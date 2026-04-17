@@ -2,6 +2,8 @@ import typer
 import json
 import os
 from pathlib import Path
+from mn_cli.server_cmds import _start_server, kill_tree, BEAM_PID_FILE, API_PID_FILE
+
 from mn_sdk import Client
 from rich.console import Console
 from rich.table import Table
@@ -155,6 +157,41 @@ def monitor(job_id: str):
     except Exception as e:
         console.print(f"[red]Error streaming events: {e}[/red]")
 
+
+
+
+
+@app.command()
+def start():
+    """Start MirrorNeuron server"""
+    _start_server()
+
+@app.command()
+def stop():
+    """Stop MirrorNeuron server"""
+    console.print("=> Stopping MirrorNeuron Services...")
+    for pid_file, name in [(API_PID_FILE, "REST API"), (BEAM_PID_FILE, "Core Service")]:
+        if pid_file.exists():
+            try:
+                pid = int(pid_file.read_text().strip())
+                try:
+                    import os
+                    os.kill(pid, 0)
+                    console.print(f"   Stopping {name} (PID: {pid})...")
+                    kill_tree(pid)
+                    import time
+                    time.sleep(1)
+                except OSError:
+                    pass
+            except ValueError:
+                pass
+            pid_file.unlink()
+    console.print("=> [green]All services stopped.[/green]")
+
+@app.command()
+def join(ip: str):
+    """Join a MirrorNeuron cluster using the IP"""
+    _start_server(ip)
 
 if __name__ == "__main__":
     app()
