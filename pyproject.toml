@@ -1,0 +1,16 @@
+[project]
+name = "mn-cli"
+version = "0.1.0"
+description = "MirrorNeuron CLI"
+dependencies = [
+    "mn-python-sdk",
+    "typer>=0.9.0",
+    "rich>=13.0.0"
+]
+
+[project.scripts]
+mn = "mn_cli.main:app"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
