@@ -115,6 +115,26 @@ def cancel(job_id: str):
 
 
 @app.command()
+def pause(job_id: str):
+    """Pause a running job"""
+    try:
+        status = client.pause_job(job_id)
+        console.print(f"[green]Job paused. Status: {status}[/green]")
+    except Exception as e:
+        console.print(f"[red]Error pausing job: {e}[/red]")
+
+
+@app.command()
+def resume(job_id: str):
+    """Resume a paused job"""
+    try:
+        status = client.resume_job(job_id)
+        console.print(f"[green]Job resumed. Status: {status}[/green]")
+    except Exception as e:
+        console.print(f"[red]Error resuming job: {e}[/red]")
+
+
+@app.command()
 def nodes():
     """Get system summary and nodes"""
     try:
