@@ -47,9 +47,19 @@ def kill_tree(parent_pid: int):
         pass
 
 def _start_server(ip: str = None):
-    if check_status(BEAM_PID_FILE) == 0 or check_status(API_PID_FILE) == 0:
-        console.print("[red]Error: MirrorNeuron is already running.[/red]")
+    if check_status(API_PID_FILE) == 0:
+        console.print("[red]Error: MirrorNeuron API is already running.[/red]")
         console.print("Use 'mn stop' to stop it first.")
+        raise typer.Exit(1)
+        
+    try:
+        docker_status = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", "mirror-neuron-core"], capture_output=True, text=True)
+        if docker_status.stdout.strip() == "true":
+            console.print("[red]Error: MirrorNeuron Core (Docker) is already running.[/red]")
+            console.print("Use 'mn stop' to stop it first.")
+            raise typer.Exit(1)
+    except FileNotFoundError:
+        console.print("[red]Error: Docker is not installed or not in PATH.[/red]")
         raise typer.Exit(1)
 
     PID_DIR.mkdir(parents=True, exist_ok=True)
@@ -62,26 +72,24 @@ def _start_server(ip: str = None):
         console.print("Starting Services in Detached Mode...")
     console.print("===========================================")
 
-    core_dir = DIR
-    if not (core_dir / "mix.exs").exists() and (core_dir / "MirrorNeuron" / "mix.exs").exists():
-        core_dir = core_dir / "MirrorNeuron"
-
     env = os.environ.copy()
     if ip:
         env["MIRROR_NEURON_CLUSTER_NODES"] = ip
 
-    console.print("=> Starting MirrorNeuron Core Service (gRPC on port 50051)...")
-    with open(BEAM_LOG, "w") as out:
-        p_beam = subprocess.Popen(
-            ["mix", "run", "--no-halt"],
-            cwd=str(core_dir),
-            stdout=out,
-            stderr=subprocess.STDOUT,
-            env=env,
-            start_new_session=True
-        )
-    BEAM_PID_FILE.write_text(str(p_beam.pid))
-    console.print(f"   [green][Started][/green] Core Service (PID: {p_beam.pid})")
+    console.print("=> Starting MirrorNeuron Core Service (Docker)...")
+    subprocess.run(["docker", "rm", "-f", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+    
+    cmd = ["docker", "run", "-d", "--name", "mirror-neuron-core", "--network", "host"]
+    if ip:
+        cmd.extend(["-e", f"MIRROR_NEURON_CLUSTER_NODES={ip}"])
+    cmd.append("mirror-neuron-core:latest")
+    
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
+        console.print("   [green][Started][/green] Core Service (Docker: mirror-neuron-core)")
+    except subprocess.CalledProcessError:
+        console.print("[red]Failed to start Core Service Docker container.[/red]")
+        raise typer.Exit(1)
 
     console.print("=> Waiting for Elixir to boot...")
     time.sleep(3)

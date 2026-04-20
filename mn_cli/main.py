@@ -170,7 +170,13 @@ def start():
 def stop():
     """Stop MirrorNeuron server"""
     console.print("=> Stopping MirrorNeuron Services...")
-    for pid_file, name in [(API_PID_FILE, "REST API"), (BEAM_PID_FILE, "Core Service")]:
+    
+    import subprocess
+    console.print("   Stopping Core Service (Docker: mirror-neuron-core)...")
+    subprocess.run(["docker", "stop", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+    subprocess.run(["docker", "rm", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+
+    for pid_file, name in [(API_PID_FILE, "REST API"), (BEAM_PID_FILE, "Legacy Core Service")]:
         if pid_file.exists():
             try:
                 pid = int(pid_file.read_text().strip())
