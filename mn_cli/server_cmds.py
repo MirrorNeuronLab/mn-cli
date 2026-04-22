@@ -79,7 +79,14 @@ def _start_server(ip: str = None):
     console.print("=> Starting MirrorNeuron Core Service (Docker)...")
     subprocess.run(["docker", "rm", "-f", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
     
-    cmd = ["docker", "run", "-d", "--name", "mirror-neuron-core", "--network", "host"]
+    cmd = ["docker", "run", "-d", "--name", "mirror-neuron-core"]
+    
+    if os.uname().sysname == "Darwin":
+        cmd.extend(["-p", "50051:50051"])
+        cmd.extend(["-e", "MIRROR_NEURON_REDIS_URL=redis://host.docker.internal:6379/0"])
+    else:
+        cmd.extend(["--network", "host"])
+
     if ip:
         cmd.extend(["-e", f"MIRROR_NEURON_CLUSTER_NODES={ip}"])
     cmd.append("mirror-neuron-core:latest")
