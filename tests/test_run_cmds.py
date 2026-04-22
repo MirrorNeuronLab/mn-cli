@@ -136,28 +136,69 @@ def test_run_no_manifest(tmp_path):
     assert "manifest.json not found" in result.stdout
 
 def test_monitor_success(mocker):
-    mock_stream = mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
-        json.dumps({"type": "job_failed"})
-    ])
+    mocker.patch('mn_cli.libs.run_cmds.client.get_job', return_value=json.dumps({"summary": {"status": "completed", "live?": False}, "job": {"job_name": "test"}, "agents": [{"agent_id": "a1", "status": "running", "processed_messages": 10}]}))
+    mocker.patch('sys.stdin.isatty', return_value=False)
     
     result = runner.invoke(app, ["monitor", "job-123"])
     
     assert result.exit_code == 0
-    assert "Job Status: Failed" in result.stdout
-    mock_stream.assert_called_once_with("job-123")
+    assert "Live Job Monitor" in result.stdout
+    assert "Job Execution Summary" in result.stdout
 
 def test_monitor_error(mocker):
-    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', side_effect=Exception("Stream fail"))
+    mocker.patch('sys.stdin.isatty', return_value=False)
+    mocker.patch('mn_cli.libs.run_cmds.client.get_job', side_effect=Exception("Network fail"))
     result = runner.invoke(app, ["monitor", "job-123"])
     assert result.exit_code == 0
-    assert "Error streaming events: Stream fail" in result.stdout
-def test_stream_bad_json(mocker):
-    # This will trigger the `except Exception:` block in `_stream_and_format_events`
+    assert "Error fetching job: Network fail" in result.stdout
+def test_result_success(mocker, tmp_path):
+    mock_get = mocker.patch('mn_cli.libs.run_cmds.client.get_job', return_value=json.dumps({
+        "job": {"status": "completed", "result": {"test": "result"}},
+        "recent_events": []
+    }))
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "custom_event", "payload": "progressive"})
+    ])
+    
+    result = runner.invoke(app, ["result", "job-123"])
+    
+    assert result.exit_code == 0
+    assert "Final result saved to" in result.stdout
+    assert "Stream results saved to" in result.stdout
+
+def test_result_not_completed(mocker, tmp_path):
+    mocker.patch('mn_cli.libs.run_cmds.client.get_job', return_value=json.dumps({
+        "job": {"status": "running"},
+        "recent_events": []
+    }))
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[])
+    
+    result = runner.invoke(app, ["result", "job-999"])
+    
+    assert result.exit_code == 0
+    assert "No final result found" in result.stdout
+
+def test_result_error(mocker):
+    mocker.patch('mn_cli.libs.run_cmds.fetch_and_save_results', side_effect=Exception("DB Error"))
+    
+    result = runner.invoke(app, ["result", "job-888"])
+    
+    assert result.exit_code == 0
+    assert "Error fetching results: DB Error" in result.stdout
+
+def test_stream_bad_json(mocker, tmp_path):
     mock_stream = mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         "invalid json format",
         json.dumps({"type": "job_failed"})
     ])
-    result = runner.invoke(app, ["monitor", "job-123"])
+    
+    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    bundle_dir = tmp_path / "run_bundle"
+    bundle_dir.mkdir()
+    manifest_file = bundle_dir / "manifest.json"
+    manifest_file.write_text('{"nodes": []}')
+    
+    result = runner.invoke(app, ["run", str(bundle_dir)])
     assert result.exit_code == 0
     assert "Job Status: Failed" in result.stdout
 
@@ -174,23 +215,38 @@ def test_validate_unexpected_error(mocker, tmp_path):
     assert result.exit_code == 1
     assert "Validation failed: Read error" in result.stdout
 
-def test_stream_all_events(mocker):
+def test_stream_all_events(mocker, tmp_path):
     events = [
         json.dumps({"type": "job_validated"}),
         json.dumps({"type": "job_scheduled"}),
         json.dumps({"type": "job_running"}),
         json.dumps({"type": "agent_message_received"}),
-        json.dumps({"type": "job_completed"})
+        json.dumps({"type": "custom_progressive", "payload": {"foo": "progressive"}}),
+        json.dumps({"type": "job_completed", "result": {"foo": "bar"}})
     ]
     mock_stream = mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=events)
+    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
     
-    result = runner.invoke(app, ["monitor", "job-123"])
+    bundle_dir = tmp_path / "run_bundle"
+    bundle_dir.mkdir()
+    manifest_file = bundle_dir / "manifest.json"
+    manifest_file.write_text('{"nodes": []}')
     
+    result = runner.invoke(app, ["run", str(bundle_dir)])
     assert result.exit_code == 0
     assert "Job Status: Success" in result.stdout
-def test_stream_keyboard_interrupt(mocker):
-    # This will trigger the KeyboardInterrupt in `_stream_and_format_events`
+    assert "result.txt" in result.stdout
+    assert "result_stream.txt" in result.stdout
+
+def test_stream_keyboard_interrupt(mocker, tmp_path):
     mock_stream = mocker.patch('mn_cli.libs.run_cmds.client.stream_events', side_effect=KeyboardInterrupt)
-    result = runner.invoke(app, ["monitor", "job-123"])
+    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    
+    bundle_dir = tmp_path / "run_bundle"
+    bundle_dir.mkdir()
+    manifest_file = bundle_dir / "manifest.json"
+    manifest_file.write_text('{"nodes": []}')
+    
+    result = runner.invoke(app, ["run", str(bundle_dir)])
     assert result.exit_code == 0
     assert "Detached from log stream" in result.stdout

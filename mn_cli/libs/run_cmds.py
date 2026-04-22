@@ -2,7 +2,63 @@ import typer
 import json
 from pathlib import Path
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+from mn_cli.libs.ui import generate_live_layout, generate_summary_panel
 from mn_cli.shared import console, client
+
+STANDARD_EVENTS = {
+    "init", "job_pending", "job_validated", "job_scheduled", "job_running",
+    "job_completed", "job_failed", "job_paused", "job_resumed", "job_cancelled",
+    "agent_recovery_started", "agent_recovered",
+    "agent_message_received", "aggregator_received", "aggregator_duplicate_ignored",
+    "executor_lease_requested", "executor_lease_acquired", "executor_lease_released",
+    "sandbox_job_started", "sandbox_job_completed", "sandbox_job_failed",
+    "node_up", "node_down"
+}
+
+def fetch_and_save_results(job_id: str, data: dict = None):
+    log_dir = Path(f"/tmp/mn_{job_id}")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    
+    if data is None:
+        try:
+            job_json = client.get_job(job_id)
+            data = json.loads(job_json)
+        except Exception:
+            return
+
+    job = data.get("job", {})
+    status = job.get("status")
+    
+    # Save final result if completed
+    if status == "completed":
+        result = job.get("result")
+        if result:
+            with open(log_dir / "result.txt", "w") as f:
+                json.dump(result, f, indent=2)
+                
+    # Save stream results (progressive)
+    stream_events = []
+    
+    try:
+        full_events = []
+        for ev_str in client.stream_events(job_id):
+            try:
+                full_events.append(json.loads(ev_str))
+            except Exception:
+                pass
+        
+        for ev in full_events:
+            ev_type = ev.get("type")
+            if ev_type not in STANDARD_EVENTS:
+                stream_events.append(ev.get("payload", ev))
+    except Exception:
+        pass
+        
+    if stream_events:
+        with open(log_dir / "result_stream.txt", "w") as f:
+            for se in stream_events:
+                f.write(json.dumps(se) + "\n")
+
 
 def _stream_and_format_events(job_id: str):
     console.print(f"Monitoring events for [bold cyan]{job_id}[/bold cyan]... (Press Ctrl+C to detach)")
@@ -28,8 +84,6 @@ def _stream_and_format_events(job_id: str):
                 TimeElapsedColumn(),
                 console=console,
             ) as progress:
-                # We'll use 4 steps total to reach "Scheduled" (100%) for the initial submission flow.
-                # Once it begins processing (messages) or completes, we'll keep it maxed or handle states.
                 job_task = progress.add_task("[cyan]Initializing...", total=4)
                 
                 for event_json in client.stream_events(job_id):
@@ -39,6 +93,10 @@ def _stream_and_format_events(job_id: str):
                         event = json.loads(event_json)
                         event_type = event.get("type")
                         
+                        if event_type not in STANDARD_EVENTS:
+                            with open(log_dir / "result_stream.txt", "a") as f_stream:
+                                f_stream.write(json.dumps(event.get("payload", event)) + "\n")
+                                
                         if event_type == "job_pending":
                             current_step = "[cyan]Pending..."
                             progress.update(job_task, completed=1, description=current_step)
@@ -56,6 +114,11 @@ def _stream_and_format_events(job_id: str):
                             current_step = f"[cyan]Running (Processed {msg_count} msgs)..."
                             progress.update(job_task, completed=4, description=current_step)
                         elif event_type == "job_completed":
+                            result = event.get("result")
+                            if result is not None:
+                                with open(log_dir / "result.txt", "w") as f_res:
+                                    json.dump(result, f_res, indent=2)
+                                    
                             current_step = "[green]Completed successfully!"
                             progress.update(job_task, completed=4, description=current_step)
                             status_text = "Success"
@@ -71,14 +134,10 @@ def _stream_and_format_events(job_id: str):
                         pass
                         
         if status_text in ["Success", "Failed"]:
-            from rich.panel import Panel
-            panel = Panel(
-                f"[bold {status_color}]Job Status: {status_text}[/bold {status_color}]\n\n"
-                f"Job ID: {job_id}\n"
-                f"Logs: {log_file}",
-                title="Job Execution Summary",
-                border_style=status_color,
-                expand=False
+            panel = generate_summary_panel(
+                job_id=job_id,
+                status="completed" if status_text == "Success" else "failed",
+                log_dir=log_dir
             )
             console.print(panel)
         else:
@@ -183,9 +242,103 @@ def run(bundle_path: str):
         raise typer.Exit(1)
 
 
+def _live_monitor(job_id: str):
+    import sys
+    import select
+    import time
+    from rich.live import Live
+    
+    is_tty = sys.stdin.isatty()
+    old_settings = None
+    if is_tty:
+        import tty
+        import termios
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
+        
+    def generate_layout(data):
+        if not data:
+            from rich.panel import Panel
+            return Panel("Connecting...", style="cyan")
+        if "error" in data:
+            from rich.panel import Panel
+            return Panel(f"Error fetching job: {data['error']}", style="red")
+        return generate_live_layout(job_id, data)
+
+    final_status = "unknown"
+    data = None
+    
+    try:
+        with Live(generate_layout(data), refresh_per_second=2, console=console) as live:
+            while True:
+                try:
+                    job_json = client.get_job(job_id)
+                    data = json.loads(job_json)
+                except Exception as e:
+                    data = {"error": str(e)}
+                    
+                live.update(generate_layout(data))
+                
+                if data and "error" not in data:
+                    status = data.get("summary", {}).get("status", "unknown")
+                    if status in ["completed", "failed", "cancelled"]:
+                        final_status = status
+                        break
+                
+                if is_tty:
+                    i, o, e = select.select([sys.stdin], [], [], 0.5)
+                    if i:
+                        key = sys.stdin.read(1)
+                        if key.lower() == 'q' or key == '\x03': # \x03 is Ctrl-C
+                            break
+                else:
+                    time.sleep(0.5)
+                    break
+                    
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if is_tty and old_settings:
+            import termios
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            
+    if final_status in ["completed", "failed", "cancelled"]:
+        # Save results and print final summary
+        fetch_and_save_results(job_id, data)
+        log_dir = Path(f"/tmp/mn_{job_id}")
+        panel = generate_summary_panel(job_id, final_status, log_dir)
+        console.print(panel)
+    else:
+        console.print(f"\n[yellow]Exited live monitor for {job_id}[/yellow]")
+        fetch_and_save_results(job_id, data)
+
+
 def monitor(job_id: str):
     """Stream live events for a job"""
     try:
-        _stream_and_format_events(job_id)
+        _live_monitor(job_id)
     except Exception as e:
         console.print(f"[red]Error streaming events: {e}[/red]")
+
+
+def result(job_id: str):
+    """Fetch and save the final and progressive results for a job"""
+    try:
+        console.print(f"Fetching results for {job_id}...")
+        fetch_and_save_results(job_id)
+        
+        log_dir = Path(f"/tmp/mn_{job_id}")
+        res_file = log_dir / "result.txt"
+        stream_file = log_dir / "result_stream.txt"
+        
+        if res_file.exists():
+            console.print(f"[green]Final result saved to: {res_file}[/green]")
+        else:
+            console.print(f"[yellow]No final result found (job might not be completed).[/yellow]")
+            
+        if stream_file.exists():
+            console.print(f"[green]Stream results saved to: {stream_file}[/green]")
+            
+    except Exception as e:
+        console.print(f"[red]Error fetching results: {e}[/red]")

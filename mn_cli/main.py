@@ -8,6 +8,7 @@ app = typer.Typer(help="MirrorNeuron CLI")
 app.command(name="validate")(run_cmds.validate)
 app.command(name="run")(run_cmds.run)
 app.command(name="monitor")(run_cmds.monitor)
+app.command(name="result")(run_cmds.result)
 
 # Job commands
 app.command(name="submit")(job_cmds.submit)
