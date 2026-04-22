@@ -18,12 +18,21 @@ def generate_live_layout(job_id: str, data: Dict[str, Any]) -> Group:
     last_event = summary.get("last_event", "N/A")
     
     # Top panel: Job info (Executors removed)
+    spinner_str = "[cyan]⠋[/cyan]"
+    try:
+        import time
+        frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        idx = int(time.time() * 12.5) % len(frames)
+        spinner_str = f"[cyan]{frames[idx]}[/cyan]"
+    except:
+        pass
+
     info_text = (
         f"[bold]Job ID:[/bold] {job_id}\n"
         f"[bold]Name:[/bold] {job.get('job_name', 'N/A')} | [bold]Graph:[/bold] {job.get('graph_id', 'N/A')}\n"
         f"[bold]Status:[/bold] [{color}]{status}[/{color}] | [bold]Live:[/bold] {summary.get('live?', False)}\n"
         f"[bold]Nodes:[/bold] {len(summary.get('nodes', []))}\n"
-        f"[bold]Last Event:[/bold] {last_event}\n\n"
+        f"[bold]Last Event:[/bold] {last_event} {spinner_str if status not in ['completed', 'failed', 'cancelled'] else ''}\n\n"
         f"[dim]Press 'q' or Ctrl-C to exit[/dim]"
     )
     info_panel = Panel(info_text, title="Live Job Monitor", border_style=color)

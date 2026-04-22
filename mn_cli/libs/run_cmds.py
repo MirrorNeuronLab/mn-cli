@@ -130,6 +130,9 @@ def _stream_and_format_events(job_id: str):
                             status_text = "Failed"
                             status_color = "red"
                             break
+                        else:
+                            current_step = f"[cyan]Running ({event_type})..."
+                            progress.update(job_task, completed=4, description=current_step)
                     except Exception:
                         pass
                         
@@ -257,20 +260,23 @@ def _live_monitor(job_id: str):
         old_settings = termios.tcgetattr(fd)
         tty.setcbreak(fd)
         
-    def generate_layout(data):
-        if not data:
-            from rich.panel import Panel
-            return Panel("Connecting...", style="cyan")
-        if "error" in data:
-            from rich.panel import Panel
-            return Panel(f"Error fetching job: {data['error']}", style="red")
-        return generate_live_layout(job_id, data)
+    class MonitorView:
+        def __init__(self):
+            self.data = None
+        def __rich__(self):
+            if not self.data:
+                from rich.panel import Panel
+                return Panel("Connecting...", style="cyan")
+            if "error" in self.data:
+                from rich.panel import Panel
+                return Panel(f"Error fetching job: {self.data['error']}", style="red")
+            return generate_live_layout(job_id, self.data)
 
     final_status = "unknown"
-    data = None
+    view = MonitorView()
     
     try:
-        with Live(generate_layout(data), refresh_per_second=2, console=console) as live:
+        with Live(view, refresh_per_second=12, console=console) as live:
             while True:
                 try:
                     job_json = client.get_job(job_id)
@@ -278,7 +284,7 @@ def _live_monitor(job_id: str):
                 except Exception as e:
                     data = {"error": str(e)}
                     
-                live.update(generate_layout(data))
+                view.data = data
                 
                 if data and "error" not in data:
                     status = data.get("summary", {}).get("status", "unknown")
