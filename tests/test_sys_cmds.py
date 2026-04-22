@@ -18,6 +18,21 @@ def test_join_success(mocker):
     assert result.exit_code == 0
     mock_start_server.assert_called_once_with("192.168.1.1")
 
+def test_leave_success(mocker):
+    import mn_cli.shared
+    mock_remove = mocker.patch.object(mn_cli.shared.client, 'remove_node', return_value="disconnected")
+    result = runner.invoke(app, ["leave", "mirror_neuron@1.2.3.4"])
+    assert result.exit_code == 0
+    assert "Successfully requested mirror_neuron@1.2.3.4 to leave" in result.stdout
+    mock_remove.assert_called_once_with("mirror_neuron@1.2.3.4")
+
+def test_leave_error(mocker):
+    import mn_cli.shared
+    mock_remove = mocker.patch.object(mn_cli.shared.client, 'remove_node', side_effect=Exception("Timeout"))
+    result = runner.invoke(app, ["leave", "mirror_neuron@1.2.3.4"])
+    assert result.exit_code == 0
+    assert "Error removing node: Timeout" in result.stdout
+
 def test_stop(mocker, tmp_path):
     mocker.patch('mn_cli.libs.sys_cmds.subprocess.run')
     mock_kill_tree = mocker.patch('mn_cli.libs.sys_cmds.kill_tree')

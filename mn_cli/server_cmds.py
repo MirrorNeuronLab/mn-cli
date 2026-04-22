@@ -81,14 +81,40 @@ def _start_server(ip: str = None):
     
     cmd = ["docker", "run", "-d", "--name", "mirror-neuron-core"]
     
+    # We want clustering to work, so we need to set the node name.
+    import socket
+    local_ip = socket.gethostbyname(socket.gethostname())
+    # As a fallback or override, you could prompt the user, but we'll try to guess it.
+    # To be safe for this specific test, we know local is 192.168.4.25 and remote is 192.168.4.173.
+    # Let's see if we can get the actual external IP:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # doesn't even have to be reachable
+        s.connect(('10.255.255.255', 1))
+        local_ip = s.getsockname()[0]
+    except Exception:
+        local_ip = '127.0.0.1'
+    finally:
+        s.close()
+        
+    cmd.extend(["-e", f"MIRROR_NEURON_NODE_NAME=mirror_neuron@{local_ip}"])
+    
     if os.uname().sysname == "Darwin":
-        cmd.extend(["-p", "50051:50051"])
+        cmd.extend(["-p", "50051:50051", "-p", "4369:4369"])
+        # Publish the distribution ports too
+        for port in range(9000, 9011):
+            cmd.extend(["-p", f"{port}:{port}"])
         cmd.extend(["-e", "MIRROR_NEURON_REDIS_URL=redis://host.docker.internal:6379/0"])
+        cmd.extend(["-e", "MIRROR_NEURON_EXECUTOR_MAX_CONCURRENCY=50"])
     else:
         cmd.extend(["--network", "host"])
+        cmd.extend(["-e", "MIRROR_NEURON_EXECUTOR_MAX_CONCURRENCY=50"])
 
     if ip:
-        cmd.extend(["-e", f"MIRROR_NEURON_CLUSTER_NODES={ip}"])
+        cmd.extend(["-e", f"MIRROR_NEURON_CLUSTER_NODES=mirror_neuron@{ip}"])
+        # A node joining another should also point its redis to the main cluster leader if not specified
+        cmd.extend(["-e", f"MIRROR_NEURON_REDIS_URL=redis://{ip}:6379/0"])
+    
     cmd.append("mirror-neuron-core:latest")
     
     try:

@@ -37,3 +37,12 @@ def join(ip: str):
     """Join a MirrorNeuron cluster using the IP"""
     _start_server(ip)
 
+def leave(node_name: str):
+    """Remove a node from the cluster by its node name (e.g. mirror_neuron@192.168.4.173)"""
+    from mn_cli.shared import client, console
+    try:
+        status = client.remove_node(node_name)
+        console.print(f"[green]Successfully requested {node_name} to leave. Status: {status}[/green]")
+    except Exception as e:
+        console.print(f"[red]Error removing node: {e}[/red]")
+

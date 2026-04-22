@@ -24,6 +24,7 @@ app.command(name="nodes")(job_cmds.nodes)
 app.command(name="start")(sys_cmds.start)
 app.command(name="stop")(sys_cmds.stop)
 app.command(name="join")(sys_cmds.join)
+app.command(name="leave")(sys_cmds.leave)
 
 # Sub-apps
 app.add_typer(blueprint_app, name="blueprint")
