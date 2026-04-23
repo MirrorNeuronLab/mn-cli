@@ -1,7 +1,9 @@
-import typer
 import json
 from rich.table import Table
 from mn_cli.shared import console, client
+from mn_cli.error_handler import handle_cli_error
+import typer
+
 
 def submit(manifest_path: str):
     """Submit a new workflow job"""
@@ -12,7 +14,7 @@ def submit(manifest_path: str):
         job_id = client.submit_job(manifest, {})
         console.print(f"[green]Job submitted successfully. Job ID: {job_id}[/green]")
     except Exception as e:
-        console.print(f"[red]Error submitting job: {e}[/red]")
+        handle_cli_error(e, console, 'submit')
 
 
 def status(job_id: str):
@@ -22,7 +24,7 @@ def status(job_id: str):
         job = json.loads(job_json)
         console.print_json(data=job)
     except Exception as e:
-        console.print(f"[red]Error fetching job status: {e}[/red]")
+        handle_cli_error(e, console, 'status')
 
 
 def list_jobs(running_only: bool = typer.Option(False, "--running-only", help="Only show running jobs")):
@@ -45,7 +47,7 @@ def list_jobs(running_only: bool = typer.Option(False, "--running-only", help="O
             )
         console.print(table)
     except Exception as e:
-        console.print(f"[red]Error listing jobs: {e}[/red]")
+        handle_cli_error(e, console, 'list_jobs')
 
 
 def clear():
@@ -54,7 +56,7 @@ def clear():
         cleared_count = client.clear_jobs()
         console.print(f"[green]Successfully cleared {cleared_count} non-running jobs.[/green]")
     except Exception as e:
-        console.print(f"[red]Error clearing jobs: {e}[/red]")
+        handle_cli_error(e, console, 'clear')
 
 def cancel(job_id: str):
     """Cancel a running job"""
@@ -62,7 +64,7 @@ def cancel(job_id: str):
         status = client.cancel_job(job_id)
         console.print(f"[green]Job cancelled. Status: {status}[/green]")
     except Exception as e:
-        console.print(f"[red]Error cancelling job: {e}[/red]")
+        handle_cli_error(e, console, 'cancel')
 
 
 def pause(job_id: str):
@@ -71,7 +73,7 @@ def pause(job_id: str):
         status = client.pause_job(job_id)
         console.print(f"[green]Job paused. Status: {status}[/green]")
     except Exception as e:
-        console.print(f"[red]Error pausing job: {e}[/red]")
+        handle_cli_error(e, console, 'pause')
 
 
 def resume(job_id: str):
@@ -80,7 +82,7 @@ def resume(job_id: str):
         status = client.resume_job(job_id)
         console.print(f"[green]Job resumed. Status: {status}[/green]")
     except Exception as e:
-        console.print(f"[red]Error resuming job: {e}[/red]")
+        handle_cli_error(e, console, 'resume')
 
 
 def nodes():
@@ -90,4 +92,4 @@ def nodes():
         summary = json.loads(summary_json)
         console.print_json(data=summary)
     except Exception as e:
-        console.print(f"[red]Error fetching nodes: {e}[/red]")
+        handle_cli_error(e, console, 'nodes')

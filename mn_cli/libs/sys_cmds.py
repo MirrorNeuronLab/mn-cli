@@ -3,6 +3,7 @@ import subprocess
 import os
 import time
 from mn_cli.shared import console
+from mn_cli.error_handler import handle_cli_error
 from mn_cli.server_cmds import _start_server, kill_tree, BEAM_PID_FILE, API_PID_FILE
 
 def start():
@@ -44,5 +45,5 @@ def leave(node_name: str):
         status = client.remove_node(node_name)
         console.print(f"[green]Successfully requested {node_name} to leave. Status: {status}[/green]")
     except Exception as e:
-        console.print(f"[red]Error removing node: {e}[/red]")
+        handle_cli_error(e, console, 'leave')
 

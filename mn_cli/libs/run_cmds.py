@@ -4,6 +4,7 @@ from pathlib import Path
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
 from mn_cli.libs.ui import generate_live_layout, generate_summary_panel
 from mn_cli.shared import console, client
+from mn_cli.error_handler import handle_cli_error
 
 STANDARD_EVENTS = {
     "init", "job_pending", "job_validated", "job_scheduled", "job_running",
@@ -199,7 +200,7 @@ def validate(bundle_path: str):
     except typer.Exit:
         raise
     except Exception as e:
-        console.print(f"[red]Validation failed: {e}[/red]")
+        handle_cli_error(e, console, 'validate')
         raise typer.Exit(1)
 
 
@@ -221,7 +222,27 @@ def run(bundle_path: str):
             raise typer.Exit(1)
 
         with open(manifest_file, "r") as f:
-            manifest = f.read()
+            manifest_dict = json.load(f)
+
+        if manifest_dict.get("require_config") is True:
+            config_script = bundle_dir / "config.py"
+            if config_script.exists():
+                import subprocess
+                import sys
+                console.print(f"[yellow]Bundle requires configuration. Auto-running {config_script.name}...[/yellow]")
+                res = subprocess.run([sys.executable, config_script.name], cwd=bundle_dir)
+                if res.returncode != 0:
+                    console.print("[red]Configuration failed or cancelled. Aborting run.[/red]")
+                    raise typer.Exit(1)
+                
+                # Reload manifest after configuration
+                with open(manifest_file, "r") as f:
+                    manifest_dict = json.load(f)
+            else:
+                console.print("[red]Bundle requires configuration, but config.py was not found.[/red]")
+                raise typer.Exit(1)
+                
+        manifest = json.dumps(manifest_dict)
 
         payloads = {}
         payloads_dir = bundle_dir / "payloads"
@@ -241,7 +262,7 @@ def run(bundle_path: str):
     except typer.Exit:
         raise
     except Exception as e:
-        console.print(f"[red]Error running bundle: {e}[/red]")
+        handle_cli_error(e, console, 'run bundle')
         raise typer.Exit(1)
 
 
@@ -325,7 +346,7 @@ def monitor(job_id: str):
     try:
         _live_monitor(job_id)
     except Exception as e:
-        console.print(f"[red]Error streaming events: {e}[/red]")
+        handle_cli_error(e, console, 'monitor stream')
 
 
 def result(job_id: str):
@@ -347,4 +368,4 @@ def result(job_id: str):
             console.print(f"[green]Stream results saved to: {stream_file}[/green]")
             
     except Exception as e:
-        console.print(f"[red]Error fetching results: {e}[/red]")
+        handle_cli_error(e, console, 'fetch results')

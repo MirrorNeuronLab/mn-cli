@@ -4,6 +4,7 @@ import subprocess
 import typer
 from rich.table import Table
 from mn_cli.shared import console
+from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.run_cmds import run as _run_bundle
 
 blueprint_app = typer.Typer(help="Manage and run MirrorNeuron blueprints")
