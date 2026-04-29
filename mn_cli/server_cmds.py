@@ -3,8 +3,11 @@ import signal
 import subprocess
 import time
 from pathlib import Path
+from typing import Optional
+from urllib.parse import urlparse
 import typer
 from rich.console import Console
+from rich.table import Table
 from mn_cli.config import CliConfig
 from mn_cli.logging_config import configure_logging
 
@@ -16,9 +19,17 @@ PID_DIR = DIR / ".pids"
 LOG_DIR = DIR / ".logs"
 BEAM_PID_FILE = PID_DIR / "beam.pid"
 API_PID_FILE = PID_DIR / "api.pid"
+WEB_UI_PID_FILE = PID_DIR / "web-ui.pid"
 BEAM_LOG = LOG_DIR / "beam.log"
 API_LOG = LOG_DIR / "api.log"
+WEB_UI_LOG = LOG_DIR / "web-ui.log"
 VENV_DIR = Path.home() / ".local" / "share" / "mn_venv"
+WEB_UI_DIRS = (
+    DIR / "web-ui-source",
+    Path(f"{DIR}_ui"),
+)
+WEB_UI_HOST = "127.0.0.1"
+WEB_UI_PORT = "5173"
 
 def check_status(pid_file: Path) -> int:
     if pid_file.exists():
@@ -51,6 +62,88 @@ def kill_tree(parent_pid: int):
     except OSError:
         logger.exception("Failed to stop process %s", parent_pid)
         pass
+
+def find_web_ui_dir() -> Optional[Path]:
+    for web_ui_dir in WEB_UI_DIRS:
+        if (web_ui_dir / "package.json").exists() and (web_ui_dir / "node_modules").exists():
+            return web_ui_dir
+    return None
+
+def _host_port_from_target(target: str, default_host: str, default_port: str) -> tuple[str, str]:
+    if "://" in target:
+        parsed = urlparse(target)
+        return parsed.hostname or default_host, str(parsed.port or default_port)
+
+    if target.startswith("[") and "]:" in target:
+        host, port = target.rsplit("]:", 1)
+        return host.lstrip("["), port
+
+    if ":" in target:
+        host, port = target.rsplit(":", 1)
+        return host or default_host, port or default_port
+
+    return target or default_host, default_port
+
+def _redis_host_port(ip: Optional[str]) -> tuple[str, str]:
+    default_url = f"redis://{ip}:6379/0" if ip else "redis://127.0.0.1:6379/0"
+    return _host_port_from_target(
+        os.getenv("MIRROR_NEURON_REDIS_URL", default_url),
+        "127.0.0.1",
+        "6379",
+    )
+
+def _print_service_endpoints(ip: Optional[str], web_ui_available: bool):
+    grpc_host, grpc_port = _host_port_from_target(
+        os.getenv("MIRROR_NEURON_GRPC_TARGET", os.getenv("MIRROR_NEURON_CORE_GRPC_TARGET", "localhost:50051")),
+        "localhost",
+        os.getenv("MIRROR_NEURON_GRPC_PORT", "50051"),
+    )
+    api_host = os.getenv("MIRROR_NEURON_API_HOST", "0.0.0.0")
+    api_port = os.getenv("MIRROR_NEURON_API_PORT", "4001")
+    redis_host, redis_port = _redis_host_port(ip)
+    dist_port = os.getenv("MIRROR_NEURON_DIST_PORT", "9000-9010" if os.uname().sysname == "Darwin" else "dynamic")
+
+    table = Table(title="Service endpoints", show_header=True, header_style="bold")
+    table.add_column("Service")
+    table.add_column("Host")
+    table.add_column("Port")
+    table.add_column("URL / target")
+
+    table.add_row("Core gRPC", grpc_host, grpc_port, f"{grpc_host}:{grpc_port}")
+    table.add_row("REST API", api_host, api_port, f"http://localhost:{api_port}/api/v1")
+    table.add_row("Redis", redis_host, redis_port, f"redis://{redis_host}:{redis_port}/0")
+    table.add_row("Erlang EPMD", "localhost", "4369", "localhost:4369")
+    table.add_row("Erlang dist", "localhost", dist_port, f"localhost:{dist_port}")
+    if web_ui_available:
+        table.add_row("Web UI", WEB_UI_HOST, WEB_UI_PORT, f"http://{WEB_UI_HOST}:{WEB_UI_PORT}")
+
+    console.print(table)
+
+def _start_web_ui_if_installed() -> bool:
+    web_ui_dir = find_web_ui_dir()
+    if not web_ui_dir:
+        return False
+
+    status = check_status(WEB_UI_PID_FILE)
+    if status == 0:
+        console.print("[yellow]=> Web UI is already running, skipping.[/yellow]")
+        return True
+    if status == 1:
+        WEB_UI_PID_FILE.unlink(missing_ok=True)
+
+    console.print("=> Starting mn-web-ui (Vite on port 5173)...")
+    with open(WEB_UI_LOG, "w") as out:
+        p_web = subprocess.Popen(
+            ["npm", "run", "dev", "--", "--host", "127.0.0.1"],
+            cwd=web_ui_dir,
+            stdout=out,
+            stderr=subprocess.STDOUT,
+            env=os.environ.copy(),
+            start_new_session=True
+        )
+    WEB_UI_PID_FILE.write_text(str(p_web.pid))
+    console.print(f"   [green][Started][/green] Web UI (PID: {p_web.pid})")
+    return True
 
 def _start_server(ip: str = None):
     if check_status(API_PID_FILE) == 0:
@@ -153,13 +246,18 @@ def _start_server(ip: str = None):
     else:
         console.print("[yellow]=> Warning: mn-api not found, skipping.[/yellow]")
 
+    web_ui_available = _start_web_ui_if_installed()
+
     console.print("\n===========================================")
     if ip:
         console.print(f"MirrorNeuron is running and attempting to join cluster at {ip}!")
     else:
         console.print("MirrorNeuron is running in the background!")
+    _print_service_endpoints(ip, web_ui_available)
     console.print("Logs are available at:")
     console.print(f"  Core: {BEAM_LOG}")
     console.print(f"  API:  {API_LOG}")
+    if WEB_UI_LOG.exists():
+        console.print(f"  Web:  {WEB_UI_LOG}")
     console.print("\nRun 'mn stop' to shut down the services.")
     console.print("===========================================")

@@ -41,18 +41,21 @@ def test_stop(mocker, tmp_path):
     # Mock PID files
     mocker.patch('mn_cli.libs.sys_cmds.API_PID_FILE', tmp_path / "api.pid")
     mocker.patch('mn_cli.libs.sys_cmds.BEAM_PID_FILE', tmp_path / "beam.pid")
+    mocker.patch('mn_cli.libs.sys_cmds.WEB_UI_PID_FILE', tmp_path / "web-ui.pid")
     
     (tmp_path / "api.pid").write_text("12345")
     (tmp_path / "beam.pid").write_text("67890")
+    (tmp_path / "web-ui.pid").write_text("24680")
     
     result = runner.invoke(app, ["stop"])
     
     assert result.exit_code == 0
     assert "All services stopped." in result.stdout
-    assert mock_kill_tree.call_count == 2
+    assert mock_kill_tree.call_count == 3
     
     assert not (tmp_path / "api.pid").exists()
     assert not (tmp_path / "beam.pid").exists()
+    assert not (tmp_path / "web-ui.pid").exists()
 
 def test_stop_pid_file_invalid(mocker, tmp_path):
     mocker.patch('mn_cli.libs.sys_cmds.subprocess.run')
@@ -60,6 +63,7 @@ def test_stop_pid_file_invalid(mocker, tmp_path):
     
     mocker.patch('mn_cli.libs.sys_cmds.API_PID_FILE', tmp_path / "api.pid")
     mocker.patch('mn_cli.libs.sys_cmds.BEAM_PID_FILE', tmp_path / "beam.pid")
+    mocker.patch('mn_cli.libs.sys_cmds.WEB_UI_PID_FILE', tmp_path / "web-ui.pid")
     
     (tmp_path / "api.pid").write_text("invalid")
     
@@ -76,6 +80,7 @@ def test_stop_kill_oserror(mocker, tmp_path):
     
     mocker.patch('mn_cli.libs.sys_cmds.API_PID_FILE', tmp_path / "api.pid")
     mocker.patch('mn_cli.libs.sys_cmds.BEAM_PID_FILE', tmp_path / "beam.pid")
+    mocker.patch('mn_cli.libs.sys_cmds.WEB_UI_PID_FILE', tmp_path / "web-ui.pid")
     
     (tmp_path / "api.pid").write_text("12345")
     

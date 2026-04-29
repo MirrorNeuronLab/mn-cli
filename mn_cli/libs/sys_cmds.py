@@ -4,21 +4,25 @@ import os
 import time
 from mn_cli.shared import console
 from mn_cli.error_handler import handle_cli_error
-from mn_cli.server_cmds import _start_server, kill_tree, BEAM_PID_FILE, API_PID_FILE
+from mn_cli.server_cmds import _start_server, kill_tree, BEAM_PID_FILE, API_PID_FILE, WEB_UI_PID_FILE
 
 def start():
-    """Start MirrorNeuron server"""
+    """Start MirrorNeuron services"""
     _start_server()
 
 def stop():
-    """Stop MirrorNeuron server"""
+    """Stop MirrorNeuron services"""
     console.print("=> Stopping MirrorNeuron Services...")
     
     console.print("   Stopping Core Service (Docker: mirror-neuron-core)...")
     subprocess.run(["docker", "stop", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
     subprocess.run(["docker", "rm", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
-    for pid_file, name in [(API_PID_FILE, "REST API"), (BEAM_PID_FILE, "Legacy Core Service")]:
+    for pid_file, name in [
+        (WEB_UI_PID_FILE, "Web UI"),
+        (API_PID_FILE, "REST API"),
+        (BEAM_PID_FILE, "Legacy Core Service"),
+    ]:
         if pid_file.exists():
             try:
                 pid = int(pid_file.read_text().strip())
@@ -46,4 +50,3 @@ def leave(node_name: str):
         console.print(f"[green]Successfully requested {node_name} to leave. Status: {status}[/green]")
     except Exception as e:
         handle_cli_error(e, console, 'leave')
-
