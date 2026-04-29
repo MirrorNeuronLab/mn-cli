@@ -19,6 +19,8 @@ app.command(name="cancel")(job_cmds.cancel)
 app.command(name="pause")(job_cmds.pause)
 app.command(name="resume")(job_cmds.resume)
 app.command(name="nodes")(job_cmds.nodes)
+app.command(name="metrics")(job_cmds.metrics)
+app.command(name="dead-letters")(job_cmds.dead_letters)
 
 # System commands
 app.command(name="start")(sys_cmds.start)

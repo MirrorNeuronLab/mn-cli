@@ -83,7 +83,10 @@ def _start_server(ip: str = None):
     
     # We want clustering to work, so we need to set the node name.
     import socket
-    local_ip = socket.gethostbyname(socket.gethostname())
+    try:
+        local_ip = socket.gethostbyname(socket.gethostname())
+    except socket.gaierror:
+        local_ip = "127.0.0.1"
     # As a fallback or override, you could prompt the user, but we'll try to guess it.
     # To be safe for this specific test, we know local is 192.168.4.25 and remote is 192.168.4.173.
     # Let's see if we can get the actual external IP:
@@ -153,4 +156,3 @@ def _start_server(ip: str = None):
     console.print(f"  API:  {API_LOG}")
     console.print("\nRun 'mn stop' to shut down the services.")
     console.print("===========================================")
-

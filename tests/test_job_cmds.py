@@ -138,3 +138,26 @@ def test_nodes_error(mocker):
     result = runner.invoke(app, ["nodes"])
     assert result.exit_code == 0
     assert "Error fetching nodes: Fail" in result.stdout
+
+
+def test_metrics_success(mocker):
+    mocker.patch(
+        'mn_cli.libs.job_cmds.client.get_system_summary',
+        return_value=json.dumps({"nodes": ["n1"], "jobs": [{"status": "running"}]}),
+    )
+    result = runner.invoke(app, ["metrics"])
+    assert result.exit_code == 0
+    assert '"running": 1' in result.stdout
+
+
+def test_dead_letters_success(mocker):
+    mocker.patch(
+        'mn_cli.libs.job_cmds.client.stream_events',
+        return_value=[
+            json.dumps({"type": "agent_started"}),
+            json.dumps({"type": "dead_letter", "agent_id": "a1", "reason": "queue full"}),
+        ],
+    )
+    result = runner.invoke(app, ["dead-letters", "job-1"])
+    assert result.exit_code == 0
+    assert "queue full" in result.stdout

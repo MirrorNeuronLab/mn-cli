@@ -93,3 +93,66 @@ def nodes():
         console.print_json(data=summary)
     except Exception as e:
         handle_cli_error(e, console, 'nodes')
+
+
+def metrics():
+    """Show runtime metrics derived from the core system summary"""
+    try:
+        summary = json.loads(client.get_system_summary())
+        if "metrics" in summary:
+            console.print_json(data=summary["metrics"])
+            return
+
+        jobs = summary.get("jobs", [])
+        status_counts = {}
+        queue_depth_total = 0
+        queue_depth_max = 0
+        pressured_agents = 0
+
+        for job in jobs:
+            status = job.get("status", "unknown")
+            status_counts[status] = status_counts.get(status, 0) + 1
+            for agent in job.get("agents", []):
+                pressure = agent.get("backpressure", {})
+                depth = int(pressure.get("queue_depth", agent.get("mailbox_depth", 0)) or 0)
+                queue_depth_total += depth
+                queue_depth_max = max(queue_depth_max, depth)
+                if pressure.get("backpressure") is True:
+                    pressured_agents += 1
+
+        console.print_json(
+            data={
+                "jobs": {"total": len(jobs), "by_status": status_counts},
+                "agents": {
+                    "queue_depth_total": queue_depth_total,
+                    "queue_depth_max": queue_depth_max,
+                    "pressured": pressured_agents,
+                },
+                "nodes": {"total": len(summary.get("nodes", []))},
+                "source": "system_summary",
+            }
+        )
+    except Exception as e:
+        handle_cli_error(e, console, "metrics")
+
+
+def dead_letters(job_id: str):
+    """List dead-letter events for a job"""
+    try:
+        letters = []
+        for index, event_json in enumerate(client.stream_events(job_id)):
+            event = json.loads(event_json)
+            if event.get("type") == "dead_letter":
+                letters.append(
+                    {
+                        "index": len(letters),
+                        "event_index": index,
+                        "agent_id": event.get("agent_id"),
+                        "reason": event.get("reason") or event.get("error"),
+                        "timestamp": event.get("timestamp"),
+                        "message": event.get("message"),
+                    }
+                )
+        console.print_json(data={"job_id": job_id, "data": letters})
+    except Exception as e:
+        handle_cli_error(e, console, "dead_letters")
