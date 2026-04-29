@@ -3,7 +3,7 @@ import json
 import subprocess
 import typer
 from rich.table import Table
-from mn_cli.shared import console
+from mn_cli.shared import console, logger
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.run_cmds import run as _run_bundle
 
@@ -29,6 +29,7 @@ def blueprint_list():
             )
         console.print(table)
     except Exception as e:
+        logger.exception("Error reading blueprint index")
         console.print(f"[red]Error reading blueprints index: {e}[/red]")
 
 @blueprint_app.command("run")
@@ -40,12 +41,14 @@ def blueprint_run(blueprint_path_name: str):
         os.makedirs(os.path.dirname(storage_dir), exist_ok=True)
         res = subprocess.run(["git", "clone", "https://github.com/MirrorNeuronLab/mn-blueprints", storage_dir], capture_output=True, text=True)
         if res.returncode != 0:
+            logger.error("Failed to clone blueprint repository: %s", res.stderr)
             console.print(f"[red]Failed to clone blueprint repository: {res.stderr}[/red]")
             raise typer.Exit(1)
     else:
         console.print(f"Updating blueprint storage at {storage_dir}...")
         res = subprocess.run(["git", "-C", storage_dir, "pull"], capture_output=True, text=True)
         if res.returncode != 0:
+            logger.warning("Failed to update blueprint repository: %s", res.stderr)
             console.print(f"[yellow]Warning: Failed to update blueprint repository: {res.stderr}[/yellow]")
     
     index_path = os.path.join(storage_dir, "index.json")
@@ -57,6 +60,7 @@ def blueprint_run(blueprint_path_name: str):
         with open(index_path, "r") as f:
             blueprints = json.load(f)
     except Exception as e:
+        logger.exception("Error parsing blueprint index")
         console.print(f"[red]Error parsing index.json: {e}[/red]")
         raise typer.Exit(1)
         

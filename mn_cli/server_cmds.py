@@ -5,8 +5,11 @@ import time
 from pathlib import Path
 import typer
 from rich.console import Console
+from mn_cli.config import CliConfig
+from mn_cli.logging_config import configure_logging
 
 console = Console()
+logger = configure_logging("mn-cli", CliConfig.from_env().log_path)
 
 DIR = Path.home() / ".mirror_neuron"
 PID_DIR = DIR / ".pids"
@@ -31,6 +34,7 @@ def kill_tree(parent_pid: int):
     try:
         os.kill(parent_pid, 0)
     except OSError:
+        logger.debug("Process %s is not running", parent_pid)
         return
     
     try:
@@ -42,8 +46,10 @@ def kill_tree(parent_pid: int):
         pass
     
     try:
+        logger.info("Stopping process %s", parent_pid)
         os.kill(parent_pid, signal.SIGTERM)
     except OSError:
+        logger.exception("Failed to stop process %s", parent_pid)
         pass
 
 def _start_server(ip: str = None):
@@ -77,6 +83,7 @@ def _start_server(ip: str = None):
         env["MIRROR_NEURON_CLUSTER_NODES"] = ip
 
     console.print("=> Starting MirrorNeuron Core Service (Docker)...")
+    logger.info("Starting MirrorNeuron Core Docker container")
     subprocess.run(["docker", "rm", "-f", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
     
     cmd = ["docker", "run", "-d", "--name", "mirror-neuron-core"]

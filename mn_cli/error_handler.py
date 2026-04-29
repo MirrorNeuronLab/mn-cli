@@ -1,23 +1,11 @@
 import sys
-import logging
 import grpc
 from rich.console import Console
 from mn_cli.config import CliConfig
+from mn_cli.logging_config import configure_logging
 
-# Setup logging
 log_file = CliConfig.from_env().log_path
-log_dir = log_file.parent
-
-try:
-    log_dir.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        filename=str(log_file),
-        level=logging.ERROR,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
-except OSError:
-    logging.basicConfig(level=logging.ERROR)
-logger = logging.getLogger("mn-cli")
+logger = configure_logging("mn-cli", log_file)
 
 CONTEXT_MESSAGES = {
     "submit": "Error submitting job",

@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
 from mn_cli.libs.ui import generate_live_layout, generate_summary_panel
-from mn_cli.shared import console, client
+from mn_cli.shared import console, client, logger
 from mn_cli.error_handler import handle_cli_error
 
 STANDARD_EVENTS = {
@@ -25,6 +25,7 @@ def fetch_and_save_results(job_id: str, data: dict = None):
             job_json = client.get_job(job_id)
             data = json.loads(job_json)
         except Exception:
+            logger.exception("Failed to fetch job result for %s", job_id)
             return
 
     job = data.get("job", {})
@@ -46,6 +47,7 @@ def fetch_and_save_results(job_id: str, data: dict = None):
             try:
                 full_events.append(json.loads(ev_str))
             except Exception:
+                logger.exception("Failed to decode event while saving results for %s", job_id)
                 pass
         
         for ev in full_events:
@@ -53,6 +55,7 @@ def fetch_and_save_results(job_id: str, data: dict = None):
             if ev_type not in STANDARD_EVENTS:
                 stream_events.append(ev.get("payload", ev))
     except Exception:
+        logger.exception("Failed to stream events while saving results for %s", job_id)
         pass
         
     if stream_events:

@@ -1,6 +1,6 @@
 import json
 from rich.table import Table
-from mn_cli.shared import console, client
+from mn_cli.shared import console, client, logger
 from mn_cli.error_handler import handle_cli_error
 import typer
 
@@ -12,6 +12,7 @@ def submit(manifest_path: str):
             manifest = f.read()
 
         job_id = client.submit_job(manifest, {})
+        logger.info("Submitted job id=%s from manifest=%s", job_id, manifest_path)
         console.print(f"[green]Job submitted successfully. Job ID: {job_id}[/green]")
     except Exception as e:
         handle_cli_error(e, console, 'submit')
@@ -54,6 +55,7 @@ def clear():
     """Remove all job records except running ones"""
     try:
         cleared_count = client.clear_jobs()
+        logger.info("Cleared %d non-running jobs", cleared_count)
         console.print(f"[green]Successfully cleared {cleared_count} non-running jobs.[/green]")
     except Exception as e:
         handle_cli_error(e, console, 'clear')
