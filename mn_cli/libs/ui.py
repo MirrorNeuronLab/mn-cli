@@ -1,6 +1,7 @@
 from rich.console import Group
 from rich.table import Table
 from rich.panel import Panel
+from rich.text import Text
 from typing import Dict, Any
 
 def generate_live_layout(job_id: str, data: Dict[str, Any]) -> Group:
@@ -92,4 +93,64 @@ def generate_summary_panel(job_id: str, status: str, log_dir) -> Panel:
         title="Job Execution Summary",
         border_style=status_color,
         expand=False
+    )
+
+def generate_run_submitted_panel(
+    *,
+    bundle_name: str,
+    job_id: str,
+    payload_count: int,
+    log_dir,
+    follow_seconds: float,
+    run_mode: str = "Batch",
+) -> Panel:
+    table = Table.grid(padding=(0, 1))
+    table.add_column(style="bold")
+    table.add_column()
+    table.add_row("Bundle", bundle_name)
+    table.add_row("Job ID", f"[bold cyan]{job_id}[/bold cyan]")
+    table.add_row("Type", run_mode)
+    table.add_row("Payloads", str(payload_count))
+    table.add_row("Logs", str(log_dir / "events.log"))
+    table.add_row("Snapshot", str(log_dir / "job_snapshot.json"))
+    table.add_row("Follow", f"{follow_seconds:g}s event tail, then detach")
+
+    return Panel(
+        table,
+        title="Job submitted successfully",
+        border_style="cyan",
+        expand=False,
+    )
+
+def generate_detached_panel(job_id: str, log_dir, status: str, event_count: int) -> Panel:
+    status_color = (
+        "green"
+        if status == "completed"
+        else "red"
+        if status in {"failed", "cancelled"}
+        else "yellow"
+    )
+    status_label = status.replace("_", " ").title() if status else "Unknown"
+
+    table = Table.grid(padding=(0, 1))
+    table.add_column(style="bold")
+    table.add_column()
+    table.add_row("Status", f"[{status_color}]{status_label}[/{status_color}]")
+    table.add_row("Job ID", f"[bold cyan]{job_id}[/bold cyan]")
+    table.add_row("Events Logged", str(event_count))
+    table.add_row("Raw Events", str(log_dir / "events.log"))
+    table.add_row("Run Log", str(log_dir / "run.log"))
+    table.add_row("Monitor", f"mn monitor {job_id}")
+
+    message = Text()
+    if status in {"completed", "failed", "cancelled"}:
+        message.append("Final job state reached.", style=status_color)
+    else:
+        message.append("Detached while job is still scheduled/running.", style="yellow")
+
+    return Panel(
+        Group(message, table),
+        title="Run Detached",
+        border_style=status_color,
+        expand=False,
     )

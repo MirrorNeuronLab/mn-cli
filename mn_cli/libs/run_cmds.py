@@ -1,8 +1,18 @@
 import typer
 import json
+import os
+import time
+import logging
 from pathlib import Path
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
-from mn_cli.libs.ui import generate_live_layout, generate_summary_panel
+from typing import Annotated, Optional
+from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from logging.handlers import RotatingFileHandler
+from mn_cli.libs.ui import (
+    generate_detached_panel,
+    generate_live_layout,
+    generate_run_submitted_panel,
+    generate_summary_panel,
+)
 from mn_cli.shared import console, client, logger
 from mn_cli.error_handler import handle_cli_error
 
@@ -15,6 +25,125 @@ STANDARD_EVENTS = {
     "sandbox_job_started", "sandbox_job_completed", "sandbox_job_failed",
     "node_up", "node_down"
 }
+
+FINAL_STATUSES = {"completed", "failed", "cancelled"}
+
+
+class JobLogWriter:
+    def __init__(self, job_id: str):
+        self.job_id = job_id
+        self.log_dir = Path(f"/tmp/mn_{job_id}")
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.events_file = self.log_dir / "events.log"
+        self.snapshot_file = self.log_dir / "job_snapshot.json"
+        self.seen = set()
+        self.event_count = 0
+        self.max_bytes = int(
+            os.getenv("MN_RUN_EVENT_LOG_MAX_BYTES", str(10 * 1024 * 1024))
+        )
+        self.backup_count = int(os.getenv("MN_RUN_EVENT_LOG_BACKUP_COUNT", "5"))
+        self.run_logger = self._build_run_logger()
+
+    def _build_run_logger(self) -> logging.Logger:
+        run_logger = logging.getLogger(f"mn-cli.run.{self.job_id}")
+        run_logger.setLevel(os.getenv("MN_RUN_LOG_LEVEL", "INFO").upper())
+        run_logger.propagate = False
+
+        if run_logger.handlers:
+            return run_logger
+
+        handler = RotatingFileHandler(
+            self.log_dir / "run.log",
+            maxBytes=int(os.getenv("MN_RUN_LOG_MAX_BYTES", str(2 * 1024 * 1024))),
+            backupCount=int(os.getenv("MN_RUN_LOG_BACKUP_COUNT", "5")),
+        )
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        run_logger.addHandler(handler)
+        return run_logger
+
+    def write_event_json(self, event_json: str) -> bool:
+        try:
+            event = json.loads(event_json)
+        except Exception:
+            self.run_logger.warning("Skipping invalid event JSON: %r", event_json)
+            return False
+        return self.write_event(event)
+
+    def write_event(self, event: dict) -> bool:
+        key = self._event_key(event)
+        if key in self.seen:
+            return False
+
+        self.seen.add(key)
+        self._rotate_if_needed()
+        with open(self.events_file, "a") as f:
+            f.write(json.dumps(event, sort_keys=True) + "\n")
+        self.event_count += 1
+
+        event_type = event.get("type", "unknown")
+        if event_type in {"slow_event_processed", "stream_metrics_updated"}:
+            payload = event.get("payload", {})
+            self.run_logger.info(
+                "slow_agent_event=%s agent=%s payload=%s",
+                event_type,
+                event.get("agent_id") or payload.get("worker") or event.get("node"),
+                json.dumps(payload, sort_keys=True),
+            )
+        elif event_type in {"backpressure_state", "external_input_rejected"}:
+            self.run_logger.info(
+                "backpressure_event=%s agent=%s payload=%s",
+                event_type,
+                event.get("agent_id"),
+                json.dumps(event.get("payload", {}), sort_keys=True),
+            )
+        elif event_type in {"job_failed", "sandbox_job_failed"}:
+            self.run_logger.error(
+                "event=%s payload=%s", event_type, json.dumps(event, sort_keys=True)
+            )
+        elif event_type not in STANDARD_EVENTS:
+            self.run_logger.info(
+                "custom_event=%s payload=%s",
+                event_type,
+                json.dumps(event, sort_keys=True),
+            )
+        else:
+            self.run_logger.info("event=%s", event_type)
+        return True
+
+    def write_snapshot(self, data: dict):
+        with open(self.snapshot_file, "w") as f:
+            json.dump(data, f, indent=2, sort_keys=True)
+
+    def _rotate_if_needed(self):
+        if not self.events_file.exists() or self.events_file.stat().st_size < self.max_bytes:
+            return
+
+        for index in range(self.backup_count - 1, 0, -1):
+            src = self.log_dir / f"events.log.{index}"
+            dst = self.log_dir / f"events.log.{index + 1}"
+            if src.exists():
+                if dst.exists():
+                    dst.unlink()
+                src.rename(dst)
+
+        first_backup = self.log_dir / "events.log.1"
+        if first_backup.exists():
+            first_backup.unlink()
+        self.events_file.rename(first_backup)
+
+    @staticmethod
+    def _event_key(event: dict):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            payload = {}
+        return (
+            event.get("timestamp"),
+            event.get("type"),
+            event.get("agent_id"),
+            event.get("node"),
+            event.get("message_id") or payload.get("message_id"),
+        )
+
 
 def fetch_and_save_results(job_id: str, data: dict = None):
     log_dir = Path(f"/tmp/mn_{job_id}")
@@ -64,81 +193,91 @@ def fetch_and_save_results(job_id: str, data: dict = None):
                 f.write(json.dumps(se) + "\n")
 
 
-def _stream_and_format_events(job_id: str):
-    console.print(f"Monitoring events for [bold cyan]{job_id}[/bold cyan]... (Press Ctrl+C to detach)")
-    
-    log_dir = Path(f"/tmp/mn_{job_id}")
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / "events.log"
-    
-    console.print(f"Saving raw logs to: [bold]{log_file}[/bold]\n")
+def _stream_and_format_events(
+    job_id: str,
+    log_writer: Optional[JobLogWriter] = None,
+    follow_seconds: Optional[float] = None,
+):
+    log_writer = log_writer or JobLogWriter(job_id)
+    log_dir = log_writer.log_dir
+    follow_seconds = (
+        float(os.getenv("MN_RUN_DETACH_LOG_SECONDS", "30"))
+        if follow_seconds is None
+        else follow_seconds
+    )
     
     status_text = "Unknown / Detached"
     status_color = "yellow"
     msg_count = 0
-    current_step = "[cyan]Connecting..."
     
     try:
-        with open(log_file, "a") as f:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                TimeElapsedColumn(),
-                console=console,
-            ) as progress:
-                job_task = progress.add_task("[cyan]Initializing...", total=4)
-                
-                for event_json in client.stream_events(job_id):
-                    f.write(event_json + "\n")
-                    f.flush()
-                    try:
-                        event = json.loads(event_json)
-                        event_type = event.get("type")
-                        
-                        if event_type not in STANDARD_EVENTS:
-                            with open(log_dir / "result_stream.txt", "a") as f_stream:
-                                f_stream.write(json.dumps(event.get("payload", event)) + "\n")
-                                
-                        if event_type == "job_pending":
-                            current_step = "[cyan]Pending..."
-                            progress.update(job_task, completed=1, description=current_step)
-                        elif event_type == "job_validated":
-                            current_step = "[cyan]Validated..."
-                            progress.update(job_task, completed=2, description=current_step)
-                        elif event_type == "job_scheduled":
-                            current_step = "[green]Scheduled... (Job detached in background)"
-                            progress.update(job_task, completed=4, description=current_step)
-                        elif event_type == "job_running":
-                            current_step = "[cyan]Running..."
-                            progress.update(job_task, completed=4, description=current_step)
-                        elif event_type in ["agent_message_received", "aggregator_received"]:
-                            msg_count += 1
-                            current_step = f"[cyan]Running (Processed {msg_count} msgs)..."
-                            progress.update(job_task, completed=4, description=current_step)
-                        elif event_type == "job_completed":
-                            result = event.get("result")
-                            if result is not None:
-                                with open(log_dir / "result.txt", "w") as f_res:
-                                    json.dump(result, f_res, indent=2)
-                                    
-                            current_step = "[green]Completed successfully!"
-                            progress.update(job_task, completed=4, description=current_step)
-                            status_text = "Success"
-                            status_color = "green"
-                            break
-                        elif event_type == "job_failed":
-                            current_step = "[red]Job failed!"
-                            progress.update(job_task, completed=4, description=current_step)
-                            status_text = "Failed"
-                            status_color = "red"
-                            break
-                        else:
-                            current_step = f"[cyan]Running ({event_type})..."
-                            progress.update(job_task, completed=4, description=current_step)
-                    except Exception:
-                        pass
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            job_task = progress.add_task("[cyan]Submitting job bundle...", total=None)
+
+            for event_json in client.stream_events(job_id):
+                log_writer.write_event_json(event_json)
+                try:
+                    event = json.loads(event_json)
+                    event_type = event.get("type")
+
+                    _write_result_stream_event(log_dir, event)
+
+                    if event_type == "job_pending":
+                        progress.update(
+                            job_task,
+                            description="[cyan]Preparing: job accepted, waiting for validation...",
+                        )
+                    elif event_type == "job_validated":
+                        progress.update(
+                            job_task,
+                            description="[cyan]Preparing: manifest validated, scheduling agents...",
+                        )
+                    elif event_type == "job_scheduled":
+                        progress.update(
+                            job_task,
+                            description="[cyan]Starting: agents scheduled, waiting for runtime to report running...",
+                        )
+                    elif event_type == "job_running":
+                        progress.update(
+                            job_task,
+                            description="[green]Running: streaming live job events...",
+                        )
+                    elif event_type in ["agent_message_received", "aggregator_received"]:
+                        msg_count += 1
+                        progress.update(
+                            job_task,
+                            description=f"[green]Running: {msg_count} routed messages, {log_writer.event_count} events logged...",
+                        )
+                    elif event_type == "job_completed":
+                        result = event.get("result")
+                        if result is not None:
+                            with open(log_dir / "result.txt", "w") as f_res:
+                                json.dump(result, f_res, indent=2)
+
+                        progress.update(
+                            job_task,
+                            description="[green]Completed successfully.",
+                        )
+                        status_text = "Success"
+                        status_color = "green"
+                        break
+                    elif event_type == "job_failed":
+                        progress.update(job_task, description="[red]Job failed.")
+                        status_text = "Failed"
+                        status_color = "red"
+                        break
+                    else:
+                        progress.update(
+                            job_task,
+                            description=f"[cyan]Observing: latest event {event_type}, {log_writer.event_count} events logged...",
+                        )
+                except Exception:
+                    log_writer.run_logger.exception("Failed to process streamed event")
                         
         if status_text in ["Success", "Failed"]:
             panel = generate_summary_panel(
@@ -148,17 +287,89 @@ def _stream_and_format_events(job_id: str):
             )
             console.print(panel)
         else:
-            if current_step.startswith("[green]Scheduled"):
-                console.print(f"\n[green]Job successfully detached in background. It is now scheduled/running.[/green]")
-            else:
-                console.print(f"\n[yellow]Job stream completed prematurely. Last step: {current_step}[/yellow]")
-            console.print(f"To monitor again, run: [bold]mn monitor {job_id}[/bold]")
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                TimeElapsedColumn(),
+                console=console,
+            ) as progress:
+                follow_task = progress.add_task(
+                    f"[cyan]Following job for {follow_seconds:g}s before detach...",
+                    total=None,
+                )
+                status, _data = _follow_job_events(
+                    job_id,
+                    log_writer,
+                    follow_seconds,
+                    progress=progress,
+                    task_id=follow_task,
+                )
+            console.print(generate_detached_panel(job_id, log_dir, status, log_writer.event_count))
         
     except KeyboardInterrupt:
-        console.print(
-            f"\n[yellow]Detached from log stream. Job {job_id} is still running.[/yellow]"
-        )
-        console.print(f"To monitor again, run: [bold]mn monitor {job_id}[/bold]")
+        console.print("[yellow]Detached from log stream.[/yellow]")
+        status, _data = _follow_job_events(job_id, log_writer, 0)
+        console.print(generate_detached_panel(job_id, log_dir, status, log_writer.event_count))
+
+
+def _write_result_stream_event(log_dir: Path, event: dict):
+    if event.get("type") in STANDARD_EVENTS:
+        return
+    with open(log_dir / "result_stream.txt", "a") as f_stream:
+        f_stream.write(json.dumps(event.get("payload", event), sort_keys=True) + "\n")
+
+
+def _follow_job_events(
+    job_id: str,
+    log_writer: JobLogWriter,
+    follow_seconds: float,
+    progress: Optional[Progress] = None,
+    task_id=None,
+):
+    deadline = time.monotonic() + max(follow_seconds, 0)
+    last_status = "unknown"
+    data = None
+
+    while True:
+        try:
+            data = json.loads(client.get_job(job_id))
+            log_writer.write_snapshot(data)
+        except Exception:
+            log_writer.run_logger.exception("Failed to poll job status")
+            break
+
+        job = data.get("job", {})
+        summary = data.get("summary", {})
+        last_status = summary.get("status") or job.get("status") or last_status
+
+        recent_events = data.get("recent_events", [])
+        for event in reversed(recent_events):
+            if log_writer.write_event(event):
+                _write_result_stream_event(log_writer.log_dir, event)
+
+        if progress is not None and task_id is not None:
+            remaining = max(deadline - time.monotonic(), 0)
+            progress.update(
+                task_id,
+                description=(
+                    f"[cyan]Following: status {last_status}, "
+                    f"{log_writer.event_count} events logged, detach in {remaining:0.1f}s..."
+                ),
+            )
+
+        if last_status in FINAL_STATUSES:
+            result = job.get("result")
+            if result is not None:
+                with open(log_writer.log_dir / "result.txt", "w") as f_res:
+                    json.dump(result, f_res, indent=2, sort_keys=True)
+            break
+
+        if time.monotonic() >= deadline:
+            break
+
+        time.sleep(float(os.getenv("MN_RUN_LOG_POLL_INTERVAL_SECONDS", "0.5")))
+
+    return last_status, data
 
 
 def validate(bundle_path: str):
@@ -195,6 +406,10 @@ def validate(bundle_path: str):
             console.print("[red]Error: 'nodes' must be a list in manifest.json[/red]")
             raise typer.Exit(1)
 
+        if "requiredContextEngine" in manifest and not isinstance(manifest.get("requiredContextEngine"), bool):
+            console.print("[red]Error: 'requiredContextEngine' must be true or false in manifest.json[/red]")
+            raise typer.Exit(1)
+
         console.print(f"[green]✓ Job bundle at '{bundle_path}' is valid.[/green]")
         console.print(f"  - Job Name: {manifest.get('job_name')}")
         console.print(f"  - Graph ID: {manifest.get('graph_id')}")
@@ -207,7 +422,16 @@ def validate(bundle_path: str):
         raise typer.Exit(1)
 
 
-def run(bundle_path: str):
+def run(
+    bundle_path: str,
+    follow_seconds: Annotated[
+        Optional[float],
+        typer.Option(
+            "--follow-seconds",
+            help="Seconds to keep polling job events after the submit stream detaches. Defaults to MN_RUN_DETACH_LOG_SECONDS or 30.",
+        ),
+    ] = None,
+):
     """Run a job bundle from a local folder directly"""
     try:
         bundle_dir = Path(bundle_path)
@@ -256,12 +480,25 @@ def run(bundle_path: str):
                     with open(filepath, "rb") as f:
                         payloads[rel_path] = f.read()
 
-        console.print(
-            f"Submitting bundle '{bundle_dir.name}' with {len(payloads)} payloads..."
-        )
         job_id = client.submit_job(manifest, payloads)
-        console.print(f"[green]Job submitted successfully. Job ID: {job_id}[/green]")
-        _stream_and_format_events(job_id)
+        log_writer = JobLogWriter(job_id)
+        resolved_follow_seconds = (
+            float(os.getenv("MN_RUN_DETACH_LOG_SECONDS", "30"))
+            if follow_seconds is None
+            else follow_seconds
+        )
+
+        console.print(
+            generate_run_submitted_panel(
+                bundle_name=bundle_dir.name,
+                job_id=job_id,
+                payload_count=len(payloads),
+                log_dir=log_writer.log_dir,
+                follow_seconds=resolved_follow_seconds,
+                run_mode=_run_mode_label(manifest_dict),
+            )
+        )
+        _stream_and_format_events(job_id, log_writer, resolved_follow_seconds)
     except typer.Exit:
         raise
     except Exception as e:
@@ -269,6 +506,13 @@ def run(bundle_path: str):
         raise typer.Exit(1)
 
 
+def _run_mode_label(manifest: dict) -> str:
+    is_live = manifest.get("daemon") is True or manifest.get("policies", {}).get("stream_mode") == "live"
+    if is_live and manifest.get("daemon") is True:
+        return "Live daemon"
+    if is_live:
+        return "Live"
+    return "Batch"
 def _live_monitor(job_id: str):
     import sys
     import select

@@ -1,5 +1,8 @@
 import pytest
 import json
+import logging
+import uuid
+from logging.handlers import RotatingFileHandler
 from typer.testing import CliRunner
 from mn_cli.main import app
 from mn_cli.libs import run_cmds
@@ -91,9 +94,126 @@ def test_run_success(mocker, tmp_path):
     
     assert result.exit_code == 0
     assert "Job submitted successfully" in result.stdout
+    assert "Type" in result.stdout
+    assert "Batch" in result.stdout
     assert "Job Status: Success" in result.stdout
     mock_submit.assert_called_once()
     mock_stream.assert_called_once_with("job-123")
+
+def test_run_displays_live_job_type_and_follow_status(mocker, tmp_path):
+    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-live")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_pending"}),
+        json.dumps({"type": "job_scheduled"}),
+    ])
+    mocker.patch(
+        'mn_cli.libs.run_cmds.client.get_job',
+        return_value=json.dumps({
+            "summary": {"status": "running"},
+            "job": {"status": "running"},
+            "recent_events": [],
+        }),
+    )
+
+    bundle_dir = tmp_path / "live_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "daemon": True,
+        "policies": {"stream_mode": "live"},
+        "nodes": [],
+    }))
+
+    result = runner.invoke(app, ["run", str(bundle_dir), "--follow-seconds", "0"])
+
+    assert result.exit_code == 0
+    assert "Live daemon" in result.stdout
+    assert "Starting: agents scheduled" in result.stdout
+    assert "Following: status running" in result.stdout
+    assert "75%" not in result.stdout
+
+def test_run_uses_detach_log_seconds_env(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUN_DETACH_LOG_SECONDS", "4.5")
+    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-env-follow")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_pending"}),
+        json.dumps({"type": "job_scheduled"}),
+    ])
+    mock_follow = mocker.patch(
+        'mn_cli.libs.run_cmds._follow_job_events',
+        return_value=("running", {}),
+    )
+
+    bundle_dir = tmp_path / "run_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text('{"nodes": []}')
+
+    result = runner.invoke(app, ["run", str(bundle_dir)])
+
+    assert result.exit_code == 0
+    assert "4.5s event tail" in result.stdout
+    assert mock_follow.call_args.args[2] == 4.5
+
+def test_run_follow_seconds_option_overrides_env(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUN_DETACH_LOG_SECONDS", "9")
+    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-option-follow")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_scheduled"}),
+    ])
+    mock_follow = mocker.patch(
+        'mn_cli.libs.run_cmds._follow_job_events',
+        return_value=("running", {}),
+    )
+
+    bundle_dir = tmp_path / "run_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text('{"nodes": []}')
+
+    result = runner.invoke(app, ["run", str(bundle_dir), "--follow-seconds", "1.25"])
+
+    assert result.exit_code == 0
+    assert "1.25s event tail" in result.stdout
+    assert mock_follow.call_args.args[2] == 1.25
+
+def test_job_log_writer_uses_run_logging_env(monkeypatch):
+    job_id = f"env-vars-{uuid.uuid4().hex}"
+    monkeypatch.setenv("MN_RUN_EVENT_LOG_MAX_BYTES", "123")
+    monkeypatch.setenv("MN_RUN_EVENT_LOG_BACKUP_COUNT", "2")
+    monkeypatch.setenv("MN_RUN_LOG_LEVEL", "DEBUG")
+    monkeypatch.setenv("MN_RUN_LOG_MAX_BYTES", "456")
+    monkeypatch.setenv("MN_RUN_LOG_BACKUP_COUNT", "3")
+
+    writer = run_cmds.JobLogWriter(job_id)
+    handler = next(
+        handler
+        for handler in writer.run_logger.handlers
+        if isinstance(handler, RotatingFileHandler)
+    )
+
+    assert writer.max_bytes == 123
+    assert writer.backup_count == 2
+    assert writer.run_logger.level == logging.DEBUG
+    assert handler.maxBytes == 456
+    assert handler.backupCount == 3
+
+def test_job_log_writer_rotates_event_log_with_env(monkeypatch):
+    job_id = f"rotate-{uuid.uuid4().hex}"
+    monkeypatch.setenv("MN_RUN_EVENT_LOG_MAX_BYTES", "1")
+    monkeypatch.setenv("MN_RUN_EVENT_LOG_BACKUP_COUNT", "2")
+
+    writer = run_cmds.JobLogWriter(job_id)
+    for index in range(4):
+        writer.write_event(
+            {
+                "type": "custom",
+                "timestamp": f"2026-04-29T00:00:0{index}Z",
+                "payload": {"value": "x" * 20},
+            }
+        )
+
+    assert writer.events_file.exists()
+    assert (writer.log_dir / "events.log.1").exists()
+    assert (writer.log_dir / "events.log.2").exists()
+    assert not (writer.log_dir / "events.log.3").exists()
 
 def test_run_error_submitting(mocker, tmp_path):
     mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', side_effect=Exception("API failure"))
