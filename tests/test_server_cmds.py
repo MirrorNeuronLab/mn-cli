@@ -162,6 +162,44 @@ def test_start_server_darwin(mocker, tmp_path):
     
     _start_server()
 
+
+def test_start_server_passes_slack_env_to_docker(mocker, tmp_path, monkeypatch):
+    mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
+    mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', ())
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setenv("SLACK_DEFAULT_CHANNEL", "#claw")
+
+    commands = []
+
+    def mock_run(cmd, **kwargs):
+        commands.append(cmd)
+        m = mocker.Mock()
+        m.stdout = "false\n"
+        return m
+
+    mocker.patch('mn_cli.server_cmds.subprocess.run', side_effect=mock_run)
+    mocker.patch('mn_cli.server_cmds.time.sleep')
+    mocker.patch('mn_cli.server_cmds.PID_DIR', tmp_path / ".pids")
+    mocker.patch('mn_cli.server_cmds.LOG_DIR', tmp_path / ".logs")
+    mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
+    mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
+    mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path)
+
+    class UnameMock:
+        sysname = "Darwin"
+
+    mocker.patch('mn_cli.server_cmds.os.uname', return_value=UnameMock())
+
+    _start_server()
+
+    docker_run = next(cmd for cmd in commands if cmd[:3] == ["docker", "run", "-d"])
+    assert ["-e", "SLACK_BOT_TOKEN"] == docker_run[
+        docker_run.index("SLACK_BOT_TOKEN") - 1 : docker_run.index("SLACK_BOT_TOKEN") + 1
+    ]
+    assert ["-e", "SLACK_DEFAULT_CHANNEL"] == docker_run[
+        docker_run.index("SLACK_DEFAULT_CHANNEL") - 1 : docker_run.index("SLACK_DEFAULT_CHANNEL") + 1
+    ]
+
 def test_find_web_ui_dir_installed(tmp_path, mocker):
     missing = tmp_path / "missing"
     installed = tmp_path / "web-ui"

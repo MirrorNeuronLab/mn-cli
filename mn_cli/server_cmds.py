@@ -217,6 +217,17 @@ def _start_server(ip: str = None):
         cmd.extend(["-e", f"MIRROR_NEURON_CLUSTER_NODES=mirror_neuron@{ip}"])
         # A node joining another should also point its redis to the main cluster leader if not specified
         cmd.extend(["-e", f"MIRROR_NEURON_REDIS_URL=redis://{ip}:6379/0"])
+
+    for env_name in [
+        "SLACK_BOT_TOKEN",
+        "SLACK_DEFAULT_CHANNEL",
+        "SLACK_API_BASE_URL",
+        "MIRROR_NEURON_SLACK_BOT_TOKEN",
+        "MIRROR_NEURON_SLACK_DEFAULT_CHANNEL",
+        "MIRROR_NEURON_SLACK_API_BASE_URL",
+    ]:
+        if os.getenv(env_name):
+            cmd.extend(["-e", env_name])
     
     cmd.append("mirror-neuron-core:latest")
     
