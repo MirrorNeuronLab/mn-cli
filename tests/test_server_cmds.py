@@ -228,6 +228,7 @@ def test_start_web_ui_if_installed(mocker, tmp_path):
     assert (tmp_path / "web-ui.pid").read_text() == "5173"
     mock_popen.assert_called_once()
     assert mock_popen.call_args.args[0][:3] == ["npm", "run", "dev"]
+    assert mock_popen.call_args.args[0][-1] == "localhost"
     assert mock_popen.call_args.kwargs["cwd"] == web_ui_dir
 
 def test_start_web_ui_missing_noop(mocker, tmp_path):
@@ -264,3 +265,30 @@ def test_print_service_endpoints(mocker, monkeypatch):
     assert "4370" in rendered
     assert "Web UI" in rendered
     assert "5173" in rendered
+
+def test_print_service_endpoints_defaults_to_localhost(mocker, monkeypatch):
+    output = StringIO()
+    mocker.patch('mn_cli.server_cmds.console', Console(file=output, force_terminal=False, width=120))
+    for name in (
+        "MIRROR_NEURON_GRPC_TARGET",
+        "MIRROR_NEURON_CORE_GRPC_TARGET",
+        "MIRROR_NEURON_CORE_HOST",
+        "MIRROR_NEURON_API_HOST",
+        "MIRROR_NEURON_REDIS_HOST",
+        "MIRROR_NEURON_REDIS_URL",
+        "MIRROR_NEURON_EPMD_HOST",
+        "MIRROR_NEURON_DIST_HOST",
+        "MIRROR_NEURON_WEB_UI_HOST",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    _print_service_endpoints(ip=None, web_ui_available=True)
+
+    rendered = output.getvalue()
+    assert "Core gRPC" in rendered
+    assert "REST API" in rendered
+    assert "Redis" in rendered
+    assert "Web UI" in rendered
+    assert "localhost" in rendered
+    assert "0.0.0.0" not in rendered
+    assert "127.0.0.1" not in rendered

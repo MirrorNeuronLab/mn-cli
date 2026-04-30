@@ -28,8 +28,32 @@ WEB_UI_DIRS = (
     DIR / "web-ui-source",
     Path(f"{DIR}_ui"),
 )
-WEB_UI_HOST = "127.0.0.1"
 WEB_UI_PORT = "5173"
+DEFAULT_HOST = "localhost"
+
+def _env_host(name: str, default: str = DEFAULT_HOST) -> str:
+    return os.getenv(name, default).strip() or default
+
+def _core_host() -> str:
+    return _env_host("MIRROR_NEURON_CORE_HOST")
+
+def _api_host() -> str:
+    return _env_host("MIRROR_NEURON_API_HOST")
+
+def _redis_host() -> str:
+    return _env_host("MIRROR_NEURON_REDIS_HOST")
+
+def _epmd_host() -> str:
+    return _env_host("MIRROR_NEURON_EPMD_HOST")
+
+def _dist_host() -> str:
+    return _env_host("MIRROR_NEURON_DIST_HOST")
+
+def _web_ui_host() -> str:
+    return _env_host("MIRROR_NEURON_WEB_UI_HOST")
+
+def _docker_publish_host(host: str) -> str:
+    return "127.0.0.1" if host == "localhost" else host
 
 def check_status(pid_file: Path) -> int:
     if pid_file.exists():
@@ -85,23 +109,31 @@ def _host_port_from_target(target: str, default_host: str, default_port: str) ->
     return target or default_host, default_port
 
 def _redis_host_port(ip: Optional[str]) -> tuple[str, str]:
-    default_url = f"redis://{ip}:6379/0" if ip else "redis://127.0.0.1:6379/0"
+    default_host = ip or _redis_host()
+    default_url = f"redis://{default_host}:6379/0"
     return _host_port_from_target(
         os.getenv("MIRROR_NEURON_REDIS_URL", default_url),
-        "127.0.0.1",
+        default_host,
         "6379",
     )
 
 def _print_service_endpoints(ip: Optional[str], web_ui_available: bool):
+    core_host = _core_host()
     grpc_host, grpc_port = _host_port_from_target(
-        os.getenv("MIRROR_NEURON_GRPC_TARGET", os.getenv("MIRROR_NEURON_CORE_GRPC_TARGET", "localhost:50051")),
-        "localhost",
+        os.getenv(
+            "MIRROR_NEURON_GRPC_TARGET",
+            os.getenv("MIRROR_NEURON_CORE_GRPC_TARGET", f"{core_host}:50051"),
+        ),
+        core_host,
         os.getenv("MIRROR_NEURON_GRPC_PORT", "50051"),
     )
-    api_host = os.getenv("MIRROR_NEURON_API_HOST", "0.0.0.0")
+    api_host = _api_host()
     api_port = os.getenv("MIRROR_NEURON_API_PORT", "4001")
     redis_host, redis_port = _redis_host_port(ip)
+    epmd_host = _epmd_host()
+    dist_host = _dist_host()
     dist_port = os.getenv("MIRROR_NEURON_DIST_PORT", "9000-9010" if os.uname().sysname == "Darwin" else "dynamic")
+    web_ui_host = _web_ui_host()
 
     table = Table(title="Service endpoints", show_header=True, header_style="bold")
     table.add_column("Service")
@@ -110,12 +142,12 @@ def _print_service_endpoints(ip: Optional[str], web_ui_available: bool):
     table.add_column("URL / target")
 
     table.add_row("Core gRPC", grpc_host, grpc_port, f"{grpc_host}:{grpc_port}")
-    table.add_row("REST API", api_host, api_port, f"http://localhost:{api_port}/api/v1")
+    table.add_row("REST API", api_host, api_port, f"http://{api_host}:{api_port}/api/v1")
     table.add_row("Redis", redis_host, redis_port, f"redis://{redis_host}:{redis_port}/0")
-    table.add_row("Erlang EPMD", "localhost", "4369", "localhost:4369")
-    table.add_row("Erlang dist", "localhost", dist_port, f"localhost:{dist_port}")
+    table.add_row("Erlang EPMD", epmd_host, "4369", f"{epmd_host}:4369")
+    table.add_row("Erlang dist", dist_host, dist_port, f"{dist_host}:{dist_port}")
     if web_ui_available:
-        table.add_row("Web UI", WEB_UI_HOST, WEB_UI_PORT, f"http://{WEB_UI_HOST}:{WEB_UI_PORT}")
+        table.add_row("Web UI", web_ui_host, WEB_UI_PORT, f"http://{web_ui_host}:{WEB_UI_PORT}")
 
     console.print(table)
 
@@ -131,14 +163,19 @@ def _start_web_ui_if_installed() -> bool:
     if status == 1:
         WEB_UI_PID_FILE.unlink(missing_ok=True)
 
-    console.print("=> Starting mn-web-ui (Vite on port 5173)...")
+    web_ui_host = _web_ui_host()
+    env = os.environ.copy()
+    env.setdefault("MIRROR_NEURON_WEB_UI_HOST", web_ui_host)
+    env.setdefault("MIRROR_NEURON_API_HOST", _api_host())
+    env.setdefault("MIRROR_NEURON_API_PORT", os.getenv("MIRROR_NEURON_API_PORT", "4001"))
+    console.print(f"=> Starting mn-web-ui (Vite on {web_ui_host}:5173)...")
     with open(WEB_UI_LOG, "w") as out:
         p_web = subprocess.Popen(
-            ["npm", "run", "dev", "--", "--host", "127.0.0.1"],
+            ["npm", "run", "dev", "--", "--host", web_ui_host],
             cwd=web_ui_dir,
             stdout=out,
             stderr=subprocess.STDOUT,
-            env=os.environ.copy(),
+            env=env,
             start_new_session=True
         )
     WEB_UI_PID_FILE.write_text(str(p_web.pid))
@@ -172,6 +209,13 @@ def _start_server(ip: str = None):
     console.print("===========================================")
 
     env = os.environ.copy()
+    env.setdefault("MIRROR_NEURON_CORE_HOST", _core_host())
+    env.setdefault("MIRROR_NEURON_API_HOST", _api_host())
+    env.setdefault("MIRROR_NEURON_REDIS_HOST", _redis_host())
+    env.setdefault("MIRROR_NEURON_EPMD_HOST", _epmd_host())
+    env.setdefault("MIRROR_NEURON_DIST_HOST", _dist_host())
+    env.setdefault("MIRROR_NEURON_WEB_UI_HOST", _web_ui_host())
+    env.setdefault("MIRROR_NEURON_CORE_GRPC_TARGET", f"{env['MIRROR_NEURON_CORE_HOST']}:{os.getenv('MIRROR_NEURON_GRPC_PORT', '50051')}")
     if ip:
         env["MIRROR_NEURON_CLUSTER_NODES"] = ip
 
@@ -202,16 +246,29 @@ def _start_server(ip: str = None):
         
     cmd.extend(["-e", f"MIRROR_NEURON_NODE_NAME=mirror_neuron@{local_ip}"])
     
-    if os.uname().sysname == "Darwin":
-        cmd.extend(["-p", "50051:50051", "-p", "4369:4369"])
+    core_publish_host = _docker_publish_host(env["MIRROR_NEURON_CORE_HOST"])
+    epmd_publish_host = _docker_publish_host(env["MIRROR_NEURON_EPMD_HOST"])
+    dist_publish_host = _docker_publish_host(env["MIRROR_NEURON_DIST_HOST"])
+
+    system_name = os.uname().sysname
+
+    if system_name == "Darwin":
+        cmd.extend(["-p", f"{core_publish_host}:50051:50051", "-p", f"{epmd_publish_host}:4369:4369"])
         # Publish the distribution ports too
         for port in range(9000, 9011):
-            cmd.extend(["-p", f"{port}:{port}"])
+            cmd.extend(["-p", f"{dist_publish_host}:{port}:{port}"])
         cmd.extend(["-e", "MIRROR_NEURON_REDIS_URL=redis://host.docker.internal:6379/0"])
         cmd.extend(["-e", "MIRROR_NEURON_EXECUTOR_MAX_CONCURRENCY=50"])
     else:
         cmd.extend(["--network", "host"])
         cmd.extend(["-e", "MIRROR_NEURON_EXECUTOR_MAX_CONCURRENCY=50"])
+
+    if system_name == "Darwin":
+        cmd.extend(["-e", "MIRROR_NEURON_CORE_HOST=0.0.0.0"])
+    else:
+        cmd.extend(["-e", f"MIRROR_NEURON_CORE_HOST={env['MIRROR_NEURON_CORE_HOST']}"])
+        cmd.extend(["-e", f"MIRROR_NEURON_REDIS_HOST={env['MIRROR_NEURON_REDIS_HOST']}"])
+        cmd.extend(["-e", f"ERL_EPMD_ADDRESS={env['MIRROR_NEURON_EPMD_HOST']}"])
 
     if ip:
         cmd.extend(["-e", f"MIRROR_NEURON_CLUSTER_NODES=mirror_neuron@{ip}"])

@@ -15,8 +15,12 @@ class CliConfig:
 
     @classmethod
     def from_env(cls) -> "CliConfig":
+        core_host = os.getenv("MIRROR_NEURON_CORE_HOST", "localhost")
         return cls(
-            grpc_target=os.getenv("MIRROR_NEURON_GRPC_TARGET", "localhost:50051"),
+            grpc_target=os.getenv(
+                "MIRROR_NEURON_GRPC_TARGET",
+                os.getenv("MIRROR_NEURON_CORE_GRPC_TARGET", f"{core_host}:50051"),
+            ),
             grpc_timeout_seconds=_timeout(),
             grpc_auth_token=os.getenv("MIRROR_NEURON_GRPC_AUTH_TOKEN", ""),
             log_path=Path(
