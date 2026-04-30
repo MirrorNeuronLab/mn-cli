@@ -315,8 +315,50 @@ def _stream_and_format_events(
 def _write_result_stream_event(log_dir: Path, event: dict):
     if event.get("type") in STANDARD_EVENTS:
         return
+    payload = event.get("payload", event)
+    _materialize_sent_email_copy(log_dir, payload)
     with open(log_dir / "result_stream.txt", "a") as f_stream:
-        f_stream.write(json.dumps(event.get("payload", event), sort_keys=True) + "\n")
+        f_stream.write(json.dumps(payload, sort_keys=True) + "\n")
+
+
+def _materialize_sent_email_copy(log_dir: Path, payload: dict):
+    if not isinstance(payload, dict):
+        return
+    sent_copy = payload.get("sent_email_copy")
+    if not isinstance(sent_copy, dict):
+        return
+    html_content = sent_copy.get("html_content")
+    text_content = sent_copy.get("text_content")
+    metadata = sent_copy.get("metadata")
+    if html_content is None and text_content is None and not isinstance(metadata, dict):
+        return
+
+    email_dir = log_dir / "sent_emails"
+    email_dir.mkdir(parents=True, exist_ok=True)
+
+    def resolve_path(raw_path: Optional[str], suffix: str) -> Path:
+        if raw_path:
+            return email_dir / Path(raw_path).name
+        stem = str(payload.get("provider_id") or payload.get("subject") or time.time_ns())
+        safe_stem = "".join(ch if ch.isalnum() or ch in "._-" else "-" for ch in stem)[:96]
+        return email_dir / f"{safe_stem or time.time_ns()}.{suffix}"
+
+    html_path = resolve_path(sent_copy.get("html_path"), "html")
+    text_path = resolve_path(sent_copy.get("text_path"), "txt")
+    metadata_path = resolve_path(sent_copy.get("metadata_path"), "json")
+
+    if html_content is not None:
+        html_path.write_text(str(html_content), encoding="utf-8")
+    if text_content is not None:
+        text_path.write_text(str(text_content), encoding="utf-8")
+    if isinstance(metadata, dict):
+        host_metadata = {
+            **metadata,
+            "host_html_path": str(html_path),
+            "host_text_path": str(text_path),
+            "host_metadata_path": str(metadata_path),
+        }
+        metadata_path.write_text(json.dumps(host_metadata, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _follow_job_events(
