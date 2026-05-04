@@ -2,7 +2,7 @@ from rich.console import Group
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 def generate_live_layout(job_id: str, data: Dict[str, Any]) -> Group:
     summary = data.get("summary", {})
@@ -103,12 +103,18 @@ def generate_run_submitted_panel(
     log_dir,
     follow_seconds: float,
     run_mode: str = "Batch",
+    blueprint_run_id: Optional[str] = None,
+    blueprint_revision: Optional[str] = None,
 ) -> Panel:
     table = Table.grid(padding=(0, 1))
     table.add_column(style="bold")
     table.add_column()
     table.add_row("Bundle", bundle_name)
     table.add_row("Job ID", f"[bold cyan]{job_id}[/bold cyan]")
+    if blueprint_run_id:
+        table.add_row("Blueprint Run ID", f"[bold green]{blueprint_run_id}[/bold green]")
+    if blueprint_revision:
+        table.add_row("Blueprint Revision", blueprint_revision[:12])
     table.add_row("Type", run_mode)
     table.add_row("Payloads", str(payload_count))
     table.add_row("Logs", str(log_dir / "events.log"))

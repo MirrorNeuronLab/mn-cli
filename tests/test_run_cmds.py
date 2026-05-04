@@ -100,6 +100,67 @@ def test_run_success(mocker, tmp_path):
     mock_submit.assert_called_once()
     mock_stream.assert_called_once_with("job-123")
 
+
+def test_run_injects_blueprint_config_scenario_and_run_id(mocker, tmp_path):
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_completed"})
+    ])
+
+    bundle_dir = tmp_path / "run_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "environment": {
+                        "LITELLM_MODEL": "ollama/nemotron3:33b",
+                        "LITELLM_API_BASE": "http://old",
+                    }
+                },
+            }
+        ]
+    }))
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(json.dumps({"identity": {"blueprint_id": "bp-1"}}))
+    (bundle_dir / "scenario.json").write_text(json.dumps({"blueprint_id": "bp-1", "metrics": [], "actions": []}))
+    (bundle_dir / "product.json").write_text(json.dumps({"title": "bp-1"}))
+
+    result = runner.invoke(app, ["run", str(bundle_dir)])
+
+    assert result.exit_code == 0
+    manifest = json.loads(mock_submit.call_args.args[0])
+    env = manifest["nodes"][0]["config"]["environment"]
+    assert json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])["identity"]["blueprint_id"] == "bp-1"
+    assert json.loads(env["MN_BLUEPRINT_SCENARIO_JSON"])["blueprint_id"] == "bp-1"
+    assert json.loads(env["MN_BLUEPRINT_PRODUCT_JSON"])["title"] == "bp-1"
+    assert env["MN_LLM_MODEL"] == "ollama/nemotron3:33b"
+    assert env["MN_LLM_API_BASE"] == "http://old"
+
+
+def test_run_records_blueprint_run_id_mapping(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-abc")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_completed"})
+    ])
+
+    bundle_dir = tmp_path / "run_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({"nodes": []}))
+
+    run_cmds.run_bundle(
+        str(bundle_dir),
+        env_overrides={"MN_RUN_ID": "bp-run"},
+        submission_metadata={"blueprint_run_id": "bp-run", "blueprint_revision": "rev-1"},
+    )
+
+    mapping = json.loads((tmp_path / "runs" / "bp-run" / "job.json").read_text())
+    assert mapping["job_id"] == "job-abc"
+    assert mapping["blueprint_revision"] == "rev-1"
+
 def test_run_displays_live_job_type_and_follow_status(mocker, tmp_path):
     mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-live")
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
@@ -214,6 +275,16 @@ def test_job_log_writer_rotates_event_log_with_env(monkeypatch):
     assert (writer.log_dir / "events.log.1").exists()
     assert (writer.log_dir / "events.log.2").exists()
     assert not (writer.log_dir / "events.log.3").exists()
+
+def test_job_log_writer_extracts_web_ui_url_once():
+    writer = run_cmds.JobLogWriter(f"web-ui-{uuid.uuid4().hex}")
+    event = {
+        "type": "web_ui_available",
+        "payload": {"url": "http://127.0.0.1:7860", "adapter": "gradio"},
+    }
+
+    assert writer.record_web_ui_url(event) == "http://127.0.0.1:7860"
+    assert writer.record_web_ui_url(event) is None
 
 def test_run_error_submitting(mocker, tmp_path):
     mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', side_effect=Exception("API failure"))

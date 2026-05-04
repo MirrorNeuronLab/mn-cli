@@ -15,29 +15,29 @@ class CliConfig:
 
     @classmethod
     def from_env(cls) -> "CliConfig":
-        core_host = os.getenv("MIRROR_NEURON_CORE_HOST", "localhost")
+        core_host = os.getenv("MN_CORE_HOST", "localhost")
         return cls(
             grpc_target=os.getenv(
-                "MIRROR_NEURON_GRPC_TARGET",
-                os.getenv("MIRROR_NEURON_CORE_GRPC_TARGET", f"{core_host}:50051"),
+                "MN_GRPC_TARGET",
+                os.getenv("MN_CORE_GRPC_TARGET", f"{core_host}:50051"),
             ),
             grpc_timeout_seconds=_timeout(),
-            grpc_auth_token=os.getenv("MIRROR_NEURON_GRPC_AUTH_TOKEN", ""),
+            grpc_auth_token=os.getenv("MN_GRPC_AUTH_TOKEN", ""),
             log_path=Path(
                 os.getenv(
-                    "MIRROR_NEURON_CLI_LOG_PATH",
+                    "MN_CLI_LOG_PATH",
                     str(Path.home() / ".mn" / "logs" / "cli.log"),
                 )
             ).expanduser(),
-            output_mode=os.getenv("MIRROR_NEURON_CLI_OUTPUT", "rich"),
+            output_mode=os.getenv("MN_CLI_OUTPUT", "rich"),
         )
 
 
 def _timeout() -> float | None:
-    value = os.getenv("MIRROR_NEURON_GRPC_TIMEOUT_SECONDS", "10")
+    value = os.getenv("MN_GRPC_TIMEOUT_SECONDS", "10")
     if value.lower() in {"", "none", "0"}:
         return None
     try:
         return float(value)
     except ValueError as exc:
-        raise ValueError("MIRROR_NEURON_GRPC_TIMEOUT_SECONDS must be a number, 0, or none") from exc
+        raise ValueError("MN_GRPC_TIMEOUT_SECONDS must be a number, 0, or none") from exc

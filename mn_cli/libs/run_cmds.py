@@ -4,7 +4,7 @@ import os
 import time
 import logging
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from logging.handlers import RotatingFileHandler
 from mn_cli.libs.ui import (
@@ -37,6 +37,7 @@ class JobLogWriter:
         self.events_file = self.log_dir / "events.log"
         self.snapshot_file = self.log_dir / "job_snapshot.json"
         self.seen = set()
+        self.web_ui_urls = set()
         self.event_count = 0
         self.max_bytes = int(
             os.getenv("MN_RUN_EVENT_LOG_MAX_BYTES", str(10 * 1024 * 1024))
@@ -144,6 +145,22 @@ class JobLogWriter:
             event.get("message_id") or payload.get("message_id"),
         )
 
+    def record_web_ui_url(self, event: dict) -> Optional[str]:
+        url = _extract_web_ui_url(event)
+        if not url or url in self.web_ui_urls:
+            return None
+        self.web_ui_urls.add(url)
+        return url
+
+
+def _extract_web_ui_url(event: dict) -> Optional[str]:
+    payload = event.get("payload") if isinstance(event, dict) else None
+    if not isinstance(payload, dict):
+        payload = event if isinstance(event, dict) else {}
+    web_ui = payload.get("web_ui") if isinstance(payload.get("web_ui"), dict) else payload
+    url = web_ui.get("url") or web_ui.get("web_ui_url") or web_ui.get("local_url")
+    return str(url) if url else None
+
 
 def fetch_and_save_results(job_id: str, data: dict = None):
     log_dir = Path(f"/tmp/mn_{job_id}")
@@ -226,6 +243,9 @@ def _stream_and_format_events(
                     event_type = event.get("type")
 
                     _write_result_stream_event(log_dir, event)
+                    web_ui_url = log_writer.record_web_ui_url(event)
+                    if web_ui_url:
+                        progress.console.print(f"[green]Blueprint Web UI:[/green] {web_ui_url}")
 
                     if event_type == "job_pending":
                         progress.update(
@@ -388,6 +408,9 @@ def _follow_job_events(
         for event in reversed(recent_events):
             if log_writer.write_event(event):
                 _write_result_stream_event(log_writer.log_dir, event)
+                web_ui_url = log_writer.record_web_ui_url(event)
+                if web_ui_url and progress is not None:
+                    progress.console.print(f"[green]Blueprint Web UI:[/green] {web_ui_url}")
 
         if progress is not None and task_id is not None:
             remaining = max(deadline - time.monotonic(), 0)
@@ -475,6 +498,17 @@ def run(
     ] = None,
 ):
     """Run a job bundle from a local folder directly"""
+    run_bundle(bundle_path, follow_seconds=follow_seconds)
+
+
+def run_bundle(
+    bundle_path: str,
+    *,
+    follow_seconds: Optional[float] = None,
+    env_overrides: Optional[dict[str, str]] = None,
+    submission_metadata: Optional[dict[str, Any]] = None,
+):
+    """Run a bundle after applying optional runtime metadata and environment."""
     try:
         bundle_dir = Path(bundle_path)
         if not bundle_dir.is_dir():
@@ -511,6 +545,12 @@ def run(
                 console.print("[red]Bundle requires configuration, but config.py was not found.[/red]")
                 raise typer.Exit(1)
                 
+        manifest_dict = prepare_manifest_for_submission(
+            bundle_dir,
+            manifest_dict,
+            env_overrides=env_overrides,
+            submission_metadata=submission_metadata,
+        )
         manifest = json.dumps(manifest_dict)
 
         payloads = {}
@@ -524,6 +564,9 @@ def run(
 
         job_id = client.submit_job(manifest, payloads)
         log_writer = JobLogWriter(job_id)
+        blueprint_run_id = (submission_metadata or {}).get("blueprint_run_id") or (env_overrides or {}).get("MN_RUN_ID")
+        if blueprint_run_id:
+            _write_blueprint_job_mapping(blueprint_run_id, job_id, submission_metadata or {})
         resolved_follow_seconds = (
             float(os.getenv("MN_RUN_DETACH_LOG_SECONDS", "30"))
             if follow_seconds is None
@@ -538,6 +581,8 @@ def run(
                 log_dir=log_writer.log_dir,
                 follow_seconds=resolved_follow_seconds,
                 run_mode=_run_mode_label(manifest_dict),
+                blueprint_run_id=blueprint_run_id,
+                blueprint_revision=(submission_metadata or {}).get("blueprint_revision"),
             )
         )
         _stream_and_format_events(job_id, log_writer, resolved_follow_seconds)
@@ -546,6 +591,82 @@ def run(
     except Exception as e:
         handle_cli_error(e, console, 'run bundle')
         raise typer.Exit(1)
+
+
+def prepare_manifest_for_submission(
+    bundle_dir: Path,
+    manifest_dict: dict[str, Any],
+    *,
+    env_overrides: Optional[dict[str, str]] = None,
+    submission_metadata: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    prepared = json.loads(json.dumps(manifest_dict))
+    runtime_env = _blueprint_runtime_environment(bundle_dir)
+    runtime_env.update({key: str(value) for key, value in (env_overrides or {}).items() if value is not None})
+    if runtime_env:
+        _inject_node_environment(prepared, runtime_env)
+    metadata = dict(submission_metadata or {})
+    if metadata:
+        prepared.setdefault("metadata", {}).setdefault("mn_cli", {}).update(metadata)
+    return prepared
+
+
+def _blueprint_runtime_environment(bundle_dir: Path) -> dict[str, str]:
+    env: dict[str, str] = {}
+    for filename, env_name in (
+        ("config/default.json", "MN_BLUEPRINT_CONFIG_JSON"),
+        ("scenario.json", "MN_BLUEPRINT_SCENARIO_JSON"),
+        ("product.json", "MN_BLUEPRINT_PRODUCT_JSON"),
+    ):
+        path = bundle_dir / filename
+        if path.exists():
+            env[env_name] = path.read_text(encoding="utf-8")
+    return env
+
+
+def _inject_node_environment(manifest: dict[str, Any], env: dict[str, str]) -> None:
+    for node in manifest.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        config = node.setdefault("config", {})
+        if not isinstance(config, dict):
+            continue
+        environment = config.setdefault("environment", {})
+        if not isinstance(environment, dict):
+            continue
+        environment.update(env)
+        _add_mn_llm_aliases(environment)
+
+
+def _add_mn_llm_aliases(environment: dict[str, Any]) -> None:
+    for legacy, primary in (
+        ("LITELLM_MODEL", "MN_LLM_MODEL"),
+        ("LITELLM_API_BASE", "MN_LLM_API_BASE"),
+        ("LITELLM_API_KEY", "MN_LLM_API_KEY"),
+        ("LITELLM_TIMEOUT_SECONDS", "MN_LLM_TIMEOUT_SECONDS"),
+        ("LITELLM_MAX_TOKENS", "MN_LLM_MAX_TOKENS"),
+        ("LITELLM_NUM_RETRIES", "MN_LLM_NUM_RETRIES"),
+        ("LITELLM_RETRY_BACKOFF_SECONDS", "MN_LLM_RETRY_BACKOFF_SECONDS"),
+    ):
+        if primary not in environment and legacy in environment:
+            environment[primary] = environment[legacy]
+
+
+def _write_blueprint_job_mapping(blueprint_run_id: str, job_id: str, metadata: dict[str, Any]) -> None:
+    run_dir = Path(os.getenv("MN_RUNS_ROOT", "~/.mn/runs")).expanduser() / blueprint_run_id
+    try:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "run_id": blueprint_run_id,
+            "job_id": job_id,
+            "blueprint_revision": metadata.get("blueprint_revision"),
+            "submitted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        tmp = run_dir / f".job.json.{os.getpid()}.tmp"
+        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        tmp.replace(run_dir / "job.json")
+    except OSError:
+        logger.exception("Failed to write blueprint job mapping for run_id=%s job_id=%s", blueprint_run_id, job_id)
 
 
 def _run_mode_label(manifest: dict) -> str:

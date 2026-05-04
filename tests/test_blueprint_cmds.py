@@ -53,11 +53,15 @@ def test_blueprint_run_init_success(mocker, tmp_path):
     
     mock_run.side_effect = create_files
     mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
+    mocker.patch('mn_cli.libs.blueprint_cmds._git_revision', return_value="abc123")
     
     result = runner.invoke(app, ["blueprint", "run", "bp-1"])
     assert result.exit_code == 0
     assert "Initializing blueprint storage" in result.stdout
-    mock_run_bundle.assert_called_once_with(str(storage_dir / "bp-1-dir"))
+    mock_run_bundle.assert_called_once()
+    assert mock_run_bundle.call_args.args[0] == str(storage_dir / "bp-1-dir")
+    assert mock_run_bundle.call_args.kwargs["env_overrides"]["MN_RUN_ID"].startswith("bp-1-")
+    assert mock_run_bundle.call_args.kwargs["submission_metadata"]["blueprint_revision"] == "abc123"
 
 def test_blueprint_run_update_success(mocker, tmp_path):
     storage_dir = tmp_path / "blueprints"
@@ -65,7 +69,7 @@ def test_blueprint_run_update_success(mocker, tmp_path):
     
     mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', return_value=str(storage_dir))
     
-    # Mock subprocess pull
+    # Mock subprocess; default run should not pull mutable remote state.
     mock_run = mocker.patch('mn_cli.libs.blueprint_cmds.subprocess.run')
     mock_run.return_value.returncode = 0
     
@@ -76,11 +80,194 @@ def test_blueprint_run_update_success(mocker, tmp_path):
     (bp_dir / "manifest.json").write_text("{}")
     
     mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
+    mocker.patch('mn_cli.libs.blueprint_cmds._git_revision', return_value="abc123")
     
     result = runner.invoke(app, ["blueprint", "run", "bp-1"])
     assert result.exit_code == 0
+    assert "Using cached blueprint storage" in result.stdout
+    assert not any("pull" in call.args[0] for call in mock_run.call_args_list if call.args)
+    mock_run_bundle.assert_called_once()
+    assert mock_run_bundle.call_args.args[0] == str(storage_dir / "bp-1-dir")
+
+
+def test_blueprint_run_update_flag_pulls_cache(mocker, tmp_path):
+    storage_dir = tmp_path / "blueprints"
+    storage_dir.mkdir()
+    mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', return_value=str(storage_dir))
+    mock_run = mocker.patch('mn_cli.libs.blueprint_cmds.subprocess.run')
+    mock_run.return_value.returncode = 0
+    mocker.patch('mn_cli.libs.blueprint_cmds._git_revision', return_value="abc123")
+    index_file = storage_dir / "index.json"
+    index_file.write_text(json.dumps([{"id": "bp-1", "path": "bp-1-dir"}]))
+    bp_dir = storage_dir / "bp-1-dir"
+    bp_dir.mkdir()
+    (bp_dir / "manifest.json").write_text("{}")
+    mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
+
+    result = runner.invoke(app, ["blueprint", "run", "bp-1", "--update"])
+
+    assert result.exit_code == 0
     assert "Updating blueprint storage" in result.stdout
-    mock_run_bundle.assert_called_once_with(str(storage_dir / "bp-1-dir"))
+    assert any("pull" in call.args[0] for call in mock_run.call_args_list if call.args)
+    mock_run_bundle.assert_called_once()
+
+
+def test_blueprint_run_generates_python_source_bundle(mocker, tmp_path):
+    storage_dir = tmp_path / "blueprints"
+    generated_root = tmp_path / "generated"
+    storage_dir.mkdir()
+
+    def fake_expanduser(path):
+        if "generated_blueprint_bundles" in path:
+            return str(generated_root)
+        return str(storage_dir)
+
+    mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', side_effect=fake_expanduser)
+    mocker.patch('mn_cli.libs.blueprint_cmds._git_revision', return_value="abc123")
+
+    index_file = storage_dir / "index.json"
+    index_file.write_text(json.dumps([{"id": "bp-1", "path": "bp-1-dir"}]))
+    bp_dir = storage_dir / "bp-1-dir"
+    bp_dir.mkdir()
+    (bp_dir / "manifest.json").write_text(
+        json.dumps({"metadata": {"blueprint_id": "bp-1", "python_source_mode": True}})
+    )
+
+    def fake_generate_bundle(blueprint_dir, output_dir):
+        output_dir.mkdir(parents=True)
+        (output_dir / "manifest.json").write_text(
+            json.dumps({"metadata": {"blueprint_id": "bp-1", "python_source_mode": True}})
+        )
+        (output_dir / "payloads").mkdir()
+        return output_dir
+
+    mock_generate_bundle = mocker.patch(
+        'mn_cli.libs.blueprint_cmds._generate_python_source_bundle',
+        side_effect=fake_generate_bundle,
+    )
+    mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
+
+    result = runner.invoke(app, ["blueprint", "run", "bp-1", "--run-id", "run-123"])
+
+    assert result.exit_code == 0
+    assert "Generating Python workflow bundle" in result.stdout
+    mock_generate_bundle.assert_called_once()
+    assert mock_generate_bundle.call_args.args[0] == bp_dir
+    mock_run_bundle.assert_called_once()
+    assert mock_run_bundle.call_args.args[0] == str(generated_root / "run-123")
+
+
+def test_blueprint_run_local_bundle_folder_bypasses_index(mocker, tmp_path):
+    bundle_dir = tmp_path / "local-bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "graph_id": "local_bundle_v1",
+                "metadata": {"blueprint_id": "local_bundle"},
+                "nodes": [],
+            }
+        )
+    )
+    mocker.patch('mn_cli.libs.blueprint_cmds._git_revision', return_value="local-rev")
+    mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
+
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir), "--run-id", "run-local"])
+
+    assert result.exit_code == 0
+    assert "Blueprint run_id" in result.stdout
+    mock_run_bundle.assert_called_once()
+    assert mock_run_bundle.call_args.args[0] == str(bundle_dir)
+    assert mock_run_bundle.call_args.kwargs["env_overrides"]["MN_RUN_ID"] == "run-local"
+    assert mock_run_bundle.call_args.kwargs["submission_metadata"]["blueprint_id"] == "local_bundle"
+    assert mock_run_bundle.call_args.kwargs["submission_metadata"]["blueprint_source"] == str(bundle_dir)
+
+
+def test_blueprint_run_local_python_source_folder_generates_bundle(mocker, tmp_path):
+    source_dir = tmp_path / "source-blueprint"
+    generated_root = tmp_path / "generated"
+    source_dir.mkdir()
+    (source_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "graph_id": "source_blueprint_v1",
+                "metadata": {
+                    "blueprint_id": "source_blueprint",
+                    "python_workflow": {"module": "workflow", "class": "Workflow"},
+                },
+            }
+        )
+    )
+
+    def fake_expanduser(path):
+        if "generated_blueprint_bundles" in path:
+            return str(generated_root)
+        return path
+
+    def fake_generate_bundle(blueprint_dir, output_dir):
+        output_dir.mkdir(parents=True)
+        (output_dir / "manifest.json").write_text(
+            json.dumps({"metadata": {"blueprint_id": "source_blueprint"}})
+        )
+        (output_dir / "payloads").mkdir()
+        return output_dir
+
+    mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', side_effect=fake_expanduser)
+    mocker.patch('mn_cli.libs.blueprint_cmds._git_revision', return_value="local-rev")
+    mock_generate_bundle = mocker.patch(
+        'mn_cli.libs.blueprint_cmds._generate_python_source_bundle',
+        side_effect=fake_generate_bundle,
+    )
+    mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
+
+    result = runner.invoke(app, ["blueprint", "run", str(source_dir), "--run-id", "run-source"])
+
+    assert result.exit_code == 0
+    assert "Generating Python workflow bundle" in result.stdout
+    mock_generate_bundle.assert_called_once()
+    assert mock_generate_bundle.call_args.args[0] == source_dir
+    mock_run_bundle.assert_called_once()
+    assert mock_run_bundle.call_args.args[0] == str(generated_root / "run-source")
+
+
+def test_blueprint_run_local_folder_missing_manifest_reports_error(mocker, tmp_path):
+    source_dir = tmp_path / "missing-manifest"
+    source_dir.mkdir()
+    mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
+
+    result = runner.invoke(app, ["blueprint", "run", str(source_dir)])
+
+    assert result.exit_code == 1
+    assert "missing manifest.json" in result.stdout
+
+
+def test_blueprint_run_local_python_source_generation_failure(mocker, tmp_path):
+    source_dir = tmp_path / "source-blueprint"
+    source_dir.mkdir()
+    (source_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "metadata": {
+                    "blueprint_id": "source_blueprint",
+                    "python_source_mode": True,
+                }
+            }
+        )
+    )
+    mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', return_value=str(tmp_path / "generated"))
+    mocker.patch('mn_cli.libs.blueprint_cmds._git_revision', return_value=None)
+    mocker.patch(
+        'mn_cli.libs.blueprint_cmds._generate_python_source_bundle',
+        side_effect=RuntimeError("compiler exploded"),
+    )
+    mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
+
+    result = runner.invoke(app, ["blueprint", "run", str(source_dir), "--run-id", "run-source"])
+
+    assert result.exit_code == 1
+    assert "Failed to generate Python workflow bundle: compiler exploded" in result.stdout
+    mock_run_bundle.assert_not_called()
+
 
 def test_blueprint_run_init_fail(mocker, tmp_path):
     storage_dir = tmp_path / "blueprints"
@@ -173,8 +360,137 @@ def test_blueprint_run_update_fail(mocker, tmp_path):
     (bp_dir / "manifest.json").write_text("{}")
     
     mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
+    mocker.patch('mn_cli.libs.blueprint_cmds._git_revision', return_value="abc123")
     
-    result = runner.invoke(app, ["blueprint", "run", "bp-1"])
+    result = runner.invoke(app, ["blueprint", "run", "bp-1", "--update"])
     assert result.exit_code == 0
     assert "Warning: Failed to update blueprint repository: git pull error" in result.stdout
-    mock_run_bundle.assert_called_once_with(str(storage_dir / "bp-1-dir"))
+    mock_run_bundle.assert_called_once()
+
+
+def _write_run(runs_root, run_id, blueprint_id="general_closed_loop_agent_runtime", status="completed", action="hold_policy"):
+    run_dir = runs_root / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "blueprint_id": blueprint_id,
+                "status": status,
+                "started_at": "2026-05-04T00:00:00+00:00",
+                "ended_at": "2026-05-04T00:01:00+00:00",
+                "run_dir": str(run_dir),
+            }
+        )
+    )
+    (run_dir / "config.json").write_text(json.dumps({"simulation": {"steps": 3}}))
+    (run_dir / "inputs.json").write_text(json.dumps({"input_source": "mock"}))
+    (run_dir / "events.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps({"timestamp": "2026-05-04T00:00:01+00:00", "type": "run_started"}),
+                json.dumps({"timestamp": "2026-05-04T00:00:30+00:00", "type": "agent_decision", "action": action}),
+                json.dumps({"timestamp": "2026-05-04T00:01:00+00:00", "type": "run_completed"}),
+            ]
+        )
+        + "\n"
+    )
+    (run_dir / "result.json").write_text(json.dumps({"score": 0.82, "final_artifact": {"recommended_action": action}}))
+    (run_dir / "final_artifact.json").write_text(
+        json.dumps({"recommended_action": action, "risk_level": "medium", "score": 0.82})
+    )
+    (run_dir / "web_ui.json").write_text(
+        json.dumps({"adapter": "static_html", "kind": "output", "status": "available", "url": f"file://{run_dir}/web/index.html"})
+    )
+    return run_dir
+
+
+def test_blueprint_monitor_reads_shared_run_store(tmp_path):
+    runs_root = tmp_path / "runs"
+    _write_run(runs_root, "run-1", action="rebalance")
+
+    result = runner.invoke(app, ["blueprint", "monitor", "--runs-root", str(runs_root)])
+
+    assert result.exit_code == 0
+    assert "run-1" in result.stdout
+    assert "general_closed_loop_agent_runtime" in result.stdout
+    assert "completed" in result.stdout
+    assert "file://" in result.stdout
+
+
+def test_blueprint_tail_prints_event_stream(tmp_path):
+    runs_root = tmp_path / "runs"
+    _write_run(runs_root, "run-1", action="escalate_review")
+
+    result = runner.invoke(app, ["blueprint", "tail", "run-1", "--runs-root", str(runs_root), "--lines", "2"])
+
+    assert result.exit_code == 0
+    assert "agent_decision" in result.stdout
+    assert "escalate_review" in result.stdout
+    assert "run_completed" in result.stdout
+
+
+def test_blueprint_compare_shows_artifact_differences(tmp_path):
+    runs_root = tmp_path / "runs"
+    _write_run(runs_root, "run-a", action="hold_policy")
+    _write_run(runs_root, "run-b", action="rebalance")
+
+    result = runner.invoke(app, ["blueprint", "compare", "run-a", "run-b", "--runs-root", str(runs_root)])
+
+    assert result.exit_code == 0
+    assert "run-a" in result.stdout
+    assert "run-b" in result.stdout
+    assert "hold_policy" in result.stdout
+    assert "rebalance" in result.stdout
+
+
+def test_blueprint_export_markdown_contains_standard_artifacts(tmp_path):
+    runs_root = tmp_path / "runs"
+    _write_run(runs_root, "run-1", action="approve_plan")
+
+    result = runner.invoke(
+        app,
+        ["blueprint", "export", "run-1", "--runs-root", str(runs_root), "--format", "markdown"],
+    )
+
+    assert result.exit_code == 0
+    assert "# Blueprint Run run-1" in result.stdout
+    assert "## Final Artifact" in result.stdout
+    assert "approve_plan" in result.stdout
+    assert "## Event Tail" in result.stdout
+    assert "## Web UI" in result.stdout
+
+
+def test_blueprint_export_html_writes_static_report(tmp_path):
+    runs_root = tmp_path / "runs"
+    run_dir = _write_run(runs_root, "run-1", action="approve_plan")
+
+    result = runner.invoke(
+        app,
+        ["blueprint", "export", "run-1", "--runs-root", str(runs_root), "--format", "html"],
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.strip().startswith("file://")
+    assert (run_dir / "web" / "index.html").exists()
+
+
+def test_blueprint_export_rejects_unknown_format(tmp_path):
+    runs_root = tmp_path / "runs"
+    _write_run(runs_root, "run-1")
+
+    result = runner.invoke(app, ["blueprint", "export", "run-1", "--runs-root", str(runs_root), "--format", "yaml"])
+
+    assert result.exit_code == 1
+    assert "Unsupported export format" in result.stdout
+
+
+def test_blueprint_tail_missing_run_reports_error(tmp_path):
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir()
+
+    result = runner.invoke(app, ["blueprint", "tail", "missing-run", "--runs-root", str(runs_root)])
+
+    assert result.exit_code == 1
+    assert "missing-run" in result.stdout
+    assert "not found" in result.stdout

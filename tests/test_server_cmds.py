@@ -242,11 +242,11 @@ def test_start_web_ui_missing_noop(mocker, tmp_path):
 def test_print_service_endpoints(mocker, monkeypatch):
     output = StringIO()
     mocker.patch('mn_cli.server_cmds.console', Console(file=output, force_terminal=False, width=120))
-    monkeypatch.setenv("MIRROR_NEURON_GRPC_TARGET", "core.local:55555")
-    monkeypatch.setenv("MIRROR_NEURON_API_HOST", "127.0.0.1")
-    monkeypatch.setenv("MIRROR_NEURON_API_PORT", "4401")
-    monkeypatch.setenv("MIRROR_NEURON_REDIS_URL", "redis://redis.local:6380/0")
-    monkeypatch.setenv("MIRROR_NEURON_DIST_PORT", "4370")
+    monkeypatch.setenv("MN_GRPC_TARGET", "core.local:55555")
+    monkeypatch.setenv("MN_API_HOST", "127.0.0.1")
+    monkeypatch.setenv("MN_API_PORT", "4401")
+    monkeypatch.setenv("MN_REDIS_URL", "redis://redis.local:6380/0")
+    monkeypatch.setenv("MN_DIST_PORT", "4370")
 
     _print_service_endpoints(ip=None, web_ui_available=True)
 
@@ -270,15 +270,15 @@ def test_print_service_endpoints_defaults_to_localhost(mocker, monkeypatch):
     output = StringIO()
     mocker.patch('mn_cli.server_cmds.console', Console(file=output, force_terminal=False, width=120))
     for name in (
-        "MIRROR_NEURON_GRPC_TARGET",
-        "MIRROR_NEURON_CORE_GRPC_TARGET",
-        "MIRROR_NEURON_CORE_HOST",
-        "MIRROR_NEURON_API_HOST",
-        "MIRROR_NEURON_REDIS_HOST",
-        "MIRROR_NEURON_REDIS_URL",
-        "MIRROR_NEURON_EPMD_HOST",
-        "MIRROR_NEURON_DIST_HOST",
-        "MIRROR_NEURON_WEB_UI_HOST",
+        "MN_GRPC_TARGET",
+        "MN_CORE_GRPC_TARGET",
+        "MN_CORE_HOST",
+        "MN_API_HOST",
+        "MN_REDIS_HOST",
+        "MN_REDIS_URL",
+        "MN_EPMD_HOST",
+        "MN_DIST_HOST",
+        "MN_WEB_UI_HOST",
     ):
         monkeypatch.delenv(name, raising=False)
 
