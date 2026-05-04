@@ -126,7 +126,6 @@ def test_run_injects_blueprint_config_scenario_and_run_id(mocker, tmp_path):
     config_dir.mkdir()
     (config_dir / "default.json").write_text(json.dumps({"identity": {"blueprint_id": "bp-1"}}))
     (bundle_dir / "scenario.json").write_text(json.dumps({"blueprint_id": "bp-1", "metrics": [], "actions": []}))
-    (bundle_dir / "product.json").write_text(json.dumps({"title": "bp-1"}))
 
     result = runner.invoke(app, ["run", str(bundle_dir)])
 
@@ -135,7 +134,7 @@ def test_run_injects_blueprint_config_scenario_and_run_id(mocker, tmp_path):
     env = manifest["nodes"][0]["config"]["environment"]
     assert json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])["identity"]["blueprint_id"] == "bp-1"
     assert json.loads(env["MN_BLUEPRINT_SCENARIO_JSON"])["blueprint_id"] == "bp-1"
-    assert json.loads(env["MN_BLUEPRINT_PRODUCT_JSON"])["title"] == "bp-1"
+    assert "MN_BLUEPRINT_PRODUCT_JSON" not in env
     assert env["MN_LLM_MODEL"] == "ollama/nemotron3:33b"
     assert env["MN_LLM_API_BASE"] == "http://old"
 

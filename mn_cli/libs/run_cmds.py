@@ -616,7 +616,6 @@ def _blueprint_runtime_environment(bundle_dir: Path) -> dict[str, str]:
     for filename, env_name in (
         ("config/default.json", "MN_BLUEPRINT_CONFIG_JSON"),
         ("scenario.json", "MN_BLUEPRINT_SCENARIO_JSON"),
-        ("product.json", "MN_BLUEPRINT_PRODUCT_JSON"),
     ):
         path = bundle_dir / filename
         if path.exists():
