@@ -1,6 +1,7 @@
 import pytest
 import json
 import logging
+import re
 import uuid
 from logging.handlers import RotatingFileHandler
 from typer.testing import CliRunner
@@ -31,7 +32,7 @@ def test_validate_not_directory(tmp_path):
     not_a_dir = tmp_path / "not_a_dir"
     result = runner.invoke(app, ["validate", str(not_a_dir)])
     assert result.exit_code == 1
-    assert "is not a directory" in result.stdout
+    assert "is not a directory" in re.sub(r"\s+", " ", result.stdout)
 
 def test_validate_no_manifest(tmp_path):
     bundle_dir = tmp_path / "no_manifest"
@@ -316,7 +317,7 @@ def test_run_not_dir(tmp_path):
     not_a_dir = tmp_path / "not_a_dir"
     result = runner.invoke(app, ["run", str(not_a_dir)])
     assert result.exit_code == 1
-    assert "is not a directory" in result.stdout
+    assert "is not a directory" in re.sub(r"\s+", " ", result.stdout)
 
 def test_run_no_manifest(tmp_path):
     bundle_dir = tmp_path / "no_manifest"
