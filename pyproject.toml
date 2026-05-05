@@ -1,5 +1,5 @@
 [project]
-name = "mn-cli"
+name = "mirrorneuron-cli"
 dynamic = ["version"]
 description = "MirrorNeuron CLI"
 readme = "README.md"
@@ -9,7 +9,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    "mn-python-sdk",
+    "mirrorneuron-python-sdk",
     "typer>=0.9.0",
     "rich>=13.0.0"
 ]

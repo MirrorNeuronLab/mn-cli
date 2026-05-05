@@ -6,7 +6,7 @@ The official Command Line Interface for managing the MirrorNeuron distributed ru
 *Note: This tool is installed automatically and symlinked globally as `mn` by the MirrorNeuron `install.sh` script.*
 
 ```bash
-pip install mn-cli
+pip install mirrorneuron-cli
 ```
 
 ## Commands
