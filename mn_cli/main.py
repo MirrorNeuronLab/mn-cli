@@ -1,8 +1,14 @@
 import typer
+from mn_cli import update_cmds
 from mn_cli.libs import job_cmds, run_cmds, sys_cmds
 from mn_cli.libs.blueprint_cmds import blueprint_app
 
 app = typer.Typer(help="MirrorNeuron CLI")
+
+
+@app.callback()
+def main(ctx: typer.Context):
+    update_cmds.maybe_prompt_for_update(ctx.invoked_subcommand)
 
 # Run commands
 app.command(name="validate")(run_cmds.validate)
@@ -27,6 +33,7 @@ app.command(name="start")(sys_cmds.start)
 app.command(name="stop")(sys_cmds.stop)
 app.command(name="join")(sys_cmds.join)
 app.command(name="leave")(sys_cmds.leave)
+app.command(name="update")(update_cmds.update)
 
 # Sub-apps
 app.add_typer(blueprint_app, name="blueprint")
