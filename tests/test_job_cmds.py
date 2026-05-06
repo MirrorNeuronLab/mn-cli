@@ -47,11 +47,12 @@ def test_status_error(mocker):
 def test_list_jobs_success(mocker):
     mock_list = mocker.patch(
         'mn_cli.libs.job_cmds.client.list_jobs',
-        return_value=json.dumps({"data": [{"job_id": "job-1", "graph_id": "g-1", "status": "completed", "submitted_at": "2023-10-01"}]})
+        return_value=json.dumps({"data": [{"job_id": "job-1", "graph_id": "g-1", "status": "completed", "submitted_at": "2023-10-01", "recovery_status": "normal"}]})
     )
     result = runner.invoke(app, ["list"])
     assert result.exit_code == 0
     assert "job-1" in result.stdout
+    assert "normal" in result.stdout
     mock_list.assert_called_once()
 
 def test_list_jobs_running_only_success(mocker):
@@ -125,6 +126,68 @@ def test_resume_error(mocker):
     result = runner.invoke(app, ["resume", "job-123"])
     assert result.exit_code == 0
     assert "Error resuming job: Fail" in result.stdout
+
+
+def test_unfinished_jobs_shows_recovery_review_state(mocker):
+    mock_list = mocker.patch(
+        'mn_cli.libs.job_cmds.client.list_jobs',
+        return_value=json.dumps({"data": [
+            {
+                "job_id": "job-review",
+                "graph_id": "g-review",
+                "status": "paused",
+                "updated_at": "2026-05-05T00:00:00Z",
+                "recovery_status": "paused_for_review",
+                "recovery_requires_review": True,
+            }
+        ]})
+    )
+
+    result = runner.invoke(app, ["unfinished"])
+
+    assert result.exit_code == 0
+    assert "job-review" in result.stdout
+    assert "paused_for_review" in result.stdout
+    assert "yes" in result.stdout
+    assert "mn resume <job_id>" in result.stdout
+    mock_list.assert_called_once_with(include_terminal=False)
+
+
+def test_unfinished_jobs_empty(mocker):
+    mocker.patch(
+        'mn_cli.libs.job_cmds.client.list_jobs',
+        return_value=json.dumps({"data": []})
+    )
+
+    result = runner.invoke(app, ["unfinished"])
+
+    assert result.exit_code == 0
+    assert "No unfinished jobs" in result.stdout
+
+
+def test_unfinished_jobs_accepts_nested_recovery_summary(mocker):
+    mocker.patch(
+        'mn_cli.libs.job_cmds.client.list_jobs',
+        return_value=json.dumps({"data": [
+            {
+                "job_id": "job-nested",
+                "graph_id": "g-nested",
+                "status": "paused",
+                "submitted_at": "2026-05-05T00:00:00Z",
+                "recovery": {
+                    "status": "paused_for_review",
+                    "requires_review": True,
+                },
+            }
+        ]})
+    )
+
+    result = runner.invoke(app, ["unfinished"])
+
+    assert result.exit_code == 0
+    assert "job-nested" in result.stdout
+    assert "paused_for_review" in result.stdout
+    assert "review=yes" in result.stdout
 
 def test_nodes_success(mocker):
     mock_nodes = mocker.patch('mn_cli.libs.job_cmds.client.get_system_summary', return_value='{"nodes": ["node1"]}')

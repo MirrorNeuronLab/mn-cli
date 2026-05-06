@@ -34,16 +34,18 @@ def list_jobs(running_only: bool = typer.Option(False, "--running-only", help="O
         jobs_json = client.list_jobs()
         data = json.loads(jobs_json)
 
-        table = Table("Job ID", "Graph ID", "Status", "Submitted At")
+        table = recovery_table("Submitted At")
         for job in data.get("data", []):
             status = job.get("status", "N/A")
-            if running_only and status not in ["running", "pending", "scheduled", "validated", "paused"]:
+            live_statuses = ["running", "pending", "scheduled", "validated", "paused"]
+            if running_only and status not in live_statuses:
                 continue
-                
+
             table.add_row(
                 job.get("job_id", "N/A"),
                 job.get("graph_id", "N/A"),
                 status,
+                recovery_label(job),
                 job.get("submitted_at", "N/A"),
             )
         console.print(table)
@@ -59,6 +61,7 @@ def clear():
         console.print(f"[green]Successfully cleared {cleared_count} non-running jobs.[/green]")
     except Exception as e:
         handle_cli_error(e, console, 'clear')
+
 
 def cancel(job_id: str):
     """Cancel a running job"""
@@ -85,6 +88,68 @@ def resume(job_id: str):
         console.print(f"[green]Job resumed. Status: {status}[/green]")
     except Exception as e:
         handle_cli_error(e, console, 'resume')
+
+
+def unfinished():
+    """List unfinished jobs that may need recovery or manual resume"""
+    try:
+        jobs_json = client.list_jobs(include_terminal=False)
+        data = json.loads(jobs_json)
+        jobs = data.get("data", [])
+
+        if not jobs:
+            console.print("[green]No unfinished jobs.[/green]")
+            return
+
+        table = recovery_table("Updated At", include_review=True)
+        for job in jobs:
+            table.add_row(
+                job.get("job_id", "N/A"),
+                job.get("graph_id", "N/A"),
+                job.get("status", "N/A"),
+                recovery_label(job),
+                "yes" if recovery_requires_review(job) else "no",
+                job.get("updated_at") or job.get("submitted_at", "N/A"),
+            )
+
+        console.print(table)
+        for job in jobs:
+            review = "yes" if recovery_requires_review(job) else "no"
+            console.print(
+                f"{job.get('job_id', 'N/A')} recovery={recovery_label(job)} review={review}"
+            )
+        console.print(
+            "Use [bold]mn status <job_id>[/bold] to inspect and "
+            "[bold]mn resume <job_id>[/bold] to continue a paused run."
+        )
+    except Exception as e:
+        handle_cli_error(e, console, 'list_jobs')
+
+
+def recovery_label(job: dict) -> str:
+    recovery = job.get("recovery") or {}
+    return (
+        job.get("recovery_status")
+        or recovery.get("status")
+        or "normal"
+    )
+
+
+def recovery_requires_review(job: dict) -> bool:
+    recovery = job.get("recovery") or {}
+    return bool(job.get("recovery_requires_review") or recovery.get("requires_review"))
+
+
+def recovery_table(time_column: str, include_review: bool = False) -> Table:
+    table = Table()
+    table.add_column("Job ID", no_wrap=True)
+    table.add_column("Graph ID", no_wrap=True)
+    table.add_column("Status", no_wrap=True)
+    table.add_column("Recovery", no_wrap=True)
+    if include_review:
+        table.add_column("Review", no_wrap=True)
+    table.add_column(time_column, no_wrap=True)
+    return table
 
 
 def nodes():

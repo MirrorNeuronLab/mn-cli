@@ -77,6 +77,7 @@ Submit and inspect a workflow:
 mn validate ./bundle
 mn run ./bundle
 mn list
+mn unfinished
 mn status <job_id>
 mn monitor <job_id>
 ```
