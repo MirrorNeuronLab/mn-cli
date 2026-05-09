@@ -1,9 +1,6 @@
 import pytest
-import os
-import signal
 import subprocess
 from io import StringIO
-from pathlib import Path
 from rich.console import Console
 from mn_cli.server_cmds import check_status, kill_tree, _start_server, find_web_ui_dir, _start_web_ui_if_installed, _print_service_endpoints
 import typer
@@ -34,7 +31,7 @@ def test_kill_tree(mocker):
     mock_kill = mocker.patch('mn_cli.server_cmds.os.kill')
     
     # Mock pgrep to return children
-    mock_check_output = mocker.patch('mn_cli.server_cmds.subprocess.check_output', side_effect=[
+    mocker.patch('mn_cli.server_cmds.subprocess.check_output', side_effect=[
         b" 1235 \n 1236 \n", # First call for parent 1234
         subprocess.CalledProcessError(1, "pgrep"), # Second call for child 1235
         subprocess.CalledProcessError(1, "pgrep")  # Third call for child 1236

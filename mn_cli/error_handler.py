@@ -1,4 +1,3 @@
-import sys
 import grpc
 from rich.console import Console
 from mn_cli.config import CliConfig
@@ -38,7 +37,7 @@ def handle_cli_error(e: Exception, console: Console, context: str = ""):
         elif code == grpc.StatusCode.INTERNAL and "not found" in str(details).lower():
             console.print(f"[red]Error: Cannot find the job by ID. ({details})[/red]")
         elif code == grpc.StatusCode.INTERNAL and "terminal state" in str(details).lower():
-            console.print(f"[red]Error: Job is already in a terminal state and cannot be modified.[/red]")
+            console.print("[red]Error: Job is already in a terminal state and cannot be modified.[/red]")
         elif code == grpc.StatusCode.RESOURCE_EXHAUSTED:
             console.print("[yellow]Runtime is under CPU/GPU/memory pressure and is not accepting new jobs.[/yellow]")
             console.print(f"[dim]{details}[/dim]")

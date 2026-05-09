@@ -17,7 +17,7 @@ The CLI submits workflow bundles, monitors jobs, manages the local runtime servi
 
 | Area | Tooling |
 | --- | --- |
-| Runtime | Python 3.10+ |
+| Runtime | Python 3.11+ |
 | CLI framework | Typer |
 | Terminal rendering | Rich |
 | Core client | `mirrorneuron-python-sdk` |
@@ -25,7 +25,7 @@ The CLI submits workflow bundles, monitors jobs, manages the local runtime servi
 
 ## Prerequisites
 
-- Python 3.10 or newer.
+- Python 3.11 or newer.
 - A MirrorNeuron core reachable over gRPC.
 - Docker for the default local core and Redis workflow.
 - Optional: the released-package installer from `mn-deploy`, which installs and wires the CLI automatically.

@@ -15,7 +15,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 
-from mn_cli.server_cmds import DIR, VENV_DIR, WEB_UI_DIRS, _start_server
+from mn_cli.server_cmds import DIR, WEB_UI_DIRS, _start_server
 
 console = Console()
 

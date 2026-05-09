@@ -1,8 +1,5 @@
-import pytest
 from typer.testing import CliRunner
 from mn_cli.main import app
-import os
-from pathlib import Path
 
 runner = CliRunner()
 
@@ -28,7 +25,7 @@ def test_leave_success(mocker):
 
 def test_leave_error(mocker):
     import mn_cli.shared
-    mock_remove = mocker.patch.object(mn_cli.shared.client, 'remove_node', side_effect=Exception("Timeout"))
+    mocker.patch.object(mn_cli.shared.client, 'remove_node', side_effect=Exception("Timeout"))
     result = runner.invoke(app, ["leave", "mirror_neuron@1.2.3.4"])
     assert result.exit_code == 0
     assert "Error removing node: Timeout" in result.stdout

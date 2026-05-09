@@ -1,4 +1,3 @@
-import typer
 import subprocess
 import os
 import time

@@ -224,7 +224,6 @@ def _stream_and_format_events(
     )
     
     status_text = "Unknown / Detached"
-    status_color = "yellow"
     msg_count = 0
     
     try:
@@ -284,12 +283,10 @@ def _stream_and_format_events(
                             description="[green]Completed successfully.",
                         )
                         status_text = "Success"
-                        status_color = "green"
                         break
                     elif event_type == "job_failed":
                         progress.update(job_task, description="[red]Job failed.")
                         status_text = "Failed"
-                        status_color = "red"
                         break
                     else:
                         progress.update(
@@ -706,7 +703,7 @@ def _live_monitor(job_id: str):
     view = MonitorView()
     
     try:
-        with Live(view, refresh_per_second=12, console=console) as live:
+        with Live(view, refresh_per_second=12, console=console):
             while True:
                 try:
                     job_json = client.get_job(job_id)
@@ -771,7 +768,7 @@ def result(job_id: str):
         if res_file.exists():
             console.print(f"[green]Final result saved to: {res_file}[/green]")
         else:
-            console.print(f"[yellow]No final result found (job might not be completed).[/yellow]")
+            console.print("[yellow]No final result found (job might not be completed).[/yellow]")
             
         if stream_file.exists():
             console.print(f"[green]Stream results saved to: {stream_file}[/green]")

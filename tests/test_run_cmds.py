@@ -1,4 +1,3 @@
-import pytest
 import json
 import logging
 import re
@@ -287,7 +286,7 @@ def test_job_log_writer_extracts_web_ui_url_once():
     assert writer.record_web_ui_url(event) is None
 
 def test_run_error_submitting(mocker, tmp_path):
-    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', side_effect=Exception("API failure"))
+    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', side_effect=Exception("API failure"))
     
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
@@ -300,8 +299,8 @@ def test_run_error_submitting(mocker, tmp_path):
     assert "Error running bundle: API failure" in result.stdout
 
 def test_run_keyboard_interrupt(mocker, tmp_path):
-    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
-    mock_stream = mocker.patch('mn_cli.libs.run_cmds.client.stream_events', side_effect=KeyboardInterrupt)
+    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', side_effect=KeyboardInterrupt)
     
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
@@ -343,7 +342,7 @@ def test_monitor_error(mocker):
     assert result.exit_code == 0
     assert "Error fetching job: Network fail" in result.stdout
 def test_result_success(mocker, tmp_path):
-    mock_get = mocker.patch('mn_cli.libs.run_cmds.client.get_job', return_value=json.dumps({
+    mocker.patch('mn_cli.libs.run_cmds.client.get_job', return_value=json.dumps({
         "job": {"status": "completed", "result": {"test": "result"}},
         "recent_events": []
     }))
@@ -378,7 +377,7 @@ def test_result_error(mocker):
     assert "Error fetching results: DB Error" in result.stdout
 
 def test_stream_bad_json(mocker, tmp_path):
-    mock_stream = mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         "invalid json format",
         json.dumps({"type": "job_failed"})
     ])
@@ -415,7 +414,7 @@ def test_stream_all_events(mocker, tmp_path):
         json.dumps({"type": "custom_progressive", "payload": {"foo": "progressive"}}),
         json.dumps({"type": "job_completed", "result": {"foo": "bar"}})
     ]
-    mock_stream = mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=events)
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=events)
     mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
     
     bundle_dir = tmp_path / "run_bundle"
@@ -430,7 +429,7 @@ def test_stream_all_events(mocker, tmp_path):
     assert "result_stream.txt" in result.stdout
 
 def test_stream_keyboard_interrupt(mocker, tmp_path):
-    mock_stream = mocker.patch('mn_cli.libs.run_cmds.client.stream_events', side_effect=KeyboardInterrupt)
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', side_effect=KeyboardInterrupt)
     mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
     
     bundle_dir = tmp_path / "run_bundle"

@@ -25,7 +25,7 @@ def generate_live_layout(job_id: str, data: Dict[str, Any]) -> Group:
         frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
         idx = int(time.time() * 12.5) % len(frames)
         spinner_str = f"[cyan]{frames[idx]}[/cyan]"
-    except:
+    except Exception:
         pass
 
     info_text = (

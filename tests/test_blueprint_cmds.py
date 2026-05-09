@@ -1,11 +1,8 @@
 import pytest
 import importlib.util
 import json
-import subprocess
 from typer.testing import CliRunner
 from mn_cli.main import app
-import os
-from pathlib import Path
 
 runner = CliRunner()
 requires_blueprint_support = pytest.mark.skipif(
