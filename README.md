@@ -108,6 +108,7 @@ mn blueprint list
 mn blueprint install
 mn blueprint update
 mn blueprint run <blueprint_id>
+mn blueprint --blueprint-repo https://github.com/MirrorNeuronLab/customer-blueprints run <blueprint_id>
 mn blueprint run ./path/to/bundle_or_source_blueprint
 mn blueprint run <blueprint_id> --offline
 mn blueprint run <blueprint_id> --revision <git_sha_or_tag>
@@ -125,6 +126,8 @@ mn blueprint export <run_id> --format html
 ```
 
 Catalog runs use the cached blueprint library by default. Run `mn blueprint update` or pass `--update` when you want to refresh the local cache.
+
+Use `mn blueprint --blueprint-repo <repo-url> ...` to read catalog commands from a different blueprint repository, including a private repository your Git credentials can access. Custom repositories are cached separately under `~/.mn/blueprint_repos/`, and the repository root must contain a valid `index.json` JSON list of blueprint entries.
 
 Blueprint run artifacts are stored under:
 

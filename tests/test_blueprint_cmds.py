@@ -1,6 +1,7 @@
 import pytest
 import importlib.util
 import json
+from pathlib import Path
 from typer.testing import CliRunner
 from mn_cli.main import app
 
@@ -34,6 +35,38 @@ def test_blueprint_list_error(mocker, tmp_path):
     result = runner.invoke(app, ["blueprint", "list"])
     assert result.exit_code == 0
     assert "Error reading blueprints index" in result.stdout
+
+
+def test_blueprint_list_blueprint_repo_reads_custom_index(mocker, tmp_path):
+    repo_url = "https://github.com/MirrorNeuronLab/customer-blueprints"
+    custom_cache_root = tmp_path / "blueprint_repos"
+
+    def fake_expanduser(path):
+        if path == "~/.mn/blueprint_repos":
+            return str(custom_cache_root)
+        return str(tmp_path / "default-blueprints")
+
+    mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', side_effect=fake_expanduser)
+
+    completed = mocker.Mock(returncode=0, stderr="", stdout="")
+
+    def fake_run(args, **kwargs):
+        if args[:2] == ["git", "clone"]:
+            storage_dir = Path(args[-1])
+            storage_dir.mkdir(parents=True, exist_ok=True)
+            (storage_dir / "index.json").write_text(
+                json.dumps([{"id": "private-bp", "name": "Private Blueprint"}])
+            )
+        return completed
+
+    mocker.patch('mn_cli.libs.blueprint_cmds.subprocess.run', side_effect=fake_run)
+
+    result = runner.invoke(app, ["blueprint", "--blueprint-repo", repo_url, "list"])
+
+    assert result.exit_code == 0
+    assert "private-bp" in result.stdout
+    assert "Private Blueprint" in result.stdout
+
 
 def test_blueprint_run_init_success(mocker, tmp_path):
     storage_dir = tmp_path / "blueprints"
@@ -112,6 +145,105 @@ def test_blueprint_run_update_flag_pulls_cache(mocker, tmp_path):
     assert "Updating blueprint storage" in result.stdout
     assert any("pull" in call.args[0] for call in mock_run.call_args_list if call.args)
     mock_run_bundle.assert_called_once()
+
+
+def test_blueprint_run_blueprint_repo_uses_repo_specific_cache(mocker, tmp_path):
+    repo_url = "https://github.com/MirrorNeuronLab/customer-blueprints"
+    custom_cache_root = tmp_path / "blueprint_repos"
+    default_storage = tmp_path / "default-blueprints"
+
+    def fake_expanduser(path):
+        if path == "~/.mn/blueprint_repos":
+            return str(custom_cache_root)
+        return str(default_storage)
+
+    mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', side_effect=fake_expanduser)
+
+    completed = mocker.Mock(returncode=0, stderr="", stdout="")
+
+    def fake_run(args, **kwargs):
+        if args[:2] == ["git", "clone"]:
+            storage_dir = Path(args[-1])
+            storage_dir.mkdir(parents=True, exist_ok=True)
+            (storage_dir / "index.json").write_text(json.dumps([{"id": "bp-1", "path": "bp-1-dir"}]))
+            bp_dir = storage_dir / "bp-1-dir"
+            bp_dir.mkdir()
+            (bp_dir / "manifest.json").write_text("{}")
+        return completed
+
+    mock_run = mocker.patch('mn_cli.libs.blueprint_cmds.subprocess.run', side_effect=fake_run)
+    mocker.patch('mn_cli.libs.blueprint_cmds._git_revision', return_value="abc123")
+    mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
+
+    result = runner.invoke(app, ["blueprint", "--blueprint-repo", repo_url, "run", "bp-1"])
+
+    assert result.exit_code == 0
+    clone_args = mock_run.call_args_list[0].args[0]
+    assert clone_args[:3] == ["git", "clone", repo_url]
+    storage_dir = Path(clone_args[-1])
+    assert storage_dir.parent == custom_cache_root
+    assert storage_dir != default_storage
+    assert "Initializing blueprint storage for" in result.stdout
+    mock_run_bundle.assert_called_once()
+    assert mock_run_bundle.call_args.args[0] == str(storage_dir / "bp-1-dir")
+
+
+def test_blueprint_run_blueprint_repo_missing_index_errors(mocker, tmp_path):
+    repo_url = "https://github.com/MirrorNeuronLab/customer-blueprints"
+    custom_cache_root = tmp_path / "blueprint_repos"
+
+    def fake_expanduser(path):
+        if path == "~/.mn/blueprint_repos":
+            return str(custom_cache_root)
+        return str(tmp_path / "default-blueprints")
+
+    mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', side_effect=fake_expanduser)
+
+    completed = mocker.Mock(returncode=0, stderr="", stdout="")
+
+    def fake_run(args, **kwargs):
+        if args[:2] == ["git", "clone"]:
+            Path(args[-1]).mkdir(parents=True, exist_ok=True)
+        return completed
+
+    mocker.patch('mn_cli.libs.blueprint_cmds.subprocess.run', side_effect=fake_run)
+    mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
+
+    result = runner.invoke(app, ["blueprint", "--blueprint-repo", repo_url, "run", "bp-1"])
+
+    assert result.exit_code == 1
+    assert "index.json not found" in result.stdout
+    mock_run_bundle.assert_not_called()
+
+
+def test_blueprint_run_blueprint_repo_malformed_index_errors(mocker, tmp_path):
+    repo_url = "https://github.com/MirrorNeuronLab/customer-blueprints"
+    custom_cache_root = tmp_path / "blueprint_repos"
+
+    def fake_expanduser(path):
+        if path == "~/.mn/blueprint_repos":
+            return str(custom_cache_root)
+        return str(tmp_path / "default-blueprints")
+
+    mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', side_effect=fake_expanduser)
+
+    completed = mocker.Mock(returncode=0, stderr="", stdout="")
+
+    def fake_run(args, **kwargs):
+        if args[:2] == ["git", "clone"]:
+            storage_dir = Path(args[-1])
+            storage_dir.mkdir(parents=True, exist_ok=True)
+            (storage_dir / "index.json").write_text(json.dumps({"blueprints": []}))
+        return completed
+
+    mocker.patch('mn_cli.libs.blueprint_cmds.subprocess.run', side_effect=fake_run)
+    mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
+
+    result = runner.invoke(app, ["blueprint", "--blueprint-repo", repo_url, "run", "bp-1"])
+
+    assert result.exit_code == 1
+    assert "index.json is not well formatted" in result.stdout
+    mock_run_bundle.assert_not_called()
 
 
 def test_blueprint_run_generates_python_source_bundle(mocker, tmp_path):

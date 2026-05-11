@@ -2,138 +2,60 @@ import os
 import json
 import shutil
 import subprocess
-import sys
 import time
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 import typer
 from rich.table import Table
+from mn_cli.libs.blueprint_observability import (
+    artifact_headline as _artifact_headline,
+    display as _display,
+    final_artifact as _final_artifact,
+    job_id_from_record as _job_id,
+    load_observability_api as _load_observability_api,
+    load_run_or_exit as _load_run_or_exit,
+    load_web_ui_api as _load_web_ui_api,
+    make_blueprint_run_id as _make_blueprint_run_id,
+    print_events as _print_events,
+    render_markdown_export as _render_markdown_export,
+    run_summary as _run_summary,
+    web_ui_url as _web_ui_url,
+)
+from mn_cli.libs.blueprint_repository import (
+    BLUEPRINT_REPO_CONTEXT_KEY,
+    DEFAULT_BLUEPRINT_REPO,
+    BlueprintIndexError,
+    blueprint_cache_dir_for_repo as _blueprint_cache_dir_for_repo,
+    blueprint_storage_dir_for_source as _blueprint_storage_dir_for_source,
+    clone_blueprint_repo as _clone_blueprint_repo,
+    context_blueprint_repo as _context_blueprint_repo,
+    default_blueprint_storage_dir as _default_blueprint_storage_dir,
+    ensure_blueprint_source as _ensure_blueprint_source,
+    git_checkout as _git_checkout,
+    git_fetch as _git_fetch,
+    git_pull as _git_pull,
+    git_revision as _git_revision,
+    load_blueprint_index as _load_blueprint_index,
+)
 from mn_cli.shared import console, logger
 from mn_cli.libs.run_cmds import run_bundle as _run_bundle
 
 blueprint_app = typer.Typer(help="Manage and run MirrorNeuron blueprints")
-DEFAULT_BLUEPRINT_REPO = "https://github.com/MirrorNeuronLab/mn-blueprints"
+_PATCH_COMPAT = (subprocess, _git_checkout, _git_fetch)
 
 
-def _load_observability_api() -> tuple[Callable[..., list[dict[str, Any]]], Callable[..., dict[str, Any]], Callable[..., list[dict[str, Any]]]]:
-    try:
-        from mn_blueprint_support.observability import list_runs, load_run, read_run_events
-    except ModuleNotFoundError:
-        repo_root = Path(__file__).resolve().parents[3]
-        support_src = repo_root / "mn-skills" / "blueprint_support_skill" / "src"
-        if support_src.exists() and str(support_src) not in sys.path:
-            sys.path.insert(0, str(support_src))
-        try:
-            from mn_blueprint_support.observability import list_runs, load_run, read_run_events
-        except ModuleNotFoundError:
-            console.print(
-                "[red]Blueprint observability support is unavailable. "
-                "Install the blueprint support package or run from the monorepo checkout.[/red]"
-            )
-            raise typer.Exit(1)
-    return list_runs, load_run, read_run_events
-
-
-def _load_web_ui_api() -> Callable[..., Any]:
-    _load_observability_api()
-    try:
-        from mn_blueprint_support.web_ui import write_static_run_report
-    except ModuleNotFoundError:
-        console.print("[red]Blueprint web UI support is unavailable.[/red]")
-        raise typer.Exit(1)
-    return write_static_run_report
-
-
-def _make_blueprint_run_id(blueprint_id: str) -> str:
-    try:
-        _load_observability_api()
-        from mn_blueprint_support import make_run_id
-
-        return make_run_id(blueprint_id)
-    except Exception:
-        import uuid
-
-        return f"{blueprint_id}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{uuid.uuid4().hex[:10]}"
-
-
-def _ensure_blueprint_source(
-    *,
-    source: Optional[str],
-    update: bool,
-    offline: bool,
-    revision: Optional[str],
-) -> str:
-    if source:
-        source_path = Path(source).expanduser()
-        if source_path.exists():
-            storage_dir = source_path
-        else:
-            storage_dir = Path(os.path.expanduser("~/.mn/blueprints"))
-            if offline:
-                console.print(f"[red]Offline mode cannot clone missing source {source!r}.[/red]")
-                raise typer.Exit(1)
-            if not storage_dir.exists():
-                _clone_blueprint_repo(source, storage_dir)
-            elif update:
-                _git_pull(storage_dir)
-    else:
-        storage_dir = Path(os.path.expanduser("~/.mn/blueprints"))
-        if not storage_dir.exists():
-            if offline:
-                console.print(f"[red]Blueprint storage not found at {storage_dir}; offline mode cannot clone it.[/red]")
-                raise typer.Exit(1)
-            console.print(f"Initializing blueprint storage at {storage_dir}...")
-            _clone_blueprint_repo(DEFAULT_BLUEPRINT_REPO, storage_dir)
-        elif update:
-            _git_pull(storage_dir)
-        else:
-            console.print(f"Using cached blueprint storage at {storage_dir}. Run 'mn blueprint update' or pass --update to refresh.")
-
-    if revision:
-        if offline:
-            _git_checkout(storage_dir, revision)
-        else:
-            _git_fetch(storage_dir)
-            _git_checkout(storage_dir, revision)
-    return str(storage_dir)
-
-
-def _clone_blueprint_repo(source: str, storage_dir: Path) -> None:
-    storage_dir.parent.mkdir(parents=True, exist_ok=True)
-    res = subprocess.run(["git", "clone", source, str(storage_dir)], capture_output=True, text=True)
-    if res.returncode != 0:
-        logger.error("Failed to clone blueprint repository: %s", res.stderr)
-        console.print(f"[red]Failed to clone blueprint repository: {res.stderr}[/red]")
-        raise typer.Exit(1)
-
-
-def _git_pull(storage_dir: Path) -> None:
-    console.print(f"Updating blueprint storage at {storage_dir}...")
-    res = subprocess.run(["git", "-C", str(storage_dir), "pull", "--ff-only"], capture_output=True, text=True)
-    if res.returncode != 0:
-        logger.warning("Failed to update blueprint repository: %s", res.stderr)
-        console.print(f"[yellow]Warning: Failed to update blueprint repository: {res.stderr}[/yellow]")
-
-
-def _git_fetch(storage_dir: Path) -> None:
-    subprocess.run(["git", "-C", str(storage_dir), "fetch", "--all", "--tags"], capture_output=True, text=True)
-
-
-def _git_checkout(storage_dir: Path, revision: str) -> None:
-    res = subprocess.run(["git", "-C", str(storage_dir), "checkout", revision], capture_output=True, text=True)
-    if res.returncode != 0:
-        console.print(f"[red]Failed to checkout blueprint revision {revision}: {res.stderr}[/red]")
-        raise typer.Exit(1)
-
-
-def _git_revision(storage_dir: Path) -> Optional[str]:
-    res = subprocess.run(["git", "-C", str(storage_dir), "rev-parse", "HEAD"], capture_output=True, text=True)
-    if res.returncode != 0:
-        return None
-    stdout = getattr(res, "stdout", "") or ""
-    return str(stdout).strip() or None
-
+@blueprint_app.callback()
+def blueprint_callback(
+    ctx: typer.Context,
+    blueprint_repo: Optional[str] = typer.Option(
+        None,
+        "--blueprint-repo",
+        help="Use this blueprint repository URL/path instead of the default catalog.",
+    ),
+) -> None:
+    ctx.obj = dict(ctx.obj or {})
+    ctx.obj[BLUEPRINT_REPO_CONTEXT_KEY] = blueprint_repo
 
 def _is_python_source_blueprint(manifest: dict[str, Any]) -> bool:
     metadata = manifest.get("metadata") or {}
@@ -249,61 +171,6 @@ def _run_local_blueprint_target(
     return True
 
 
-def _display(value: Any, *, max_length: int = 140) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, (dict, list)):
-        text = json.dumps(value, sort_keys=True)
-    else:
-        text = str(value)
-    return text if len(text) <= max_length else text[: max_length - 1] + "…"
-
-
-def _run_summary(run: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "Run ID": run.get("run_id"),
-        "Blueprint": run.get("blueprint_id"),
-        "Status": run.get("status"),
-        "Started": run.get("started_at"),
-        "Ended": run.get("ended_at"),
-        "Run Directory": run.get("run_dir"),
-    }
-
-
-def _run_summary_with_job(record: dict[str, Any]) -> dict[str, Any]:
-    summary = _run_summary(record.get("run") or record)
-    job_id = _job_id(record)
-    if job_id:
-        summary["Job ID"] = job_id
-    return summary
-
-
-def _final_artifact(record: dict[str, Any]) -> dict[str, Any]:
-    final_artifact = record.get("final_artifact") or {}
-    if final_artifact:
-        return final_artifact
-    result = record.get("result") or {}
-    nested = result.get("final_artifact") if isinstance(result, dict) else None
-    return nested if isinstance(nested, dict) else {}
-
-
-def _artifact_headline(artifact: dict[str, Any]) -> str:
-    for key in ("recommended_action", "recommendation", "decision", "risk_level", "priority", "summary"):
-        if key in artifact:
-            return _display(artifact[key])
-    return _display(artifact)
-
-
-def _web_ui_url(record: dict[str, Any]) -> str:
-    web_ui = record.get("web_ui") or {}
-    return str(web_ui.get("url") or "")
-
-
-def _job_id(record: dict[str, Any]) -> str:
-    job = record.get("job") or {}
-    return str(job.get("job_id") or "")
-
-
 def _print_run_table(runs: list[dict[str, Any]]) -> None:
     if not runs:
         console.print("[yellow]No blueprint runs found.[/yellow]")
@@ -322,66 +189,28 @@ def _print_run_table(runs: list[dict[str, Any]]) -> None:
         )
 
 
-def _load_run_or_exit(run_id: str, runs_root: Optional[str]) -> dict[str, Any]:
-    _, load_run, _ = _load_observability_api()
-    try:
-        return load_run(run_id, runs_root=runs_root)
-    except FileNotFoundError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(1)
-
-
-def _print_events(events: list[dict[str, Any]]) -> None:
-    for event in events:
-        timestamp = event.get("timestamp") or event.get("time") or event.get("ts") or ""
-        event_type = event.get("type") or event.get("event") or event.get("name") or "event"
-        details = {
-            key: value
-            for key, value in event.items()
-            if key not in {"timestamp", "time", "ts", "type", "event", "name"}
-        }
-        detail_text = json.dumps(details, sort_keys=True) if details else ""
-        console.print(f"{_display(timestamp, max_length=36)} {_display(event_type, max_length=48)} {detail_text}", markup=False)
-
-
-def _markdown_table(rows: list[tuple[str, Any]]) -> list[str]:
-    output = ["| Field | Value |", "|---|---|"]
-    for key, value in rows:
-        escaped_value = _display(value).replace("|", "\\|")
-        output.append(f"| {key} | {escaped_value} |")
-    return output
-
-
-def _render_markdown_export(record: dict[str, Any]) -> str:
-    run = record.get("run") or {}
-    artifact = _final_artifact(record)
-    lines = [f"# Blueprint Run {run.get('run_id', 'unknown')}", ""]
-    lines.extend(["## Summary", ""])
-    lines.extend(_markdown_table(list(_run_summary_with_job(record).items())))
-    lines.extend(["", "## Final Artifact", "", "```json", json.dumps(artifact, indent=2, sort_keys=True), "```"])
-    web_ui = record.get("web_ui") or {}
-    if web_ui:
-        lines.extend(["", "## Web UI", ""])
-        lines.extend(_markdown_table([("URL", web_ui.get("url")), ("Adapter", web_ui.get("adapter")), ("Status", web_ui.get("status"))]))
-    lines.extend(["", "## Result", "", "```json", json.dumps(record.get("result") or {}, indent=2, sort_keys=True), "```"])
-    lines.extend(["", "## Inputs", "", "```json", json.dumps(record.get("inputs") or {}, indent=2, sort_keys=True), "```"])
-    lines.extend(["", "## Config", "", "```json", json.dumps(record.get("config") or {}, indent=2, sort_keys=True), "```"])
-    lines.extend(["", "## Event Tail", "", "```json"])
-    for event in (record.get("events") or [])[-20:]:
-        lines.append(json.dumps(event, sort_keys=True))
-    lines.extend(["```", ""])
-    return "\n".join(lines)
-
 @blueprint_app.command("list")
-def blueprint_list():
+def blueprint_list(ctx: typer.Context):
     """List all available blueprints from the local storage shared with mn staff"""
-    index_path = os.path.expanduser("~/.mn/blueprints/index.json")
-    if not os.path.exists(index_path):
-        console.print("[yellow]Blueprint storage not initialized. Run 'mn blueprint run <name>' to initialize.[/yellow]")
-        return
+    blueprint_repo = _context_blueprint_repo(ctx)
+    if blueprint_repo:
+        storage_dir = Path(
+            _ensure_blueprint_source(
+                source=None,
+                blueprint_repo=blueprint_repo,
+                update=False,
+                offline=False,
+                revision=None,
+            )
+        )
+        index_path = storage_dir / "index.json"
+    else:
+        index_path = Path(os.path.expanduser("~/.mn/blueprints/index.json"))
+        if not index_path.exists():
+            console.print("[yellow]Blueprint storage not initialized. Run 'mn blueprint run <name>' to initialize.[/yellow]")
+            return
     try:
-        with open(index_path, "r") as f:
-            blueprints = json.load(f)
+        blueprints = _load_blueprint_index(index_path)
         table = Table("ID", "Name", "Job Name", "Description")
         for bp in blueprints:
             table.add_row(
@@ -391,12 +220,15 @@ def blueprint_list():
                 bp.get("description", "")
             )
         console.print(table)
-    except Exception as e:
+    except BlueprintIndexError as e:
         logger.exception("Error reading blueprint index")
         console.print(f"[red]Error reading blueprints index: {e}[/red]")
+        if blueprint_repo:
+            raise typer.Exit(1)
 
 @blueprint_app.command("run")
 def blueprint_run(
+    ctx: typer.Context,
     blueprint_path_name: str,
     run_id: Optional[str] = typer.Option(None, "--run-id", help="Use a specific shared blueprint run ID."),
     source: Optional[str] = typer.Option(None, "--source", help="Use a local blueprint repo/path or clone URL instead of ~/.mn/blueprints."),
@@ -413,19 +245,20 @@ def blueprint_run(
     ):
         return
 
-    storage_dir = _ensure_blueprint_source(source=source, update=update, offline=offline, revision=revision)
+    storage_dir = _ensure_blueprint_source(
+        source=source,
+        blueprint_repo=_context_blueprint_repo(ctx),
+        update=update,
+        offline=offline,
+        revision=revision,
+    )
     
-    index_path = os.path.join(storage_dir, "index.json")
-    if not os.path.exists(index_path):
-        console.print("[red]Error: index.json not found in blueprint storage.[/red]")
-        raise typer.Exit(1)
-        
+    index_path = Path(storage_dir) / "index.json"
     try:
-        with open(index_path, "r") as f:
-            blueprints = json.load(f)
-    except Exception as e:
+        blueprints = _load_blueprint_index(index_path, require_paths=True)
+    except BlueprintIndexError as e:
         logger.exception("Error parsing blueprint index")
-        console.print(f"[red]Error parsing index.json: {e}[/red]")
+        console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
         
     target_bp = None
@@ -457,11 +290,18 @@ def blueprint_run(
 
 @blueprint_app.command("install")
 def blueprint_install(
-    source: str = typer.Option(DEFAULT_BLUEPRINT_REPO, "--source", help="Blueprint repository URL or local path."),
+    ctx: typer.Context,
+    source: Optional[str] = typer.Option(None, "--source", help="Blueprint repository URL or local path."),
     force: bool = typer.Option(False, "--force", help="Replace the existing cached repository."),
 ):
     """Install the blueprint library into ~/.mn/blueprints."""
-    storage_dir = Path(os.path.expanduser("~/.mn/blueprints"))
+    blueprint_repo = _context_blueprint_repo(ctx)
+    repo_source = source or blueprint_repo or DEFAULT_BLUEPRINT_REPO
+    storage_dir = (
+        _blueprint_cache_dir_for_repo(repo_source)
+        if source is None and blueprint_repo
+        else _default_blueprint_storage_dir()
+    )
     if storage_dir.exists() and not force:
         console.print(f"[yellow]Blueprint storage already exists at {storage_dir}. Use --force to replace it.[/yellow]")
         return
@@ -469,20 +309,37 @@ def blueprint_install(
         import shutil
 
         shutil.rmtree(storage_dir)
-    _clone_blueprint_repo(source, storage_dir)
+    _clone_blueprint_repo(repo_source, storage_dir)
+    try:
+        _load_blueprint_index(storage_dir / "index.json")
+    except BlueprintIndexError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
     console.print(f"[green]Installed blueprints at {storage_dir}.[/green]")
 
 
 @blueprint_app.command("update")
 def blueprint_update(
+    ctx: typer.Context,
     source: Optional[str] = typer.Option(None, "--source", help="Cached blueprint repo/path to update."),
 ):
     """Update the cached blueprint library explicitly."""
-    storage_dir = Path(source).expanduser() if source else Path(os.path.expanduser("~/.mn/blueprints"))
+    blueprint_repo = _context_blueprint_repo(ctx)
+    if source:
+        storage_dir = Path(source).expanduser()
+    elif blueprint_repo:
+        storage_dir = _blueprint_storage_dir_for_source(blueprint_repo)
+    else:
+        storage_dir = _default_blueprint_storage_dir()
     if not storage_dir.exists():
         console.print(f"[red]Blueprint storage not found at {storage_dir}. Run 'mn blueprint install' first.[/red]")
         raise typer.Exit(1)
     _git_pull(storage_dir)
+    try:
+        _load_blueprint_index(storage_dir / "index.json")
+    except BlueprintIndexError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
 
 
 @blueprint_app.command("monitor")
