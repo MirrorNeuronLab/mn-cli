@@ -359,6 +359,7 @@ def _update_core() -> None:
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     bash \\
     ca-certificates \\
+    curl \\
     libgcc-s1 \\
     libstdc++6 \\
     libssl3 \\
@@ -366,6 +367,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
     openssl \\
     procps \\
     && rm -rf /var/lib/apt/lists/*
+
+ARG OPENSHELL_VERSION=v0.0.16
+RUN set -eux; \\
+    arch="$(dpkg --print-architecture)"; \\
+    case "$arch" in \\
+      arm64) openshell_target="aarch64-unknown-linux-musl"; openshell_sha="7301b47e37f498e6535c0fa3c1f8db505d385719cbe94de10fc1dc69b83e37fb" ;; \\
+      amd64) openshell_target="x86_64-unknown-linux-musl"; openshell_sha="c95ffd08705f3fce6198e5cb9992fa4e8c5eea63b581758c761db5925b92fec5" ;; \\
+      *) echo "unsupported architecture for OpenShell: $arch" >&2; exit 1 ;; \\
+    esac; \\
+    curl -fLsS -o /tmp/openshell.tar.gz \\
+      "https://github.com/NVIDIA/OpenShell/releases/download/${OPENSHELL_VERSION}/openshell-${openshell_target}.tar.gz"; \\
+    echo "${openshell_sha}  /tmp/openshell.tar.gz" | sha256sum -c -; \\
+    tar -xzf /tmp/openshell.tar.gz -C /usr/local/bin openshell; \\
+    chmod 0755 /usr/local/bin/openshell; \\
+    rm -f /tmp/openshell.tar.gz; \\
+    openshell --version
 
 ARG CORE_RELEASE_TAG
 LABEL org.opencontainers.image.version="${CORE_RELEASE_TAG}"

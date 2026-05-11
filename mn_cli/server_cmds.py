@@ -285,6 +285,19 @@ def _start_server(ip: str = None):
     ]:
         if os.getenv(env_name):
             cmd.extend(["-e", env_name])
+
+    openshell_container_config_dir = Path(
+        os.getenv(
+            "OPENSHELL_CONTAINER_CONFIG_DIR",
+            str(Path.home() / ".config" / "openshell-mirror-neuron"),
+        )
+    )
+    openshell_config_dir = openshell_container_config_dir
+    if not (openshell_config_dir / "gateways" / "openshell").is_dir():
+        openshell_config_dir = Path.home() / ".config" / "openshell"
+    if (openshell_config_dir / "gateways" / "openshell").is_dir():
+        cmd.extend(["-v", f"{openshell_config_dir}:/root/.config/openshell:ro"])
+        cmd.extend(["-v", f"{openshell_config_dir}:/opt/mirror_neuron/.config/openshell:ro"])
     
     cmd.append("mirror-neuron-core:latest")
     
