@@ -74,7 +74,9 @@ def test_validate_nodes_not_list(tmp_path):
     assert result.exit_code == 1
     assert "'nodes' must be a list" in result.stdout
 
-def test_run_success(mocker, tmp_path):
+def test_run_success(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="run-bundle-auto")
     mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
     mock_stream = mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_pending"}),
@@ -94,9 +96,12 @@ def test_run_success(mocker, tmp_path):
     
     assert result.exit_code == 0
     assert "Job submitted successfully" in result.stdout
+    assert "run-bundle-auto" in result.stdout
     assert "Type" in result.stdout
     assert "Batch" in result.stdout
     assert "Job Status: Success" in result.stdout
+    mapping = json.loads((tmp_path / "runs" / "run-bundle-auto" / "job.json").read_text())
+    assert mapping["job_id"] == "job-123"
     mock_submit.assert_called_once()
     mock_stream.assert_called_once_with("job-123")
 
@@ -141,6 +146,80 @@ def test_run_injects_blueprint_config_scenario_and_run_id(mocker, tmp_path):
     assert "MN_BLUEPRINT_PRODUCT_JSON" not in env
     assert env["MN_LLM_MODEL"] == "ollama/nemotron3:33b"
     assert env["MN_LLM_API_BASE"] == "http://old"
+
+
+def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-auto")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_completed"})
+    ])
+    mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="bp-1-auto-run")
+
+    bundle_dir = tmp_path / "run_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "graph_id": "bp_graph",
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "environment": {},
+                    "runner_module": "MirrorNeuron.Runner.HostLocal",
+                    "upload_paths": [
+                        {"source": "worker", "target": "worker"},
+                        {"source": "web_ui", "target": "web_ui"},
+                    ],
+                    "workdir": "/sandbox/job/worker",
+                },
+            }
+        ],
+    }))
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(json.dumps({
+        "identity": {"blueprint_id": "bp-1", "name": "Blueprint One"},
+        "outputs": {"adapter": "local_run_store", "run_root": "~/.mn/runs", "write_run_store": True},
+        "web_ui": {
+            "enabled": True,
+            "kind": "static_html",
+            "dashboard": {"path": "payloads/web_ui/index.html"},
+        },
+        "manifest_config_bindings": [
+            {
+                "config_path": "identity.run_id",
+                "manifest_path": "nodes.worker.config.environment.MN_RUN_ID",
+            },
+            {
+                "config_path": "outputs.run_root",
+                "manifest_path": "nodes.worker.config.environment.MN_RUNS_ROOT",
+            },
+        ],
+    }))
+    web_dir = bundle_dir / "payloads" / "web_ui"
+    web_dir.mkdir(parents=True)
+    (web_dir / "index.html").write_text("<html></html>")
+
+    result = runner.invoke(app, ["run", str(bundle_dir)])
+
+    assert result.exit_code == 0
+    assert "bp-1-auto-run" in result.stdout
+    mapping = json.loads((tmp_path / "runs" / "bp-1-auto-run" / "job.json").read_text())
+    assert mapping["job_id"] == "job-auto"
+    manifest = json.loads(mock_submit.call_args.args[0])
+    env = manifest["nodes"][0]["config"]["environment"]
+    injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
+    assert env["MN_RUN_ID"] == "bp-1-auto-run"
+    assert env["MN_RUNS_ROOT"] == str(tmp_path / "runs")
+    assert injected_config["identity"]["run_id"] == "bp-1-auto-run"
+    assert injected_config["outputs"]["run_root"] == str(tmp_path / "runs")
+    web_ui = json.loads((tmp_path / "runs" / "bp-1-auto-run" / "web_ui.json").read_text())
+    assert web_ui["title"] == "Blueprint One"
+    assert web_ui["metadata"]["registered_by"] == "mn_cli"
+    config = manifest["nodes"][0]["config"]
+    assert config["upload_path"] == "."
+    assert config["upload_as"] == "."
+    assert "upload_paths" not in config
 
 
 def test_run_records_blueprint_run_id_mapping(mocker, tmp_path, monkeypatch):

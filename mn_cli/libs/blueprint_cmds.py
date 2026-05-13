@@ -148,31 +148,13 @@ def _run_resolved_blueprint(
     )
 
 
-def _run_local_blueprint_target(
-    target: str,
-    *,
-    run_id: Optional[str],
-    follow_seconds: Optional[float],
-) -> bool:
+def _reject_local_blueprint_path(target: str) -> None:
     blueprint_dir = Path(target).expanduser()
-    if not blueprint_dir.is_dir():
-        return False
-
-    manifest = _load_blueprint_manifest(blueprint_dir, target)
-    metadata = manifest.get("metadata") or {}
-    blueprint_id = str(metadata.get("blueprint_id") or manifest.get("graph_id") or blueprint_dir.name)
-    resolved_revision = _git_revision(blueprint_dir)
-    _run_resolved_blueprint(
-        blueprint_dir=blueprint_dir,
-        manifest=manifest,
-        display_name=target,
-        blueprint_id=blueprint_id,
-        run_id=run_id,
-        revision=resolved_revision,
-        source_label=str(blueprint_dir),
-        follow_seconds=follow_seconds,
-    )
-    return True
+    if not blueprint_dir.exists():
+        return
+    console.print("[red]Error: 'mn blueprint run' accepts catalog blueprint names only.[/red]")
+    console.print(f"Use [bold]mn run {blueprint_dir}[/bold] to run a local blueprint folder.")
+    raise typer.Exit(1)
 
 
 def _collect_init_config_review_overrides(
@@ -351,13 +333,8 @@ def blueprint_run(
     revision: Optional[str] = typer.Option(None, "--revision", help="Checkout a specific git revision before running."),
     follow_seconds: Optional[float] = typer.Option(None, "--follow-seconds", help="Seconds to follow runtime events before detaching."),
 ):
-    """Run a blueprint by name or local folder."""
-    if _run_local_blueprint_target(
-        blueprint_path_name,
-        run_id=run_id,
-        follow_seconds=follow_seconds,
-    ):
-        return
+    """Run a blueprint by catalog name."""
+    _reject_local_blueprint_path(blueprint_path_name)
 
     storage_dir = _ensure_blueprint_source(
         source=source,

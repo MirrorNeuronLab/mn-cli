@@ -2,6 +2,7 @@ import typer
 import json
 import os
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Annotated, Any, Optional
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
@@ -22,9 +23,11 @@ from mn_cli.libs.run_manifest import (
     add_mn_llm_aliases as _add_mn_llm_aliases,
     blueprint_runtime_environment as _blueprint_runtime_environment,
     inject_node_environment as _inject_node_environment,
+    load_blueprint_config,
     prepare_manifest_for_submission,
     run_mode_label as _run_mode_label,
 )
+from mn_cli.libs.blueprint_observability import make_blueprint_run_id as _make_blueprint_run_id
 from mn_cli.shared import console, client, logger
 from mn_cli.error_handler import handle_cli_error
 
@@ -335,6 +338,8 @@ def run_bundle(
 ):
     """Run a bundle after applying optional runtime metadata and environment."""
     try:
+        env_overrides = dict(env_overrides or {})
+        submission_metadata = dict(submission_metadata or {})
         bundle_dir = Path(bundle_path)
         if not bundle_dir.is_dir():
             console.print(
@@ -369,7 +374,14 @@ def run_bundle(
             else:
                 console.print("[red]Bundle requires configuration, but config.py was not found.[/red]")
                 raise typer.Exit(1)
-                
+
+        _ensure_local_run_store_identity(
+            bundle_dir,
+            manifest_dict,
+            env_overrides,
+            submission_metadata,
+            config_overrides=config_overrides,
+        )
         manifest_dict = prepare_manifest_for_submission(
             bundle_dir,
             manifest_dict,
@@ -388,11 +400,18 @@ def run_bundle(
                     with open(filepath, "rb") as f:
                         payloads[rel_path] = f.read()
 
+        blueprint_run_id = submission_metadata.get("blueprint_run_id") or env_overrides.get("MN_RUN_ID")
+        blueprint_run_dir = _blueprint_run_dir(blueprint_run_id, env_overrides) if blueprint_run_id else None
         job_id = client.submit_job(manifest, payloads)
-        log_writer = JobLogWriter(job_id)
-        blueprint_run_id = (submission_metadata or {}).get("blueprint_run_id") or (env_overrides or {}).get("MN_RUN_ID")
+        log_writer = JobLogWriter(job_id, run_dir=blueprint_run_dir)
         if blueprint_run_id:
-            _write_blueprint_job_mapping(blueprint_run_id, job_id, submission_metadata or {})
+            _write_blueprint_job_mapping(blueprint_run_id, job_id, submission_metadata, env_overrides)
+            _write_local_web_ui_handle(
+                bundle_dir,
+                blueprint_run_id,
+                env_overrides=env_overrides,
+                config_overrides=config_overrides,
+            )
         resolved_follow_seconds = (
             float(os.getenv("MN_RUN_DETACH_LOG_SECONDS", "30"))
             if follow_seconds is None
@@ -408,7 +427,7 @@ def run_bundle(
                 follow_seconds=resolved_follow_seconds,
                 run_mode=_run_mode_label(manifest_dict),
                 blueprint_run_id=blueprint_run_id,
-                blueprint_revision=(submission_metadata or {}).get("blueprint_revision"),
+                blueprint_revision=submission_metadata.get("blueprint_revision"),
             )
         )
         _stream_and_format_events(job_id, log_writer, resolved_follow_seconds)
@@ -419,8 +438,40 @@ def run_bundle(
         raise typer.Exit(1)
 
 
-def _write_blueprint_job_mapping(blueprint_run_id: str, job_id: str, metadata: dict[str, Any]) -> None:
-    run_dir = Path(os.getenv("MN_RUNS_ROOT", "~/.mn/runs")).expanduser() / blueprint_run_id
+def _ensure_local_run_store_identity(
+    bundle_dir: Path,
+    manifest_dict: dict[str, Any],
+    env_overrides: dict[str, str],
+    submission_metadata: dict[str, Any],
+    *,
+    config_overrides: Optional[dict[str, Any]] = None,
+) -> None:
+    if submission_metadata.get("blueprint_run_id") or env_overrides.get("MN_RUN_ID"):
+        return
+
+    config = load_blueprint_config(bundle_dir, config_overrides=config_overrides) or {}
+    identity = config.get("identity") if isinstance(config, dict) else {}
+    identity = identity if isinstance(identity, dict) else {}
+    metadata = manifest_dict.get("metadata") if isinstance(manifest_dict.get("metadata"), dict) else {}
+    blueprint_id = (
+        identity.get("blueprint_id")
+        or metadata.get("blueprint_id")
+        or manifest_dict.get("graph_id")
+        or bundle_dir.name
+    )
+    run_id = identity.get("run_id") or _make_blueprint_run_id(str(blueprint_id))
+    env_overrides["MN_RUN_ID"] = str(run_id)
+    submission_metadata.setdefault("blueprint_id", str(blueprint_id))
+    submission_metadata["blueprint_run_id"] = str(run_id)
+
+
+def _write_blueprint_job_mapping(
+    blueprint_run_id: str,
+    job_id: str,
+    metadata: dict[str, Any],
+    env_overrides: dict[str, str],
+) -> None:
+    run_dir = _blueprint_run_dir(blueprint_run_id, env_overrides)
     try:
         run_dir.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -434,6 +485,88 @@ def _write_blueprint_job_mapping(blueprint_run_id: str, job_id: str, metadata: d
         tmp.replace(run_dir / "job.json")
     except OSError:
         logger.exception("Failed to write blueprint job mapping for run_id=%s job_id=%s", blueprint_run_id, job_id)
+
+
+def _blueprint_run_dir(blueprint_run_id: str, env_overrides: dict[str, str]) -> Path:
+    runs_root = Path(env_overrides.get("MN_RUNS_ROOT") or os.getenv("MN_RUNS_ROOT") or "~/.mn/runs").expanduser()
+    return runs_root / blueprint_run_id
+
+
+def _write_local_web_ui_handle(
+    bundle_dir: Path,
+    blueprint_run_id: str,
+    *,
+    env_overrides: dict[str, str],
+    config_overrides: Optional[dict[str, Any]] = None,
+) -> None:
+    config = load_blueprint_config(bundle_dir, config_overrides=config_overrides)
+    if not isinstance(config, dict):
+        return
+    web_ui = config.get("web_ui")
+    if not isinstance(web_ui, dict) or web_ui.get("enabled") is False:
+        return
+
+    dashboard = web_ui.get("dashboard") if isinstance(web_ui.get("dashboard"), dict) else {}
+    output = web_ui.get("output") if isinstance(web_ui.get("output"), dict) else {}
+    dashboard_path = dashboard.get("path") or output.get("path")
+    if not isinstance(dashboard_path, str) or not dashboard_path:
+        metadata = config.get("metadata") if isinstance(config.get("metadata"), dict) else {}
+        dashboard_path = ((metadata.get("web_ui") or {}) if isinstance(metadata.get("web_ui"), dict) else {}).get("path")
+    if not isinstance(dashboard_path, str) or not dashboard_path:
+        return
+
+    html_path = (bundle_dir / dashboard_path).expanduser().resolve()
+    if not html_path.exists():
+        return
+
+    runs_root = Path(env_overrides.get("MN_RUNS_ROOT") or os.getenv("MN_RUNS_ROOT") or "~/.mn/runs").expanduser()
+    run_dir = runs_root / blueprint_run_id
+    video_source = _web_ui_video_source(config, bundle_dir)
+    query = urllib.parse.urlencode(
+        {
+            "video": video_source,
+            "events": (run_dir / "events.jsonl").resolve().as_uri(),
+            "pollMs": "2000",
+        }
+    )
+    identity = config.get("identity") if isinstance(config.get("identity"), dict) else {}
+    handle = {
+        "adapter": output.get("adapter") or web_ui.get("kind") or "static_html",
+        "kind": "output",
+        "url": f"{html_path.as_uri()}?{query}",
+        "title": output.get("title") or identity.get("name") or bundle_dir.name,
+        "path": str(html_path),
+        "status": "available",
+        "metadata": {
+            "blueprint_id": identity.get("blueprint_id"),
+            "run_id": blueprint_run_id,
+            "events_path": str(run_dir / "events.jsonl"),
+            "dashboard_path": str(html_path),
+            "registered_by": "mn_cli",
+        },
+    }
+    try:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "web_ui.json").write_text(json.dumps(handle, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except OSError:
+        logger.exception("Failed to write blueprint web UI handle for run_id=%s", blueprint_run_id)
+
+
+def _web_ui_video_source(config: dict[str, Any], bundle_dir: Path) -> str:
+    video_source = ((config.get("video_source") or {}) if isinstance(config.get("video_source"), dict) else {}).get("uri")
+    if not isinstance(video_source, str) or not video_source:
+        dashboard = (config.get("web_ui") or {}).get("dashboard") if isinstance(config.get("web_ui"), dict) else {}
+        video_source = (dashboard or {}).get("default_video_source") or ""
+    if "://" in video_source:
+        return video_source
+    for candidate in (
+        bundle_dir / "payloads" / "person_detector" / video_source,
+        bundle_dir / "payloads" / "web_ui" / video_source,
+        bundle_dir / video_source,
+    ):
+        if candidate.exists():
+            return candidate.resolve().as_uri()
+    return video_source
 
 
 def _live_monitor(job_id: str):

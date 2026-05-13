@@ -40,17 +40,14 @@ def prepare_manifest_for_submission(
     runtime_env.update({key: str(value) for key, value in (env_overrides or {}).items() if value is not None})
     if runtime_env:
         inject_node_environment(prepared, runtime_env)
+    normalize_host_local_uploads(prepared)
     if metadata:
         prepared.setdefault("metadata", {}).setdefault("mn_cli", {}).update(metadata)
     return prepared
 
 
 def _shared_runs_root(env_overrides: Optional[dict[str, str]] = None) -> str:
-    return str(
-        (env_overrides or {}).get("MN_RUNS_ROOT")
-        or os.getenv("MN_RUNS_ROOT")
-        or DEFAULT_RUNS_ROOT
-    )
+    return str(Path((env_overrides or {}).get("MN_RUNS_ROOT") or os.getenv("MN_RUNS_ROOT") or DEFAULT_RUNS_ROOT).expanduser())
 
 
 def with_shared_run_store_config(
@@ -263,6 +260,23 @@ def add_mn_llm_aliases(environment: dict[str, Any]) -> None:
     ):
         if primary not in environment and legacy in environment:
             environment[primary] = environment[legacy]
+
+
+def normalize_host_local_uploads(manifest: dict[str, Any]) -> None:
+    for node in manifest.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        config = node.get("config")
+        if not isinstance(config, dict):
+            continue
+        if config.get("runner_module") != "MirrorNeuron.Runner.HostLocal":
+            continue
+        upload_paths = config.get("upload_paths")
+        if not isinstance(upload_paths, list) or len(upload_paths) <= 1:
+            continue
+        config["upload_path"] = "."
+        config["upload_as"] = "."
+        config.pop("upload_paths", None)
 
 
 def run_mode_label(manifest: dict) -> str:

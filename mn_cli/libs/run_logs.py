@@ -21,11 +21,13 @@ STANDARD_EVENTS = {
 
 
 class JobLogWriter:
-    def __init__(self, job_id: str):
+    def __init__(self, job_id: str, run_dir: Optional[Path] = None):
         self.job_id = job_id
         self.log_dir = Path(f"/tmp/mn_{job_id}")
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.events_file = self.log_dir / "events.log"
+        self.run_dir = run_dir
+        self.run_events_file = run_dir / "events.jsonl" if run_dir is not None else None
         self.snapshot_file = self.log_dir / "job_snapshot.json"
         self.seen = set()
         self.web_ui_urls = set()
@@ -70,6 +72,10 @@ class JobLogWriter:
         self._rotate_if_needed()
         with open(self.events_file, "a") as f:
             f.write(json.dumps(event, sort_keys=True) + "\n")
+        if self.run_events_file is not None:
+            self.run_events_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.run_events_file, "a") as f:
+                f.write(json.dumps(event, sort_keys=True) + "\n")
         self.event_count += 1
 
         event_type = event.get("type", "unknown")
