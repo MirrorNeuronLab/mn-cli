@@ -331,6 +331,7 @@ def run_bundle(
     follow_seconds: Optional[float] = None,
     env_overrides: Optional[dict[str, str]] = None,
     submission_metadata: Optional[dict[str, Any]] = None,
+    config_overrides: Optional[dict[str, Any]] = None,
 ):
     """Run a bundle after applying optional runtime metadata and environment."""
     try:
@@ -374,6 +375,7 @@ def run_bundle(
             manifest_dict,
             env_overrides=env_overrides,
             submission_metadata=submission_metadata,
+            config_overrides=config_overrides,
         )
         manifest = json.dumps(manifest_dict)
 

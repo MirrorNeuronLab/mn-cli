@@ -2,6 +2,7 @@ import os
 import json
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -40,6 +41,7 @@ from mn_cli.libs.blueprint_repository import (
 )
 from mn_cli.shared import console, logger
 from mn_cli.libs.run_cmds import run_bundle as _run_bundle
+from mn_cli.libs.run_manifest import load_blueprint_config as _load_blueprint_config
 
 blueprint_app = typer.Typer(help="Manage and run MirrorNeuron blueprints")
 _PATCH_COMPAT = (subprocess, _git_checkout, _git_fetch)
@@ -128,6 +130,7 @@ def _run_resolved_blueprint(
     if revision:
         console.print(f"Blueprint revision: {revision}")
     bundle_path = _prepare_blueprint_bundle_for_run(blueprint_dir, manifest, shared_run_id)
+    config_overrides = _collect_init_config_review_overrides(bundle_path, manifest)
     _run_bundle(
         str(bundle_path),
         follow_seconds=follow_seconds,
@@ -141,6 +144,7 @@ def _run_resolved_blueprint(
             "blueprint_revision": revision,
             "blueprint_source": source_label,
         },
+        config_overrides=config_overrides,
     )
 
 
@@ -169,6 +173,116 @@ def _run_local_blueprint_target(
         follow_seconds=follow_seconds,
     )
     return True
+
+
+def _collect_init_config_review_overrides(
+    bundle_path: Path,
+    manifest: dict[str, Any],
+) -> dict[str, Any] | None:
+    review = _manifest_init_config_review(manifest)
+    if not isinstance(review, dict):
+        return None
+    fields = review.get("fields")
+    if not isinstance(fields, list) or not fields:
+        return None
+    if _env_flag("MN_BLUEPRINT_SKIP_INIT_CONFIG_REVIEW"):
+        return None
+    if not sys.stdin.isatty():
+        if review.get("required") is True:
+            console.print("[yellow]Blueprint config review requested; keeping current config in this non-interactive run.[/yellow]")
+        return None
+
+    config = _load_blueprint_config(bundle_path) or {}
+    overrides: dict[str, Any] = {}
+    console.print("[bold]Review blueprint config before launch[/bold]")
+    instruction = review.get("instruction")
+    if isinstance(instruction, str) and instruction.strip():
+        console.print(instruction.strip())
+
+    for raw_field in fields:
+        if not isinstance(raw_field, dict):
+            continue
+        path = raw_field.get("path")
+        if not isinstance(path, str) or not path.strip():
+            continue
+        path = path.strip()
+        label = str(raw_field.get("label") or path)
+        description = raw_field.get("description")
+        current = _config_path_get(config, path)
+        fallback = raw_field.get("default")
+        default_value = current if current is not None else fallback
+        if isinstance(description, str) and description.strip():
+            console.print(f"{label}: {description.strip()}")
+        if default_value is None:
+            response = typer.prompt(label, default="", show_default=False)
+            if response == "":
+                continue
+        else:
+            response = typer.prompt(label, default=str(default_value), show_default=True)
+        parsed = _parse_review_value(response, default_value)
+        if parsed != current:
+            _config_path_set(overrides, path, parsed)
+
+    return overrides or None
+
+
+def _manifest_init_config_review(manifest: dict[str, Any]) -> Any:
+    if "init_config_review" in manifest:
+        return manifest.get("init_config_review")
+    metadata = manifest.get("metadata")
+    if isinstance(metadata, dict):
+        return metadata.get("init_config_review")
+    return None
+
+
+def _config_path_get(config: dict[str, Any], dotted_path: str) -> Any:
+    cursor: Any = config
+    for part in dotted_path.split("."):
+        if not isinstance(cursor, dict) or part not in cursor:
+            return None
+        cursor = cursor[part]
+    return cursor
+
+
+def _config_path_set(config: dict[str, Any], dotted_path: str, value: Any) -> None:
+    cursor = config
+    parts = [part for part in dotted_path.split(".") if part]
+    for part in parts[:-1]:
+        next_value = cursor.get(part)
+        if not isinstance(next_value, dict):
+            next_value = {}
+            cursor[part] = next_value
+        cursor = next_value
+    if parts:
+        cursor[parts[-1]] = value
+
+
+def _parse_review_value(value: str, default_value: Any) -> Any:
+    if isinstance(default_value, bool):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    if isinstance(default_value, int) and not isinstance(default_value, bool):
+        try:
+            return int(value)
+        except ValueError:
+            return value
+    if isinstance(default_value, float):
+        try:
+            return float(value)
+        except ValueError:
+            return value
+    if isinstance(default_value, (dict, list)):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    return value
+
+
+def _env_flag(name: str) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _print_run_table(runs: list[dict[str, Any]]) -> None:

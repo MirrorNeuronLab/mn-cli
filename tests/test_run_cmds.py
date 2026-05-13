@@ -124,7 +124,8 @@ def test_run_injects_blueprint_config_scenario_and_run_id(mocker, tmp_path):
     }))
     config_dir = bundle_dir / "config"
     config_dir.mkdir()
-    (config_dir / "default.json").write_text(json.dumps({"identity": {"blueprint_id": "bp-1"}}))
+    (config_dir / "default.json").write_text(json.dumps({"identity": {"blueprint_id": "bp-1"}, "video_source": {"uri": "default"}}))
+    (config_dir / "overwrite.json").write_text(json.dumps({"video_source": {"uri": "overwrite"}}))
     (bundle_dir / "scenario.json").write_text(json.dumps({"blueprint_id": "bp-1", "metrics": [], "actions": []}))
 
     result = runner.invoke(app, ["run", str(bundle_dir)])
@@ -132,7 +133,10 @@ def test_run_injects_blueprint_config_scenario_and_run_id(mocker, tmp_path):
     assert result.exit_code == 0
     manifest = json.loads(mock_submit.call_args.args[0])
     env = manifest["nodes"][0]["config"]["environment"]
-    assert json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])["identity"]["blueprint_id"] == "bp-1"
+    injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
+    assert injected_config["identity"]["blueprint_id"] == "bp-1"
+    assert injected_config["video_source"]["uri"] == "overwrite"
+    assert env["VIDEO_SOURCE_URI"] == "overwrite"
     assert json.loads(env["MN_BLUEPRINT_SCENARIO_JSON"])["blueprint_id"] == "bp-1"
     assert "MN_BLUEPRINT_PRODUCT_JSON" not in env
     assert env["MN_LLM_MODEL"] == "ollama/nemotron3:33b"

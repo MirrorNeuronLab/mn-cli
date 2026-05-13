@@ -1,7 +1,13 @@
 import json
 
+import pytest
+
 from mn_cli.libs.run_logs import JobLogWriter, materialize_sent_email_copy
-from mn_cli.libs.run_manifest import prepare_manifest_for_submission
+from mn_cli.libs.run_manifest import (
+    apply_manifest_config_bindings,
+    load_blueprint_config,
+    prepare_manifest_for_submission,
+)
 
 
 def test_prepare_manifest_for_submission_merges_runtime_env_and_metadata(tmp_path):
@@ -9,7 +15,17 @@ def test_prepare_manifest_for_submission_merges_runtime_env_and_metadata(tmp_pat
     bundle_dir.mkdir()
     config_dir = bundle_dir / "config"
     config_dir.mkdir()
-    (config_dir / "default.json").write_text(json.dumps({"identity": {"blueprint_id": "bp"}}))
+    (config_dir / "default.json").write_text(json.dumps({
+        "identity": {"blueprint_id": "bp"},
+        "vl_model": {"model": "default"},
+        "manifest_config_bindings": [
+            {
+                "config_path": "vl_model.model",
+                "manifest_path": "nodes.worker.config.environment.CUSTOM_MODEL",
+            }
+        ],
+    }))
+    (config_dir / "overwrite.json").write_text(json.dumps({"vl_model": {"model": "overwrite"}}))
 
     manifest = {
         "nodes": [
@@ -30,14 +46,74 @@ def test_prepare_manifest_for_submission_merges_runtime_env_and_metadata(tmp_pat
         manifest,
         env_overrides={"MN_RUN_ID": "run-1"},
         submission_metadata={"blueprint_id": "bp"},
+        config_overrides={"vl_model": {"base_url": "http://local"}},
     )
 
     env = prepared["nodes"][0]["config"]["environment"]
-    assert json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])["identity"]["blueprint_id"] == "bp"
+    injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
+    assert injected_config["identity"]["blueprint_id"] == "bp"
+    assert injected_config["vl_model"] == {"model": "overwrite", "base_url": "http://local"}
+    assert env["VL_MODEL_NAME"] == "overwrite"
+    assert env["OLLAMA_MODEL"] == "overwrite"
+    assert env["VL_MODEL_BASE_URL"] == "http://local"
+    assert env["CUSTOM_MODEL"] == "overwrite"
     assert env["MN_RUN_ID"] == "run-1"
     assert env["MN_LLM_MODEL"] == "ollama/test"
     assert env["MN_LLM_API_KEY"] == "kept"
     assert prepared["metadata"]["mn_cli"]["blueprint_id"] == "bp"
+
+
+def test_blueprint_config_ignores_misnamed_overwrite_file(tmp_path):
+    bundle_dir = tmp_path / "bundle"
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "default.json").write_text(json.dumps({"vl_model": {"model": "default"}}))
+    (config_dir / "overwrites.json").write_text(json.dumps({"vl_model": {"model": "wrong-name"}}))
+
+    config = load_blueprint_config(bundle_dir)
+
+    assert config == {"vl_model": {"model": "default"}}
+
+
+@pytest.mark.parametrize("payload", ["[]", "{bad json"])
+def test_blueprint_config_rejects_invalid_overwrite_data_format(tmp_path, payload):
+    bundle_dir = tmp_path / "bundle"
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "default.json").write_text(json.dumps({"vl_model": {"model": "default"}}))
+    (config_dir / "overwrite.json").write_text(payload)
+
+    with pytest.raises((json.JSONDecodeError, ValueError)):
+        load_blueprint_config(bundle_dir)
+
+
+def test_manifest_config_bindings_ignore_wrong_names():
+    manifest = {
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {"environment": {"CUSTOM_MODEL": "keep"}},
+            }
+        ]
+    }
+    config = {
+        "vl_model": {"model": "overwrite"},
+        "manifest_config_bindings": [
+            {
+                "config_path": "vl_model.wrong_name",
+                "manifest_path": "nodes.worker.config.environment.CUSTOM_MODEL",
+            },
+            {
+                "config_path": "vl_model.model",
+                "manifest_path": "nodes.missing_worker.config.environment.NEW_MODEL",
+            },
+        ],
+    }
+
+    apply_manifest_config_bindings(manifest, config)
+
+    env = manifest["nodes"][0]["config"]["environment"]
+    assert env == {"CUSTOM_MODEL": "keep"}
 
 
 def test_job_log_writer_deduplicates_events_and_records_web_ui_once():
