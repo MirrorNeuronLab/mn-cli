@@ -145,14 +145,37 @@ def test_run_injects_blueprint_config_scenario_and_run_id(mocker, tmp_path):
 
 def test_run_records_blueprint_run_id_mapping(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
-    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-abc")
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-abc")
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_completed"})
     ])
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps({"nodes": []}))
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {"environment": {}},
+            }
+        ]
+    }))
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(json.dumps({
+        "identity": {"run_id": "stale-run"},
+        "outputs": {"run_root": str(tmp_path / "blueprints" / "worker" / "runs")},
+        "manifest_config_bindings": [
+            {
+                "config_path": "identity.run_id",
+                "manifest_path": "nodes.worker.config.environment.MN_RUN_ID",
+            },
+            {
+                "config_path": "outputs.run_root",
+                "manifest_path": "nodes.worker.config.environment.MN_RUNS_ROOT",
+            },
+        ],
+    }))
 
     run_cmds.run_bundle(
         str(bundle_dir),
@@ -163,6 +186,14 @@ def test_run_records_blueprint_run_id_mapping(mocker, tmp_path, monkeypatch):
     mapping = json.loads((tmp_path / "runs" / "bp-run" / "job.json").read_text())
     assert mapping["job_id"] == "job-abc"
     assert mapping["blueprint_revision"] == "rev-1"
+    assert not (tmp_path / "blueprints" / "worker" / "runs").exists()
+    manifest = json.loads(mock_submit.call_args.args[0])
+    env = manifest["nodes"][0]["config"]["environment"]
+    injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
+    assert env["MN_RUN_ID"] == "bp-run"
+    assert env["MN_RUNS_ROOT"] == str(tmp_path / "runs")
+    assert injected_config["identity"]["run_id"] == "bp-run"
+    assert injected_config["outputs"]["run_root"] == str(tmp_path / "runs")
 
 def test_run_displays_live_job_type_and_follow_status(mocker, tmp_path):
     mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-live")

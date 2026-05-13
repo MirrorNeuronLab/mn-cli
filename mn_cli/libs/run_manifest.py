@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Optional
+
+DEFAULT_RUNS_ROOT = "~/.mn/runs"
 
 
 def prepare_manifest_for_submission(
@@ -14,7 +17,16 @@ def prepare_manifest_for_submission(
     config_overrides: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     prepared = json.loads(json.dumps(manifest_dict))
+    metadata = dict(submission_metadata or {})
+    run_id = (
+        metadata.get("blueprint_run_id")
+        or metadata.get("run_id")
+        or (env_overrides or {}).get("MN_RUN_ID")
+    )
+    runs_root = _shared_runs_root(env_overrides)
     config = load_blueprint_config(bundle_dir, config_overrides=config_overrides)
+    if run_id:
+        config = with_shared_run_store_config(config, str(run_id), runs_root)
     if config is not None:
         apply_manifest_config_bindings(prepared, config)
     runtime_env = blueprint_runtime_environment(
@@ -22,13 +34,39 @@ def prepare_manifest_for_submission(
         config=config,
         config_overrides=config_overrides,
     )
+    if run_id:
+        runtime_env.setdefault("MN_RUN_ID", str(run_id))
+        runtime_env["MN_RUNS_ROOT"] = runs_root
     runtime_env.update({key: str(value) for key, value in (env_overrides or {}).items() if value is not None})
     if runtime_env:
         inject_node_environment(prepared, runtime_env)
-    metadata = dict(submission_metadata or {})
     if metadata:
         prepared.setdefault("metadata", {}).setdefault("mn_cli", {}).update(metadata)
     return prepared
+
+
+def _shared_runs_root(env_overrides: Optional[dict[str, str]] = None) -> str:
+    return str(
+        (env_overrides or {}).get("MN_RUNS_ROOT")
+        or os.getenv("MN_RUNS_ROOT")
+        or DEFAULT_RUNS_ROOT
+    )
+
+
+def with_shared_run_store_config(
+    config: Optional[dict[str, Any]],
+    run_id: str,
+    runs_root: str,
+) -> dict[str, Any]:
+    resolved = json.loads(json.dumps(config or {}))
+    identity = resolved.setdefault("identity", {})
+    if isinstance(identity, dict):
+        identity["run_id"] = run_id
+    outputs = resolved.setdefault("outputs", {})
+    if isinstance(outputs, dict):
+        outputs["run_root"] = runs_root
+        outputs.setdefault("write_run_store", True)
+    return resolved
 
 
 def blueprint_runtime_environment(
