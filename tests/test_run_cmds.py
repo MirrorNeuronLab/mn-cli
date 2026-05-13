@@ -204,6 +204,89 @@ def test_run_submits_python_environment_requirements_payload(mocker, tmp_path, m
     assert payloads["worker/requirements.txt"] == b"opencv-python-headless>=4.10,<5\n"
 
 
+def test_run_prebuilds_custom_openshell_image_from_payload_directory(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="openshell-from-run")
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_completed"})
+    ])
+    mock_build = mocker.patch(
+        'mn_cli.libs.run_cmds.subprocess.run',
+        return_value=mocker.Mock(
+            returncode=0,
+            stdout="Image \x1b[36mopenshell/sandbox-from:123\x1b[39m is available in the gateway.\n",
+            stderr="",
+        ),
+    )
+
+    bundle_dir = tmp_path / "run_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "nodes": [
+            {
+                "node_id": "detector",
+                "config": {
+                    "runner_module": "MirrorNeuron.Sandbox.OpenShell",
+                    "custom_openshell_image": "detector/openshell_sandbox",
+                },
+            }
+        ]
+    }))
+    sandbox_dir = bundle_dir / "payloads" / "detector" / "openshell_sandbox"
+    sandbox_dir.mkdir(parents=True)
+    (sandbox_dir / "Dockerfile").write_text("FROM base\n")
+
+    result = runner.invoke(app, ["run", str(bundle_dir)])
+
+    assert result.exit_code == 0
+    assert "OpenShell sandbox image ready" in result.stdout
+    mock_build.assert_called_once()
+    manifest = json.loads(mock_submit.call_args.args[0])
+    assert manifest["nodes"][0]["config"]["custom_openshell_image"] == "detector/openshell_sandbox"
+    assert manifest["nodes"][0]["config"]["from"] == "openshell/sandbox-from:123"
+
+
+def test_run_prebuilds_legacy_openshell_from_directory(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="openshell-from-run")
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_completed"})
+    ])
+    mocker.patch(
+        'mn_cli.libs.run_cmds.subprocess.run',
+        return_value=mocker.Mock(
+            returncode=0,
+            stdout="Image openshell/sandbox-from:456 is available in the gateway.\n",
+            stderr="",
+        ),
+    )
+
+    bundle_dir = tmp_path / "run_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "nodes": [
+            {
+                "node_id": "detector",
+                "config": {
+                    "runner_module": "MirrorNeuron.Sandbox.OpenShell",
+                    "from": "detector/openshell_sandbox",
+                },
+            }
+        ]
+    }))
+    sandbox_dir = bundle_dir / "payloads" / "detector" / "openshell_sandbox"
+    sandbox_dir.mkdir(parents=True)
+    (sandbox_dir / "Dockerfile").write_text("FROM base\n")
+
+    result = runner.invoke(app, ["run", str(bundle_dir)])
+
+    assert result.exit_code == 0
+    manifest = json.loads(mock_submit.call_args.args[0])
+    assert manifest["nodes"][0]["config"]["from"] == "openshell/sandbox-from:456"
+
+
 def test_run_injects_blueprint_config_scenario_and_run_id(mocker, tmp_path):
     mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[

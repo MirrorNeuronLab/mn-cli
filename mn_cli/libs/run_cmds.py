@@ -36,6 +36,7 @@ from mn_cli.shared import console, client, logger
 from mn_cli.error_handler import handle_cli_error
 
 FINAL_STATUSES = {"completed", "failed", "cancelled"}
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _HELPER_COMPAT = (
     _add_mn_llm_aliases,
     _blueprint_runtime_environment,
@@ -448,6 +449,7 @@ def run_bundle(
             submission_metadata=submission_metadata,
             config_overrides=config_overrides,
         )
+        _prepare_openshell_custom_images(bundle_dir, manifest_dict)
         manifest = json.dumps(manifest_dict)
 
         payloads = {}
@@ -522,6 +524,94 @@ def _ensure_local_run_store_identity(
     env_overrides["MN_RUN_ID"] = str(run_id)
     submission_metadata.setdefault("blueprint_id", str(blueprint_id))
     submission_metadata["blueprint_run_id"] = str(run_id)
+
+
+def _prepare_openshell_custom_images(bundle_dir: Path, manifest_dict: dict[str, Any]) -> None:
+    nodes = manifest_dict.get("nodes")
+    if not isinstance(nodes, list):
+        return
+
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        config = node.get("config")
+        if not isinstance(config, dict):
+            continue
+        if config.get("runner_module") != "MirrorNeuron.Sandbox.OpenShell":
+            continue
+
+        custom_image = config.get("custom_openshell_image")
+        if custom_image is not None:
+            source_path = _openshell_local_from_path(bundle_dir, custom_image)
+            if source_path is None:
+                console.print(
+                    f"[red]custom_openshell_image for {node.get('node_id') or 'OpenShell node'} "
+                    f"must point to a payload directory or Dockerfile: {custom_image}[/red]"
+                )
+                raise typer.Exit(1)
+        else:
+            source_path = _openshell_local_from_path(bundle_dir, config.get("from"))
+
+        if source_path is None:
+            continue
+
+        config["from"] = _build_openshell_from_image(source_path, node.get("node_id") or "openshell")
+
+
+def _openshell_local_from_path(bundle_dir: Path, source: Any) -> Path | None:
+    if not isinstance(source, str) or not source.strip():
+        return None
+
+    source = source.strip()
+    if "://" in source:
+        return None
+
+    raw = Path(source).expanduser()
+    candidates = [raw] if raw.is_absolute() else [bundle_dir / "payloads" / source, bundle_dir / source]
+
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate.is_dir() and (candidate / "Dockerfile").is_file():
+            return candidate
+        if candidate.is_file() and candidate.name == "Dockerfile":
+            return candidate
+    return None
+
+
+def _build_openshell_from_image(source_path: Path, node_id: Any) -> str:
+    console.print(f"[yellow]Building OpenShell sandbox image for {node_id} from {source_path}...[/yellow]")
+    result = subprocess.run(
+        [
+            "openshell",
+            "sandbox",
+            "create",
+            "--from",
+            str(source_path),
+            "--no-tty",
+            "--no-keep",
+            "--",
+            "true",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    output = f"{result.stdout}\n{result.stderr}"
+    if result.returncode != 0:
+        console.print(f"[red]Failed to build OpenShell sandbox image for {node_id}.[/red]")
+        if output.strip():
+            console.print(output.strip())
+        raise typer.Exit(1)
+
+    matches = re.findall(r"Image\s+([^\s]+)\s+is available in the gateway", output)
+    if not matches:
+        console.print(f"[red]OpenShell did not report an image reference for {node_id}.[/red]")
+        if output.strip():
+            console.print(output.strip())
+        raise typer.Exit(1)
+
+    image_ref = ANSI_ESCAPE_RE.sub("", matches[-1])
+    console.print(f"[green]✓ OpenShell sandbox image ready:[/green] {image_ref}")
+    return image_ref
 
 
 def _write_blueprint_job_mapping(
