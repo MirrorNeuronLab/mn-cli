@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import sys
 import uuid
 from logging.handlers import RotatingFileHandler
 from typer.testing import CliRunner
@@ -311,26 +312,27 @@ def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_pat
     assert injected_config["identity"]["run_id"] == "bp-1-auto-run"
     assert injected_config["outputs"]["run_root"] == str(tmp_path / "runs")
     web_ui = json.loads((tmp_path / "runs" / "bp-1-auto-run" / "web_ui.json").read_text())
-    ui = json.loads((tmp_path / "runs" / "bp-1-auto-run" / "ui.json").read_text())
-    assert web_ui["adapter"] == "gradio"
+    assert web_ui["adapter"] == "static_html"
     assert web_ui["title"] == "Blueprint One"
-    assert web_ui["url"] == "http://localhost:7860/runs/bp-1-auto-run/ui"
-    assert web_ui["path"].endswith("/ui.json")
+    assert web_ui["url"].startswith("file://")
+    assert "index.html" in web_ui["url"]
     assert web_ui["metadata"]["registered_by"] == "mn_cli"
-    assert ui["adapter"] == "gradio"
-    assert ui["metadata"]["server"] == "central_gradio"
-    assert ui["components"][0]["type"] == "events"
+    assert web_ui["metadata"]["launch_adapter"] == "blueprint_static_html"
+    assert not (tmp_path / "runs" / "bp-1-auto-run" / "ui.json").exists()
     config = manifest["nodes"][0]["config"]
     assert config["upload_path"] == "."
     assert config["upload_as"] == "."
     assert "upload_paths" not in config
 
 
-def test_write_local_web_ui_handle_uses_central_gradio_for_blueprint_dashboard(tmp_path, monkeypatch):
+def test_write_local_web_ui_handle_launches_blueprint_owned_web_ui_script(tmp_path, monkeypatch, mocker):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
-    monkeypatch.setenv("MN_GRADIO_UI_BASE_URL", "http://127.0.0.1:7861/")
+    monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_START_TIMEOUT_SECONDS", "0")
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
+    script_path = bundle_dir / "payloads" / "web_ui" / "run_dashboard.py"
+    script_path.parent.mkdir(parents=True)
+    script_path.write_text("print('started')\n")
     config_dir = bundle_dir / "config"
     config_dir.mkdir()
     (config_dir / "default.json").write_text(
@@ -344,28 +346,81 @@ def test_write_local_web_ui_handle_uses_central_gradio_for_blueprint_dashboard(t
                         "title": "Blueprint Gradio",
                         "host": "127.0.0.1",
                         "port": 7870,
-                        "registration_script": "payloads/web_ui/register_dashboard.py",
+                        "launch_script": "payloads/web_ui/run_dashboard.py",
                     },
                     "dashboard": {
-                        "registration": {"script": "payloads/web_ui/register_dashboard.py"},
+                        "event_types": ["alert"],
                     },
                 },
             }
         )
     )
+    process = mocker.Mock()
+    process.pid = 4242
+    process.poll.return_value = None
+    popen = mocker.patch("mn_cli.libs.run_cmds.subprocess.Popen", return_value=process)
 
     run_cmds._write_local_web_ui_handle(bundle_dir, "bp-gradio-run", env_overrides={})
 
-    web_ui = json.loads((tmp_path / "runs" / "bp-gradio-run" / "web_ui.json").read_text())
-    ui = json.loads((tmp_path / "runs" / "bp-gradio-run" / "ui.json").read_text())
-    assert web_ui["adapter"] == "gradio"
-    assert web_ui["url"] == "http://127.0.0.1:7861/runs/bp-gradio-run/ui"
-    assert web_ui["status"] == "available"
-    assert web_ui["metadata"]["launch_adapter"] == "central_gradio"
-    assert ui["adapter"] == "gradio"
-    assert ui["metadata"]["server"] == "central_gradio"
-    assert ui["refresh_seconds"] == 2.0
-    assert ui["components"][0]["type"] == "events"
+    process_info = json.loads((tmp_path / "runs" / "bp-gradio-run" / "web_ui_process.json").read_text())
+    assert process_info["pid"] == 4242
+    assert process_info["url"] == "http://localhost:7870"
+    command = popen.call_args.args[0]
+    assert command[1] == str(script_path)
+    assert "--run-id" in command
+    assert "bp-gradio-run" in command
+    assert "--base-url" in command
+    assert "http://localhost:7870" in command
+    assert popen.call_args.kwargs["env"]["MN_BLUEPRINT_WEB_UI_PORT"] == "7870"
+    assert not (tmp_path / "runs" / "bp-gradio-run" / "ui.json").exists()
+
+
+def test_write_local_web_ui_handle_launches_shared_gradio_support_module(tmp_path, monkeypatch, mocker):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_START_TIMEOUT_SECONDS", "0")
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps(
+            {
+                "identity": {"blueprint_id": "bp-shared-gradio", "name": "Shared Gradio"},
+                "web_ui": {
+                    "enabled": True,
+                    "output": {
+                        "adapter": "gradio",
+                        "title": "Shared Gradio",
+                        "host": "127.0.0.1",
+                        "port": 7871,
+                    },
+                    "dashboard": {
+                        "event_types": ["alert"],
+                    },
+                },
+            }
+        )
+    )
+    process = mocker.Mock()
+    process.pid = 4243
+    process.poll.return_value = None
+    popen = mocker.patch("mn_cli.libs.run_cmds.subprocess.Popen", return_value=process)
+
+    run_cmds._write_local_web_ui_handle(bundle_dir, "bp-shared-gradio-run", env_overrides={})
+
+    process_info = json.loads((tmp_path / "runs" / "bp-shared-gradio-run" / "web_ui_process.json").read_text())
+    assert process_info["pid"] == 4243
+    assert process_info["module"] == "mn_blueprint_support.gradio_dashboard"
+    assert process_info["url"] == "http://localhost:7871"
+    command = popen.call_args.args[0]
+    assert command[:3] == [sys.executable, "-m", "mn_blueprint_support.gradio_dashboard"]
+    assert "--run-id" in command
+    assert "bp-shared-gradio-run" in command
+    assert "--base-url" in command
+    assert "http://localhost:7871" in command
+    assert popen.call_args.kwargs["env"]["MN_BLUEPRINT_WEB_UI_PORT"] == "7871"
+    assert "blueprint_support_skill/src" in popen.call_args.kwargs["env"].get("PYTHONPATH", "")
+    assert not (tmp_path / "runs" / "bp-shared-gradio-run" / "ui.json").exists()
 
 
 def test_run_records_blueprint_run_id_mapping(mocker, tmp_path, monkeypatch):

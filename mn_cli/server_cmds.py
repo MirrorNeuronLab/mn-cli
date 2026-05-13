@@ -1,9 +1,7 @@
 import os
 import signal
 import subprocess
-import sys
 import time
-import importlib.util
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -22,18 +20,15 @@ LOG_DIR = DIR / ".logs"
 BEAM_PID_FILE = PID_DIR / "beam.pid"
 API_PID_FILE = PID_DIR / "api.pid"
 WEB_UI_PID_FILE = PID_DIR / "web-ui.pid"
-GRADIO_UI_PID_FILE = PID_DIR / "gradio-ui.pid"
 BEAM_LOG = LOG_DIR / "beam.log"
 API_LOG = LOG_DIR / "api.log"
 WEB_UI_LOG = LOG_DIR / "web-ui.log"
-GRADIO_UI_LOG = LOG_DIR / "gradio-ui.log"
 VENV_DIR = Path.home() / ".local" / "share" / "mn_venv"
 WEB_UI_DIRS = (
     DIR / "web-ui-source",
     Path(f"{DIR}_ui"),
 )
 WEB_UI_PORT = "5173"
-GRADIO_UI_PORT = "7860"
 DEFAULT_HOST = "localhost"
 
 def _env_host(name: str, default: str = DEFAULT_HOST) -> str:
@@ -56,9 +51,6 @@ def _dist_host() -> str:
 
 def _web_ui_host() -> str:
     return _env_host("MN_WEB_UI_HOST")
-
-def _gradio_ui_host() -> str:
-    return _env_host("MN_GRADIO_UI_HOST")
 
 def _docker_publish_host(host: str) -> str:
     return "127.0.0.1" if host == "localhost" else host
@@ -125,7 +117,7 @@ def _redis_host_port(ip: Optional[str]) -> tuple[str, str]:
         "6379",
     )
 
-def _print_service_endpoints(ip: Optional[str], web_ui_available: bool, gradio_ui_available: bool = False):
+def _print_service_endpoints(ip: Optional[str], web_ui_available: bool):
     core_host = _core_host()
     grpc_host, grpc_port = _host_port_from_target(
         os.getenv(
@@ -142,7 +134,6 @@ def _print_service_endpoints(ip: Optional[str], web_ui_available: bool, gradio_u
     dist_host = _dist_host()
     dist_port = os.getenv("MN_DIST_PORT", "9000-9010" if os.uname().sysname == "Darwin" else "dynamic")
     web_ui_host = _web_ui_host()
-    gradio_ui_host = _gradio_ui_host()
 
     table = Table(title="Service endpoints", show_header=True, header_style="bold")
     table.add_column("Service")
@@ -157,13 +148,6 @@ def _print_service_endpoints(ip: Optional[str], web_ui_available: bool, gradio_u
     table.add_row("Erlang dist", dist_host, dist_port, f"{dist_host}:{dist_port}")
     if web_ui_available:
         table.add_row("Web UI", web_ui_host, WEB_UI_PORT, f"http://{web_ui_host}:{WEB_UI_PORT}")
-    if gradio_ui_available:
-        table.add_row(
-            "Blueprint Gradio UI",
-            gradio_ui_host,
-            GRADIO_UI_PORT,
-            f"http://{gradio_ui_host}:{GRADIO_UI_PORT}/runs/<run_id>/ui",
-        )
 
     console.print(table)
 
@@ -184,10 +168,6 @@ def _start_web_ui_if_installed() -> bool:
     env.setdefault("MN_WEB_UI_HOST", web_ui_host)
     env.setdefault("MN_API_HOST", _api_host())
     env.setdefault("MN_API_PORT", os.getenv("MN_API_PORT", "4001"))
-    env.setdefault(
-        "MN_GRADIO_UI_BASE_URL",
-        f"http://{_gradio_ui_host()}:{os.getenv('MN_GRADIO_UI_PORT', GRADIO_UI_PORT)}",
-    )
     console.print(f"=> Starting mn-web-ui (Vite on {web_ui_host}:5173)...")
     with open(WEB_UI_LOG, "w") as out:
         p_web = subprocess.Popen(
@@ -200,50 +180,6 @@ def _start_web_ui_if_installed() -> bool:
         )
     WEB_UI_PID_FILE.write_text(str(p_web.pid))
     console.print(f"   [green][Started][/green] Web UI (PID: {p_web.pid})")
-    return True
-
-def _start_gradio_web_ui() -> bool:
-    if importlib.util.find_spec("gradio") is None:
-        console.print("[yellow]=> Warning: gradio is not installed, skipping central blueprint Gradio UI.[/yellow]")
-        return False
-
-    status = check_status(GRADIO_UI_PID_FILE)
-    if status == 0:
-        console.print("[yellow]=> Central blueprint Gradio UI is already running, skipping.[/yellow]")
-        return True
-    if status == 1:
-        GRADIO_UI_PID_FILE.unlink(missing_ok=True)
-
-    gradio_ui_host = _gradio_ui_host()
-    gradio_ui_port = os.getenv("MN_GRADIO_UI_PORT", GRADIO_UI_PORT)
-    env = os.environ.copy()
-    env.setdefault("MN_GRADIO_UI_HOST", gradio_ui_host)
-    env.setdefault("MN_GRADIO_UI_PORT", gradio_ui_port)
-    env.setdefault("MN_RUNS_ROOT", os.getenv("MN_RUNS_ROOT", str(Path.home() / ".mn" / "runs")))
-
-    console.print(f"=> Starting central blueprint Gradio UI ({gradio_ui_host}:{gradio_ui_port})...")
-    GRADIO_UI_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
-    GRADIO_UI_LOG.parent.mkdir(parents=True, exist_ok=True)
-    with open(GRADIO_UI_LOG, "w") as out:
-        p_gradio = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "mn_cli.gradio_web_ui",
-                "--host",
-                gradio_ui_host,
-                "--port",
-                gradio_ui_port,
-                "--runs-root",
-                env["MN_RUNS_ROOT"],
-            ],
-            stdout=out,
-            stderr=subprocess.STDOUT,
-            env=env,
-            start_new_session=True,
-        )
-    GRADIO_UI_PID_FILE.write_text(str(p_gradio.pid))
-    console.print(f"   [green][Started][/green] Blueprint Gradio UI (PID: {p_gradio.pid})")
     return True
 
 def _start_server(ip: str = None):
@@ -392,20 +328,17 @@ def _start_server(ip: str = None):
         console.print("[yellow]=> Warning: mn-api not found, skipping.[/yellow]")
 
     web_ui_available = _start_web_ui_if_installed()
-    gradio_ui_available = _start_gradio_web_ui()
 
     console.print("\n===========================================")
     if ip:
         console.print(f"MirrorNeuron is running and attempting to join cluster at {ip}!")
     else:
         console.print("MirrorNeuron is running in the background!")
-    _print_service_endpoints(ip, web_ui_available, gradio_ui_available)
+    _print_service_endpoints(ip, web_ui_available)
     console.print("Logs are available at:")
     console.print(f"  Core: {BEAM_LOG}")
     console.print(f"  API:  {API_LOG}")
     if WEB_UI_LOG.exists():
         console.print(f"  Web:  {WEB_UI_LOG}")
-    if GRADIO_UI_LOG.exists():
-        console.print(f"  Gradio:  {GRADIO_UI_LOG}")
     console.print("\nRun 'mn stop' to shut down the services.")
     console.print("===========================================")

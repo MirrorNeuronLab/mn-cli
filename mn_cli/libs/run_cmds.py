@@ -1,6 +1,10 @@
 import typer
 import json
 import os
+import re
+import socket
+import subprocess
+import sys
 import time
 import urllib.parse
 from pathlib import Path
@@ -567,93 +571,373 @@ def _write_local_web_ui_handle(
     identity = config.get("identity") if isinstance(config.get("identity"), dict) else {}
     runs_root = Path(env_overrides.get("MN_RUNS_ROOT") or os.getenv("MN_RUNS_ROOT") or "~/.mn/runs").expanduser()
     run_dir = runs_root / blueprint_run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
 
-    base_url = _central_gradio_web_ui_base_url(env_overrides)
-    title = output.get("title") or identity.get("name") or bundle_dir.name
-    events_path = run_dir / "events.jsonl"
-    video_source = _web_ui_video_source(config, bundle_dir)
-    event_types = dashboard.get("event_types") if isinstance(dashboard.get("event_types"), list) else []
-    event_types = [str(item) for item in event_types if isinstance(item, str)]
-    refresh_seconds = _web_ui_refresh_seconds(output, dashboard)
-    components: list[dict[str, Any]] = [
-        {
-            "type": "events",
-            "label": "Event Stream",
-            "event_types": event_types,
-            "max_events": 200,
-        }
-    ]
-    if video_source:
-        components.insert(
-            0,
+    script_path = _web_ui_registration_script(bundle_dir, web_ui, output, dashboard)
+    if script_path is not None:
+        _launch_blueprint_web_ui_script(
+            bundle_dir,
+            script_path,
+            blueprint_run_id,
+            run_dir,
+            runs_root,
+            config,
+            env_overrides=env_overrides,
+        )
+        return
+
+    module_name = _web_ui_registration_module(web_ui, output, dashboard)
+    if module_name is not None:
+        _launch_blueprint_web_ui_module(
+            bundle_dir,
+            module_name,
+            blueprint_run_id,
+            run_dir,
+            runs_root,
+            config,
+            env_overrides=env_overrides,
+        )
+        return
+
+    custom_url = _web_ui_custom_url(output)
+    if custom_url:
+        _write_web_ui_handle(
+            run_dir,
             {
-                "type": "video",
-                "label": "Video Source",
-                "source": video_source,
+                "adapter": str(output.get("adapter") or "custom"),
+                "kind": "output",
+                "url": custom_url,
+                "title": str(output.get("title") or identity.get("name") or bundle_dir.name),
+                "status": "external",
+                "metadata": {
+                    "blueprint_id": identity.get("blueprint_id"),
+                    "run_id": blueprint_run_id,
+                    "registered_by": "mn_cli",
+                    "customer_managed": True,
+                },
             },
         )
+        return
 
-    ui_path = run_dir / "ui.json"
-    ui_definition = {
-        "schema_version": 1,
-        "adapter": "gradio",
-        "kind": "output",
-        "title": title,
-        "run_id": blueprint_run_id,
-        "blueprint_id": identity.get("blueprint_id") or bundle_dir.name,
-        "events_path": str(events_path),
-        "refresh_seconds": refresh_seconds,
-        "components": components,
-        "metadata": {
-            "run_dir": str(run_dir),
-            "bundle_dir": str(bundle_dir),
-            "server": "central_gradio",
-            "dashboard": dashboard,
-            "output": output,
-        },
-    }
-    run_url = f"{base_url}/runs/{urllib.parse.quote(blueprint_run_id, safe='')}/ui"
-    handle = {
-        "adapter": "gradio",
-        "kind": "output",
-        "url": run_url,
-        "title": title,
-        "path": str(ui_path),
-        "status": "available",
-        "metadata": {
+    _write_static_web_ui_handle(bundle_dir, run_dir, blueprint_run_id, config)
+
+
+def _web_ui_registration_script(
+    bundle_dir: Path,
+    web_ui: dict[str, Any],
+    output: dict[str, Any],
+    dashboard: dict[str, Any],
+) -> Path | None:
+    registration = web_ui.get("registration") if isinstance(web_ui.get("registration"), dict) else {}
+    dashboard_registration = dashboard.get("registration") if isinstance(dashboard.get("registration"), dict) else {}
+    for raw_value in (
+        output.get("launch_script"),
+        output.get("registration_script"),
+        registration.get("script"),
+        dashboard_registration.get("script"),
+    ):
+        script_path = _safe_bundle_file(bundle_dir, raw_value)
+        if script_path is not None:
+            return script_path
+    return None
+
+
+def _web_ui_registration_module(
+    web_ui: dict[str, Any],
+    output: dict[str, Any],
+    dashboard: dict[str, Any],
+) -> str | None:
+    registration = web_ui.get("registration") if isinstance(web_ui.get("registration"), dict) else {}
+    dashboard_registration = dashboard.get("registration") if isinstance(dashboard.get("registration"), dict) else {}
+    for raw_value in (
+        output.get("launch_module"),
+        output.get("registration_module"),
+        registration.get("module"),
+        dashboard_registration.get("module"),
+    ):
+        module_name = _safe_python_module(raw_value)
+        if module_name is not None:
+            return module_name
+
+    adapter = str(output.get("adapter") or web_ui.get("kind") or "").lower()
+    if adapter == "gradio" and output.get("auto_generate", True) is not False:
+        return "mn_blueprint_support.gradio_dashboard"
+    return None
+
+
+def _safe_python_module(raw_value: Any) -> str | None:
+    if not isinstance(raw_value, str) or not raw_value.strip():
+        return None
+    module_name = raw_value.strip()
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*", module_name):
+        return module_name
+    return None
+
+
+def _safe_bundle_file(bundle_dir: Path, raw_value: Any) -> Path | None:
+    if not isinstance(raw_value, str) or not raw_value.strip():
+        return None
+    relative = Path(raw_value)
+    if relative.is_absolute() or ".." in relative.parts:
+        return None
+    root = bundle_dir.resolve()
+    candidate = (root / relative).resolve()
+    if not candidate.is_relative_to(root) or not candidate.is_file():
+        return None
+    return candidate
+
+
+def _launch_blueprint_web_ui_script(
+    bundle_dir: Path,
+    script_path: Path,
+    blueprint_run_id: str,
+    run_dir: Path,
+    runs_root: Path,
+    config: dict[str, Any],
+    *,
+    env_overrides: dict[str, str],
+) -> None:
+    command = [
+        sys.executable,
+        str(script_path),
+    ]
+    _launch_blueprint_web_ui_command(
+        bundle_dir,
+        command,
+        blueprint_run_id,
+        run_dir,
+        runs_root,
+        config,
+        env_overrides=env_overrides,
+        script=str(script_path),
+    )
+
+
+def _launch_blueprint_web_ui_module(
+    bundle_dir: Path,
+    module_name: str,
+    blueprint_run_id: str,
+    run_dir: Path,
+    runs_root: Path,
+    config: dict[str, Any],
+    *,
+    env_overrides: dict[str, str],
+) -> None:
+    command = [
+        sys.executable,
+        "-m",
+        module_name,
+    ]
+    _launch_blueprint_web_ui_command(
+        bundle_dir,
+        command,
+        blueprint_run_id,
+        run_dir,
+        runs_root,
+        config,
+        env_overrides=env_overrides,
+        module=module_name,
+    )
+
+
+def _launch_blueprint_web_ui_command(
+    bundle_dir: Path,
+    command_prefix: list[str],
+    blueprint_run_id: str,
+    run_dir: Path,
+    runs_root: Path,
+    config: dict[str, Any],
+    *,
+    env_overrides: dict[str, str],
+    script: str | None = None,
+    module: str | None = None,
+) -> None:
+    web_ui = config.get("web_ui") if isinstance(config.get("web_ui"), dict) else {}
+    output = web_ui.get("output") if isinstance(web_ui.get("output"), dict) else {}
+    identity = config.get("identity") if isinstance(config.get("identity"), dict) else {}
+    host = str(output.get("host") or env_overrides.get("MN_BLUEPRINT_WEB_UI_HOST") or os.getenv("MN_BLUEPRINT_WEB_UI_HOST") or "127.0.0.1")
+    port = _web_ui_port(output)
+    base_url = _web_ui_base_url(output, host, port)
+
+    env = os.environ.copy()
+    env.update(env_overrides)
+    env.update(
+        {
+            "MN_RUN_ID": blueprint_run_id,
+            "MN_RUN_DIR": str(run_dir),
+            "MN_RUNS_ROOT": str(runs_root),
+            "MN_BLUEPRINT_BUNDLE_DIR": str(bundle_dir),
+            "MN_BLUEPRINT_CONFIG_JSON": json.dumps(config, sort_keys=True),
+            "MN_BLUEPRINT_ID": str(identity.get("blueprint_id") or bundle_dir.name),
+            "MN_BLUEPRINT_WEB_UI_HOST": host,
+            "MN_BLUEPRINT_WEB_UI_PORT": str(port),
+            "MN_BLUEPRINT_WEB_UI_BASE_URL": base_url,
+        }
+    )
+    _inject_local_blueprint_support_pythonpath(env)
+
+    command = command_prefix + [
+        "--run-id",
+        blueprint_run_id,
+        "--run-dir",
+        str(run_dir),
+        "--runs-root",
+        str(runs_root),
+        "--bundle-dir",
+        str(bundle_dir),
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "--base-url",
+        base_url,
+    ]
+    log_path = run_dir / "web_ui.log"
+    try:
+        with log_path.open("a", encoding="utf-8") as log_file:
+            process = subprocess.Popen(
+                command,
+                cwd=bundle_dir,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                env=env,
+                start_new_session=True,
+            )
+        process_info = {
+            "pid": process.pid,
+            "command": command,
+            "log": str(log_path),
             "blueprint_id": identity.get("blueprint_id"),
             "run_id": blueprint_run_id,
-            "events_path": str(events_path),
-            "ui_path": str(ui_path),
-            "base_url": base_url,
-            "registered_by": "mn_cli",
-            "launch_adapter": "central_gradio",
+            "url": base_url,
+        }
+        if script:
+            process_info["script"] = script
+        if module:
+            process_info["module"] = module
+        (run_dir / "web_ui_process.json").write_text(json.dumps(process_info, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _wait_for_blueprint_web_ui(run_dir, process)
+    except OSError:
+        logger.exception("Failed to launch blueprint web UI for run_id=%s", blueprint_run_id)
+
+
+def _inject_local_blueprint_support_pythonpath(env: dict[str, str]) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    support_src = repo_root / "mn-skills" / "blueprint_support_skill" / "src"
+    if not support_src.is_dir():
+        return
+    current = env.get("PYTHONPATH")
+    paths = [str(support_src)]
+    if current:
+        paths.append(current)
+    env["PYTHONPATH"] = os.pathsep.join(paths)
+
+
+def _web_ui_port(output: dict[str, Any]) -> int:
+    raw_port = output.get("port")
+    if raw_port not in (None, ""):
+        try:
+            parsed = int(raw_port)
+            if parsed > 0:
+                return parsed
+        except (TypeError, ValueError):
+            pass
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _web_ui_base_url(output: dict[str, Any], host: str, port: int) -> str:
+    configured_url = output.get("base_url") or os.getenv("MN_BLUEPRINT_WEB_UI_BASE_URL")
+    if isinstance(configured_url, str) and configured_url.strip():
+        return configured_url.rstrip("/")
+    public_host = output.get("public_host")
+    if not isinstance(public_host, str) or not public_host.strip():
+        public_host = "localhost" if host in {"127.0.0.1", "0.0.0.0", "::"} else host
+    scheme = str(output.get("scheme") or "http")
+    return f"{scheme}://{public_host}:{port}"
+
+
+def _wait_for_blueprint_web_ui(run_dir: Path, process: subprocess.Popen[Any]) -> None:
+    try:
+        timeout = max(float(os.getenv("MN_BLUEPRINT_WEB_UI_START_TIMEOUT_SECONDS", "5")), 0)
+    except ValueError:
+        timeout = 5.0
+    deadline = time.monotonic() + timeout
+    handle_path = run_dir / "web_ui.json"
+    while time.monotonic() < deadline:
+        if handle_path.exists():
+            return
+        poll = getattr(process, "poll", None)
+        if callable(poll) and poll() is not None:
+            return
+        time.sleep(0.1)
+
+
+def _web_ui_custom_url(output: dict[str, Any]) -> str:
+    adapter = str(output.get("adapter") or "").lower()
+    if adapter != "custom":
+        return ""
+    url = output.get("custom_url") or output.get("url")
+    return str(url).strip() if isinstance(url, str) else ""
+
+
+def _write_static_web_ui_handle(
+    bundle_dir: Path,
+    run_dir: Path,
+    blueprint_run_id: str,
+    config: dict[str, Any],
+) -> None:
+    web_ui = config.get("web_ui") if isinstance(config.get("web_ui"), dict) else {}
+    dashboard = web_ui.get("dashboard") if isinstance(web_ui.get("dashboard"), dict) else {}
+    output = web_ui.get("output") if isinstance(web_ui.get("output"), dict) else {}
+    identity = config.get("identity") if isinstance(config.get("identity"), dict) else {}
+    adapter = str(output.get("adapter") or web_ui.get("kind") or "").lower()
+    if adapter not in {"static_html", "html"} and not (output.get("path") or dashboard.get("path") or web_ui.get("path")):
+        return
+
+    html_path = _safe_bundle_file(bundle_dir, output.get("path") or dashboard.get("path") or web_ui.get("path"))
+    if html_path is None:
+        return
+
+    events_path = run_dir / "events.jsonl"
+    query: dict[str, str] = {}
+    video_source = _web_ui_video_source(config, bundle_dir)
+    video_query_param = str(output.get("video_source_query_param") or "video")
+    events_query_param = str(output.get("events_query_param") or "events")
+    if video_source:
+        query[video_query_param] = video_source
+    query[events_query_param] = events_path.resolve().as_uri()
+    url = html_path.resolve().as_uri()
+    if query:
+        url = f"{url}?{urllib.parse.urlencode(query)}"
+
+    _write_web_ui_handle(
+        run_dir,
+        {
+            "adapter": "static_html",
+            "kind": "output",
+            "url": url,
+            "title": str(output.get("title") or identity.get("name") or bundle_dir.name),
+            "path": str(html_path),
+            "status": "available",
+            "metadata": {
+                "blueprint_id": identity.get("blueprint_id"),
+                "run_id": blueprint_run_id,
+                "events_path": str(events_path),
+                "registered_by": "mn_cli",
+                "launch_adapter": "blueprint_static_html",
+            },
         },
-    }
+    )
+
+
+def _write_web_ui_handle(run_dir: Path, handle: dict[str, Any]) -> None:
     try:
         run_dir.mkdir(parents=True, exist_ok=True)
-        ui_path.write_text(json.dumps(ui_definition, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         (run_dir / "web_ui.json").write_text(json.dumps(handle, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     except OSError:
-        logger.exception("Failed to write blueprint web UI handle for run_id=%s", blueprint_run_id)
-
-
-def _central_gradio_web_ui_base_url(env_overrides: dict[str, str]) -> str:
-    configured_url = env_overrides.get("MN_GRADIO_UI_BASE_URL") or os.getenv("MN_GRADIO_UI_BASE_URL")
-    if configured_url:
-        return configured_url.rstrip("/")
-    scheme = env_overrides.get("MN_GRADIO_UI_SCHEME") or os.getenv("MN_GRADIO_UI_SCHEME") or "http"
-    host = env_overrides.get("MN_GRADIO_UI_HOST") or os.getenv("MN_GRADIO_UI_HOST") or "localhost"
-    port = env_overrides.get("MN_GRADIO_UI_PORT") or os.getenv("MN_GRADIO_UI_PORT") or "7860"
-    return f"{scheme}://{host}:{port}" if port else f"{scheme}://{host}"
-
-
-def _web_ui_refresh_seconds(output: dict[str, Any], dashboard: dict[str, Any]) -> float:
-    raw_value = output.get("refresh_seconds", dashboard.get("refresh_seconds", 2.0))
-    try:
-        return float(raw_value)
-    except (TypeError, ValueError):
-        return 2.0
+        logger.exception("Failed to write blueprint web UI handle for run_dir=%s", run_dir)
 
 
 def _web_ui_video_source(config: dict[str, Any], bundle_dir: Path) -> str:

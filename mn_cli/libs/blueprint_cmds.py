@@ -589,14 +589,16 @@ def _print_cleanup_summary(summary: dict[str, Any] | None) -> None:
     generated_removed = summary.get("generated_removed") or []
     bundle_removed = summary.get("bundle_removed") or []
     docker_removed = summary.get("docker_removed") or []
+    process_removed = summary.get("process_removed") or []
     errors = summary.get("errors") or []
     dry_run = bool(summary.get("dry_run"))
     verb = "Would remove" if dry_run else "Removed"
-    if python_removed or run_removed or generated_removed or bundle_removed or docker_removed:
+    if python_removed or run_removed or generated_removed or bundle_removed or docker_removed or process_removed:
         console.print(
             f"[green]{verb} {len(python_removed)} Python env resource(s), "
             f"{len(run_removed)} run record(s), {len(generated_removed)} generated bundle(s), "
-            f"{len(bundle_removed)} bundle cache resource(s), and {len(docker_removed)} Docker resource(s).[/green]"
+            f"{len(bundle_removed)} bundle cache resource(s), {len(docker_removed)} Docker resource(s), "
+            f"and {len(process_removed)} web UI process(es).[/green]"
         )
     else:
         console.print("[green]No blueprint runtime resources needed cleanup.[/green]")

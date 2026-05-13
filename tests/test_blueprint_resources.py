@@ -103,6 +103,28 @@ def test_cleanup_removes_legacy_run_records_by_blueprint_prefix(mocker, tmp_path
     assert summary["generated_removed"][0]["reason"] == "removed_run_generated_bundle"
 
 
+def test_cleanup_stops_blueprint_web_ui_process_with_run_record(mocker, tmp_path):
+    mocker.patch("mn_cli.libs.blueprint_resources.shutil.which", return_value=None)
+    mock_kill = mocker.patch("mn_cli.libs.blueprint_resources.os.kill")
+    mock_killpg = mocker.patch("mn_cli.libs.blueprint_resources.os.killpg")
+    runs_root = tmp_path / "runs"
+    run_dir = runs_root / "bp-removed-run"
+    _write_run_record(run_dir, "bp-removed")
+    (run_dir / "web_ui_process.json").write_text(json.dumps({"pid": 4242, "blueprint_id": "bp-removed"}))
+
+    summary = cleanup_blueprint_resources(
+        blueprint_ids={"bp-removed"},
+        python_envs_dir=tmp_path / "missing-envs",
+        runs_root=runs_root,
+        include_docker=False,
+    )
+
+    assert not run_dir.exists()
+    mock_kill.assert_called_once_with(4242, 0)
+    mock_killpg.assert_called_once()
+    assert summary["process_removed"][0]["pid"] == 4242
+
+
 def test_cleanup_removes_dead_labeled_and_named_docker_resources(mocker, tmp_path):
     mocker.patch("mn_cli.libs.blueprint_resources.shutil.which", return_value="/usr/local/bin/docker")
     calls = []

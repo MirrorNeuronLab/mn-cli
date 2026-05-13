@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -14,7 +15,7 @@ RESOURCE_METADATA_FILE = ".mn-blueprint-resource.json"
 DEFAULT_TEMP_DIR = "/tmp/mirror_neuron"
 DOCKER_LABEL_KEYS = ("mirrorneuron.blueprint_id", "com.mirrorneuron.blueprint_id")
 DOCKER_NAME_PREFIXES = ("mn-blueprint-", "mirror-neuron-blueprint-")
-RUN_METADATA_FILES = ("run.json", "job.json", "ui.json", "web_ui.json", "config.json")
+RUN_METADATA_FILES = ("run.json", "job.json", "ui.json", "web_ui.json", "web_ui_process.json", "config.json")
 GENERATED_BUNDLE_METADATA_FILES = ("manifest.json", "config/default.json", "config.json", "scenario.json")
 BUNDLE_CACHE_METADATA_FILES = ("manifest.json", "config/default.json", "config.json", "scenario.json")
 
@@ -69,6 +70,8 @@ def cleanup_blueprint_resources(
         "bundle_skipped": [],
         "docker_removed": [],
         "docker_skipped": [],
+        "process_removed": [],
+        "process_skipped": [],
         "errors": [],
         "dry_run": dry_run,
     }
@@ -242,6 +245,7 @@ def cleanup_run_records(
                 include_dead=include_dead,
             )
             if action["remove"]:
+                cleanup_web_ui_process(child, dry_run=dry_run, summary=summary)
                 remove_path(child, dry_run=dry_run)
                 removed_run_ids.add(child.name)
                 summary["run_removed"].append(
@@ -264,6 +268,50 @@ def cleanup_run_records(
         except Exception as exc:
             summary["errors"].append(f"failed to inspect blueprint run resource {child}: {exc}")
     return removed_run_ids
+
+
+def cleanup_web_ui_process(run_dir: Path, *, dry_run: bool, summary: dict[str, Any]) -> None:
+    process_info = read_json_object(run_dir / "web_ui_process.json")
+    if not process_info:
+        return
+    try:
+        pid = int(process_info.get("pid"))
+    except (TypeError, ValueError):
+        summary["process_skipped"].append({"path": str(run_dir), "reason": "invalid_web_ui_pid"})
+        return
+
+    if not process_is_running(pid):
+        summary["process_skipped"].append({"path": str(run_dir), "pid": pid, "reason": "web_ui_process_not_running"})
+        return
+
+    if dry_run:
+        summary["process_removed"].append({"path": str(run_dir), "pid": pid, "reason": "dry_run"})
+        return
+
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        summary["process_skipped"].append({"path": str(run_dir), "pid": pid, "reason": "web_ui_process_not_running"})
+        return
+    except OSError:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            summary["process_skipped"].append({"path": str(run_dir), "pid": pid, "reason": "web_ui_process_not_running"})
+            return
+        except OSError as exc:
+            summary["errors"].append(f"failed to stop web UI process {pid} for {run_dir}: {exc}")
+            return
+
+    summary["process_removed"].append({"path": str(run_dir), "pid": pid, "reason": "run_record_removed"})
+
+
+def process_is_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
 
 
 def classify_run_record(
