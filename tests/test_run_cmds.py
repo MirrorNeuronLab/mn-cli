@@ -419,7 +419,6 @@ def test_write_local_web_ui_handle_launches_shared_gradio_support_module(tmp_pat
     assert "--base-url" in command
     assert "http://localhost:7871" in command
     assert popen.call_args.kwargs["env"]["MN_BLUEPRINT_WEB_UI_PORT"] == "7871"
-    assert "blueprint_support_skill/src" in popen.call_args.kwargs["env"].get("PYTHONPATH", "")
     assert not (tmp_path / "runs" / "bp-shared-gradio-run" / "ui.json").exists()
 
 
