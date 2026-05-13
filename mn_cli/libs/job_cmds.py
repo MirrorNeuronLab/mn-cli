@@ -1,7 +1,10 @@
 import json
+import os
+from pathlib import Path
 from rich.table import Table
 from mn_cli.shared import console, client, logger
 from mn_cli.error_handler import handle_cli_error
+from mn_cli.libs.blueprint_resources import cleanup_web_ui_process
 import typer
 
 
@@ -67,9 +70,48 @@ def cancel(job_id: str):
     """Cancel a running job"""
     try:
         status = client.cancel_job(job_id)
+        _cleanup_cancelled_job_web_ui(job_id)
         console.print(f"[green]Job cancelled. Status: {status}[/green]")
     except Exception as e:
+        _cleanup_cancelled_job_web_ui(job_id)
         handle_cli_error(e, console, 'cancel')
+
+
+def _cleanup_cancelled_job_web_ui(job_id: str) -> None:
+    run_id = _blueprint_run_id_for_job(job_id)
+    if not run_id:
+        return
+
+    run_dir = Path(os.getenv("MN_RUNS_ROOT") or "~/.mn/runs").expanduser() / run_id
+    if not run_dir.is_dir():
+        return
+
+    summary = {"process_removed": [], "process_skipped": [], "errors": []}
+    cleanup_web_ui_process(run_dir, dry_run=False, summary=summary, reason="job_cancelled")
+    for error in summary["errors"]:
+        logger.warning("Failed to cleanup web UI for cancelled job %s: %s", job_id, error)
+
+
+def _blueprint_run_id_for_job(job_id: str) -> str | None:
+    snapshot_path = Path(f"/tmp/mn_{job_id}") / "job_snapshot.json"
+    if snapshot_path.is_file():
+        try:
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            run_id = snapshot.get("run_id")
+            if isinstance(run_id, str) and run_id:
+                return run_id
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    try:
+        job = json.loads(client.get_job(job_id))
+    except Exception:
+        return None
+
+    metadata = (((job.get("job") or {}).get("manifest") or {}).get("metadata") or {})
+    mn_cli_metadata = metadata.get("mn_cli") if isinstance(metadata, dict) else {}
+    run_id = mn_cli_metadata.get("blueprint_run_id") if isinstance(mn_cli_metadata, dict) else None
+    return run_id if isinstance(run_id, str) and run_id else None
 
 
 def pause(job_id: str):

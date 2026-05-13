@@ -270,7 +270,13 @@ def cleanup_run_records(
     return removed_run_ids
 
 
-def cleanup_web_ui_process(run_dir: Path, *, dry_run: bool, summary: dict[str, Any]) -> None:
+def cleanup_web_ui_process(
+    run_dir: Path,
+    *,
+    dry_run: bool,
+    summary: dict[str, Any],
+    reason: str = "run_record_removed",
+) -> None:
     process_info = read_json_object(run_dir / "web_ui_process.json")
     if not process_info:
         return
@@ -288,14 +294,17 @@ def cleanup_web_ui_process(run_dir: Path, *, dry_run: bool, summary: dict[str, A
         summary["process_removed"].append({"path": str(run_dir), "pid": pid, "reason": "dry_run"})
         return
 
+    signal_sent = False
     try:
         os.killpg(pid, signal.SIGTERM)
+        signal_sent = True
     except ProcessLookupError:
         summary["process_skipped"].append({"path": str(run_dir), "pid": pid, "reason": "web_ui_process_not_running"})
         return
     except OSError:
         try:
             os.kill(pid, signal.SIGTERM)
+            signal_sent = True
         except ProcessLookupError:
             summary["process_skipped"].append({"path": str(run_dir), "pid": pid, "reason": "web_ui_process_not_running"})
             return
@@ -303,7 +312,28 @@ def cleanup_web_ui_process(run_dir: Path, *, dry_run: bool, summary: dict[str, A
             summary["errors"].append(f"failed to stop web UI process {pid} for {run_dir}: {exc}")
             return
 
-    summary["process_removed"].append({"path": str(run_dir), "pid": pid, "reason": "run_record_removed"})
+    if signal_sent:
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            if not process_is_running(pid):
+                break
+            time.sleep(0.05)
+
+    if process_is_running(pid):
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except OSError as exc:
+                summary["errors"].append(f"failed to force-stop web UI process {pid} for {run_dir}: {exc}")
+                return
+
+    summary["process_removed"].append({"path": str(run_dir), "pid": pid, "reason": reason})
 
 
 def process_is_running(pid: int) -> bool:

@@ -89,16 +89,36 @@ def test_clear_error(mocker):
 
 def test_cancel_success(mocker):
     mock_cancel = mocker.patch('mn_cli.libs.job_cmds.client.cancel_job', return_value="cancelled")
+    mock_cleanup = mocker.patch('mn_cli.libs.job_cmds._cleanup_cancelled_job_web_ui')
     result = runner.invoke(app, ["cancel", "job-123"])
     assert result.exit_code == 0
     assert "Job cancelled. Status: cancelled" in result.stdout
     mock_cancel.assert_called_once_with("job-123")
+    mock_cleanup.assert_called_once_with("job-123")
 
 def test_cancel_error(mocker):
     mocker.patch('mn_cli.libs.job_cmds.client.cancel_job', side_effect=Exception("Fail"))
+    mock_cleanup = mocker.patch('mn_cli.libs.job_cmds._cleanup_cancelled_job_web_ui')
     result = runner.invoke(app, ["cancel", "job-123"])
     assert result.exit_code == 0
     assert "Error cancelling job: Fail" in result.stdout
+    mock_cleanup.assert_called_once_with("job-123")
+
+def test_cancel_cleans_blueprint_web_ui_process(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path))
+    run_dir = tmp_path / "run-123"
+    run_dir.mkdir()
+    mocker.patch('mn_cli.libs.job_cmds._blueprint_run_id_for_job', return_value="run-123")
+    mock_cleanup = mocker.patch('mn_cli.libs.job_cmds.cleanup_web_ui_process')
+
+    mocker.patch('mn_cli.libs.job_cmds.client.cancel_job', return_value="cancelled")
+    result = runner.invoke(app, ["cancel", "job-123"])
+
+    assert result.exit_code == 0
+    mock_cleanup.assert_called_once()
+    _, kwargs = mock_cleanup.call_args
+    assert kwargs["dry_run"] is False
+    assert kwargs["reason"] == "job_cancelled"
 
 def test_pause_success(mocker):
     mock_pause = mocker.patch('mn_cli.libs.job_cmds.client.pause_job', return_value="paused")

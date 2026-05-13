@@ -105,8 +105,8 @@ def test_cleanup_removes_legacy_run_records_by_blueprint_prefix(mocker, tmp_path
 
 def test_cleanup_stops_blueprint_web_ui_process_with_run_record(mocker, tmp_path):
     mocker.patch("mn_cli.libs.blueprint_resources.shutil.which", return_value=None)
-    mock_kill = mocker.patch("mn_cli.libs.blueprint_resources.os.kill")
     mock_killpg = mocker.patch("mn_cli.libs.blueprint_resources.os.killpg")
+    mocker.patch("mn_cli.libs.blueprint_resources.process_is_running", side_effect=[True, False, False])
     runs_root = tmp_path / "runs"
     run_dir = runs_root / "bp-removed-run"
     _write_run_record(run_dir, "bp-removed")
@@ -120,8 +120,7 @@ def test_cleanup_stops_blueprint_web_ui_process_with_run_record(mocker, tmp_path
     )
 
     assert not run_dir.exists()
-    mock_kill.assert_called_once_with(4242, 0)
-    mock_killpg.assert_called_once()
+    mock_killpg.assert_called_once_with(4242, 15)
     assert summary["process_removed"][0]["pid"] == 4242
 
 
