@@ -302,6 +302,12 @@ def validate(bundle_path: str):
             console.print("[red]Error: 'requiredContextEngine' must be true or false in manifest.json[/red]")
             raise typer.Exit(1)
 
+        python_environment_errors = validate_python_environments(bundle_dir, manifest)
+        if python_environment_errors:
+            for error in python_environment_errors:
+                console.print(f"[red]Error: {error}[/red]")
+            raise typer.Exit(1)
+
         console.print(f"[green]✓ Job bundle at '{bundle_path}' is valid.[/green]")
         console.print(f"  - Job Name: {manifest.get('job_name')}")
         console.print(f"  - Graph ID: {manifest.get('graph_id')}")
@@ -312,6 +318,55 @@ def validate(bundle_path: str):
     except Exception as e:
         handle_cli_error(e, console, 'validate')
         raise typer.Exit(1)
+
+
+def validate_python_environments(bundle_dir: Path, manifest: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    nodes = manifest.get("nodes")
+    if not isinstance(nodes, list):
+        return errors
+
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            continue
+        config = node.get("config")
+        if not isinstance(config, dict) or "python_environment" not in config:
+            continue
+
+        node_id = str(node.get("node_id") or f"nodes[{index}]")
+        runner_module = config.get("runner_module")
+        python_environment = config.get("python_environment")
+        if runner_module != "MirrorNeuron.Runner.HostLocal":
+            errors.append(f"{node_id}: python_environment is only supported with MirrorNeuron.Runner.HostLocal")
+            continue
+        if not isinstance(python_environment, dict):
+            errors.append(f"{node_id}: python_environment must be an object")
+            continue
+
+        requirements = python_environment.get("requirements")
+        if requirements not in (None, ""):
+            if not isinstance(requirements, str):
+                errors.append(f"{node_id}: python_environment.requirements must be a string")
+            elif not _is_safe_payload_relative_path(requirements):
+                errors.append(
+                    f"{node_id}: python_environment.requirements must be a relative path inside payloads/"
+                )
+            elif not (bundle_dir / "payloads" / requirements).is_file():
+                errors.append(f"{node_id}: python_environment requirements file not found: payloads/{requirements}")
+
+        packages = python_environment.get("packages")
+        if packages is not None and (
+            not isinstance(packages, list)
+            or not all(isinstance(package, str) and package.strip() for package in packages)
+        ):
+            errors.append(f"{node_id}: python_environment.packages must be a list of non-empty strings")
+
+    return errors
+
+
+def _is_safe_payload_relative_path(path: str) -> bool:
+    candidate = Path(path)
+    return not candidate.is_absolute() and path not in ("", ".") and ".." not in candidate.parts
 
 
 def run(
@@ -477,6 +532,7 @@ def _write_blueprint_job_mapping(
         payload = {
             "run_id": blueprint_run_id,
             "job_id": job_id,
+            "blueprint_id": metadata.get("blueprint_id"),
             "blueprint_revision": metadata.get("blueprint_revision"),
             "submitted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
@@ -509,76 +565,95 @@ def _write_local_web_ui_handle(
     dashboard = web_ui.get("dashboard") if isinstance(web_ui.get("dashboard"), dict) else {}
     output = web_ui.get("output") if isinstance(web_ui.get("output"), dict) else {}
     identity = config.get("identity") if isinstance(config.get("identity"), dict) else {}
-    adapter = output.get("adapter") or web_ui.get("kind") or "static_html"
     runs_root = Path(env_overrides.get("MN_RUNS_ROOT") or os.getenv("MN_RUNS_ROOT") or "~/.mn/runs").expanduser()
     run_dir = runs_root / blueprint_run_id
-    if adapter == "gradio":
-        host = output.get("host") or "127.0.0.1"
-        port = output.get("port") or 7860
-        inferred_url = output.get("custom_url") or output.get("url") or (f"http://{host}:{port}/" if port else "")
-        registration = dashboard.get("registration") if isinstance(dashboard.get("registration"), dict) else {}
-        handle = {
-            "adapter": "gradio",
-            "kind": "output",
-            "url": inferred_url,
-            "title": output.get("title") or identity.get("name") or bundle_dir.name,
-            "path": str(run_dir),
-            "status": "not_started" if not inferred_url else "configured",
-            "metadata": {
-                "blueprint_id": identity.get("blueprint_id"),
-                "run_id": blueprint_run_id,
-                "events_path": str(run_dir / "events.jsonl"),
-                "registered_by": "mn_cli",
-                "registration_script": output.get("registration_script") or registration.get("script"),
-                "launch_adapter": "gradio",
-            },
-        }
-        try:
-            run_dir.mkdir(parents=True, exist_ok=True)
-            (run_dir / "web_ui.json").write_text(json.dumps(handle, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        except OSError:
-            logger.exception("Failed to write blueprint web UI handle for run_id=%s", blueprint_run_id)
-        return
 
-    dashboard_path = dashboard.get("path") or output.get("path")
-    if not isinstance(dashboard_path, str) or not dashboard_path:
-        metadata = config.get("metadata") if isinstance(config.get("metadata"), dict) else {}
-        dashboard_path = ((metadata.get("web_ui") or {}) if isinstance(metadata.get("web_ui"), dict) else {}).get("path")
-    if not isinstance(dashboard_path, str) or not dashboard_path:
-        return
-
-    html_path = (bundle_dir / dashboard_path).expanduser().resolve()
-    if not html_path.exists():
-        return
-
+    base_url = _central_gradio_web_ui_base_url(env_overrides)
+    title = output.get("title") or identity.get("name") or bundle_dir.name
+    events_path = run_dir / "events.jsonl"
     video_source = _web_ui_video_source(config, bundle_dir)
-    query = urllib.parse.urlencode(
+    event_types = dashboard.get("event_types") if isinstance(dashboard.get("event_types"), list) else []
+    event_types = [str(item) for item in event_types if isinstance(item, str)]
+    refresh_seconds = _web_ui_refresh_seconds(output, dashboard)
+    components: list[dict[str, Any]] = [
         {
-            "video": video_source,
-            "events": (run_dir / "events.jsonl").resolve().as_uri(),
-            "pollMs": "2000",
+            "type": "events",
+            "label": "Event Stream",
+            "event_types": event_types,
+            "max_events": 200,
         }
-    )
-    handle = {
-        "adapter": adapter,
+    ]
+    if video_source:
+        components.insert(
+            0,
+            {
+                "type": "video",
+                "label": "Video Source",
+                "source": video_source,
+            },
+        )
+
+    ui_path = run_dir / "ui.json"
+    ui_definition = {
+        "schema_version": 1,
+        "adapter": "gradio",
         "kind": "output",
-        "url": f"{html_path.as_uri()}?{query}",
-        "title": output.get("title") or identity.get("name") or bundle_dir.name,
-        "path": str(html_path),
+        "title": title,
+        "run_id": blueprint_run_id,
+        "blueprint_id": identity.get("blueprint_id") or bundle_dir.name,
+        "events_path": str(events_path),
+        "refresh_seconds": refresh_seconds,
+        "components": components,
+        "metadata": {
+            "run_dir": str(run_dir),
+            "bundle_dir": str(bundle_dir),
+            "server": "central_gradio",
+            "dashboard": dashboard,
+            "output": output,
+        },
+    }
+    run_url = f"{base_url}/runs/{urllib.parse.quote(blueprint_run_id, safe='')}/ui"
+    handle = {
+        "adapter": "gradio",
+        "kind": "output",
+        "url": run_url,
+        "title": title,
+        "path": str(ui_path),
         "status": "available",
         "metadata": {
             "blueprint_id": identity.get("blueprint_id"),
             "run_id": blueprint_run_id,
-            "events_path": str(run_dir / "events.jsonl"),
-            "dashboard_path": str(html_path),
+            "events_path": str(events_path),
+            "ui_path": str(ui_path),
+            "base_url": base_url,
             "registered_by": "mn_cli",
+            "launch_adapter": "central_gradio",
         },
     }
     try:
         run_dir.mkdir(parents=True, exist_ok=True)
+        ui_path.write_text(json.dumps(ui_definition, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         (run_dir / "web_ui.json").write_text(json.dumps(handle, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     except OSError:
         logger.exception("Failed to write blueprint web UI handle for run_id=%s", blueprint_run_id)
+
+
+def _central_gradio_web_ui_base_url(env_overrides: dict[str, str]) -> str:
+    configured_url = env_overrides.get("MN_GRADIO_UI_BASE_URL") or os.getenv("MN_GRADIO_UI_BASE_URL")
+    if configured_url:
+        return configured_url.rstrip("/")
+    scheme = env_overrides.get("MN_GRADIO_UI_SCHEME") or os.getenv("MN_GRADIO_UI_SCHEME") or "http"
+    host = env_overrides.get("MN_GRADIO_UI_HOST") or os.getenv("MN_GRADIO_UI_HOST") or "localhost"
+    port = env_overrides.get("MN_GRADIO_UI_PORT") or os.getenv("MN_GRADIO_UI_PORT") or "7860"
+    return f"{scheme}://{host}:{port}" if port else f"{scheme}://{host}"
+
+
+def _web_ui_refresh_seconds(output: dict[str, Any], dashboard: dict[str, Any]) -> float:
+    raw_value = output.get("refresh_seconds", dashboard.get("refresh_seconds", 2.0))
+    try:
+        return float(raw_value)
+    except (TypeError, ValueError):
+        return 2.0
 
 
 def _web_ui_video_source(config: dict[str, Any], bundle_dir: Path) -> str:
@@ -586,6 +661,8 @@ def _web_ui_video_source(config: dict[str, Any], bundle_dir: Path) -> str:
     if not isinstance(video_source, str) or not video_source:
         dashboard = (config.get("web_ui") or {}).get("dashboard") if isinstance(config.get("web_ui"), dict) else {}
         video_source = (dashboard or {}).get("default_video_source") or ""
+    if not isinstance(video_source, str) or not video_source:
+        return ""
     if "://" in video_source:
         return video_source
     for candidate in (
@@ -593,7 +670,7 @@ def _web_ui_video_source(config: dict[str, Any], bundle_dir: Path) -> str:
         bundle_dir / "payloads" / "web_ui" / video_source,
         bundle_dir / video_source,
     ):
-        if candidate.exists():
+        if candidate.is_file():
             return candidate.resolve().as_uri()
     return video_source
 

@@ -1,8 +1,9 @@
 import pytest
 import subprocess
+import sys
 from io import StringIO
 from rich.console import Console
-from mn_cli.server_cmds import check_status, kill_tree, _start_server, find_web_ui_dir, _start_web_ui_if_installed, _print_service_endpoints
+from mn_cli.server_cmds import check_status, kill_tree, _start_server, find_web_ui_dir, _start_web_ui_if_installed, _start_gradio_web_ui, _print_service_endpoints
 import typer
 
 def test_check_status_running(mocker, tmp_path):
@@ -126,6 +127,7 @@ def test_start_server_success(mocker, tmp_path):
     
     mock_popen = mocker.patch('mn_cli.server_cmds.subprocess.Popen')
     mock_popen.return_value.pid = 9999
+    mocker.patch('mn_cli.server_cmds._start_gradio_web_ui', return_value=False)
     
     class UnameMock:
         sysname = "Linux"
@@ -152,6 +154,7 @@ def test_start_server_darwin(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path) # no mn-api to skip api
+    mocker.patch('mn_cli.server_cmds._start_gradio_web_ui', return_value=False)
     
     class UnameMock:
         sysname = "Darwin"
@@ -181,6 +184,7 @@ def test_start_server_passes_slack_env_to_docker(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path)
+    mocker.patch('mn_cli.server_cmds._start_gradio_web_ui', return_value=False)
 
     class UnameMock:
         sysname = "Darwin"
@@ -227,12 +231,37 @@ def test_start_web_ui_if_installed(mocker, tmp_path):
     assert mock_popen.call_args.args[0][:3] == ["npm", "run", "dev"]
     assert mock_popen.call_args.args[0][-1] == "localhost"
     assert mock_popen.call_args.kwargs["cwd"] == web_ui_dir
+    assert mock_popen.call_args.kwargs["env"]["MN_GRADIO_UI_BASE_URL"] == "http://localhost:7860"
 
 def test_start_web_ui_missing_noop(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', (tmp_path / "web-ui",))
     mock_popen = mocker.patch('mn_cli.server_cmds.subprocess.Popen')
 
     _start_web_ui_if_installed()
+
+    mock_popen.assert_not_called()
+
+def test_start_gradio_web_ui(mocker, tmp_path):
+    mocker.patch('mn_cli.server_cmds.GRADIO_UI_PID_FILE', tmp_path / "gradio-ui.pid")
+    mocker.patch('mn_cli.server_cmds.GRADIO_UI_LOG', tmp_path / "gradio-ui.log")
+    mocker.patch('mn_cli.server_cmds.importlib.util.find_spec', return_value=object())
+    mock_popen = mocker.patch('mn_cli.server_cmds.subprocess.Popen')
+    mock_popen.return_value.pid = 7860
+
+    assert _start_gradio_web_ui() is True
+
+    assert (tmp_path / "gradio-ui.pid").read_text() == "7860"
+    command = mock_popen.call_args.args[0]
+    assert command[:3] == [sys.executable, "-m", "mn_cli.gradio_web_ui"]
+    assert "--port" in command
+    assert "7860" in command
+
+def test_start_gradio_web_ui_missing_dependency(mocker, tmp_path):
+    mocker.patch('mn_cli.server_cmds.GRADIO_UI_PID_FILE', tmp_path / "gradio-ui.pid")
+    mocker.patch('mn_cli.server_cmds.importlib.util.find_spec', return_value=None)
+    mock_popen = mocker.patch('mn_cli.server_cmds.subprocess.Popen')
+
+    assert _start_gradio_web_ui() is False
 
     mock_popen.assert_not_called()
 

@@ -74,6 +74,67 @@ def test_validate_nodes_not_list(tmp_path):
     assert result.exit_code == 1
     assert "'nodes' must be a list" in result.stdout
 
+
+def test_validate_accepts_host_local_python_environment(tmp_path):
+    bundle_dir = tmp_path / "python_env_bundle"
+    requirements = bundle_dir / "payloads" / "worker" / "requirements.txt"
+    requirements.parent.mkdir(parents=True)
+    requirements.write_text("opencv-python-headless>=4.10,<5\n")
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "manifest_version": "1.0",
+        "graph_id": "test_graph",
+        "job_name": "test_job",
+        "entrypoints": ["worker"],
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.HostLocal",
+                    "python_environment": {
+                        "requirements": "worker/requirements.txt",
+                        "packages": ["numpy>=1.26"],
+                    },
+                },
+            }
+        ],
+    }))
+
+    result = runner.invoke(app, ["validate", str(bundle_dir)])
+
+    assert result.exit_code == 0
+    assert "is valid" in result.stdout
+
+
+def test_validate_rejects_invalid_python_environment(tmp_path):
+    bundle_dir = tmp_path / "bad_python_env_bundle"
+    (bundle_dir / "payloads").mkdir(parents=True)
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "manifest_version": "1.0",
+        "graph_id": "test_graph",
+        "job_name": "test_job",
+        "entrypoints": ["worker"],
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.HostLocal",
+                    "python_environment": {
+                        "requirements": "../requirements.txt",
+                        "packages": ["numpy>=1.26", ""],
+                    },
+                },
+            }
+        ],
+    }))
+
+    result = runner.invoke(app, ["validate", str(bundle_dir)])
+
+    assert result.exit_code == 1
+    normalized = re.sub(r"\s+", " ", result.stdout)
+    assert "python_environment.requirements must be a relative path inside payloads" in normalized
+    assert "python_environment.packages must be a list of non-empty strings" in result.stdout
+
+
 def test_run_success(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="run-bundle-auto")
@@ -104,6 +165,42 @@ def test_run_success(mocker, tmp_path, monkeypatch):
     assert mapping["job_id"] == "job-123"
     mock_submit.assert_called_once()
     mock_stream.assert_called_once_with("job-123")
+
+
+def test_run_submits_python_environment_requirements_payload(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="python-env-run")
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_completed"})
+    ])
+
+    bundle_dir = tmp_path / "run_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.HostLocal",
+                    "upload_path": "worker",
+                    "upload_as": "worker",
+                    "python_environment": {
+                        "requirements": "worker/requirements.txt",
+                    },
+                },
+            }
+        ]
+    }))
+    payloads_dir = bundle_dir / "payloads" / "worker"
+    payloads_dir.mkdir(parents=True)
+    (payloads_dir / "requirements.txt").write_text("opencv-python-headless>=4.10,<5\n")
+
+    result = runner.invoke(app, ["run", str(bundle_dir)])
+
+    assert result.exit_code == 0
+    payloads = mock_submit.call_args.args[1]
+    assert payloads["worker/requirements.txt"] == b"opencv-python-headless>=4.10,<5\n"
 
 
 def test_run_injects_blueprint_config_scenario_and_run_id(mocker, tmp_path):
@@ -214,16 +311,24 @@ def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_pat
     assert injected_config["identity"]["run_id"] == "bp-1-auto-run"
     assert injected_config["outputs"]["run_root"] == str(tmp_path / "runs")
     web_ui = json.loads((tmp_path / "runs" / "bp-1-auto-run" / "web_ui.json").read_text())
+    ui = json.loads((tmp_path / "runs" / "bp-1-auto-run" / "ui.json").read_text())
+    assert web_ui["adapter"] == "gradio"
     assert web_ui["title"] == "Blueprint One"
+    assert web_ui["url"] == "http://localhost:7860/runs/bp-1-auto-run/ui"
+    assert web_ui["path"].endswith("/ui.json")
     assert web_ui["metadata"]["registered_by"] == "mn_cli"
+    assert ui["adapter"] == "gradio"
+    assert ui["metadata"]["server"] == "central_gradio"
+    assert ui["components"][0]["type"] == "events"
     config = manifest["nodes"][0]["config"]
     assert config["upload_path"] == "."
     assert config["upload_as"] == "."
     assert "upload_paths" not in config
 
 
-def test_write_local_web_ui_handle_supports_gradio_without_static_dashboard(tmp_path, monkeypatch):
+def test_write_local_web_ui_handle_uses_central_gradio_for_blueprint_dashboard(tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    monkeypatch.setenv("MN_GRADIO_UI_BASE_URL", "http://127.0.0.1:7861/")
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     config_dir = bundle_dir / "config"
@@ -252,9 +357,15 @@ def test_write_local_web_ui_handle_supports_gradio_without_static_dashboard(tmp_
     run_cmds._write_local_web_ui_handle(bundle_dir, "bp-gradio-run", env_overrides={})
 
     web_ui = json.loads((tmp_path / "runs" / "bp-gradio-run" / "web_ui.json").read_text())
+    ui = json.loads((tmp_path / "runs" / "bp-gradio-run" / "ui.json").read_text())
     assert web_ui["adapter"] == "gradio"
-    assert web_ui["url"] == "http://127.0.0.1:7870/"
-    assert web_ui["metadata"]["registration_script"] == "payloads/web_ui/register_dashboard.py"
+    assert web_ui["url"] == "http://127.0.0.1:7861/runs/bp-gradio-run/ui"
+    assert web_ui["status"] == "available"
+    assert web_ui["metadata"]["launch_adapter"] == "central_gradio"
+    assert ui["adapter"] == "gradio"
+    assert ui["metadata"]["server"] == "central_gradio"
+    assert ui["refresh_seconds"] == 2.0
+    assert ui["components"][0]["type"] == "events"
 
 
 def test_run_records_blueprint_run_id_mapping(mocker, tmp_path, monkeypatch):

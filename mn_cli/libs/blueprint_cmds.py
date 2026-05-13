@@ -39,6 +39,13 @@ from mn_cli.libs.blueprint_repository import (
     git_revision as _git_revision,
     load_blueprint_index as _load_blueprint_index,
 )
+from mn_cli.libs.blueprint_resources import (
+    cleanup_blueprint_resources as _cleanup_blueprint_resources,
+    default_bundle_cache_dir as _default_bundle_cache_dir,
+    default_generated_bundles_dir as _default_generated_bundles_dir,
+    default_python_envs_dir as _default_python_envs_dir,
+    default_runs_root as _default_runs_root,
+)
 from mn_cli.shared import console, logger
 from mn_cli.libs.run_cmds import run_bundle as _run_bundle
 from mn_cli.libs.run_manifest import load_blueprint_config as _load_blueprint_config
@@ -85,7 +92,7 @@ def _prepare_blueprint_bundle_for_run(
     if not _is_python_source_blueprint(manifest):
         return blueprint_dir
 
-    generated_root = Path(os.path.expanduser("~/.mn/generated_blueprint_bundles"))
+    generated_root = _default_generated_bundles_dir()
     output_dir = generated_root / run_id
     if output_dir.exists():
         shutil.rmtree(output_dir)
@@ -136,6 +143,7 @@ def _run_resolved_blueprint(
         follow_seconds=follow_seconds,
         env_overrides={
             "MN_RUN_ID": shared_run_id,
+            "MN_BLUEPRINT_ID": blueprint_id,
             "MN_BLUEPRINT_REVISION": revision or "",
         },
         submission_metadata={
@@ -425,12 +433,175 @@ def blueprint_update(
     if not storage_dir.exists():
         console.print(f"[red]Blueprint storage not found at {storage_dir}. Run 'mn blueprint install' first.[/red]")
         raise typer.Exit(1)
+    before_ids = _blueprint_ids_from_storage(storage_dir)
     _git_pull(storage_dir)
     try:
         _load_blueprint_index(storage_dir / "index.json")
     except BlueprintIndexError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
+    after_ids = _blueprint_ids_from_storage(storage_dir)
+    removed_ids = before_ids - after_ids
+    cleanup_summary = _cleanup_catalog_resources(
+        removed_ids=removed_ids,
+        active_ids=after_ids,
+        include_docker=True,
+        dry_run=False,
+    )
+    _print_cleanup_summary(cleanup_summary)
+
+
+@blueprint_app.command("cleanup")
+def blueprint_cleanup(
+    ctx: typer.Context,
+    blueprint_id: Optional[str] = typer.Option(None, "--blueprint-id", help="Clean resources for one blueprint ID."),
+    source: Optional[str] = typer.Option(None, "--source", help="Blueprint storage path used to decide which resources are dead."),
+    python_envs_dir: Optional[str] = typer.Option(None, "--python-envs-dir", help="Override the blueprint Python environment cache root."),
+    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the shared blueprint run store root."),
+    generated_bundles_dir: Optional[str] = typer.Option(None, "--generated-bundles-dir", help="Override the generated Python workflow bundle cache root."),
+    bundle_cache_dir: Optional[str] = typer.Option(None, "--bundle-cache-dir", help="Override the MirrorNeuron local bundle cache root."),
+    include_files: bool = typer.Option(True, "--files/--no-files", help="Also remove blueprint-owned run records, generated bundles, and local bundle cache entries."),
+    include_docker: bool = typer.Option(True, "--docker/--no-docker", help="Also remove Docker resources labelled for removed blueprints."),
+    include_dead: bool = typer.Option(True, "--dead/--no-dead", help="Remove stale incomplete resources and resources for blueprints no longer in storage."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be removed without deleting anything."),
+):
+    """Clean blueprint-owned Python envs, ~/.mn files, Docker resources, and stale leftovers."""
+    active_ids: set[str] = set()
+    explicit_ids = {blueprint_id} if blueprint_id else set()
+    if include_dead and not explicit_ids:
+        storage_dir = _resolve_blueprint_storage_for_cleanup(ctx, source)
+        active_ids = _blueprint_ids_from_storage(storage_dir)
+        if not active_ids:
+            console.print(f"[yellow]No readable blueprint index found at {storage_dir}; only stale incomplete resources will be cleaned.[/yellow]")
+
+    summary = _cleanup_blueprint_resources(
+        blueprint_ids=explicit_ids,
+        active_blueprint_ids=active_ids,
+        python_envs_dir=Path(python_envs_dir).expanduser() if python_envs_dir else _default_python_envs_dir(),
+        runs_root=Path(runs_root).expanduser() if runs_root else _default_runs_root(),
+        generated_bundles_dir=Path(generated_bundles_dir).expanduser() if generated_bundles_dir else _default_generated_bundles_dir(),
+        bundle_cache_dir=Path(bundle_cache_dir).expanduser() if bundle_cache_dir else _default_bundle_cache_dir(),
+        include_dead=include_dead,
+        include_docker=include_docker,
+        include_files=include_files,
+        dry_run=dry_run,
+    )
+    _print_cleanup_summary(summary)
+
+
+@blueprint_app.command("uninstall")
+def blueprint_uninstall(
+    ctx: typer.Context,
+    source: Optional[str] = typer.Option(None, "--source", help="Cached blueprint storage path to remove."),
+    keep_resources: bool = typer.Option(False, "--keep-resources", help="Remove blueprint files but keep cached runtime resources."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be removed without deleting anything."),
+):
+    """Remove cached blueprint storage and its owned runtime resources."""
+    storage_dir = _resolve_blueprint_storage_for_cleanup(ctx, source)
+    blueprint_ids = _blueprint_ids_from_storage(storage_dir)
+    if not storage_dir.exists():
+        console.print(f"[yellow]Blueprint storage not found at {storage_dir}.[/yellow]")
+    elif dry_run:
+        console.print(f"Would remove blueprint storage at {storage_dir}.")
+    else:
+        shutil.rmtree(storage_dir)
+        console.print(f"[green]Removed blueprint storage at {storage_dir}.[/green]")
+
+    if keep_resources:
+        return
+
+    summary = _cleanup_blueprint_resources(
+        blueprint_ids=blueprint_ids,
+        active_blueprint_ids=set(),
+        include_dead=True,
+        include_docker=True,
+        include_files=True,
+        dry_run=dry_run,
+    )
+    _print_cleanup_summary(summary)
+
+
+def _resolve_blueprint_storage_for_cleanup(ctx: typer.Context, source: Optional[str]) -> Path:
+    if source:
+        return Path(source).expanduser()
+    blueprint_repo = _context_blueprint_repo(ctx)
+    if blueprint_repo:
+        return _blueprint_storage_dir_for_source(blueprint_repo)
+    return _default_blueprint_storage_dir()
+
+
+def _blueprint_ids_from_storage(storage_dir: Path) -> set[str]:
+    index_path = storage_dir / "index.json"
+    if not index_path.exists():
+        return set()
+    try:
+        entries = _load_blueprint_index(index_path)
+    except BlueprintIndexError:
+        return set()
+    ids: set[str] = set()
+    for entry in entries:
+        blueprint_id = entry.get("id")
+        if isinstance(blueprint_id, str) and blueprint_id.strip():
+            ids.add(blueprint_id.strip())
+            continue
+        path = entry.get("path")
+        if isinstance(path, str) and path.strip():
+            manifest_path = storage_dir / path / "manifest.json"
+            if manifest_path.exists():
+                try:
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                metadata = manifest.get("metadata") if isinstance(manifest, dict) else {}
+                manifest_blueprint_id = metadata.get("blueprint_id") if isinstance(metadata, dict) else None
+                if isinstance(manifest_blueprint_id, str) and manifest_blueprint_id.strip():
+                    ids.add(manifest_blueprint_id.strip())
+    return ids
+
+
+def _cleanup_catalog_resources(
+    *,
+    removed_ids: set[str],
+    active_ids: set[str],
+    include_docker: bool,
+    dry_run: bool,
+) -> dict[str, Any] | None:
+    if not removed_ids and not active_ids:
+        return None
+    try:
+        return _cleanup_blueprint_resources(
+            blueprint_ids=removed_ids,
+            active_blueprint_ids=active_ids,
+            include_dead=True,
+            include_docker=include_docker,
+            dry_run=dry_run,
+        )
+    except Exception as exc:
+        logger.exception("Failed to clean blueprint resources")
+        return {"errors": [str(exc)], "dry_run": dry_run}
+
+
+def _print_cleanup_summary(summary: dict[str, Any] | None) -> None:
+    if not summary:
+        return
+    python_removed = summary.get("python_removed") or []
+    run_removed = summary.get("run_removed") or []
+    generated_removed = summary.get("generated_removed") or []
+    bundle_removed = summary.get("bundle_removed") or []
+    docker_removed = summary.get("docker_removed") or []
+    errors = summary.get("errors") or []
+    dry_run = bool(summary.get("dry_run"))
+    verb = "Would remove" if dry_run else "Removed"
+    if python_removed or run_removed or generated_removed or bundle_removed or docker_removed:
+        console.print(
+            f"[green]{verb} {len(python_removed)} Python env resource(s), "
+            f"{len(run_removed)} run record(s), {len(generated_removed)} generated bundle(s), "
+            f"{len(bundle_removed)} bundle cache resource(s), and {len(docker_removed)} Docker resource(s).[/green]"
+        )
+    else:
+        console.print("[green]No blueprint runtime resources needed cleanup.[/green]")
+    for error in errors:
+        console.print(f"[yellow]Cleanup warning: {error}[/yellow]")
 
 
 @blueprint_app.command("monitor")

@@ -3,7 +3,7 @@ import os
 import time
 from mn_cli.shared import console
 from mn_cli.error_handler import handle_cli_error
-from mn_cli.server_cmds import _start_server, kill_tree, BEAM_PID_FILE, API_PID_FILE, WEB_UI_PID_FILE
+from mn_cli.server_cmds import _start_server, kill_tree, BEAM_PID_FILE, API_PID_FILE, WEB_UI_PID_FILE, GRADIO_UI_PID_FILE
 
 def start():
     """Start MirrorNeuron services"""
@@ -18,6 +18,7 @@ def stop():
     subprocess.run(["docker", "rm", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
     for pid_file, name in [
+        (GRADIO_UI_PID_FILE, "Blueprint Gradio UI"),
         (WEB_UI_PID_FILE, "Web UI"),
         (API_PID_FILE, "REST API"),
         (BEAM_PID_FILE, "Legacy Core Service"),

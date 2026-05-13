@@ -113,6 +113,9 @@ Blueprint commands are grouped under `mn blueprint`.
 mn blueprint list
 mn blueprint install
 mn blueprint update
+mn blueprint cleanup
+mn blueprint cleanup --blueprint-id <blueprint_id>
+mn blueprint uninstall
 mn blueprint run <blueprint_id>
 mn blueprint --blueprint-repo https://github.com/MirrorNeuronLab/customer-blueprints run <blueprint_id>
 mn blueprint run ./path/to/bundle_or_source_blueprint
@@ -132,6 +135,8 @@ mn blueprint export <run_id> --format html
 ```
 
 Catalog runs use the cached blueprint library by default. Run `mn blueprint update` or pass `--update` when you want to refresh the local cache.
+
+`mn blueprint update` also checks for blueprints removed from the catalog and cleans blueprint-owned runtime resources, including cached Python virtualenvs, `~/.mn/runs/<run_id>` records, `~/.mn/generated_blueprint_bundles/<run_id>` bundles, local bundle-cache entries, and Docker resources labelled with `mirrorneuron.blueprint_id=<blueprint_id>` or `com.mirrorneuron.blueprint_id=<blueprint_id>`. Use `mn blueprint cleanup` to run the same dead-resource check manually, or `mn blueprint cleanup --blueprint-id <id>` to remove resources for one deleted blueprint. Use `--dry-run` to preview removals. Cleanup is lifecycle-driven and explicit; there is no hidden scheduled housekeeping job.
 
 Use `mn blueprint --blueprint-repo <repo-url> ...` to read catalog commands from a different blueprint repository, including a private repository your Git credentials can access. Custom repositories are cached separately under `~/.mn/blueprint_repos/`, and the repository root must contain a valid `index.json` JSON list of blueprint entries.
 

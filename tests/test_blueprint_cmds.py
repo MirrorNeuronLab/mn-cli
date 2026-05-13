@@ -11,6 +11,33 @@ requires_blueprint_support = pytest.mark.skipif(
     reason="blueprint-support-skill is not installed",
 )
 
+
+def _write_python_resource(path: Path, blueprint_id: str) -> None:
+    (path / "bin").mkdir(parents=True, exist_ok=True)
+    (path / "bin" / "python").write_text("")
+    (path / ".ready").write_text("")
+    (path / ".mn-blueprint-resource.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "resource_type": "python_venv",
+                "blueprint_id": blueprint_id,
+            }
+        )
+    )
+
+
+def _write_generated_bundle(path: Path, blueprint_id: str) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "manifest.json").write_text(
+        json.dumps({"metadata": {"blueprint_id": blueprint_id}, "nodes": []})
+    )
+
+
+def _write_bundle_cache(path: Path, blueprint_id: str) -> None:
+    _write_generated_bundle(path, blueprint_id)
+
+
 def test_blueprint_list_not_initialized(mocker, tmp_path):
     mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', return_value=str(tmp_path / "index.json"))
     result = runner.invoke(app, ["blueprint", "list"])
@@ -147,6 +174,154 @@ def test_blueprint_run_update_flag_pulls_cache(mocker, tmp_path):
     mock_run_bundle.assert_called_once()
 
 
+def test_blueprint_update_cleans_resources_for_removed_blueprints(mocker, tmp_path, monkeypatch):
+    storage_dir = tmp_path / "blueprints"
+    storage_dir.mkdir()
+    env_root = tmp_path / "python_envs"
+    runs_root = tmp_path / "runs"
+    generated_root = tmp_path / "generated_blueprint_bundles"
+    bundle_cache_root = tmp_path / "bundle_cache"
+    removed_env = env_root / "removed-env"
+    active_env = env_root / "active-env"
+    removed_run = _write_run(runs_root, "bp-removed-run", blueprint_id="bp-removed")
+    active_run = _write_run(runs_root, "bp-active-run", blueprint_id="bp-active")
+    removed_generated = generated_root / "bp-removed-run"
+    active_generated = generated_root / "bp-active-run"
+    removed_bundle_cache = bundle_cache_root / "removed-fingerprint"
+    active_bundle_cache = bundle_cache_root / "active-fingerprint"
+    _write_generated_bundle(removed_generated, "bp-removed")
+    _write_generated_bundle(active_generated, "bp-active")
+    _write_bundle_cache(removed_bundle_cache, "bp-removed")
+    _write_bundle_cache(active_bundle_cache, "bp-active")
+    _write_python_resource(removed_env, "bp-removed")
+    _write_python_resource(active_env, "bp-active")
+    (storage_dir / "index.json").write_text(
+        json.dumps(
+            [
+                {"id": "bp-removed", "path": "bp-removed"},
+                {"id": "bp-active", "path": "bp-active"},
+            ]
+        )
+    )
+    monkeypatch.setenv("MN_BLUEPRINT_PYTHON_ENVS_DIR", str(env_root))
+    monkeypatch.setenv("MN_RUNS_ROOT", str(runs_root))
+    monkeypatch.setenv("MN_GENERATED_BLUEPRINT_BUNDLES_DIR", str(generated_root))
+    monkeypatch.setenv("MN_BUNDLE_CACHE_DIR", str(bundle_cache_root))
+    mocker.patch("mn_cli.libs.blueprint_resources.shutil.which", return_value=None)
+
+    def fake_pull(path):
+        assert Path(path) == storage_dir
+        (storage_dir / "index.json").write_text(json.dumps([{"id": "bp-active", "path": "bp-active"}]))
+
+    mocker.patch("mn_cli.libs.blueprint_cmds._git_pull", side_effect=fake_pull)
+
+    result = runner.invoke(app, ["blueprint", "update", "--source", str(storage_dir)])
+
+    assert result.exit_code == 0
+    assert not removed_env.exists()
+    assert not removed_run.exists()
+    assert not removed_generated.exists()
+    assert not removed_bundle_cache.exists()
+    assert active_env.exists()
+    assert active_run.exists()
+    assert active_generated.exists()
+    assert active_bundle_cache.exists()
+    assert "Removed 1 Python env resource" in result.stdout
+    assert "1 run record" in result.stdout
+    assert "1 generated bundle" in result.stdout
+    assert "1 bundle cache" in result.stdout
+
+
+def test_blueprint_cleanup_removes_dead_and_stale_resources(mocker, tmp_path, monkeypatch):
+    storage_dir = tmp_path / "blueprints"
+    storage_dir.mkdir()
+    (storage_dir / "index.json").write_text(json.dumps([{"id": "bp-active", "path": "bp-active"}]))
+    env_root = tmp_path / "python_envs"
+    runs_root = tmp_path / "runs"
+    generated_root = tmp_path / "generated_blueprint_bundles"
+    bundle_cache_root = tmp_path / "bundle_cache"
+    active_env = env_root / "active-env"
+    removed_env = env_root / "removed-env"
+    incomplete_env = env_root / "incomplete-env"
+    corrupt_env = env_root / "corrupt-env"
+    active_run = _write_run(runs_root, "bp-active-run", blueprint_id="bp-active")
+    removed_run = _write_run(runs_root, "bp-removed-run", blueprint_id="bp-removed")
+    incomplete_run = runs_root / "incomplete-run"
+    incomplete_run.mkdir(parents=True)
+    active_generated = generated_root / "bp-active-run"
+    removed_generated = generated_root / "bp-removed-run"
+    orphan_generated = generated_root / "orphan-generated"
+    active_bundle_cache = bundle_cache_root / "active-fingerprint"
+    removed_bundle_cache = bundle_cache_root / "removed-fingerprint"
+    incomplete_bundle_cache = bundle_cache_root / "incomplete-fingerprint"
+    _write_generated_bundle(active_generated, "bp-active")
+    _write_generated_bundle(removed_generated, "bp-removed")
+    orphan_generated.mkdir(parents=True)
+    _write_bundle_cache(active_bundle_cache, "bp-active")
+    _write_bundle_cache(removed_bundle_cache, "bp-removed")
+    incomplete_bundle_cache.mkdir(parents=True)
+    _write_python_resource(active_env, "bp-active")
+    _write_python_resource(removed_env, "bp-removed")
+    incomplete_env.mkdir(parents=True)
+    corrupt_env.mkdir(parents=True)
+    (corrupt_env / ".mn-blueprint-resource.json").write_text("{not-json")
+    monkeypatch.setenv("MN_BLUEPRINT_PYTHON_ENVS_DIR", str(env_root))
+    monkeypatch.setenv("MN_RUNS_ROOT", str(runs_root))
+    monkeypatch.setenv("MN_GENERATED_BLUEPRINT_BUNDLES_DIR", str(generated_root))
+    monkeypatch.setenv("MN_BUNDLE_CACHE_DIR", str(bundle_cache_root))
+    monkeypatch.setenv("MN_BLUEPRINT_RESOURCE_STALE_SECONDS", "0")
+    mocker.patch("mn_cli.libs.blueprint_resources.shutil.which", return_value=None)
+
+    result = runner.invoke(app, ["blueprint", "cleanup", "--source", str(storage_dir)])
+
+    assert result.exit_code == 0
+    assert active_env.exists()
+    assert active_run.exists()
+    assert active_generated.exists()
+    assert active_bundle_cache.exists()
+    assert not removed_env.exists()
+    assert not removed_run.exists()
+    assert not removed_generated.exists()
+    assert not removed_bundle_cache.exists()
+    assert not incomplete_env.exists()
+    assert not incomplete_run.exists()
+    assert not corrupt_env.exists()
+    assert not orphan_generated.exists()
+    assert not incomplete_bundle_cache.exists()
+    assert "Removed 3 Python env resource" in result.stdout
+
+
+def test_blueprint_uninstall_removes_storage_and_owned_resources(mocker, tmp_path, monkeypatch):
+    storage_dir = tmp_path / "blueprints"
+    storage_dir.mkdir()
+    (storage_dir / "index.json").write_text(json.dumps([{"id": "bp-old", "path": "bp-old"}]))
+    env_root = tmp_path / "python_envs"
+    runs_root = tmp_path / "runs"
+    generated_root = tmp_path / "generated_blueprint_bundles"
+    bundle_cache_root = tmp_path / "bundle_cache"
+    old_env = env_root / "old-env"
+    old_run = _write_run(runs_root, "bp-old-run", blueprint_id="bp-old")
+    old_generated = generated_root / "bp-old-run"
+    old_bundle_cache = bundle_cache_root / "old-fingerprint"
+    _write_generated_bundle(old_generated, "bp-old")
+    _write_bundle_cache(old_bundle_cache, "bp-old")
+    _write_python_resource(old_env, "bp-old")
+    monkeypatch.setenv("MN_BLUEPRINT_PYTHON_ENVS_DIR", str(env_root))
+    monkeypatch.setenv("MN_RUNS_ROOT", str(runs_root))
+    monkeypatch.setenv("MN_GENERATED_BLUEPRINT_BUNDLES_DIR", str(generated_root))
+    monkeypatch.setenv("MN_BUNDLE_CACHE_DIR", str(bundle_cache_root))
+    mocker.patch("mn_cli.libs.blueprint_resources.shutil.which", return_value=None)
+
+    result = runner.invoke(app, ["blueprint", "uninstall", "--source", str(storage_dir)])
+
+    assert result.exit_code == 0
+    assert not storage_dir.exists()
+    assert not old_env.exists()
+    assert not old_run.exists()
+    assert not old_generated.exists()
+    assert not old_bundle_cache.exists()
+
+
 def test_blueprint_run_blueprint_repo_uses_repo_specific_cache(mocker, tmp_path):
     repo_url = "https://github.com/MirrorNeuronLab/customer-blueprints"
     custom_cache_root = tmp_path / "blueprint_repos"
@@ -246,14 +421,13 @@ def test_blueprint_run_blueprint_repo_malformed_index_errors(mocker, tmp_path):
     mock_run_bundle.assert_not_called()
 
 
-def test_blueprint_run_generates_python_source_bundle(mocker, tmp_path):
+def test_blueprint_run_generates_python_source_bundle(mocker, tmp_path, monkeypatch):
     storage_dir = tmp_path / "blueprints"
     generated_root = tmp_path / "generated"
     storage_dir.mkdir()
+    monkeypatch.setenv("MN_GENERATED_BLUEPRINT_BUNDLES_DIR", str(generated_root))
 
     def fake_expanduser(path):
-        if "generated_blueprint_bundles" in path:
-            return str(generated_root)
         return str(storage_dir)
 
     mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', side_effect=fake_expanduser)
