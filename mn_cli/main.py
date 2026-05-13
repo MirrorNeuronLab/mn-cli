@@ -1,13 +1,40 @@
+from importlib import metadata
+
 import typer
 from mn_cli import update_cmds
 from mn_cli.libs import job_cmds, run_cmds, sys_cmds
 from mn_cli.libs.blueprint_cmds import blueprint_app
 
+PACKAGE_NAME = "mirrorneuron-cli"
+FALLBACK_VERSION = "0.0.0"
+
 app = typer.Typer(help="MirrorNeuron CLI")
 
 
+def get_version() -> str:
+    try:
+        return metadata.version(PACKAGE_NAME)
+    except metadata.PackageNotFoundError:
+        return FALLBACK_VERSION
+
+
+def version_callback(value: bool):
+    if value:
+        typer.echo(f"mn {get_version()}")
+        raise typer.Exit()
+
+
 @app.callback()
-def main(ctx: typer.Context):
+def main(
+    ctx: typer.Context,
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=version_callback,
+        is_eager=True,
+        help="Show the installed MirrorNeuron CLI version.",
+    ),
+):
     update_cmds.maybe_prompt_for_update(ctx.invoked_subcommand)
 
 # Run commands

@@ -64,6 +64,12 @@ pip install -e .
 
 ## Usage
 
+Check the installed CLI version:
+
+```bash
+mn --version
+```
+
 Check the runtime:
 
 ```bash

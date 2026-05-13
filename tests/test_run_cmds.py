@@ -222,6 +222,41 @@ def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_pat
     assert "upload_paths" not in config
 
 
+def test_write_local_web_ui_handle_supports_gradio_without_static_dashboard(tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps(
+            {
+                "identity": {"blueprint_id": "bp-gradio", "name": "Blueprint Gradio"},
+                "web_ui": {
+                    "enabled": True,
+                    "output": {
+                        "adapter": "gradio",
+                        "title": "Blueprint Gradio",
+                        "host": "127.0.0.1",
+                        "port": 7870,
+                        "registration_script": "payloads/web_ui/register_dashboard.py",
+                    },
+                    "dashboard": {
+                        "registration": {"script": "payloads/web_ui/register_dashboard.py"},
+                    },
+                },
+            }
+        )
+    )
+
+    run_cmds._write_local_web_ui_handle(bundle_dir, "bp-gradio-run", env_overrides={})
+
+    web_ui = json.loads((tmp_path / "runs" / "bp-gradio-run" / "web_ui.json").read_text())
+    assert web_ui["adapter"] == "gradio"
+    assert web_ui["url"] == "http://127.0.0.1:7870/"
+    assert web_ui["metadata"]["registration_script"] == "payloads/web_ui/register_dashboard.py"
+
+
 def test_run_records_blueprint_run_id_mapping(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-abc")

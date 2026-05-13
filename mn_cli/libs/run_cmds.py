@@ -508,6 +508,38 @@ def _write_local_web_ui_handle(
 
     dashboard = web_ui.get("dashboard") if isinstance(web_ui.get("dashboard"), dict) else {}
     output = web_ui.get("output") if isinstance(web_ui.get("output"), dict) else {}
+    identity = config.get("identity") if isinstance(config.get("identity"), dict) else {}
+    adapter = output.get("adapter") or web_ui.get("kind") or "static_html"
+    runs_root = Path(env_overrides.get("MN_RUNS_ROOT") or os.getenv("MN_RUNS_ROOT") or "~/.mn/runs").expanduser()
+    run_dir = runs_root / blueprint_run_id
+    if adapter == "gradio":
+        host = output.get("host") or "127.0.0.1"
+        port = output.get("port") or 7860
+        inferred_url = output.get("custom_url") or output.get("url") or (f"http://{host}:{port}/" if port else "")
+        registration = dashboard.get("registration") if isinstance(dashboard.get("registration"), dict) else {}
+        handle = {
+            "adapter": "gradio",
+            "kind": "output",
+            "url": inferred_url,
+            "title": output.get("title") or identity.get("name") or bundle_dir.name,
+            "path": str(run_dir),
+            "status": "not_started" if not inferred_url else "configured",
+            "metadata": {
+                "blueprint_id": identity.get("blueprint_id"),
+                "run_id": blueprint_run_id,
+                "events_path": str(run_dir / "events.jsonl"),
+                "registered_by": "mn_cli",
+                "registration_script": output.get("registration_script") or registration.get("script"),
+                "launch_adapter": "gradio",
+            },
+        }
+        try:
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "web_ui.json").write_text(json.dumps(handle, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        except OSError:
+            logger.exception("Failed to write blueprint web UI handle for run_id=%s", blueprint_run_id)
+        return
+
     dashboard_path = dashboard.get("path") or output.get("path")
     if not isinstance(dashboard_path, str) or not dashboard_path:
         metadata = config.get("metadata") if isinstance(config.get("metadata"), dict) else {}
@@ -519,8 +551,6 @@ def _write_local_web_ui_handle(
     if not html_path.exists():
         return
 
-    runs_root = Path(env_overrides.get("MN_RUNS_ROOT") or os.getenv("MN_RUNS_ROOT") or "~/.mn/runs").expanduser()
-    run_dir = runs_root / blueprint_run_id
     video_source = _web_ui_video_source(config, bundle_dir)
     query = urllib.parse.urlencode(
         {
@@ -529,9 +559,8 @@ def _write_local_web_ui_handle(
             "pollMs": "2000",
         }
     )
-    identity = config.get("identity") if isinstance(config.get("identity"), dict) else {}
     handle = {
-        "adapter": output.get("adapter") or web_ui.get("kind") or "static_html",
+        "adapter": adapter,
         "kind": "output",
         "url": f"{html_path.as_uri()}?{query}",
         "title": output.get("title") or identity.get("name") or bundle_dir.name,
