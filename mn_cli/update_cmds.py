@@ -25,7 +25,6 @@ INSTALL_METADATA_FILE = DIR / "install_metadata.json"
 CHECK_INTERVAL_SECONDS = int(os.getenv("MN_UPDATE_CHECK_INTERVAL_SECONDS", "86400"))
 PYPI_PACKAGES = [
     "mirrorneuron-python-sdk",
-    "mirrorneuron-blueprint-support-skill",
     "mirrorneuron-cli",
     "mirrorneuron-api",
 ]
@@ -285,7 +284,6 @@ def _update_python_packages() -> None:
             "install",
             "--upgrade",
             "mirrorneuron-python-sdk",
-            "mirrorneuron-blueprint-support-skill[webui]",
             "mirrorneuron-cli",
             "mirrorneuron-api",
         ],

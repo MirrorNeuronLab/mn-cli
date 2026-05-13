@@ -111,3 +111,13 @@ def test_available_updates_compares_release_channels(mocker, tmp_path):
         "mirrorneuron-web-ui",
         "MirrorNeuron core",
     }
+
+
+def test_python_package_updates_exclude_blueprint_support_skill(mocker):
+    mock_run = mocker.patch("mn_cli.update_cmds.subprocess.run")
+
+    update_cmds._update_python_packages()
+
+    command = mock_run.call_args.args[0]
+    assert "mirrorneuron-blueprint-support-skill[webui]" not in command
+    assert "mirrorneuron-blueprint-support-skill" not in update_cmds.PYPI_PACKAGES
