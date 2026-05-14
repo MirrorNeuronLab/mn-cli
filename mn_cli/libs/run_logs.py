@@ -37,6 +37,7 @@ class JobLogWriter:
         )
         self.backup_count = int(os.getenv("MN_RUN_EVENT_LOG_BACKUP_COUNT", "5"))
         self.run_logger = self._build_run_logger()
+        self._load_existing_event_keys()
 
     def _build_run_logger(self) -> logging.Logger:
         run_logger = logging.getLogger(f"mn-cli.run.{self.job_id}")
@@ -141,6 +142,23 @@ class JobLogWriter:
             event.get("node"),
             event.get("message_id") or payload.get("message_id"),
         )
+
+    def _load_existing_event_keys(self) -> None:
+        for path in (self.events_file, self.run_events_file):
+            if path is None or not path.exists():
+                continue
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                self.run_logger.exception("Failed to load existing event keys from %s", path)
+                continue
+            for line in lines:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event, dict):
+                    self.seen.add(self._event_key(event))
 
     def record_web_ui_url(self, event: dict) -> Optional[str]:
         url = extract_web_ui_url(event)

@@ -130,6 +130,22 @@ def test_job_log_writer_deduplicates_events_and_records_web_ui_once():
     assert writer.record_web_ui_url(event) is None
 
 
+def test_job_log_writer_loads_existing_run_events(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    event = {
+        "timestamp": "2026-05-14T00:00:00Z",
+        "type": "door_camera_frame_tick_generated",
+        "agent_id": "door_camera_tick_source",
+        "payload": {"tick_seq": 1},
+    }
+    (run_dir / "events.jsonl").write_text(json.dumps(event) + "\n")
+
+    writer = JobLogWriter("unit-existing-events", run_dir=run_dir)
+
+    assert writer.write_event(event) is False
+
+
 def test_materialize_sent_email_copy_uses_safe_host_paths(tmp_path):
     materialize_sent_email_copy(
         tmp_path,

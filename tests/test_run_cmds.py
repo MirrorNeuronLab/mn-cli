@@ -588,6 +588,60 @@ def test_run_displays_live_job_type_and_follow_status(mocker, tmp_path):
     assert "Following: status running" in result.stdout
     assert "75%" not in result.stdout
 
+
+def test_live_web_ui_run_starts_background_event_relay(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="live-ui-run")
+    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-live-ui")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_pending"}),
+        json.dumps({"type": "job_running"}),
+    ])
+    mocker.patch(
+        'mn_cli.libs.run_cmds.client.get_job',
+        return_value=json.dumps({
+            "summary": {"status": "running"},
+            "job": {"status": "running"},
+            "recent_events": [],
+        }),
+    )
+    mock_process = mocker.Mock(pid=4242)
+    mock_popen = mocker.patch('mn_cli.libs.run_cmds.subprocess.Popen', return_value=mock_process)
+
+    bundle_dir = tmp_path / "live_ui_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "daemon": True,
+        "policies": {"stream_mode": "live"},
+        "nodes": [],
+    }))
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(json.dumps({
+        "identity": {"blueprint_id": "live-ui"},
+        "budgets": {"max_stream_duration_seconds": 120},
+        "web_ui": {
+            "enabled": True,
+            "output": {
+                "adapter": "custom",
+                "custom_url": "http://127.0.0.1:9999",
+                "refresh_seconds": 0.5,
+            },
+        },
+    }))
+
+    result = runner.invoke(app, ["run", str(bundle_dir), "--follow-seconds", "0"])
+
+    assert result.exit_code == 0
+    assert "Live event relay" in result.stdout
+    mock_popen.assert_called_once()
+    command = mock_popen.call_args.args[0]
+    assert command[:3] == [sys.executable, "-m", "mn_cli.libs.event_relay"]
+    assert "--max-seconds" in command
+    relay = json.loads((tmp_path / "runs" / "live-ui-run" / "event_relay.json").read_text())
+    assert relay["pid"] == 4242
+
+
 def test_run_uses_detach_log_seconds_env(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUN_DETACH_LOG_SECONDS", "4.5")
     mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-env-follow")

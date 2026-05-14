@@ -98,7 +98,7 @@ def _stream_and_format_events(
     job_id: str,
     log_writer: Optional[JobLogWriter] = None,
     follow_seconds: Optional[float] = None,
-):
+) -> str:
     log_writer = log_writer or JobLogWriter(job_id)
     log_dir = log_writer.log_dir
     follow_seconds = (
@@ -206,11 +206,19 @@ def _stream_and_format_events(
                     task_id=follow_task,
                 )
             console.print(generate_detached_panel(job_id, log_dir, status, log_writer.event_count))
+            status_text = status
         
     except KeyboardInterrupt:
         console.print("[yellow]Detached from log stream.[/yellow]")
         status, _data = _follow_job_events(job_id, log_writer, 0)
         console.print(generate_detached_panel(job_id, log_dir, status, log_writer.event_count))
+        status_text = status
+
+    if status_text == "Success":
+        return "completed"
+    if status_text == "Failed":
+        return "failed"
+    return str(status_text).lower()
 
 
 def _follow_job_events(
@@ -491,7 +499,16 @@ def run_bundle(
                 blueprint_revision=submission_metadata.get("blueprint_revision"),
             )
         )
-        _stream_and_format_events(job_id, log_writer, resolved_follow_seconds)
+        final_status = _stream_and_format_events(job_id, log_writer, resolved_follow_seconds)
+        if blueprint_run_dir is not None:
+            _start_background_event_relay_if_needed(
+                bundle_dir,
+                manifest_dict,
+                job_id,
+                blueprint_run_dir,
+                final_status,
+                config_overrides=config_overrides,
+            )
     except typer.Exit:
         raise
     except Exception as e:
@@ -710,6 +727,113 @@ def _write_local_web_ui_handle(
         return
 
     _write_static_web_ui_handle(bundle_dir, run_dir, blueprint_run_id, config)
+
+
+def _start_background_event_relay_if_needed(
+    bundle_dir: Path,
+    manifest_dict: dict[str, Any],
+    job_id: str,
+    run_dir: Path,
+    final_status: str,
+    *,
+    config_overrides: Optional[dict[str, Any]] = None,
+) -> None:
+    if final_status in FINAL_STATUSES:
+        return
+    if not _is_live_manifest(manifest_dict):
+        return
+    if os.getenv("MN_RUN_BACKGROUND_EVENT_RELAY", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return
+
+    config = load_blueprint_config(bundle_dir, config_overrides=config_overrides) or {}
+    web_ui = config.get("web_ui") if isinstance(config.get("web_ui"), dict) else {}
+    if not isinstance(web_ui, dict) or web_ui.get("enabled") is False:
+        return
+    if not (run_dir / "web_ui.json").exists() and not (run_dir / "ui.json").exists():
+        return
+
+    max_seconds = _background_event_relay_max_seconds(config)
+    poll_seconds = _background_event_relay_poll_seconds(config)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    log_path = run_dir / "event_relay.log"
+    command = [
+        sys.executable,
+        "-m",
+        "mn_cli.libs.event_relay",
+        "--job-id",
+        job_id,
+        "--run-dir",
+        str(run_dir),
+        "--poll-seconds",
+        f"{poll_seconds:g}",
+    ]
+    if max_seconds is not None:
+        command.extend(["--max-seconds", f"{max_seconds:g}"])
+
+    env = os.environ.copy()
+    env["MN_RUN_EVENT_RELAY_CHILD"] = "1"
+    with open(log_path, "a", encoding="utf-8") as relay_log:
+        process = subprocess.Popen(
+            command,
+            stdout=relay_log,
+            stderr=relay_log,
+            stdin=subprocess.DEVNULL,
+            close_fds=True,
+            start_new_session=True,
+            env=env,
+        )
+
+    relay_info = {
+        "job_id": job_id,
+        "pid": process.pid,
+        "poll_seconds": poll_seconds,
+        "max_seconds": max_seconds,
+        "log_path": str(log_path),
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    (run_dir / "event_relay.json").write_text(
+        json.dumps(relay_info, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    console.print("[green]Live event relay:[/green] keeping the local dashboard stream updated in the background.")
+
+
+def _is_live_manifest(manifest_dict: dict[str, Any]) -> bool:
+    policies = manifest_dict.get("policies") if isinstance(manifest_dict.get("policies"), dict) else {}
+    return manifest_dict.get("daemon") is True or policies.get("stream_mode") == "live"
+
+
+def _background_event_relay_poll_seconds(config: dict[str, Any]) -> float:
+    raw = os.getenv("MN_RUN_EVENT_RELAY_POLL_SECONDS")
+    if raw is not None:
+        try:
+            return max(float(raw), 0.1)
+        except ValueError:
+            return 1.0
+
+    web_ui = config.get("web_ui") if isinstance(config.get("web_ui"), dict) else {}
+    output = web_ui.get("output") if isinstance(web_ui.get("output"), dict) else {}
+    try:
+        return max(float(output.get("refresh_seconds", 1.0)), 0.1)
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _background_event_relay_max_seconds(config: dict[str, Any]) -> float | None:
+    raw = os.getenv("MN_RUN_EVENT_RELAY_MAX_SECONDS")
+    if raw is not None:
+        if raw.strip().lower() in {"", "0", "none", "infinity"}:
+            return None
+        try:
+            return max(float(raw), 0.0)
+        except ValueError:
+            return None
+
+    budgets = config.get("budgets") if isinstance(config.get("budgets"), dict) else {}
+    try:
+        return max(float(budgets.get("max_stream_duration_seconds", 3600)), 0.0)
+    except (TypeError, ValueError):
+        return 3600.0
 
 
 def _web_ui_registration_script(
