@@ -236,6 +236,7 @@ def test_resource_list_success(mocker):
     mock_resource = mocker.patch(
         'mn_cli.libs.resource_cmds.client.get_resource',
         return_value=json.dumps({"totals": {"cpu_cores": 8}, "limits": {"cpu": 100}}),
+        create=True,
     )
     result = runner.invoke(app, ["resource", "list"])
     assert result.exit_code == 0
@@ -247,6 +248,7 @@ def test_resource_set_success(mocker):
     mock_set = mocker.patch(
         'mn_cli.libs.resource_cmds.client.set_resource',
         return_value=json.dumps({"limits": {"cpu": 50, "gpu": 75}}),
+        create=True,
     )
     result = runner.invoke(app, ["resource", "set", "--cpu", "50", "--gpu", "75"])
     assert result.exit_code == 0

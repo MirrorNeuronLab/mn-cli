@@ -75,6 +75,8 @@ Check the runtime:
 ```bash
 mn nodes
 mn metrics
+mn resource list
+mn resource set --cpu 75 --gpu 50 --memory 75
 ```
 
 Submit and inspect a workflow:

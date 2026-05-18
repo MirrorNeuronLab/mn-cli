@@ -20,8 +20,16 @@ def list_resources():
 
 @resource_app.command(name="set")
 def set_resources(
-    cpu: Optional[int] = typer.Option(None, "--cpu", help="Maximum CPU use percentage: 25, 50, 75, or 100"),
-    gpu: Optional[int] = typer.Option(None, "--gpu", help="Maximum GPU use percentage: 25, 50, 75, or 100"),
+    cpu: Optional[int] = typer.Option(
+        None,
+        "--cpu",
+        help="Maximum CPU use percentage: 25, 50, 75, or 100",
+    ),
+    gpu: Optional[int] = typer.Option(
+        None,
+        "--gpu",
+        help="Maximum GPU use percentage: 25, 50, 75, or 100",
+    ),
     memory: Optional[int] = typer.Option(
         None,
         "--memory",
