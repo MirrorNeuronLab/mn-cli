@@ -2,8 +2,21 @@ import pytest
 import subprocess
 from io import StringIO
 from rich.console import Console
-from mn_cli.server_cmds import check_status, kill_tree, _start_server, find_web_ui_dir, _start_web_ui_if_installed, _print_service_endpoints
+from mn_cli.server_cmds import (
+    check_status,
+    kill_tree,
+    _resolve_mn_cookie,
+    _start_server,
+    find_web_ui_dir,
+    _start_web_ui_if_installed,
+    _print_service_endpoints,
+)
 import typer
+
+@pytest.fixture(autouse=True)
+def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
+    monkeypatch.delenv("MN_COOKIE", raising=False)
+    mocker.patch('mn_cli.server_cmds.DIR', tmp_path / ".mirror_neuron")
 
 def test_check_status_running(mocker, tmp_path):
     pid_file = tmp_path / "test.pid"
@@ -54,6 +67,23 @@ def test_kill_tree_term_fails(mocker):
     mocker.patch('mn_cli.server_cmds.subprocess.check_output', side_effect=subprocess.CalledProcessError(1, "pgrep"))
     kill_tree(1234)
     assert mock_kill.call_count == 2
+
+def test_resolve_mn_cookie_generates_persistent_non_default_cookie(tmp_path, mocker):
+    cookie_dir = tmp_path / "state"
+    mocker.patch('mn_cli.server_cmds.DIR', cookie_dir)
+
+    cookie = _resolve_mn_cookie()
+
+    assert cookie
+    assert cookie != "mirrorneuron"
+    assert (cookie_dir / "erlang.cookie").read_text().strip() == cookie
+    assert (cookie_dir / "erlang.cookie").stat().st_mode & 0o777 == 0o600
+    assert _resolve_mn_cookie() == cookie
+
+def test_resolve_mn_cookie_prefers_non_default_env(monkeypatch):
+    monkeypatch.setenv("MN_COOKIE", "operator-provided-cookie")
+
+    assert _resolve_mn_cookie() == "operator-provided-cookie"
 
 def test_start_server_already_running(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
@@ -190,6 +220,8 @@ def test_start_server_passes_slack_env_to_docker(mocker, tmp_path, monkeypatch):
     _start_server()
 
     docker_run = next(cmd for cmd in commands if cmd[:3] == ["docker", "run", "-d"])
+    cookie_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_COOKIE="))
+    assert cookie_env != "MN_COOKIE=mirrorneuron"
     assert ["-e", "SLACK_BOT_TOKEN"] == docker_run[
         docker_run.index("SLACK_BOT_TOKEN") - 1 : docker_run.index("SLACK_BOT_TOKEN") + 1
     ]

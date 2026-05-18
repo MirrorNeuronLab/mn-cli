@@ -1,5 +1,6 @@
 import os
 import signal
+import secrets
 import subprocess
 import time
 from pathlib import Path
@@ -54,6 +55,30 @@ def _web_ui_host() -> str:
 
 def _docker_publish_host(host: str) -> str:
     return "127.0.0.1" if host == "localhost" else host
+
+def _resolve_mn_cookie() -> str:
+    env_cookie = os.getenv("MN_COOKIE", "").strip()
+    if env_cookie and env_cookie != "mirrorneuron":
+        return env_cookie
+
+    cookie_file = DIR / "erlang.cookie"
+    try:
+        existing_cookie = cookie_file.read_text().strip()
+        if existing_cookie and existing_cookie != "mirrorneuron":
+            return existing_cookie
+    except FileNotFoundError:
+        pass
+
+    DIR.mkdir(parents=True, exist_ok=True)
+    generated_cookie = secrets.token_hex(32)
+    fd = os.open(cookie_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(f"{generated_cookie}\n")
+    try:
+        cookie_file.chmod(0o600)
+    except OSError:
+        logger.debug("Failed to chmod Erlang cookie file %s", cookie_file, exc_info=True)
+    return generated_cookie
 
 def check_status(pid_file: Path) -> int:
     if pid_file.exists():
@@ -245,6 +270,7 @@ def _start_server(ip: str = None):
         s.close()
         
     cmd.extend(["-e", f"MN_NODE_NAME=mirror_neuron@{local_ip}"])
+    cmd.extend(["-e", f"MN_COOKIE={_resolve_mn_cookie()}"])
     
     core_publish_host = _docker_publish_host(env["MN_CORE_HOST"])
     epmd_publish_host = _docker_publish_host(env["MN_EPMD_HOST"])
