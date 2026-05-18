@@ -35,6 +35,8 @@ CORE_REPO = os.getenv("MN_CORE_REPO", "MirrorNeuronLab/MirrorNeuron")
 def maybe_prompt_for_update(command_name: Optional[str] = None) -> None:
     if command_name in {"update", "stop"}:
         return
+    if _local_source_install():
+        return
     if os.getenv("MN_DISABLE_UPDATE_CHECK", "").lower() in {"1", "true", "yes"}:
         return
     if os.getenv("CI", "").lower() == "true":
@@ -73,6 +75,13 @@ def update(
     ),
 ) -> None:
     """Check for released package updates and optionally install them."""
+
+    if _local_source_install():
+        console.print(
+            "[yellow]Local source install detected; release updates are skipped. "
+            "Run install_local.sh from your checkout to refresh local components.[/yellow]"
+        )
+        return
 
     try:
         available = get_available_updates()
@@ -193,6 +202,17 @@ def _check_due() -> bool:
 def _record_check() -> None:
     CHECK_FILE.parent.mkdir(parents=True, exist_ok=True)
     CHECK_FILE.write_text(json.dumps({"checked_at": time.time()}))
+
+def _local_source_install() -> bool:
+    try:
+        data = json.loads(INSTALL_METADATA_FILE.read_text())
+    except Exception:
+        data = {}
+
+    if data.get("install_type") == "local_source":
+        return True
+
+    return (DIR / "core-source").exists() or (DIR / "cli-source").exists()
 
 
 def _json_url(url: str) -> dict:

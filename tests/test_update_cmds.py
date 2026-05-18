@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from typer.testing import CliRunner
 
 from mn_cli import update_cmds
@@ -7,6 +8,19 @@ from mn_cli.main import app
 
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def isolated_install_state(mocker, tmp_path):
+    mocker.patch("mn_cli.update_cmds.DIR", tmp_path / ".mirror_neuron")
+    mocker.patch(
+        "mn_cli.update_cmds.INSTALL_METADATA_FILE",
+        tmp_path / ".mirror_neuron" / "install_metadata.json",
+    )
+    mocker.patch(
+        "mn_cli.update_cmds.CHECK_FILE",
+        tmp_path / ".mirror_neuron" / ".update-check.json",
+    )
 
 
 def test_update_check_only_prints_available_updates(mocker):
@@ -50,6 +64,20 @@ def test_update_requires_ack_by_default(mocker):
     assert "Updating will stop all MirrorNeuron components" in result.stdout
     assert "Update cancelled" in result.stdout
     mock_perform.assert_not_called()
+
+
+def test_update_skips_release_flow_for_local_source_install(mocker, tmp_path):
+    metadata_file = tmp_path / "install_metadata.json"
+    metadata_file.write_text(json.dumps({"install_type": "local_source"}))
+    mocker.patch("mn_cli.update_cmds.INSTALL_METADATA_FILE", metadata_file)
+    mock_get_updates = mocker.patch("mn_cli.update_cmds.get_available_updates")
+
+    result = runner.invoke(app, ["update"])
+
+    assert result.exit_code == 0
+    assert "Local source install detected" in result.stdout
+    assert "Do you want to update now?" not in result.stdout
+    mock_get_updates.assert_not_called()
 
 
 def test_update_yes_stops_updates_and_restarts(mocker):
