@@ -2,7 +2,7 @@ from importlib import metadata
 
 import typer
 from mn_cli import update_cmds
-from mn_cli.libs import job_cmds, run_cmds, sys_cmds
+from mn_cli.libs import job_cmds, resource_cmds, run_cmds, sys_cmds
 from mn_cli.libs.blueprint_cmds import blueprint_app
 
 PACKAGE_NAME = "mirrorneuron-cli"
@@ -65,6 +65,7 @@ app.command(name="update")(update_cmds.update)
 
 # Sub-apps
 app.add_typer(blueprint_app, name="blueprint")
+app.add_typer(resource_cmds.resource_app, name="resource")
 
 if __name__ == "__main__":
     app()

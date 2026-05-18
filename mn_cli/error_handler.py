@@ -16,6 +16,8 @@ CONTEXT_MESSAGES = {
     "resume": "Error resuming job",
     "nodes": "Error fetching nodes",
     "metrics": "Error fetching metrics",
+    "resource list": "Error fetching resources",
+    "resource set": "Error setting resource limits",
     "dead_letters": "Error listing dead letters",
     "run bundle": "Error running bundle",
     "monitor stream": "Error fetching job",

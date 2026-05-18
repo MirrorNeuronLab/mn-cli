@@ -232,6 +232,28 @@ def test_metrics_success(mocker):
     assert '"running": 1' in result.stdout
 
 
+def test_resource_list_success(mocker):
+    mock_resource = mocker.patch(
+        'mn_cli.libs.resource_cmds.client.get_resource',
+        return_value=json.dumps({"totals": {"cpu_cores": 8}, "limits": {"cpu": 100}}),
+    )
+    result = runner.invoke(app, ["resource", "list"])
+    assert result.exit_code == 0
+    assert '"cpu_cores": 8' in result.stdout
+    mock_resource.assert_called_once()
+
+
+def test_resource_set_success(mocker):
+    mock_set = mocker.patch(
+        'mn_cli.libs.resource_cmds.client.set_resource',
+        return_value=json.dumps({"limits": {"cpu": 50, "gpu": 75}}),
+    )
+    result = runner.invoke(app, ["resource", "set", "--cpu", "50", "--gpu", "75"])
+    assert result.exit_code == 0
+    assert '"cpu": 50' in result.stdout
+    mock_set.assert_called_once_with({"cpu": 50, "gpu": 75})
+
+
 def test_dead_letters_success(mocker):
     mocker.patch(
         'mn_cli.libs.job_cmds.client.stream_events',
