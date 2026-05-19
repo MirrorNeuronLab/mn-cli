@@ -22,7 +22,7 @@ class CliConfig:
                 os.getenv("MN_CORE_GRPC_TARGET", f"{core_host}:50051"),
             ),
             grpc_timeout_seconds=_timeout(),
-            grpc_auth_token=os.getenv("MN_GRPC_AUTH_TOKEN", ""),
+            grpc_auth_token=_grpc_auth_token(),
             log_path=Path(
                 os.getenv(
                     "MN_CLI_LOG_PATH",
@@ -41,3 +41,14 @@ def _timeout() -> float | None:
         return float(value)
     except ValueError as exc:
         raise ValueError("MN_GRPC_TIMEOUT_SECONDS must be a number, 0, or none") from exc
+
+
+def _grpc_auth_token() -> str:
+    token = os.getenv("MN_GRPC_AUTH_TOKEN")
+    if token:
+        return token
+
+    try:
+        return (Path.home() / ".mirror_neuron" / "grpc_auth.token").read_text().strip()
+    except OSError:
+        return ""

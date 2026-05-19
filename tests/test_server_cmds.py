@@ -5,6 +5,7 @@ from rich.console import Console
 from mn_cli.server_cmds import (
     check_status,
     kill_tree,
+    _resolve_grpc_auth_token,
     _resolve_mn_cookie,
     _start_server,
     find_web_ui_dir,
@@ -16,6 +17,7 @@ import typer
 @pytest.fixture(autouse=True)
 def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_COOKIE", raising=False)
+    monkeypatch.delenv("MN_GRPC_AUTH_TOKEN", raising=False)
     mocker.patch('mn_cli.server_cmds.DIR', tmp_path / ".mirror_neuron")
 
 def test_check_status_running(mocker, tmp_path):
@@ -84,6 +86,22 @@ def test_resolve_mn_cookie_prefers_non_default_env(monkeypatch):
     monkeypatch.setenv("MN_COOKIE", "operator-provided-cookie")
 
     assert _resolve_mn_cookie() == "operator-provided-cookie"
+
+def test_resolve_grpc_auth_token_generates_persistent_token(tmp_path, mocker):
+    token_dir = tmp_path / "state"
+    mocker.patch('mn_cli.server_cmds.DIR', token_dir)
+
+    token = _resolve_grpc_auth_token()
+
+    assert token
+    assert (token_dir / "grpc_auth.token").read_text().strip() == token
+    assert (token_dir / "grpc_auth.token").stat().st_mode & 0o777 == 0o600
+    assert _resolve_grpc_auth_token() == token
+
+def test_resolve_grpc_auth_token_prefers_env(monkeypatch):
+    monkeypatch.setenv("MN_GRPC_AUTH_TOKEN", "auth-token")
+
+    assert _resolve_grpc_auth_token() == "auth-token"
 
 def test_start_server_already_running(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
@@ -221,7 +239,9 @@ def test_start_server_passes_slack_env_to_docker(mocker, tmp_path, monkeypatch):
 
     docker_run = next(cmd for cmd in commands if cmd[:3] == ["docker", "run", "-d"])
     cookie_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_COOKIE="))
+    auth_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_GRPC_AUTH_TOKEN="))
     assert cookie_env != "MN_COOKIE=mirrorneuron"
+    assert auth_env != "MN_GRPC_AUTH_TOKEN="
     assert ["-e", "SLACK_BOT_TOKEN"] == docker_run[
         docker_run.index("SLACK_BOT_TOKEN") - 1 : docker_run.index("SLACK_BOT_TOKEN") + 1
     ]

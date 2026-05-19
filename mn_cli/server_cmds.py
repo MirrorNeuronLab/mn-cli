@@ -80,6 +80,30 @@ def _resolve_mn_cookie() -> str:
         logger.debug("Failed to chmod Erlang cookie file %s", cookie_file, exc_info=True)
     return generated_cookie
 
+def _resolve_grpc_auth_token() -> str:
+    env_token = os.getenv("MN_GRPC_AUTH_TOKEN", "").strip()
+    if env_token:
+        return env_token
+
+    token_file = DIR / "grpc_auth.token"
+    try:
+        existing_token = token_file.read_text().strip()
+        if existing_token:
+            return existing_token
+    except FileNotFoundError:
+        pass
+
+    DIR.mkdir(parents=True, exist_ok=True)
+    generated_token = secrets.token_hex(32)
+    fd = os.open(token_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(f"{generated_token}\n")
+    try:
+        token_file.chmod(0o600)
+    except OSError:
+        logger.debug("Failed to chmod gRPC auth token file %s", token_file, exc_info=True)
+    return generated_token
+
 def check_status(pid_file: Path) -> int:
     if pid_file.exists():
         try:
@@ -241,6 +265,8 @@ def _start_server(ip: str = None):
     env.setdefault("MN_DIST_HOST", _dist_host())
     env.setdefault("MN_WEB_UI_HOST", _web_ui_host())
     env.setdefault("MN_CORE_GRPC_TARGET", f"{env['MN_CORE_HOST']}:{os.getenv('MN_GRPC_PORT', '50051')}")
+    if not env.get("MN_GRPC_AUTH_TOKEN"):
+        env["MN_GRPC_AUTH_TOKEN"] = _resolve_grpc_auth_token()
     if ip:
         env["MN_CLUSTER_NODES"] = ip
 
@@ -271,6 +297,7 @@ def _start_server(ip: str = None):
         
     cmd.extend(["-e", f"MN_NODE_NAME=mirror_neuron@{local_ip}"])
     cmd.extend(["-e", f"MN_COOKIE={_resolve_mn_cookie()}"])
+    cmd.extend(["-e", f"MN_GRPC_AUTH_TOKEN={env['MN_GRPC_AUTH_TOKEN']}"])
     
     core_publish_host = _docker_publish_host(env["MN_CORE_HOST"])
     epmd_publish_host = _docker_publish_host(env["MN_EPMD_HOST"])
