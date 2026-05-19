@@ -10,6 +10,7 @@ class CliConfig:
     grpc_target: str = "localhost:50051"
     grpc_timeout_seconds: float | None = 10.0
     grpc_auth_token: str = ""
+    grpc_admin_token: str = ""
     log_path: Path = Path.home() / ".mn" / "logs" / "cli.log"
     output_mode: str = "rich"
 
@@ -23,6 +24,7 @@ class CliConfig:
             ),
             grpc_timeout_seconds=_timeout(),
             grpc_auth_token=_grpc_auth_token(),
+            grpc_admin_token=_grpc_admin_token(),
             log_path=Path(
                 os.getenv(
                     "MN_CLI_LOG_PATH",
@@ -50,5 +52,16 @@ def _grpc_auth_token() -> str:
 
     try:
         return (Path.home() / ".mirror_neuron" / "grpc_auth.token").read_text().strip()
+    except OSError:
+        return ""
+
+
+def _grpc_admin_token() -> str:
+    token = os.getenv("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN")
+    if token:
+        return token
+
+    try:
+        return (Path.home() / ".mirror_neuron" / "grpc_admin.token").read_text().strip()
     except OSError:
         return ""

@@ -55,7 +55,8 @@ pip install -e .
 | `MN_GRPC_TARGET` | `localhost:50051` | Core gRPC target. |
 | `MN_CORE_GRPC_TARGET` | unset | Fallback core gRPC target. |
 | `MN_GRPC_TIMEOUT_SECONDS` | `10` | RPC timeout. Use `0` or `none` to disable. |
-| `MN_GRPC_AUTH_TOKEN` | unset | Optional bearer metadata for protected gateways. |
+| `MN_GRPC_AUTH_TOKEN` | `~/.mirror_neuron/grpc_auth.token` when present | Optional bearer metadata for protected gateways. |
+| `MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN` | unset | Admin token for destructive gRPC operations such as `mn clear`; falls back to `~/.mirror_neuron/grpc_admin.token`. |
 | `MN_CLI_LOG_PATH` | `~/.mn/logs/cli.log` | CLI log file path. |
 | `MN_CLI_OUTPUT` | `rich` | Set to `plain` to disable Rich formatting. |
 | `MN_DISABLE_UPDATE_CHECK` | unset | Set to `1`, `true`, or `yes` to disable automatic update checks. |
