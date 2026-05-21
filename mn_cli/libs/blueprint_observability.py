@@ -16,7 +16,7 @@ def load_observability_api() -> tuple[Callable[..., list[dict[str, Any]]], Calla
         from mn_blueprint_support.observability import list_runs, load_run, read_run_events
     except ModuleNotFoundError:
         repo_root = Path(__file__).resolve().parents[3]
-        support_src = repo_root / "mn-skills" / "blueprint_support_skill" / "src"
+        support_src = repo_root / "mn-skills" / "blueprint-support-skill" / "src"
         if support_src.exists() and str(support_src) not in sys.path:
             sys.path.insert(0, str(support_src))
         try:

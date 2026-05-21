@@ -1037,7 +1037,7 @@ def _launch_blueprint_web_ui_command(
 
 def _inject_local_blueprint_support_pythonpath(env: dict[str, str]) -> None:
     repo_root = Path(__file__).resolve().parents[3]
-    support_src = repo_root / "mn-skills" / "blueprint_support_skill" / "src"
+    support_src = repo_root / "mn-skills" / "blueprint-support-skill" / "src"
     if not support_src.is_dir():
         return
     current = env.get("PYTHONPATH")
