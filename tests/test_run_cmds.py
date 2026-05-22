@@ -3,6 +3,8 @@ import logging
 import re
 import sys
 import uuid
+from pathlib import Path
+import pytest
 from logging.handlers import RotatingFileHandler
 from typer.testing import CliRunner
 from mn_cli.main import app
@@ -607,6 +609,95 @@ def test_write_local_web_ui_handle_launches_shared_gradio_support_module(tmp_pat
     assert "http://localhost:7871" in command
     assert popen.call_args.kwargs["env"]["MN_BLUEPRINT_WEB_UI_PORT"] == "7871"
     assert not (tmp_path / "runs" / "bp-shared-gradio-run" / "ui.json").exists()
+
+
+def test_run_starts_pre_launch_hook_before_submit(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-pre-launch")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_completed"}),
+    ])
+
+    bundle_dir = tmp_path / "pre_launch_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({"nodes": []}))
+    script_path = bundle_dir / "scripts" / "pre-launch.sh"
+    script_path.parent.mkdir()
+    script_path.write_text("#!/usr/bin/env bash\n")
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(json.dumps({
+        "identity": {"blueprint_id": "pre-launch"},
+        "video_source": {"uri": "rtsp://127.0.0.1:8554/video-watch"},
+    }))
+
+    process = mocker.Mock(pid=4242)
+    process.poll.return_value = None
+
+    def fake_popen(_command, **kwargs):
+        env = kwargs["env"]
+        Path(env["MN_PRE_LAUNCH_READY_FILE"]).write_text("ready\n")
+        return process
+
+    popen = mocker.patch("mn_cli.libs.run_cmds.subprocess.Popen", side_effect=fake_popen)
+
+    run_cmds.run_bundle(str(bundle_dir), follow_seconds=0)
+
+    command = popen.call_args.args[0]
+    env = popen.call_args.kwargs["env"]
+    assert command == ["bash", str(script_path.resolve())]
+    assert env["MN_RUN_ID"].startswith("pre-launch-")
+    assert env["MN_BLUEPRINT_BUNDLE_DIR"] == str(bundle_dir)
+    assert json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])["video_source"]["uri"].startswith("rtsp://")
+    process_info = json.loads((tmp_path / "runs" / env["MN_RUN_ID"] / "pre_launch_process.json").read_text())
+    assert process_info["pid"] == 4242
+    assert process_info["script"] == str(script_path.resolve())
+
+
+def test_run_cleans_pre_launch_hook_on_validation_failure(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job')
+    mock_killpg = mocker.patch("mn_cli.libs.run_cmds.os.killpg")
+    mocker.patch("mn_cli.libs.run_cmds.os.kill")
+
+    bundle_dir = tmp_path / "pre_launch_validation_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "nodes": [],
+        "input_validation": {
+            "rules": [
+                {
+                    "name": "model_url",
+                    "type": "pattern",
+                    "path": "llm.api_base",
+                    "pattern": "^https?://",
+                }
+            ]
+        },
+    }))
+    script_path = bundle_dir / "scripts" / "pre-launch.sh"
+    script_path.parent.mkdir()
+    script_path.write_text("#!/usr/bin/env bash\n")
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(json.dumps({
+        "identity": {"blueprint_id": "pre-launch-validation"},
+        "llm": {"api_base": "not-a-url"},
+    }))
+    process = mocker.Mock(pid=4343)
+    process.poll.return_value = None
+
+    def fake_popen(_command, **kwargs):
+        Path(kwargs["env"]["MN_PRE_LAUNCH_READY_FILE"]).write_text("ready\n")
+        return process
+
+    mocker.patch("mn_cli.libs.run_cmds.subprocess.Popen", side_effect=fake_popen)
+
+    with pytest.raises(Exception):
+        run_cmds.run_bundle(str(bundle_dir), follow_seconds=0)
+
+    mock_submit.assert_not_called()
+    mock_killpg.assert_any_call(4343, 15)
 
 
 def test_run_records_blueprint_run_id_mapping(mocker, tmp_path, monkeypatch):

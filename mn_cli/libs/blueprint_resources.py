@@ -15,7 +15,15 @@ RESOURCE_METADATA_FILE = ".mn-blueprint-resource.json"
 DEFAULT_TEMP_DIR = "/tmp/mirror_neuron"
 DOCKER_LABEL_KEYS = ("mirrorneuron.blueprint_id", "com.mirrorneuron.blueprint_id")
 DOCKER_NAME_PREFIXES = ("mn-blueprint-", "mirror-neuron-blueprint-")
-RUN_METADATA_FILES = ("run.json", "job.json", "ui.json", "web_ui.json", "web_ui_process.json", "config.json")
+RUN_METADATA_FILES = (
+    "run.json",
+    "job.json",
+    "ui.json",
+    "web_ui.json",
+    "web_ui_process.json",
+    "pre_launch_process.json",
+    "config.json",
+)
 GENERATED_BUNDLE_METADATA_FILES = ("manifest.json", "config/default.json", "config.json", "scenario.json")
 BUNDLE_CACHE_METADATA_FILES = ("manifest.json", "config/default.json", "config.json", "scenario.json")
 
@@ -245,6 +253,7 @@ def cleanup_run_records(
                 include_dead=include_dead,
             )
             if action["remove"]:
+                cleanup_pre_launch_process(child, dry_run=dry_run, summary=summary)
                 cleanup_web_ui_process(child, dry_run=dry_run, summary=summary)
                 remove_path(child, dry_run=dry_run)
                 removed_run_ids.add(child.name)
@@ -277,17 +286,59 @@ def cleanup_web_ui_process(
     summary: dict[str, Any],
     reason: str = "run_record_removed",
 ) -> None:
-    process_info = read_json_object(run_dir / "web_ui_process.json")
+    cleanup_recorded_process(
+        run_dir,
+        metadata_name="web_ui_process.json",
+        invalid_reason="invalid_web_ui_pid",
+        not_running_reason="web_ui_process_not_running",
+        label="web UI",
+        dry_run=dry_run,
+        summary=summary,
+        reason=reason,
+    )
+
+
+def cleanup_pre_launch_process(
+    run_dir: Path,
+    *,
+    dry_run: bool,
+    summary: dict[str, Any],
+    reason: str = "run_record_removed",
+) -> None:
+    cleanup_recorded_process(
+        run_dir,
+        metadata_name="pre_launch_process.json",
+        invalid_reason="invalid_pre_launch_pid",
+        not_running_reason="pre_launch_process_not_running",
+        label="pre-launch",
+        dry_run=dry_run,
+        summary=summary,
+        reason=reason,
+    )
+
+
+def cleanup_recorded_process(
+    run_dir: Path,
+    *,
+    metadata_name: str,
+    invalid_reason: str,
+    not_running_reason: str,
+    label: str,
+    dry_run: bool,
+    summary: dict[str, Any],
+    reason: str,
+) -> None:
+    process_info = read_json_object(run_dir / metadata_name)
     if not process_info:
         return
     try:
         pid = int(process_info.get("pid"))
     except (TypeError, ValueError):
-        summary["process_skipped"].append({"path": str(run_dir), "reason": "invalid_web_ui_pid"})
+        summary["process_skipped"].append({"path": str(run_dir), "reason": invalid_reason})
         return
 
     if not process_is_running(pid):
-        summary["process_skipped"].append({"path": str(run_dir), "pid": pid, "reason": "web_ui_process_not_running"})
+        summary["process_skipped"].append({"path": str(run_dir), "pid": pid, "reason": not_running_reason})
         return
 
     if dry_run:
@@ -299,17 +350,17 @@ def cleanup_web_ui_process(
         os.killpg(pid, signal.SIGTERM)
         signal_sent = True
     except ProcessLookupError:
-        summary["process_skipped"].append({"path": str(run_dir), "pid": pid, "reason": "web_ui_process_not_running"})
+        summary["process_skipped"].append({"path": str(run_dir), "pid": pid, "reason": not_running_reason})
         return
     except OSError:
         try:
             os.kill(pid, signal.SIGTERM)
             signal_sent = True
         except ProcessLookupError:
-            summary["process_skipped"].append({"path": str(run_dir), "pid": pid, "reason": "web_ui_process_not_running"})
+            summary["process_skipped"].append({"path": str(run_dir), "pid": pid, "reason": not_running_reason})
             return
         except OSError as exc:
-            summary["errors"].append(f"failed to stop web UI process {pid} for {run_dir}: {exc}")
+            summary["errors"].append(f"failed to stop {label} process {pid} for {run_dir}: {exc}")
             return
 
     if signal_sent:
@@ -330,7 +381,7 @@ def cleanup_web_ui_process(
             except ProcessLookupError:
                 pass
             except OSError as exc:
-                summary["errors"].append(f"failed to force-stop web UI process {pid} for {run_dir}: {exc}")
+                summary["errors"].append(f"failed to force-stop {label} process {pid} for {run_dir}: {exc}")
                 return
 
     summary["process_removed"].append({"path": str(run_dir), "pid": pid, "reason": reason})

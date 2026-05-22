@@ -2,6 +2,7 @@ import typer
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -30,8 +31,10 @@ from mn_cli.libs.run_manifest import (
     load_blueprint_config,
     prepare_manifest_for_submission,
     run_mode_label as _run_mode_label,
+    with_shared_run_store_config as _with_shared_run_store_config,
 )
 from mn_cli.libs.blueprint_observability import make_blueprint_run_id as _make_blueprint_run_id
+from mn_cli.libs.blueprint_resources import cleanup_pre_launch_process
 from mn_cli.shared import console, client, logger
 from mn_cli.error_handler import handle_cli_error
 from mn_sdk import (
@@ -43,6 +46,7 @@ from mn_sdk import (
 
 FINAL_STATUSES = {"completed", "failed", "cancelled"}
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+PRE_LAUNCH_SCRIPT = Path("scripts/pre-launch.sh")
 _HELPER_COMPAT = (
     _add_mn_llm_aliases,
     _blueprint_runtime_environment,
@@ -535,6 +539,8 @@ def run_bundle(
     force: bool = False,
 ):
     """Run a bundle after applying optional runtime metadata and environment."""
+    pre_launch_process: subprocess.Popen[Any] | None = None
+    pre_launch_run_dir: Path | None = None
     try:
         env_overrides = dict(env_overrides or {})
         submission_metadata = dict(submission_metadata or {})
@@ -580,6 +586,15 @@ def run_bundle(
             submission_metadata,
             config_overrides=config_overrides,
         )
+        blueprint_run_id = submission_metadata.get("blueprint_run_id") or env_overrides.get("MN_RUN_ID")
+        if blueprint_run_id:
+            pre_launch_run_dir = _blueprint_run_dir(str(blueprint_run_id), env_overrides)
+            pre_launch_process = _start_pre_launch_hook(
+                bundle_dir,
+                str(blueprint_run_id),
+                env_overrides=env_overrides,
+                config_overrides=config_overrides,
+            )
         if not force:
             _validate_manifest_inputs_or_exit(
                 bundle_dir,
@@ -610,7 +625,6 @@ def run_bundle(
                     with open(filepath, "rb") as f:
                         payloads[rel_path] = f.read()
 
-        blueprint_run_id = submission_metadata.get("blueprint_run_id") or env_overrides.get("MN_RUN_ID")
         blueprint_run_dir = _blueprint_run_dir(blueprint_run_id, env_overrides) if blueprint_run_id else None
         job_id = client.submit_job(manifest, payloads, force=force)
         log_writer = JobLogWriter(job_id, run_dir=blueprint_run_dir)
@@ -650,9 +664,32 @@ def run_bundle(
                 final_status,
                 config_overrides=config_overrides,
             )
+            if final_status in FINAL_STATUSES:
+                cleanup_pre_launch_process(
+                    blueprint_run_dir,
+                    dry_run=False,
+                    summary={"process_removed": [], "process_skipped": [], "errors": []},
+                    reason=f"job_{final_status}",
+                )
     except typer.Exit:
+        _terminate_pre_launch_process(pre_launch_process, reason="launch_failed")
+        if pre_launch_run_dir is not None:
+            cleanup_pre_launch_process(
+                pre_launch_run_dir,
+                dry_run=False,
+                summary={"process_removed": [], "process_skipped": [], "errors": []},
+                reason="launch_failed",
+            )
         raise
     except Exception as e:
+        _terminate_pre_launch_process(pre_launch_process, reason="launch_failed")
+        if pre_launch_run_dir is not None:
+            cleanup_pre_launch_process(
+                pre_launch_run_dir,
+                dry_run=False,
+                summary={"process_removed": [], "process_skipped": [], "errors": []},
+                reason="launch_failed",
+            )
         handle_cli_error(e, console, 'run bundle')
         raise typer.Exit(1)
 
@@ -798,6 +835,140 @@ def _write_blueprint_job_mapping(
 def _blueprint_run_dir(blueprint_run_id: str, env_overrides: dict[str, str]) -> Path:
     runs_root = Path(env_overrides.get("MN_RUNS_ROOT") or os.getenv("MN_RUNS_ROOT") or "~/.mn/runs").expanduser()
     return runs_root / blueprint_run_id
+
+
+def _start_pre_launch_hook(
+    bundle_dir: Path,
+    blueprint_run_id: str,
+    *,
+    env_overrides: dict[str, str],
+    config_overrides: Optional[dict[str, Any]] = None,
+) -> subprocess.Popen[Any] | None:
+    script_path = (bundle_dir / PRE_LAUNCH_SCRIPT).resolve()
+    if not script_path.is_file():
+        return None
+
+    run_dir = _blueprint_run_dir(blueprint_run_id, env_overrides)
+    runs_root = run_dir.parent
+    run_dir.mkdir(parents=True, exist_ok=True)
+    ready_file = run_dir / "pre_launch.ready"
+    try:
+        ready_file.unlink()
+    except FileNotFoundError:
+        pass
+
+    config = load_blueprint_config(bundle_dir, config_overrides=config_overrides)
+    config = _with_shared_run_store_config(config, blueprint_run_id, str(runs_root))
+    runtime_env = _blueprint_runtime_environment(
+        bundle_dir,
+        config=config,
+        config_overrides=config_overrides,
+    )
+
+    env = os.environ.copy()
+    env.update(runtime_env)
+    env.update({key: str(value) for key, value in (env_overrides or {}).items() if value is not None})
+    env.update(
+        {
+            "MN_RUN_ID": blueprint_run_id,
+            "MN_RUN_DIR": str(run_dir),
+            "MN_RUNS_ROOT": str(runs_root),
+            "MN_BLUEPRINT_BUNDLE_DIR": str(bundle_dir),
+            "MN_BLUEPRINT_CONFIG_JSON": json.dumps(config, sort_keys=True),
+            "MN_PRE_LAUNCH_READY_FILE": str(ready_file),
+        }
+    )
+
+    command = ["bash", str(script_path)]
+    log_path = run_dir / "pre_launch.log"
+    try:
+        with log_path.open("a", encoding="utf-8") as log_file:
+            process = subprocess.Popen(
+                command,
+                cwd=bundle_dir,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                env=env,
+                start_new_session=True,
+            )
+    except OSError as exc:
+        raise RuntimeError(f"Failed to start blueprint pre-launch hook: {exc}") from exc
+
+    process_info = {
+        "pid": process.pid,
+        "command": command,
+        "script": str(script_path),
+        "log": str(log_path),
+        "ready_file": str(ready_file),
+        "run_id": blueprint_run_id,
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    (run_dir / "pre_launch_process.json").write_text(
+        json.dumps(process_info, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    try:
+        _wait_for_pre_launch_ready(run_dir, process, ready_file)
+    except Exception:
+        _terminate_pre_launch_process(process, reason="pre_launch_failed")
+        raise
+
+    console.print("[green]Blueprint pre-launch hook ready:[/green] scripts/pre-launch.sh")
+    return process
+
+
+def _wait_for_pre_launch_ready(run_dir: Path, process: subprocess.Popen[Any], ready_file: Path) -> None:
+    try:
+        timeout = max(float(os.getenv("MN_PRE_LAUNCH_TIMEOUT_SECONDS", "30")), 0)
+    except ValueError:
+        timeout = 30.0
+    deadline = time.monotonic() + timeout
+    while time.monotonic() <= deadline:
+        if ready_file.exists():
+            return
+        poll = getattr(process, "poll", None)
+        if callable(poll) and poll() is not None:
+            raise RuntimeError(
+                f"Blueprint pre-launch hook exited before becoming ready. See {run_dir / 'pre_launch.log'}."
+            )
+        time.sleep(0.1)
+    raise RuntimeError(
+        f"Blueprint pre-launch hook timed out after {timeout:g}s. See {run_dir / 'pre_launch.log'}."
+    )
+
+
+def _terminate_pre_launch_process(process: subprocess.Popen[Any] | None, *, reason: str) -> None:
+    if process is None:
+        return
+    poll = getattr(process, "poll", None)
+    if callable(poll) and poll() is not None:
+        return
+    pid = getattr(process, "pid", None)
+    if not isinstance(pid, int):
+        try:
+            process.terminate()
+        except OSError:
+            pass
+        return
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except OSError:
+        try:
+            process.terminate()
+        except OSError:
+            pass
+    try:
+        process.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except OSError:
+            try:
+                process.kill()
+            except OSError:
+                pass
+    logger.info("Stopped blueprint pre-launch hook pid=%s reason=%s", pid, reason)
 
 
 def _write_local_web_ui_handle(

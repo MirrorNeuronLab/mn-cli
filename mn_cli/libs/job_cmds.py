@@ -4,7 +4,7 @@ from pathlib import Path
 from rich.table import Table
 from mn_cli.shared import console, client, logger
 from mn_cli.error_handler import handle_cli_error
-from mn_cli.libs.blueprint_resources import cleanup_web_ui_process
+from mn_cli.libs.blueprint_resources import cleanup_pre_launch_process, cleanup_web_ui_process
 import typer
 
 
@@ -87,6 +87,7 @@ def _cleanup_cancelled_job_web_ui(job_id: str) -> None:
         return
 
     summary = {"process_removed": [], "process_skipped": [], "errors": []}
+    cleanup_pre_launch_process(run_dir, dry_run=False, summary=summary, reason="job_cancelled")
     cleanup_web_ui_process(run_dir, dry_run=False, summary=summary, reason="job_cancelled")
     for error in summary["errors"]:
         logger.warning("Failed to cleanup web UI for cancelled job %s: %s", job_id, error)
