@@ -120,6 +120,7 @@ mn blueprint cleanup
 mn blueprint cleanup --blueprint-id <blueprint_id>
 mn blueprint uninstall
 mn blueprint run <blueprint_id>
+mn blueprint run <blueprint_id> --force
 mn blueprint --blueprint-repo https://github.com/MirrorNeuronLab/customer-blueprints run <blueprint_id>
 mn blueprint run ./path/to/bundle_or_source_blueprint
 mn blueprint run <blueprint_id> --offline
@@ -138,6 +139,8 @@ mn blueprint export <run_id> --format html
 ```
 
 Catalog runs use the cached blueprint library by default. Run `mn blueprint update` or pass `--update` when you want to refresh the local cache.
+
+`mn validate` runs manifest checks plus any `input_validation.rules` declared by the bundle. `mn run` and `mn blueprint run` run those input checks before submitting by default; pass `--force` only when you intentionally want runtime to bypass input validation and manifest requirements for that run.
 
 `mn blueprint update` also checks for blueprints removed from the catalog and cleans blueprint-owned runtime resources, including cached Python virtualenvs, `~/.mn/runs/<run_id>` records, `~/.mn/generated_blueprint_bundles/<run_id>` bundles, local bundle-cache entries, and Docker resources labelled with `mirrorneuron.blueprint_id=<blueprint_id>` or `com.mirrorneuron.blueprint_id=<blueprint_id>`. Use `mn blueprint cleanup` to run the same dead-resource check manually, or `mn blueprint cleanup --blueprint-id <id>` to remove resources for one deleted blueprint. Use `--dry-run` to preview removals. Cleanup is lifecycle-driven and explicit; there is no hidden scheduled housekeeping job.
 

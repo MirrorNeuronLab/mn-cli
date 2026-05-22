@@ -130,6 +130,7 @@ def _run_resolved_blueprint(
     revision: Optional[str],
     source_label: str,
     follow_seconds: Optional[float],
+    force: bool,
 ) -> None:
     shared_run_id = run_id or _make_blueprint_run_id(blueprint_id)
     console.print(f"[green]Blueprint '{display_name}' validated. Running...[/green]")
@@ -153,6 +154,7 @@ def _run_resolved_blueprint(
             "blueprint_source": source_label,
         },
         config_overrides=config_overrides,
+        force=force,
     )
 
 
@@ -340,6 +342,7 @@ def blueprint_run(
     offline: bool = typer.Option(False, "--offline", help="Use only local blueprint files; never clone, fetch, or pull."),
     revision: Optional[str] = typer.Option(None, "--revision", help="Checkout a specific git revision before running."),
     follow_seconds: Optional[float] = typer.Option(None, "--follow-seconds", help="Seconds to follow runtime events before detaching."),
+    force: bool = typer.Option(False, "--force", help="Run even if blueprint input validation or runtime requirements fail."),
 ):
     """Run a blueprint by catalog name."""
     _reject_local_blueprint_path(blueprint_path_name)
@@ -384,6 +387,7 @@ def blueprint_run(
         revision=resolved_revision,
         source_label=str(storage_dir),
         follow_seconds=follow_seconds,
+        force=force,
     )
 
 

@@ -34,6 +34,11 @@ from mn_cli.libs.run_manifest import (
 from mn_cli.libs.blueprint_observability import make_blueprint_run_id as _make_blueprint_run_id
 from mn_cli.shared import console, client, logger
 from mn_cli.error_handler import handle_cli_error
+from mn_sdk import (
+    run_input_validation,
+    validate_input_validation_spec,
+    validate_requirements_spec,
+)
 
 FINAL_STATUSES = {"completed", "failed", "cancelled"}
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -321,10 +326,19 @@ def validate(bundle_path: str):
                 console.print(f"[red]Error: {error}[/red]")
             raise typer.Exit(1)
 
+        manifest_spec_errors = validate_requirements_spec(manifest) + validate_input_validation_spec(manifest)
+        if manifest_spec_errors:
+            for error in manifest_spec_errors:
+                console.print(f"[red]Error: {error}[/red]")
+            raise typer.Exit(1)
+
+        validation_result = _validate_manifest_inputs_or_exit(bundle_dir, manifest)
+
         console.print(f"[green]✓ Job bundle at '{bundle_path}' is valid.[/green]")
         console.print(f"  - Job Name: {manifest.get('job_name')}")
         console.print(f"  - Graph ID: {manifest.get('graph_id')}")
         console.print(f"  - Nodes count: {len(manifest.get('nodes'))}")
+        console.print(f"  - Input validation rules: {len(validation_result.get('results') or [])}")
         
     except typer.Exit:
         raise
@@ -377,6 +391,41 @@ def validate_python_environments(bundle_dir: Path, manifest: dict[str, Any]) -> 
     return errors
 
 
+def _validate_manifest_inputs_or_exit(
+    bundle_dir: Path,
+    manifest: dict[str, Any],
+    *,
+    env_overrides: Optional[dict[str, str]] = None,
+    config_overrides: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    config = load_blueprint_config(bundle_dir, config_overrides=config_overrides)
+    env = _blueprint_runtime_environment(
+        bundle_dir,
+        config=config,
+        config_overrides=config_overrides,
+    )
+    env.update({key: str(value) for key, value in (env_overrides or {}).items() if value is not None})
+    result = run_input_validation(bundle_dir, manifest, config=config, env=env)
+    if result.get("ok"):
+        return result
+
+    for error in result.get("errors") or []:
+        console.print(f"[red]Input validation failed: {error}[/red]")
+    raise typer.Exit(1)
+
+
+def _mark_manifest_force(manifest: dict[str, Any]) -> None:
+    metadata = manifest.setdefault("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+        manifest["metadata"] = metadata
+    validation = metadata.setdefault("mn_validation", {})
+    if not isinstance(validation, dict):
+        validation = {}
+        metadata["mn_validation"] = validation
+    validation["force"] = True
+
+
 def _is_safe_payload_relative_path(path: str) -> bool:
     candidate = Path(path)
     return not candidate.is_absolute() and path not in ("", ".") and ".." not in candidate.parts
@@ -391,9 +440,16 @@ def run(
             help="Seconds to keep polling job events after the submit stream detaches. Defaults to MN_RUN_DETACH_LOG_SECONDS or 30.",
         ),
     ] = None,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Run even if blueprint input validation or runtime requirements fail.",
+        ),
+    ] = False,
 ):
     """Run a job bundle from a local folder directly"""
-    run_bundle(bundle_path, follow_seconds=follow_seconds)
+    run_bundle(bundle_path, follow_seconds=follow_seconds, force=force)
 
 
 def run_bundle(
@@ -403,6 +459,7 @@ def run_bundle(
     env_overrides: Optional[dict[str, str]] = None,
     submission_metadata: Optional[dict[str, Any]] = None,
     config_overrides: Optional[dict[str, Any]] = None,
+    force: bool = False,
 ):
     """Run a bundle after applying optional runtime metadata and environment."""
     try:
@@ -450,6 +507,13 @@ def run_bundle(
             submission_metadata,
             config_overrides=config_overrides,
         )
+        if not force:
+            _validate_manifest_inputs_or_exit(
+                bundle_dir,
+                manifest_dict,
+                env_overrides=env_overrides,
+                config_overrides=config_overrides,
+            )
         manifest_dict = prepare_manifest_for_submission(
             bundle_dir,
             manifest_dict,
@@ -457,6 +521,8 @@ def run_bundle(
             submission_metadata=submission_metadata,
             config_overrides=config_overrides,
         )
+        if force:
+            _mark_manifest_force(manifest_dict)
         _prepare_openshell_custom_images(bundle_dir, manifest_dict)
         manifest = json.dumps(manifest_dict)
 
@@ -471,7 +537,7 @@ def run_bundle(
 
         blueprint_run_id = submission_metadata.get("blueprint_run_id") or env_overrides.get("MN_RUN_ID")
         blueprint_run_dir = _blueprint_run_dir(blueprint_run_id, env_overrides) if blueprint_run_id else None
-        job_id = client.submit_job(manifest, payloads)
+        job_id = client.submit_job(manifest, payloads, force=force)
         log_writer = JobLogWriter(job_id, run_dir=blueprint_run_dir)
         if blueprint_run_id:
             _write_blueprint_job_mapping(blueprint_run_id, job_id, submission_metadata, env_overrides)

@@ -11,7 +11,7 @@ resource_app = typer.Typer(help="Inspect and update core resource limits")
 
 @resource_app.command(name="list")
 def list_resources():
-    """Show CPU, GPU, and memory resources reported by the core"""
+    """Show CPU, GPU, memory, and disk resources reported by the core"""
     try:
         console.print_json(data=json.loads(client.get_resource()))
     except Exception as e:
@@ -35,12 +35,17 @@ def set_resources(
         "--memory",
         help="Maximum memory use percentage: 25, 50, 75, or 100",
     ),
+    disk: Optional[int] = typer.Option(
+        None,
+        "--disk",
+        help="Maximum disk use percentage: 25, 50, 75, or 100",
+    ),
 ):
     """Set core resource use percentages"""
     try:
         payload = {
             key: value
-            for key, value in {"cpu": cpu, "gpu": gpu, "memory": memory}.items()
+            for key, value in {"cpu": cpu, "gpu": gpu, "memory": memory, "disk": disk}.items()
             if value is not None
         }
         console.print_json(data=json.loads(client.set_resource(payload)))

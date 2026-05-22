@@ -136,6 +136,38 @@ def test_validate_rejects_invalid_python_environment(tmp_path):
     assert "python_environment.packages must be a list of non-empty strings" in result.stdout
 
 
+def test_validate_runs_manifest_input_validation(tmp_path):
+    bundle_dir = tmp_path / "validated_inputs"
+    bundle_dir.mkdir()
+    (bundle_dir / "config").mkdir()
+    (bundle_dir / "config" / "default.json").write_text(json.dumps({
+        "video_source": {"uri": "ftp://camera.local/live"}
+    }))
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "manifest_version": "1.0",
+        "graph_id": "test_graph",
+        "job_name": "test_job",
+        "entrypoints": ["worker"],
+        "nodes": [{"node_id": "worker"}],
+        "input_validation": {
+            "rules": [
+                {
+                    "name": "camera_url",
+                    "type": "pattern",
+                    "path": "video_source.uri",
+                    "pattern": "^https?://",
+                }
+            ]
+        },
+    }))
+
+    result = runner.invoke(app, ["validate", str(bundle_dir)])
+
+    assert result.exit_code == 1
+    assert "Input validation failed" in result.stdout
+    assert "camera_url" in result.stdout
+
+
 def test_run_success(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="run-bundle-auto")
@@ -166,6 +198,38 @@ def test_run_success(mocker, tmp_path, monkeypatch):
     assert mapping["job_id"] == "job-123"
     mock_submit.assert_called_once()
     mock_stream.assert_called_once_with("job-123")
+
+
+def test_run_force_skips_input_validation(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="forced-run")
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_completed"})
+    ])
+
+    bundle_dir = tmp_path / "run_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "nodes": [],
+        "input_validation": {
+            "rules": [
+                {
+                    "name": "missing_command",
+                    "type": "command",
+                    "command": ["definitely-missing-validator"],
+                }
+            ]
+        },
+    }))
+    (bundle_dir / "payloads").mkdir()
+
+    result = runner.invoke(app, ["run", str(bundle_dir), "--force"])
+
+    assert result.exit_code == 0
+    manifest = json.loads(mock_submit.call_args.args[0])
+    assert manifest["metadata"]["mn_validation"]["force"] is True
+    assert mock_submit.call_args.kwargs["force"] is True
 
 
 def test_run_submits_python_environment_requirements_payload(mocker, tmp_path, monkeypatch):
