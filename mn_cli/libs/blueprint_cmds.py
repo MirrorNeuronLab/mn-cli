@@ -15,6 +15,7 @@ from mn_cli.libs.blueprint_observability import (
     final_artifact as _final_artifact,
     job_id_from_record as _job_id,
     load_observability_api as _load_observability_api,
+    load_observability_tools as _load_observability_tools,
     load_run_or_exit as _load_run_or_exit,
     load_web_ui_api as _load_web_ui_api,
     make_blueprint_run_id as _make_blueprint_run_id,
@@ -51,6 +52,7 @@ from mn_cli.libs.run_cmds import run_bundle as _run_bundle
 from mn_cli.libs.run_manifest import load_blueprint_config as _load_blueprint_config
 
 blueprint_app = typer.Typer(help="Manage and run MirrorNeuron blueprints")
+human_app = typer.Typer(help="Inspect and respond to human collaboration events")
 _PATCH_COMPAT = (subprocess, _git_checkout, _git_fetch)
 
 
@@ -293,6 +295,58 @@ def _print_run_table(runs: list[dict[str, Any]]) -> None:
             f"{_display(_web_ui_url(run), max_length=70)}",
             markup=False,
         )
+
+
+def _print_log_records(records: list[dict[str, Any]]) -> None:
+    for record in records:
+        timestamp = _display(record.get("ts") or record.get("timestamp"), max_length=28)
+        level = _display(record.get("level"), max_length=8)
+        component = _display(record.get("component"), max_length=28)
+        message = _display(record.get("message"), max_length=160)
+        console.print(f"{timestamp:<28} {level:<8} {component:<28} {message}", markup=False)
+
+
+def _observability_cursor(record: dict[str, Any]) -> str:
+    return str(record.get("id") or f"{record.get('channel','')}:{record.get('type','')}:{record.get('ts') or record.get('timestamp','')}:{record.get('message','')}")
+
+
+def _duration_seconds(value: str) -> float:
+    text = str(value).strip().lower()
+    if not text:
+        return 0
+    unit = text[-1]
+    number_text = text[:-1] if unit.isalpha() else text
+    try:
+        number = float(number_text)
+    except ValueError:
+        raise typer.BadParameter(f"invalid duration: {value}")
+    if unit == "s" or not unit.isalpha():
+        return number
+    if unit == "m":
+        return number * 60
+    if unit == "h":
+        return number * 3600
+    if unit == "d":
+        return number * 86400
+    raise typer.BadParameter(f"unsupported duration unit: {unit}")
+
+
+def _print_resource_summary(summary: dict[str, Any]) -> None:
+    table = Table("Start", "Samples", "CPU avg/max", "Memory avg/max MB", "GPU avg/max", "LLM tokens", "LLM calls")
+    for bucket in summary.get("buckets") or []:
+        if not bucket.get("sample_count") and not (bucket.get("llm") or {}).get("total_tokens"):
+            continue
+        llm = bucket.get("llm") or {}
+        table.add_row(
+            _display(bucket.get("start"), max_length=19),
+            str(bucket.get("sample_count", 0)),
+            f"{_display(bucket.get('cpu_pct_avg'))}/{_display(bucket.get('cpu_pct_max'))}",
+            f"{_display(bucket.get('memory_rss_mb_avg'))}/{_display(bucket.get('memory_rss_mb_max'))}",
+            f"{_display(bucket.get('gpu_util_pct_avg'))}/{_display(bucket.get('gpu_util_pct_max'))}",
+            str(llm.get("total_tokens", 0)),
+            str(llm.get("calls", 0)),
+        )
+    console.print(table)
 
 
 @blueprint_app.command("list")
@@ -643,28 +697,209 @@ def blueprint_tail(
     """Print the event stream for one blueprint run."""
     _load_run_or_exit(run_id, runs_root)
     _, _, read_run_events = _load_observability_api()
-    seen = 0
+    seen_ids: set[str] = set()
+    last_ts: str | None = None
+    poll_interval = max(float(interval), 1.0)
     try:
         while True:
-            events = read_run_events(run_id, runs_root=runs_root)
+            events = read_run_events(
+                run_id,
+                runs_root=runs_root,
+                limit=max(lines, 1),
+                since=last_ts if seen_ids else None,
+            )
             if not events:
                 console.print(f"[yellow]No events found for run {run_id}.[/yellow]")
-            elif seen == 0:
-                selected = events[-lines:]
-                _print_events(selected)
-                seen = len(events)
             else:
-                new_events = events[seen:]
-                _print_events(new_events)
-                seen = len(events)
+                selected = []
+                for event in events:
+                    cursor = _observability_cursor(event)
+                    if cursor in seen_ids:
+                        continue
+                    selected.append(event)
+                    seen_ids.add(cursor)
+                    last_ts = str(event.get("ts") or event.get("timestamp") or last_ts or "")
+                _print_events(selected)
             if not follow:
                 return
-            time.sleep(interval)
+            time.sleep(poll_interval)
     except FileNotFoundError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
     except KeyboardInterrupt:
         console.print(f"\n[yellow]Stopped tailing {run_id}.[/yellow]")
+
+
+@blueprint_app.command("logs")
+def blueprint_logs(
+    run_id: str,
+    lines: int = typer.Option(50, "--lines", "-n", help="Number of log records to show."),
+    level: Optional[str] = typer.Option(None, "--level", help="Minimum log level to show."),
+    follow: bool = typer.Option(False, "--follow", "-f", help="Continue printing new logs until interrupted."),
+    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default ~/.mn/runs directory."),
+    interval: float = typer.Option(1.0, "--interval", help="Polling interval in seconds when --follow is enabled."),
+):
+    """Print structured logs for one blueprint run."""
+    _load_run_or_exit(run_id, runs_root)
+    tools = _load_observability_tools()
+    read_run_logs = tools["read_run_logs"]
+    seen_ids: set[str] = set()
+    last_ts: str | None = None
+    poll_interval = max(float(interval), 1.0)
+    try:
+        while True:
+            records = read_run_logs(
+                run_id,
+                runs_root=runs_root,
+                level=level,
+                limit=max(lines, 1),
+                since=last_ts if seen_ids else None,
+            )
+            selected = []
+            for record in records:
+                cursor = _observability_cursor(record)
+                if cursor in seen_ids:
+                    continue
+                selected.append(record)
+                seen_ids.add(cursor)
+                last_ts = str(record.get("ts") or record.get("timestamp") or last_ts or "")
+            _print_log_records(selected)
+            if not follow:
+                return
+            time.sleep(poll_interval)
+    except KeyboardInterrupt:
+        console.print(f"\n[yellow]Stopped tailing logs for {run_id}.[/yellow]")
+
+
+@blueprint_app.command("stream")
+def blueprint_stream(
+    run_id: str,
+    channels: str = typer.Option("events,logs,human,resources", "--channels", help="Comma-separated channels to print."),
+    lines: int = typer.Option(100, "--lines", "-n", help="Number of stream records to show."),
+    level: Optional[str] = typer.Option(None, "--level", help="Minimum log level when logs are included."),
+    follow: bool = typer.Option(False, "--follow", "-f", help="Continue printing new stream records until interrupted."),
+    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default ~/.mn/runs directory."),
+    interval: float = typer.Option(1.0, "--interval", help="Polling interval in seconds when --follow is enabled."),
+):
+    """Print merged blueprint events, logs, human events, and resource samples."""
+    _load_run_or_exit(run_id, runs_root)
+    tools = _load_observability_tools()
+    read_run_stream_records = tools["read_run_stream_records"]
+    seen_ids: set[str] = set()
+    last_ts: str | None = None
+    selected_channels = [item.strip() for item in channels.split(",") if item.strip()]
+    poll_interval = max(float(interval), 1.0)
+    try:
+        while True:
+            records = read_run_stream_records(
+                run_id,
+                runs_root=runs_root,
+                channels=selected_channels,
+                level=level,
+                limit=max(lines, 1),
+                since=last_ts if seen_ids else None,
+            )
+            selected = []
+            for record in records:
+                cursor = _observability_cursor(record)
+                if cursor in seen_ids:
+                    continue
+                selected.append(record)
+                seen_ids.add(cursor)
+                last_ts = str(record.get("ts") or last_ts or "")
+            for record in selected:
+                console.print(json.dumps(record, sort_keys=True), markup=False)
+            if not follow:
+                return
+            time.sleep(poll_interval)
+    except KeyboardInterrupt:
+        console.print(f"\n[yellow]Stopped streaming {run_id}.[/yellow]")
+
+
+@blueprint_app.command("resources")
+def blueprint_resources(
+    run_id: str,
+    window: str = typer.Option("24h", "--window", help="History window, for example 24h."),
+    bucket: str = typer.Option("1h", "--bucket", help="Aggregation bucket, for example 1h."),
+    live: bool = typer.Option(False, "--live", help="Refresh resource usage until interrupted."),
+    interval: float = typer.Option(5.0, "--interval", help="Live refresh interval in seconds."),
+    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default ~/.mn/runs directory."),
+):
+    """Show CPU, GPU, memory, and LLM token usage for one blueprint run."""
+    _load_run_or_exit(run_id, runs_root)
+    tools = _load_observability_tools()
+    read_run_resources = tools["read_run_resources"]
+    window_hours = _duration_seconds(window) / 3600.0
+    bucket_seconds = max(int(_duration_seconds(bucket)), 1)
+    live_interval = max(float(interval), 1.0)
+    try:
+        while True:
+            summary = read_run_resources(run_id, runs_root=runs_root, window_hours=window_hours, bucket_seconds=bucket_seconds)
+            _print_resource_summary(summary)
+            if not live:
+                return
+            time.sleep(live_interval)
+    except KeyboardInterrupt:
+        console.print(f"\n[yellow]Stopped resource monitor for {run_id}.[/yellow]")
+
+
+@human_app.callback(invoke_without_command=True)
+def blueprint_human(
+    ctx: typer.Context,
+    run_id: Optional[str] = typer.Argument(None, help="Blueprint run ID."),
+    pending: bool = typer.Option(False, "--pending", help="Show only pending human input requests."),
+    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default ~/.mn/runs directory."),
+):
+    """Show human collaboration events for one blueprint run."""
+    if ctx.invoked_subcommand is not None:
+        return
+    if not run_id:
+        console.print("[red]run_id is required unless using a human subcommand.[/red]")
+        raise typer.Exit(1)
+    _load_run_or_exit(run_id, runs_root)
+    tools = _load_observability_tools()
+    events = (
+        tools["list_pending_human_requests"](run_id, runs_root=runs_root)
+        if pending
+        else tools["read_human_events"](run_id, runs_root=runs_root)
+    )
+    for event in events:
+        console.print(json.dumps(event, sort_keys=True), markup=False)
+
+
+@human_app.command("respond")
+def blueprint_human_respond(
+    run_id: str,
+    request_id: str,
+    decision: str = typer.Option(..., "--decision", help="Decision value, such as approve, revise, or reject."),
+    notes: str = typer.Option("", "--notes", help="Optional reviewer notes."),
+    reviewer: str = typer.Option("cli", "--reviewer", help="Reviewer identity label."),
+    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default ~/.mn/runs directory."),
+):
+    """Record a response to a human input request."""
+    _load_run_or_exit(run_id, runs_root)
+    tools = _load_observability_tools()
+    event = tools["record_human_response"](
+        run_id,
+        request_id,
+        {"decision": decision, "notes": notes, "reviewer": reviewer},
+        runs_root=runs_root,
+    )
+    console.print(json.dumps(event, indent=2, sort_keys=True), markup=False)
+
+
+@human_app.command("ack")
+def blueprint_human_ack(
+    run_id: str,
+    notice_id: str,
+    reviewer: str = typer.Option("cli", "--reviewer", help="Reviewer identity label."),
+    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default ~/.mn/runs directory."),
+):
+    """Acknowledge a human notice."""
+    _load_run_or_exit(run_id, runs_root)
+    tools = _load_observability_tools()
+    event = tools["acknowledge_human_notice"](run_id, notice_id, {"reviewer": reviewer}, runs_root=runs_root)
+    console.print(json.dumps(event, indent=2, sort_keys=True), markup=False)
 
 
 @blueprint_app.command("compare")
@@ -674,8 +909,8 @@ def blueprint_compare(
     runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default ~/.mn/runs directory."),
 ):
     """Compare two blueprint runs from the shared run store."""
-    record_a = _load_run_or_exit(run_a, runs_root)
-    record_b = _load_run_or_exit(run_b, runs_root)
+    record_a = _load_run_or_exit(run_a, runs_root, include_observability=True)
+    record_b = _load_run_or_exit(run_b, runs_root, include_observability=True)
     summary_a = _run_summary(record_a.get("run") or {})
     summary_b = _run_summary(record_b.get("run") or {})
     artifact_a = _final_artifact(record_a)
@@ -704,7 +939,7 @@ def blueprint_export(
     runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default ~/.mn/runs directory."),
 ):
     """Export one blueprint run as JSON, Markdown, or static HTML."""
-    record = _load_run_or_exit(run_id, runs_root)
+    record = _load_run_or_exit(run_id, runs_root, include_observability=True)
     normalized_format = output_format.lower().strip()
     if normalized_format == "json":
         console.print(json.dumps(record, indent=2, sort_keys=True), markup=False)
@@ -721,3 +956,6 @@ def blueprint_export(
     else:
         console.print("[red]Unsupported export format. Use 'json', 'markdown', or 'html'.[/red]")
         raise typer.Exit(1)
+
+
+blueprint_app.add_typer(human_app, name="human")

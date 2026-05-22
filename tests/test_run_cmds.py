@@ -166,6 +166,44 @@ def test_validate_runs_manifest_input_validation(tmp_path):
     assert result.exit_code == 1
     assert "Input validation failed" in result.stdout
     assert "camera_url" in result.stdout
+    assert "Field" in result.stdout
+    assert "Fix" in result.stdout
+
+
+def test_validate_outputs_json_report(tmp_path):
+    bundle_dir = tmp_path / "validated_inputs"
+    bundle_dir.mkdir()
+    (bundle_dir / "config").mkdir()
+    (bundle_dir / "config" / "default.json").write_text(json.dumps({
+        "video_source": {"uri": "ftp://camera.local/live"}
+    }))
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "manifest_version": "1.0",
+        "graph_id": "test_graph",
+        "job_name": "test_job",
+        "entrypoints": ["worker"],
+        "nodes": [{"node_id": "worker"}],
+        "input_validation": {
+            "rules": [
+                {
+                    "name": "camera_url",
+                    "type": "pattern",
+                    "path": "video_source.uri",
+                    "pattern": "^https?://",
+                    "help": "Use an http:// or https:// URL.",
+                }
+            ]
+        },
+    }))
+
+    result = runner.invoke(app, ["validate", str(bundle_dir), "--output", "json"])
+
+    assert result.exit_code == 1
+    report = json.loads(result.stdout)
+    assert report["ok"] is False
+    assert report["issues"][0]["location"]["path"] == "video_source.uri"
+    assert report["issues"][0]["rule"]["name"] == "camera_url"
+    assert report["issues"][0]["help"] == "Use an http:// or https:// URL."
 
 
 def test_run_success(mocker, tmp_path, monkeypatch):
@@ -227,8 +265,10 @@ def test_run_force_skips_input_validation(mocker, tmp_path, monkeypatch):
     result = runner.invoke(app, ["run", str(bundle_dir), "--force"])
 
     assert result.exit_code == 0
+    assert "Validation skipped because --force was provided" in result.stdout
     manifest = json.loads(mock_submit.call_args.args[0])
     assert manifest["metadata"]["mn_validation"]["force"] is True
+    assert manifest["metadata"]["mn_validation"]["status"] == "skipped"
     assert mock_submit.call_args.kwargs["force"] is True
 
 

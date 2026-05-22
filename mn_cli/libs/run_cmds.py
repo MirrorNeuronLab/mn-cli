@@ -35,9 +35,10 @@ from mn_cli.libs.blueprint_observability import make_blueprint_run_id as _make_b
 from mn_cli.shared import console, client, logger
 from mn_cli.error_handler import handle_cli_error
 from mn_sdk import (
+    make_validation_report,
     run_input_validation,
-    validate_input_validation_spec,
-    validate_requirements_spec,
+    validate_input_validation_spec_issues,
+    validate_requirements_spec_issues,
 )
 
 FINAL_STATUSES = {"completed", "failed", "cancelled"}
@@ -282,9 +283,16 @@ def _follow_job_events(
     return last_status, data
 
 
-def validate(bundle_path: str):
+def validate(
+    bundle_path: str,
+    output: Annotated[
+        str,
+        typer.Option("--output", "-o", help="Output format: table or json."),
+    ] = "table",
+):
     """Check if a job bundle in a local folder is valid to run"""
     try:
+        output_format = _normalize_validation_output(output)
         bundle_dir = Path(bundle_path)
         if not bundle_dir.is_dir():
             console.print(
@@ -322,17 +330,23 @@ def validate(bundle_path: str):
 
         python_environment_errors = validate_python_environments(bundle_dir, manifest)
         if python_environment_errors:
-            for error in python_environment_errors:
-                console.print(f"[red]Error: {error}[/red]")
+            report = make_validation_report(
+                [_legacy_validation_issue(error, source="manifest") for error in python_environment_errors]
+            )
+            _emit_validation_report(report, output_format, title="Manifest validation failed")
             raise typer.Exit(1)
 
-        manifest_spec_errors = validate_requirements_spec(manifest) + validate_input_validation_spec(manifest)
-        if manifest_spec_errors:
-            for error in manifest_spec_errors:
-                console.print(f"[red]Error: {error}[/red]")
+        manifest_spec_issues = validate_requirements_spec_issues(manifest) + validate_input_validation_spec_issues(manifest)
+        if manifest_spec_issues:
+            report = make_validation_report(manifest_spec_issues)
+            _emit_validation_report(report, output_format, title="Manifest validation failed")
             raise typer.Exit(1)
 
-        validation_result = _validate_manifest_inputs_or_exit(bundle_dir, manifest)
+        validation_result = _validate_manifest_inputs_or_exit(bundle_dir, manifest, output_format=output_format)
+
+        if output_format == "json":
+            console.print_json(data=validation_result)
+            return
 
         console.print(f"[green]✓ Job bundle at '{bundle_path}' is valid.[/green]")
         console.print(f"  - Job Name: {manifest.get('job_name')}")
@@ -397,6 +411,7 @@ def _validate_manifest_inputs_or_exit(
     *,
     env_overrides: Optional[dict[str, str]] = None,
     config_overrides: Optional[dict[str, Any]] = None,
+    output_format: str = "table",
 ) -> dict[str, Any]:
     config = load_blueprint_config(bundle_dir, config_overrides=config_overrides)
     env = _blueprint_runtime_environment(
@@ -409,8 +424,7 @@ def _validate_manifest_inputs_or_exit(
     if result.get("ok"):
         return result
 
-    for error in result.get("errors") or []:
-        console.print(f"[red]Input validation failed: {error}[/red]")
+    _emit_validation_report(result, output_format, title="Input validation failed")
     raise typer.Exit(1)
 
 
@@ -424,6 +438,65 @@ def _mark_manifest_force(manifest: dict[str, Any]) -> None:
         validation = {}
         metadata["mn_validation"] = validation
     validation["force"] = True
+    validation["status"] = "skipped"
+    validation["skipped_checks"] = ["input_validation", "requirements"]
+
+
+def _normalize_validation_output(output: str) -> str:
+    normalized = str(output or "table").strip().lower()
+    if normalized in {"table", "rich", "pretty"}:
+        return "table"
+    if normalized == "json":
+        return "json"
+    console.print("[red]Unsupported output format. Use 'table' or 'json'.[/red]")
+    raise typer.Exit(1)
+
+
+def _emit_validation_report(report: dict[str, Any], output_format: str, *, title: str) -> None:
+    if output_format == "json":
+        console.print_json(data=report)
+        return
+
+    issues = report.get("issues") if isinstance(report.get("issues"), list) else []
+    if not issues:
+        for error in report.get("errors") or []:
+            console.print(f"[red]{title}: {error}[/red]")
+        return
+
+    console.print(f"[red]{title}[/red]")
+    console.print("Field | Problem | Fix | Rule", markup=False)
+    console.print("--- | --- | --- | ---", markup=False)
+    for issue in issues:
+        location = issue.get("location") if isinstance(issue.get("location"), dict) else {}
+        rule = issue.get("rule") if isinstance(issue.get("rule"), dict) else {}
+        console.print(
+            " | ".join(
+                [
+                    str(location.get("path") or location.get("pointer") or "-"),
+                    str(issue.get("message") or issue.get("code") or "Validation failed"),
+                    str(issue.get("help") or "-"),
+                    str(rule.get("name") or rule.get("id") or "-"),
+                ]
+            ),
+            markup=False,
+        )
+
+
+def _legacy_validation_issue(error: str, *, source: str) -> dict[str, Any]:
+    path = ""
+    if ":" in error:
+        path = error.split(":", 1)[0].strip()
+    return {
+        "code": "manifest.validation_failed",
+        "message": error,
+        "help": "Fix this manifest field and run validation again.",
+        "severity": "error",
+        "location": {
+            "source": source,
+            "path": path,
+            "pointer": "/" + source + ("/" + path.replace(".", "/") if path else ""),
+        },
+    }
 
 
 def _is_safe_payload_relative_path(path: str) -> bool:
@@ -514,6 +587,8 @@ def run_bundle(
                 env_overrides=env_overrides,
                 config_overrides=config_overrides,
             )
+        else:
+            console.print("[yellow]Validation skipped because --force was provided; input checks and runtime requirements will be bypassed for this run.[/yellow]")
         manifest_dict = prepare_manifest_for_submission(
             bundle_dir,
             manifest_dict,

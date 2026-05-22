@@ -64,6 +64,69 @@ def test_blueprint_list_error(mocker, tmp_path):
     assert "Error reading blueprints index" in result.stdout
 
 
+def test_blueprint_observability_commands_read_shared_run_store(tmp_path):
+    run_dir = tmp_path / "observe-run"
+    run_dir.mkdir()
+    (run_dir / "run.json").write_text(json.dumps({
+        "run_id": "observe-run",
+        "blueprint_id": "general_human_in_the_loop_workflow",
+        "status": "running",
+    }))
+    (run_dir / "logs.jsonl").write_text(json.dumps({
+        "ts": "2026-05-22T12:00:01Z",
+        "run_id": "observe-run",
+        "blueprint_id": "general_human_in_the_loop_workflow",
+        "level": "WARN",
+        "component": "worker",
+        "message": "needs attention",
+    }) + "\n")
+    (run_dir / "human.jsonl").write_text(json.dumps({
+        "ts": "2026-05-22T12:00:02Z",
+        "run_id": "observe-run",
+        "blueprint_id": "general_human_in_the_loop_workflow",
+        "channel": "human",
+        "type": "human_input_requested",
+        "payload": {"request_id": "hitl-1", "prompt": "Approve?"},
+    }) + "\n")
+    (run_dir / "resources.jsonl").write_text(json.dumps({
+        "ts": "2026-05-22T12:00:03Z",
+        "run_id": "observe-run",
+        "blueprint_id": "general_human_in_the_loop_workflow",
+        "component": "worker",
+        "cpu_pct": 12.5,
+        "memory_rss_mb": 256,
+        "gpu": [],
+        "llm": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15, "calls": 1, "estimated": False},
+    }) + "\n")
+
+    logs = runner.invoke(app, ["blueprint", "logs", "observe-run", "--runs-root", str(tmp_path)])
+    human = runner.invoke(app, ["blueprint", "human", "observe-run", "--pending", "--runs-root", str(tmp_path)])
+    response = runner.invoke(
+        app,
+        [
+            "blueprint",
+            "human",
+            "respond",
+            "observe-run",
+            "hitl-1",
+            "--decision",
+            "approve",
+            "--runs-root",
+            str(tmp_path),
+        ],
+    )
+    resources = runner.invoke(app, ["blueprint", "resources", "observe-run", "--window", "24000h", "--runs-root", str(tmp_path)])
+
+    assert logs.exit_code == 0
+    assert "needs attention" in logs.stdout
+    assert human.exit_code == 0
+    assert "hitl-1" in human.stdout
+    assert response.exit_code == 0
+    assert '"approved": true' in response.stdout
+    assert resources.exit_code == 0
+    assert "15" in resources.stdout
+
+
 def test_blueprint_list_blueprint_repo_reads_custom_index(mocker, tmp_path):
     repo_url = "https://github.com/MirrorNeuronLab/customer-blueprints"
     custom_cache_root = tmp_path / "blueprint_repos"

@@ -84,6 +84,7 @@ Submit and inspect a workflow:
 
 ```bash
 mn validate ./bundle
+mn validate ./bundle --output json
 mn run ./bundle
 mn list
 mn unfinished
@@ -127,6 +128,12 @@ mn blueprint run <blueprint_id> --offline
 mn blueprint run <blueprint_id> --revision <git_sha_or_tag>
 mn blueprint monitor --follow
 mn blueprint tail <run_id>
+mn blueprint logs <run_id> --follow --level INFO
+mn blueprint stream <run_id> --channels logs,events,human,resources
+mn blueprint human <run_id> --pending
+mn blueprint human respond <run_id> <request_id> --decision approve
+mn blueprint resources <run_id> --window 24h --bucket 1h
+mn blueprint resources <run_id> --live --interval 5
 mn blueprint compare <run_a> <run_b>
 mn blueprint export <run_id> --format markdown
 mn blueprint export <run_id> --format html
@@ -140,11 +147,13 @@ mn blueprint export <run_id> --format html
 
 Catalog runs use the cached blueprint library by default. Run `mn blueprint update` or pass `--update` when you want to refresh the local cache.
 
-`mn validate` runs manifest checks plus any `input_validation.rules` declared by the bundle. `mn run` and `mn blueprint run` run those input checks before submitting by default; pass `--force` only when you intentionally want runtime to bypass input validation and manifest requirements for that run.
+`mn validate` runs manifest checks plus any `input_validation.rules` declared by the bundle. Human output shows `Field | Problem | Fix | Rule`; use `--output json` for the full `validation.report/v1` object with structured `issues` for UI rendering. `mn run` and `mn blueprint run` run those input checks before submitting by default; pass `--force` only when you intentionally want runtime to bypass input validation and manifest requirements for that run.
 
 `mn blueprint update` also checks for blueprints removed from the catalog and cleans blueprint-owned runtime resources, including cached Python virtualenvs, `~/.mn/runs/<run_id>` records, `~/.mn/generated_blueprint_bundles/<run_id>` bundles, local bundle-cache entries, and Docker resources labelled with `mirrorneuron.blueprint_id=<blueprint_id>` or `com.mirrorneuron.blueprint_id=<blueprint_id>`. Use `mn blueprint cleanup` to run the same dead-resource check manually, or `mn blueprint cleanup --blueprint-id <id>` to remove resources for one deleted blueprint. Use `--dry-run` to preview removals. Cleanup is lifecycle-driven and explicit; there is no hidden scheduled housekeeping job.
 
 Use `mn blueprint --blueprint-repo <repo-url> ...` to read catalog commands from a different blueprint repository, including a private repository your Git credentials can access. Custom repositories are cached separately under `~/.mn/blueprint_repos/`, and the repository root must contain a valid `index.json` JSON list of blueprint entries.
+
+Live observability commands poll incrementally and clamp refresh intervals to at least one second. `mn blueprint resources --live --interval 5` is the recommended default for a steady view without noisy CPU or disk churn.
 
 Blueprint run artifacts are stored under:
 
@@ -152,7 +161,7 @@ Blueprint run artifacts are stored under:
 ~/.mn/runs/<run_id>/
 ```
 
-Use `--runs-root <path>` with `monitor`, `tail`, `compare`, or `export` to inspect a custom run directory.
+Use `--runs-root <path>` with observability commands such as `monitor`, `tail`, `logs`, `human`, `resources`, `compare`, or `export` to inspect a custom run directory.
 
 ## Updates
 

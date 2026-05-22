@@ -12,22 +12,52 @@ from mn_cli.shared import console
 
 
 def load_observability_api() -> tuple[Callable[..., list[dict[str, Any]]], Callable[..., dict[str, Any]], Callable[..., list[dict[str, Any]]]]:
+    _ensure_blueprint_support_path()
     try:
         from mn_blueprint_support.observability import list_runs, load_run, read_run_events
     except ModuleNotFoundError:
-        repo_root = Path(__file__).resolve().parents[3]
-        support_src = repo_root / "mn-skills" / "blueprint-support-skill" / "src"
-        if support_src.exists() and str(support_src) not in sys.path:
-            sys.path.insert(0, str(support_src))
-        try:
-            from mn_blueprint_support.observability import list_runs, load_run, read_run_events
-        except ModuleNotFoundError:
-            console.print(
-                "[red]Blueprint observability support is unavailable. "
-                "Install the blueprint support package or run from the monorepo checkout.[/red]"
-            )
-            raise typer.Exit(1)
+        console.print(
+            "[red]Blueprint observability support is unavailable. "
+            "Install the blueprint support package or run from the monorepo checkout.[/red]"
+        )
+        raise typer.Exit(1)
     return list_runs, load_run, read_run_events
+
+
+def load_observability_tools() -> dict[str, Callable[..., Any]]:
+    _ensure_blueprint_support_path()
+    try:
+        from mn_blueprint_support.observability import (
+            acknowledge_human_notice,
+            list_pending_human_requests,
+            read_human_events,
+            read_run_logs,
+            read_run_resources,
+            read_run_stream_records,
+            record_human_response,
+        )
+    except ModuleNotFoundError:
+        console.print(
+            "[red]Blueprint observability support is unavailable. "
+            "Install the blueprint support package or run from the monorepo checkout.[/red]"
+        )
+        raise typer.Exit(1)
+    return {
+        "acknowledge_human_notice": acknowledge_human_notice,
+        "list_pending_human_requests": list_pending_human_requests,
+        "read_human_events": read_human_events,
+        "read_run_logs": read_run_logs,
+        "read_run_resources": read_run_resources,
+        "read_run_stream_records": read_run_stream_records,
+        "record_human_response": record_human_response,
+    }
+
+
+def _ensure_blueprint_support_path() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    support_src = repo_root / "mn-skills" / "blueprint_support_skill" / "src"
+    if support_src.exists() and str(support_src) not in sys.path:
+        sys.path.insert(0, str(support_src))
 
 
 def load_web_ui_api() -> Callable[..., Any]:
@@ -107,10 +137,10 @@ def job_id_from_record(record: dict[str, Any]) -> str:
     return str(job.get("job_id") or "")
 
 
-def load_run_or_exit(run_id: str, runs_root: Optional[str]) -> dict[str, Any]:
+def load_run_or_exit(run_id: str, runs_root: Optional[str], *, include_observability: bool = False) -> dict[str, Any]:
     _, load_run, _ = load_observability_api()
     try:
-        return load_run(run_id, runs_root=runs_root)
+        return load_run(run_id, runs_root=runs_root, include_observability=include_observability)
     except FileNotFoundError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
