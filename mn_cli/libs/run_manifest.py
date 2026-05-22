@@ -17,6 +17,7 @@ def prepare_manifest_for_submission(
     config_overrides: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     prepared = json.loads(json.dumps(manifest_dict))
+    render_agent_templates_for_submission(prepared)
     metadata = dict(submission_metadata or {})
     run_id = (
         metadata.get("blueprint_run_id")
@@ -44,6 +45,19 @@ def prepare_manifest_for_submission(
     if metadata:
         prepared.setdefault("metadata", {}).setdefault("mn_cli", {}).update(metadata)
     return prepared
+
+
+def render_agent_templates_for_submission(manifest: dict[str, Any]) -> None:
+    nodes = manifest.get("nodes")
+    if not isinstance(nodes, list) or not any(isinstance(node, dict) and "uses" in node for node in nodes):
+        return
+    try:
+        from mn_blueprint_support import render_manifest_agent_templates
+    except ImportError as exc:
+        raise RuntimeError("Manifest uses agent templates, but mn_blueprint_support is not installed.") from exc
+    rendered = render_manifest_agent_templates(manifest)
+    manifest.clear()
+    manifest.update(rendered)
 
 
 def _shared_runs_root(env_overrides: Optional[dict[str, str]] = None) -> str:

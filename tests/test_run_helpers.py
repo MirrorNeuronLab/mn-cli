@@ -1,4 +1,5 @@
 import json
+import uuid
 
 import pytest
 
@@ -63,6 +64,61 @@ def test_prepare_manifest_for_submission_merges_runtime_env_and_metadata(tmp_pat
     assert prepared["metadata"]["mn_cli"]["blueprint_id"] == "bp"
 
 
+def test_prepare_manifest_for_submission_renders_agent_templates(tmp_path, monkeypatch):
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "config").mkdir()
+    (bundle_dir / "config" / "default.json").write_text(json.dumps({"identity": {"blueprint_id": "bp"}}))
+
+    agent_root = tmp_path / "mn-agents"
+    agent_dir = agent_root / "control_router"
+    agent_dir.mkdir(parents=True)
+    (agent_root / "index.json").write_text(json.dumps({
+        "agents": [
+            {
+                "template_id": "mn-agents.control_router",
+                "version": "1.0.0",
+                "path": "control_router",
+                "template_category": "control",
+            }
+        ]
+    }))
+    (agent_dir / "agent.json").write_text(json.dumps({
+        "template_id": "mn-agents.control_router",
+        "version": "1.0.0",
+        "defaults": {
+            "agent_type": "router",
+            "type": "map",
+            "role": "coordinator",
+            "emit_type": "start",
+        },
+        "inputs": {"required": []},
+    }))
+    monkeypatch.setenv("MN_AGENTS_ROOT", str(agent_root))
+
+    prepared = prepare_manifest_for_submission(
+        bundle_dir,
+        {
+            "nodes": [
+                {
+                    "node_id": "ingress",
+                    "uses": "mn-agents.control_router@1.0.0",
+                    "with": {"emit_type": "video_monitor_start"},
+                }
+            ]
+        },
+        env_overrides={"MN_RUN_ID": "run-template"},
+    )
+
+    node = prepared["nodes"][0]
+    assert node["agent_type"] == "router"
+    assert node["type"] == "map"
+    assert "uses" not in node
+    assert "with" not in node
+    assert node["config"]["emit_type"] == "video_monitor_start"
+    assert node["config"]["environment"]["MN_RUN_ID"] == "run-template"
+
+
 def test_blueprint_config_ignores_misnamed_overwrite_file(tmp_path):
     bundle_dir = tmp_path / "bundle"
     config_dir = bundle_dir / "config"
@@ -117,7 +173,7 @@ def test_manifest_config_bindings_ignore_wrong_names():
 
 
 def test_job_log_writer_deduplicates_events_and_records_web_ui_once():
-    writer = JobLogWriter("unit-run-helper")
+    writer = JobLogWriter(f"unit-run-helper-{uuid.uuid4().hex}")
     event = {
         "timestamp": "2026-05-01T00:00:00Z",
         "type": "custom",
