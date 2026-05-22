@@ -620,7 +620,14 @@ def test_run_starts_pre_launch_hook_before_submit(mocker, tmp_path, monkeypatch)
 
     bundle_dir = tmp_path / "pre_launch_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps({"nodes": []}))
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {"environment": {}},
+            }
+        ]
+    }))
     script_path = bundle_dir / "scripts" / "pre-launch.sh"
     script_path.parent.mkdir()
     script_path.write_text("#!/usr/bin/env bash\n")
@@ -636,7 +643,18 @@ def test_run_starts_pre_launch_hook_before_submit(mocker, tmp_path, monkeypatch)
 
     def fake_popen(_command, **kwargs):
         env = kwargs["env"]
-        Path(env["MN_PRE_LAUNCH_READY_FILE"]).write_text("ready\n")
+        Path(env["MN_PRE_LAUNCH_READY_FILE"]).write_text(json.dumps({
+            "status": "ready",
+            "env": {
+                "RTSP_PORT": "8561",
+                "STREAM_URI": "rtsp://127.0.0.1:8561/video-watch",
+                "VIDEO_SOURCE_URI": "rtsp://127.0.0.1:8561/video-watch",
+            },
+            "config": {
+                "video_source": {"uri": "rtsp://127.0.0.1:8561/video-watch"},
+                "web_ui": {"dashboard": {"default_video_source": "rtsp://127.0.0.1:8561/video-watch"}},
+            },
+        }))
         return process
 
     popen = mocker.patch("mn_cli.libs.run_cmds.subprocess.Popen", side_effect=fake_popen)
@@ -649,6 +667,11 @@ def test_run_starts_pre_launch_hook_before_submit(mocker, tmp_path, monkeypatch)
     assert env["MN_RUN_ID"].startswith("pre-launch-")
     assert env["MN_BLUEPRINT_BUNDLE_DIR"] == str(bundle_dir)
     assert json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])["video_source"]["uri"].startswith("rtsp://")
+    submitted_manifest = json.loads(run_cmds.client.submit_job.call_args.args[0])
+    submitted_env = submitted_manifest["nodes"][0]["config"]["environment"]
+    assert submitted_env["VIDEO_SOURCE_URI"] == "rtsp://127.0.0.1:8561/video-watch"
+    assert submitted_env["STREAM_URI"] == "rtsp://127.0.0.1:8561/video-watch"
+    assert submitted_env["RTSP_PORT"] == "8561"
     process_info = json.loads((tmp_path / "runs" / env["MN_RUN_ID"] / "pre_launch_process.json").read_text())
     assert process_info["pid"] == 4242
     assert process_info["script"] == str(script_path.resolve())

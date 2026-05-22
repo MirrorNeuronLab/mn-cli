@@ -543,6 +543,7 @@ def run_bundle(
     pre_launch_run_dir: Path | None = None
     try:
         env_overrides = dict(env_overrides or {})
+        config_overrides = dict(config_overrides or {})
         submission_metadata = dict(submission_metadata or {})
         bundle_dir = Path(bundle_path)
         if not bundle_dir.is_dir():
@@ -910,6 +911,11 @@ def _start_pre_launch_hook(
 
     try:
         _wait_for_pre_launch_ready(run_dir, process, ready_file)
+        _apply_pre_launch_ready_metadata(
+            ready_file,
+            env_overrides=env_overrides,
+            config_overrides=config_overrides,
+        )
     except Exception:
         _terminate_pre_launch_process(process, reason="pre_launch_failed")
         raise
@@ -936,6 +942,42 @@ def _wait_for_pre_launch_ready(run_dir: Path, process: subprocess.Popen[Any], re
     raise RuntimeError(
         f"Blueprint pre-launch hook timed out after {timeout:g}s. See {run_dir / 'pre_launch.log'}."
     )
+
+
+def _apply_pre_launch_ready_metadata(
+    ready_file: Path,
+    *,
+    env_overrides: dict[str, str],
+    config_overrides: dict[str, Any],
+) -> None:
+    raw = ready_file.read_text(encoding="utf-8").strip()
+    if not raw or raw == "ready":
+        return
+    try:
+        metadata = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("Ignoring non-JSON pre-launch ready metadata from %s", ready_file)
+        return
+    if not isinstance(metadata, dict):
+        return
+    env_patch = metadata.get("env")
+    if isinstance(env_patch, dict):
+        env_overrides.update({str(key): str(value) for key, value in env_patch.items() if value is not None})
+    config_patch = metadata.get("config") or metadata.get("config_overrides")
+    if isinstance(config_patch, dict):
+        merged = _deep_merge_dict(config_overrides, config_patch)
+        config_overrides.clear()
+        config_overrides.update(merged)
+
+
+def _deep_merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    result = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _deep_merge_dict(result[key], value)
+        else:
+            result[key] = value
+    return result
 
 
 def _terminate_pre_launch_process(process: subprocess.Popen[Any] | None, *, reason: str) -> None:
