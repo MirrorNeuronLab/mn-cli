@@ -1,4 +1,5 @@
 import typer
+import hashlib
 import json
 import os
 import re
@@ -34,7 +35,7 @@ from mn_cli.libs.run_manifest import (
     with_shared_run_store_config as _with_shared_run_store_config,
 )
 from mn_cli.libs.blueprint_observability import make_blueprint_run_id as _make_blueprint_run_id
-from mn_cli.libs.blueprint_resources import cleanup_pre_launch_process
+from mn_cli.libs.blueprint_resources import cleanup_blueprint_host_hooks
 from mn_cli.shared import console, client, logger
 from mn_cli.error_handler import handle_cli_error
 from mn_sdk import (
@@ -47,6 +48,7 @@ from mn_sdk import (
 FINAL_STATUSES = {"completed", "failed", "cancelled"}
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 PRE_LAUNCH_SCRIPT = Path("scripts/pre-launch.sh")
+POST_LAUNCH_SCRIPT = Path("scripts/post-launch.sh")
 _HELPER_COMPAT = (
     _add_mn_llm_aliases,
     _blueprint_runtime_environment,
@@ -590,6 +592,7 @@ def run_bundle(
         blueprint_run_id = submission_metadata.get("blueprint_run_id") or env_overrides.get("MN_RUN_ID")
         if blueprint_run_id:
             pre_launch_run_dir = _blueprint_run_dir(str(blueprint_run_id), env_overrides)
+            _register_post_launch_hook(bundle_dir, str(blueprint_run_id), env_overrides=env_overrides)
             pre_launch_process = _start_pre_launch_hook(
                 bundle_dir,
                 str(blueprint_run_id),
@@ -666,7 +669,7 @@ def run_bundle(
                 config_overrides=config_overrides,
             )
             if final_status in FINAL_STATUSES:
-                cleanup_pre_launch_process(
+                cleanup_blueprint_host_hooks(
                     blueprint_run_dir,
                     dry_run=False,
                     summary={"process_removed": [], "process_skipped": [], "errors": []},
@@ -675,7 +678,7 @@ def run_bundle(
     except typer.Exit:
         _terminate_pre_launch_process(pre_launch_process, reason="launch_failed")
         if pre_launch_run_dir is not None:
-            cleanup_pre_launch_process(
+            cleanup_blueprint_host_hooks(
                 pre_launch_run_dir,
                 dry_run=False,
                 summary={"process_removed": [], "process_skipped": [], "errors": []},
@@ -685,7 +688,7 @@ def run_bundle(
     except Exception as e:
         _terminate_pre_launch_process(pre_launch_process, reason="launch_failed")
         if pre_launch_run_dir is not None:
-            cleanup_pre_launch_process(
+            cleanup_blueprint_host_hooks(
                 pre_launch_run_dir,
                 dry_run=False,
                 summary={"process_removed": [], "process_skipped": [], "errors": []},
@@ -754,6 +757,69 @@ def _prepare_openshell_custom_images(bundle_dir: Path, manifest_dict: dict[str, 
         config["from"] = _build_openshell_from_image(source_path, node.get("node_id") or "openshell")
 
 
+def _openshell_gateway_endpoint() -> str:
+    configured_endpoint = os.getenv("OPENSHELL_GATEWAY_ENDPOINT")
+    if configured_endpoint:
+        return configured_endpoint
+
+    gateway_name = _openshell_gateway_name()
+    if gateway_name:
+        metadata = _openshell_gateway_metadata(gateway_name)
+        endpoint = metadata.get("gateway_endpoint")
+        if isinstance(endpoint, str) and endpoint.strip():
+            return endpoint.strip()
+
+    return f"https://127.0.0.1:{os.getenv('OPENSHELL_GATEWAY_PORT', '8080')}"
+
+
+def _openshell_env() -> dict[str, str]:
+    env = os.environ.copy()
+    if env.get("OPENSHELL_GATEWAY_ENDPOINT"):
+        return env
+
+    gateway_name = _openshell_gateway_name(env=env)
+    if gateway_name:
+        env.setdefault("OPENSHELL_GATEWAY", gateway_name)
+    else:
+        env.setdefault("OPENSHELL_GATEWAY_ENDPOINT", _openshell_gateway_endpoint())
+    return env
+
+
+def _openshell_config_dir() -> Path:
+    return Path(os.getenv("OPENSHELL_CONFIG_DIR", str(Path.home() / ".config" / "openshell"))).expanduser()
+
+
+def _openshell_gateway_name(*, env: dict[str, str] | None = None) -> str:
+    source_env = env or os.environ
+    configured_gateway = source_env.get("OPENSHELL_GATEWAY", "").strip()
+    if configured_gateway:
+        return configured_gateway
+
+    config_dir = _openshell_config_dir()
+    try:
+        active_gateway = (config_dir / "active_gateway").read_text(encoding="utf-8").strip()
+        if active_gateway:
+            return active_gateway
+    except OSError:
+        pass
+
+    if (config_dir / "gateways" / "openshell" / "metadata.json").is_file():
+        return "openshell"
+    return ""
+
+
+def _openshell_gateway_metadata(gateway_name: str) -> dict[str, Any]:
+    if not gateway_name:
+        return {}
+
+    metadata_path = _openshell_config_dir() / "gateways" / gateway_name / "metadata.json"
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return metadata if isinstance(metadata, dict) else {}
+
+
 def _openshell_local_from_path(bundle_dir: Path, source: Any) -> Path | None:
     if not isinstance(source, str) or not source.strip():
         return None
@@ -776,6 +842,11 @@ def _openshell_local_from_path(bundle_dir: Path, source: Any) -> Path | None:
 
 def _build_openshell_from_image(source_path: Path, node_id: Any) -> str:
     console.print(f"[yellow]Building OpenShell sandbox image for {node_id} from {source_path}...[/yellow]")
+    if _openshell_gateway_uses_local_docker():
+        image_ref = _build_local_docker_sandbox_image(source_path)
+        console.print(f"[green]✓ OpenShell sandbox image ready:[/green] {image_ref}")
+        return image_ref
+
     result = subprocess.run(
         [
             "openshell",
@@ -790,6 +861,7 @@ def _build_openshell_from_image(source_path: Path, node_id: Any) -> str:
         ],
         capture_output=True,
         text=True,
+        env=_openshell_env(),
     )
     output = f"{result.stdout}\n{result.stderr}"
     if result.returncode != 0:
@@ -807,6 +879,39 @@ def _build_openshell_from_image(source_path: Path, node_id: Any) -> str:
 
     image_ref = ANSI_ESCAPE_RE.sub("", matches[-1])
     console.print(f"[green]✓ OpenShell sandbox image ready:[/green] {image_ref}")
+    return image_ref
+
+
+def _openshell_gateway_uses_local_docker() -> bool:
+    gateway_name = _openshell_gateway_name()
+    if not gateway_name:
+        return False
+
+    metadata = _openshell_gateway_metadata(gateway_name)
+    if metadata.get("is_remote") is True:
+        return False
+
+    endpoint = metadata.get("gateway_endpoint")
+    if not isinstance(endpoint, str):
+        return False
+    parsed = urllib.parse.urlparse(endpoint)
+    return parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+
+
+def _build_local_docker_sandbox_image(source_path: Path) -> str:
+    source_path = source_path.resolve()
+    digest = hashlib.sha256(str(source_path).encode("utf-8")).hexdigest()[:12]
+    image_ref = f"openshell/sandbox-from:{digest}"
+    result = subprocess.run(
+        ["docker", "build", "-t", image_ref, str(source_path)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        output = f"{result.stdout}\n{result.stderr}".strip()
+        if output:
+            console.print(output)
+        raise typer.Exit(1)
     return image_ref
 
 
@@ -838,6 +943,39 @@ def _blueprint_run_dir(blueprint_run_id: str, env_overrides: dict[str, str]) -> 
     return runs_root / blueprint_run_id
 
 
+def _register_post_launch_hook(
+    bundle_dir: Path,
+    blueprint_run_id: str,
+    *,
+    env_overrides: dict[str, str],
+) -> None:
+    script_path = (bundle_dir / POST_LAUNCH_SCRIPT).resolve()
+    if not script_path.is_file():
+        return
+
+    run_dir = _blueprint_run_dir(blueprint_run_id, env_overrides)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    log_path = run_dir / "post_launch.log"
+    ready_file = run_dir / "pre_launch.ready"
+    state_file = run_dir / "post_launch_state.json"
+    hook_info = {
+        "command": ["bash", str(script_path)],
+        "script": str(script_path),
+        "cwd": str(bundle_dir),
+        "log": str(log_path),
+        "run_id": blueprint_run_id,
+        "bundle_dir": str(bundle_dir),
+        "state_file": str(state_file),
+        "pre_launch_ready_file": str(ready_file),
+        "pre_launch_process_file": str(run_dir / "pre_launch_process.json"),
+        "registered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    (run_dir / "post_launch_hook.json").write_text(
+        json.dumps(hook_info, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _start_pre_launch_hook(
     bundle_dir: Path,
     blueprint_run_id: str,
@@ -866,7 +1004,7 @@ def _start_pre_launch_hook(
         config_overrides=config_overrides,
     )
 
-    env = os.environ.copy()
+    env = _openshell_env()
     env.update(runtime_env)
     env.update({key: str(value) for key, value in (env_overrides or {}).items() if value is not None})
     env.update(
@@ -877,6 +1015,7 @@ def _start_pre_launch_hook(
             "MN_BLUEPRINT_BUNDLE_DIR": str(bundle_dir),
             "MN_BLUEPRINT_CONFIG_JSON": json.dumps(config, sort_keys=True),
             "MN_PRE_LAUNCH_READY_FILE": str(ready_file),
+            "MN_POST_LAUNCH_STATE_FILE": str(run_dir / "post_launch_state.json"),
         }
     )
 
@@ -1390,8 +1529,15 @@ def _launch_blueprint_web_ui_command(
 
 
 def _inject_local_blueprint_support_pythonpath(env: dict[str, str]) -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    support_src = repo_root / "mn-skills" / "blueprint-support-skill" / "src"
+    repo_root = Path(
+        os.getenv("MN_WORKSPACE_ROOT")
+        or os.getenv("MIRROR_NEURON_WORKSPACE")
+        or os.getenv("OTTERDESK_MIRROR_NEURON_WORKSPACE")
+        or Path(__file__).resolve().parents[3]
+    ).expanduser()
+    support_src = repo_root / "mn-skills" / "blueprint_support_skill" / "src"
+    if not support_src.is_dir():
+        support_src = repo_root / "mn-skills" / "blueprint-support-skill" / "src"
     if not support_src.is_dir():
         return
     current = env.get("PYTHONPATH")

@@ -3,7 +3,15 @@ import os
 import time
 from mn_cli.shared import console
 from mn_cli.error_handler import handle_cli_error
-from mn_cli.server_cmds import _start_server, kill_tree, BEAM_PID_FILE, API_PID_FILE, WEB_UI_PID_FILE
+from mn_cli.server_cmds import (
+    _start_server,
+    kill_tree,
+    BEAM_PID_FILE,
+    API_PID_FILE,
+    WEB_UI_PID_FILE,
+    runtime_compose_available,
+    runtime_compose_cmd,
+)
 
 def start():
     """Start MirrorNeuron services"""
@@ -13,9 +21,13 @@ def stop():
     """Stop MirrorNeuron services"""
     console.print("=> Stopping MirrorNeuron Services...")
     
-    console.print("   Stopping Core Service (Docker: mirror-neuron-core)...")
-    subprocess.run(["docker", "stop", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-    subprocess.run(["docker", "rm", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+    if runtime_compose_available():
+        console.print("   Stopping Docker runtime (Compose)...")
+        subprocess.run(runtime_compose_cmd("down"), stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+    else:
+        console.print("   Stopping Core Service (Docker: mirror-neuron-core)...")
+        subprocess.run(["docker", "stop", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        subprocess.run(["docker", "rm", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
     for pid_file, name in [
         (WEB_UI_PID_FILE, "Web UI"),

@@ -1,3 +1,5 @@
+import subprocess
+
 from typer.testing import CliRunner
 from mn_cli.main import app
 
@@ -53,6 +55,24 @@ def test_stop(mocker, tmp_path):
     assert not (tmp_path / "api.pid").exists()
     assert not (tmp_path / "beam.pid").exists()
     assert not (tmp_path / "web-ui.pid").exists()
+
+def test_stop_uses_compose_runtime_when_available(mocker, tmp_path):
+    mock_run = mocker.patch('mn_cli.libs.sys_cmds.subprocess.run')
+    mocker.patch('mn_cli.libs.sys_cmds.runtime_compose_available', return_value=True)
+    mocker.patch('mn_cli.libs.sys_cmds.runtime_compose_cmd', return_value=["docker", "compose", "down"])
+    mock_kill_tree = mocker.patch('mn_cli.libs.sys_cmds.kill_tree')
+    mocker.patch('mn_cli.libs.sys_cmds.os.kill')
+
+    mocker.patch('mn_cli.libs.sys_cmds.API_PID_FILE', tmp_path / "api.pid")
+    mocker.patch('mn_cli.libs.sys_cmds.BEAM_PID_FILE', tmp_path / "beam.pid")
+    mocker.patch('mn_cli.libs.sys_cmds.WEB_UI_PID_FILE', tmp_path / "web-ui.pid")
+    (tmp_path / "api.pid").write_text("12345")
+
+    result = runner.invoke(app, ["stop"])
+
+    assert result.exit_code == 0
+    mock_run.assert_any_call(["docker", "compose", "down"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+    assert mock_kill_tree.call_count == 1
 
 def test_stop_pid_file_invalid(mocker, tmp_path):
     mocker.patch('mn_cli.libs.sys_cmds.subprocess.run')

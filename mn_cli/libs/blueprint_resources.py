@@ -22,6 +22,7 @@ RUN_METADATA_FILES = (
     "web_ui.json",
     "web_ui_process.json",
     "pre_launch_process.json",
+    "post_launch_hook.json",
     "config.json",
 )
 GENERATED_BUNDLE_METADATA_FILES = ("manifest.json", "config/default.json", "config.json", "scenario.json")
@@ -253,7 +254,7 @@ def cleanup_run_records(
                 include_dead=include_dead,
             )
             if action["remove"]:
-                cleanup_pre_launch_process(child, dry_run=dry_run, summary=summary)
+                cleanup_blueprint_host_hooks(child, dry_run=dry_run, summary=summary)
                 cleanup_web_ui_process(child, dry_run=dry_run, summary=summary)
                 remove_path(child, dry_run=dry_run)
                 removed_run_ids.add(child.name)
@@ -279,6 +280,17 @@ def cleanup_run_records(
     return removed_run_ids
 
 
+def cleanup_blueprint_host_hooks(
+    run_dir: Path,
+    *,
+    dry_run: bool,
+    summary: dict[str, Any],
+    reason: str = "run_record_removed",
+) -> None:
+    cleanup_pre_launch_process(run_dir, dry_run=dry_run, summary=summary, reason=reason)
+    cleanup_post_launch_hook(run_dir, dry_run=dry_run, summary=summary, reason=reason)
+
+
 def cleanup_web_ui_process(
     run_dir: Path,
     *,
@@ -296,6 +308,112 @@ def cleanup_web_ui_process(
         summary=summary,
         reason=reason,
     )
+
+
+def cleanup_post_launch_hook(
+    run_dir: Path,
+    *,
+    dry_run: bool,
+    summary: dict[str, Any],
+    reason: str = "run_record_removed",
+) -> None:
+    hook_info = read_json_object(run_dir / "post_launch_hook.json")
+    if not hook_info:
+        return
+
+    script_value = hook_info.get("script")
+    if not isinstance(script_value, str) or not script_value:
+        summary["process_skipped"].append({"path": str(run_dir), "reason": "invalid_post_launch_script"})
+        return
+
+    script_path = Path(script_value)
+    if not script_path.is_file():
+        summary["process_skipped"].append(
+            {"path": str(run_dir), "script": script_value, "reason": "post_launch_script_not_found"}
+        )
+        return
+
+    command = hook_info.get("command")
+    if not isinstance(command, list) or not all(isinstance(part, str) for part in command):
+        command = ["bash", str(script_path)]
+
+    cwd_value = hook_info.get("cwd")
+    cwd = Path(cwd_value) if isinstance(cwd_value, str) and cwd_value else script_path.parent
+    if not cwd.is_dir():
+        cwd = script_path.parent
+
+    log_value = hook_info.get("log")
+    log_path = Path(log_value) if isinstance(log_value, str) and log_value else run_dir / "post_launch.log"
+
+    if dry_run:
+        summary["process_removed"].append(
+            {"path": str(run_dir), "script": str(script_path), "reason": "dry_run"}
+        )
+        return
+
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        summary["errors"].append(f"failed to prepare post-launch log for {run_dir}: {exc}")
+        return
+
+    env = os.environ.copy()
+    env.update(_post_launch_env(run_dir, hook_info, reason=reason))
+    try:
+        timeout = max(float(os.getenv("MN_POST_LAUNCH_TIMEOUT_SECONDS", "10")), 0.1)
+    except ValueError:
+        timeout = 10.0
+
+    try:
+        with log_path.open("a", encoding="utf-8") as log_file:
+            log_file.write(f"\n--- post-launch cleanup reason={reason} ---\n")
+            result = subprocess.run(
+                command,
+                cwd=cwd,
+                env=env,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                timeout=timeout,
+                text=True,
+            )
+    except subprocess.TimeoutExpired:
+        summary["errors"].append(f"post-launch cleanup timed out for {run_dir}; see {log_path}")
+        return
+    except OSError as exc:
+        summary["errors"].append(f"failed to run post-launch cleanup for {run_dir}: {exc}")
+        return
+
+    if result.returncode != 0:
+        summary["errors"].append(
+            f"post-launch cleanup failed for {run_dir} with exit code {result.returncode}; see {log_path}"
+        )
+        return
+
+    summary["process_removed"].append(
+        {"path": str(run_dir), "script": str(script_path), "reason": reason}
+    )
+
+
+def _post_launch_env(run_dir: Path, hook_info: dict[str, Any], *, reason: str) -> dict[str, str]:
+    ready_file = hook_info.get("pre_launch_ready_file")
+    ready_path = Path(ready_file) if isinstance(ready_file, str) and ready_file else run_dir / "pre_launch.ready"
+    pre_launch_process_file = hook_info.get("pre_launch_process_file")
+    state_file = hook_info.get("state_file")
+    env = {
+        "MN_RUN_ID": str(hook_info.get("run_id") or run_dir.name),
+        "MN_RUN_DIR": str(run_dir),
+        "MN_RUNS_ROOT": str(run_dir.parent),
+        "MN_BLUEPRINT_BUNDLE_DIR": str(hook_info.get("bundle_dir") or ""),
+        "MN_PRE_LAUNCH_READY_FILE": str(ready_path),
+        "MN_PRE_LAUNCH_PROCESS_FILE": str(pre_launch_process_file or run_dir / "pre_launch_process.json"),
+        "MN_POST_LAUNCH_STATE_FILE": str(state_file or run_dir / "post_launch_state.json"),
+        "MN_POST_LAUNCH_REASON": reason,
+    }
+    ready = read_json_object(ready_path)
+    ready_env = ready.get("env") if isinstance(ready, dict) else None
+    if isinstance(ready_env, dict):
+        env.update({str(key): str(value) for key, value in ready_env.items() if value is not None})
+    return env
 
 
 def cleanup_pre_launch_process(

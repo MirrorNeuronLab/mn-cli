@@ -7,6 +7,13 @@ from mn_cli.libs.blueprint_cmds import blueprint_app
 
 PACKAGE_NAME = "mirrorneuron-cli"
 FALLBACK_VERSION = "0.0.0"
+MN_ASCII_ART = r"""
+ __  __ _   _
+|  \/  | \ | |
+| |\/| |  \| |
+| |  | | |\  |
+|_|  |_|_| \_|
+""".strip()
 
 app = typer.Typer(help="MirrorNeuron CLI")
 
@@ -18,9 +25,13 @@ def get_version() -> str:
         return FALLBACK_VERSION
 
 
+def format_version() -> str:
+    return f"{MN_ASCII_ART}\nversion {get_version()}"
+
+
 def version_callback(value: bool):
     if value:
-        typer.echo(f"mn {get_version()}")
+        typer.echo(format_version())
         raise typer.Exit()
 
 
@@ -30,6 +41,7 @@ def main(
     version: bool = typer.Option(
         False,
         "--version",
+        "-v",
         callback=version_callback,
         is_eager=True,
         help="Show the installed MirrorNeuron CLI version.",

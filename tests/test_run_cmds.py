@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import subprocess
 import sys
 import uuid
 from pathlib import Path
@@ -29,6 +30,27 @@ def test_validate_success(tmp_path):
     assert result.exit_code == 0
     assert "Job bundle at" in result.stdout
     assert "is valid" in result.stdout
+
+
+def test_openshell_env_prefers_active_gateway_metadata(tmp_path, monkeypatch):
+    config_dir = tmp_path / "openshell-config"
+    gateway_dir = config_dir / "gateways" / "openshell"
+    gateway_dir.mkdir(parents=True)
+    (config_dir / "active_gateway").write_text("openshell\n")
+    (gateway_dir / "metadata.json").write_text(json.dumps({
+        "name": "openshell",
+        "gateway_endpoint": "https://127.0.0.1:8080",
+    }))
+    monkeypatch.setenv("OPENSHELL_CONFIG_DIR", str(config_dir))
+    monkeypatch.delenv("OPENSHELL_GATEWAY", raising=False)
+    monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
+
+    env = run_cmds._openshell_env()
+
+    assert env["OPENSHELL_GATEWAY"] == "openshell"
+    assert "OPENSHELL_GATEWAY_ENDPOINT" not in env
+    assert run_cmds._openshell_gateway_endpoint() == "https://127.0.0.1:8080"
+
 
 def test_validate_not_directory(tmp_path):
     not_a_dir = tmp_path / "not_a_dir"
@@ -312,6 +334,9 @@ def test_run_submits_python_environment_requirements_payload(mocker, tmp_path, m
 
 def test_run_prebuilds_custom_openshell_image_from_payload_directory(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    monkeypatch.setenv("OPENSHELL_CONFIG_DIR", str(tmp_path / "openshell-config"))
+    monkeypatch.delenv("OPENSHELL_GATEWAY", raising=False)
+    monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="openshell-from-run")
     mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
@@ -348,6 +373,7 @@ def test_run_prebuilds_custom_openshell_image_from_payload_directory(mocker, tmp
     assert result.exit_code == 0
     assert "OpenShell sandbox image ready" in result.stdout
     mock_build.assert_called_once()
+    assert mock_build.call_args.kwargs["env"]["OPENSHELL_GATEWAY_ENDPOINT"] == "https://127.0.0.1:8080"
     manifest = json.loads(mock_submit.call_args.args[0])
     assert manifest["nodes"][0]["config"]["custom_openshell_image"] == "detector/openshell_sandbox"
     assert manifest["nodes"][0]["config"]["from"] == "openshell/sandbox-from:123"
@@ -613,6 +639,9 @@ def test_write_local_web_ui_handle_launches_shared_gradio_support_module(tmp_pat
 
 def test_run_starts_pre_launch_hook_before_submit(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    monkeypatch.setenv("OPENSHELL_CONFIG_DIR", str(tmp_path / "openshell-config"))
+    monkeypatch.delenv("OPENSHELL_GATEWAY", raising=False)
+    monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
     mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-pre-launch")
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_completed"}),
@@ -664,6 +693,7 @@ def test_run_starts_pre_launch_hook_before_submit(mocker, tmp_path, monkeypatch)
     command = popen.call_args.args[0]
     env = popen.call_args.kwargs["env"]
     assert command == ["bash", str(script_path.resolve())]
+    assert env["OPENSHELL_GATEWAY_ENDPOINT"] == "https://127.0.0.1:8080"
     assert env["MN_RUN_ID"].startswith("pre-launch-")
     assert env["MN_BLUEPRINT_BUNDLE_DIR"] == str(bundle_dir)
     assert json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])["video_source"]["uri"].startswith("rtsp://")
@@ -721,6 +751,64 @@ def test_run_cleans_pre_launch_hook_on_validation_failure(mocker, tmp_path, monk
 
     mock_submit.assert_not_called()
     mock_killpg.assert_any_call(4343, 15)
+
+
+def test_run_executes_post_launch_hook_after_terminal_status(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-post-launch")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_completed"}),
+    ])
+    mocker.patch("mn_cli.libs.blueprint_resources.process_is_running", return_value=False)
+    post_run = mocker.patch(
+        "mn_cli.libs.blueprint_resources.subprocess.run",
+        return_value=subprocess.CompletedProcess(["bash"], 0),
+    )
+
+    bundle_dir = tmp_path / "post_launch_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {"environment": {}},
+            }
+        ]
+    }))
+    scripts_dir = bundle_dir / "scripts"
+    scripts_dir.mkdir()
+    pre_launch_script = scripts_dir / "pre-launch.sh"
+    pre_launch_script.write_text("#!/usr/bin/env bash\n")
+    post_launch_script = scripts_dir / "post-launch.sh"
+    post_launch_script.write_text("#!/usr/bin/env bash\n")
+
+    process = mocker.Mock(pid=4545)
+    process.poll.return_value = None
+
+    def fake_popen(_command, **kwargs):
+        Path(kwargs["env"]["MN_PRE_LAUNCH_READY_FILE"]).write_text(json.dumps({
+            "status": "ready",
+            "env": {"RTSP_PORT": "8563"},
+        }))
+        return process
+
+    mocker.patch("mn_cli.libs.run_cmds.subprocess.Popen", side_effect=fake_popen)
+
+    run_cmds.run_bundle(
+        str(bundle_dir),
+        follow_seconds=0,
+        env_overrides={"MN_RUN_ID": "post-launch-run"},
+        submission_metadata={"blueprint_run_id": "post-launch-run"},
+    )
+
+    run_dir = tmp_path / "runs" / "post-launch-run"
+    hook_info = json.loads((run_dir / "post_launch_hook.json").read_text())
+    assert hook_info["script"] == str(post_launch_script.resolve())
+    assert hook_info["state_file"] == str(run_dir / "post_launch_state.json")
+    post_run.assert_called_once()
+    assert post_run.call_args.args[0] == ["bash", str(post_launch_script.resolve())]
+    assert post_run.call_args.kwargs["env"]["MN_POST_LAUNCH_REASON"] == "job_completed"
+    assert post_run.call_args.kwargs["env"]["RTSP_PORT"] == "8563"
 
 
 def test_run_records_blueprint_run_id_mapping(mocker, tmp_path, monkeypatch):

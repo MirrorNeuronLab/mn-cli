@@ -35,6 +35,11 @@ class CliConfig:
         )
 
 
+def _mn_home() -> Path:
+    configured_home = os.getenv("MN_HOME") or os.getenv("MIRROR_NEURON_HOME")
+    return Path(configured_home).expanduser() if configured_home else Path.home() / ".mn"
+
+
 def _timeout() -> float | None:
     value = os.getenv("MN_GRPC_TIMEOUT_SECONDS", "10")
     if value.lower() in {"", "none", "0"}:
@@ -50,10 +55,7 @@ def _grpc_auth_token() -> str:
     if token:
         return token
 
-    try:
-        return (Path.home() / ".mirror_neuron" / "grpc_auth.token").read_text().strip()
-    except OSError:
-        return ""
+    return _read_token_file("grpc_auth.token")
 
 
 def _grpc_admin_token() -> str:
@@ -61,7 +63,15 @@ def _grpc_admin_token() -> str:
     if token:
         return token
 
-    try:
-        return (Path.home() / ".mirror_neuron" / "grpc_admin.token").read_text().strip()
-    except OSError:
-        return ""
+    return _read_token_file("grpc_admin.token")
+
+
+def _read_token_file(name: str) -> str:
+    for token_file in (_mn_home() / name, Path.home() / ".mirror_neuron" / name):
+        try:
+            token = token_file.read_text().strip()
+        except OSError:
+            continue
+        if token:
+            return token
+    return ""

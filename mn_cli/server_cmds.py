@@ -1,6 +1,8 @@
 import os
+import json
 import signal
 import secrets
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -15,9 +17,14 @@ from mn_cli.logging_config import configure_logging
 console = Console()
 logger = configure_logging("mn-cli", CliConfig.from_env().log_path)
 
-DIR = Path.home() / ".mirror_neuron"
-PID_DIR = DIR / ".pids"
-LOG_DIR = DIR / ".logs"
+def _mn_home() -> Path:
+    configured_home = os.getenv("MN_HOME") or os.getenv("MIRROR_NEURON_HOME")
+    return Path(configured_home).expanduser() if configured_home else Path.home() / ".mn"
+
+
+DIR = _mn_home()
+PID_DIR = DIR / "pids"
+LOG_DIR = DIR / "logs"
 BEAM_PID_FILE = PID_DIR / "beam.pid"
 API_PID_FILE = PID_DIR / "api.pid"
 WEB_UI_PID_FILE = PID_DIR / "web-ui.pid"
@@ -25,12 +32,46 @@ BEAM_LOG = LOG_DIR / "beam.log"
 API_LOG = LOG_DIR / "api.log"
 WEB_UI_LOG = LOG_DIR / "web-ui.log"
 VENV_DIR = Path.home() / ".local" / "share" / "mn_venv"
+RUNTIME_COMPOSE_FILE = DIR / "docker-compose.yml"
+RUNTIME_COMPOSE_ENV = DIR / "docker-compose.env"
 WEB_UI_DIRS = (
+    DIR / "webui",
     DIR / "web-ui-source",
-    Path(f"{DIR}_ui"),
 )
 WEB_UI_PORT = "5173"
 DEFAULT_HOST = "localhost"
+DEFAULT_DIST_PORT = "4370"
+
+
+def _openshell_config_dir() -> Path:
+    return Path(os.getenv("OPENSHELL_CONFIG_DIR", str(Path.home() / ".config" / "openshell"))).expanduser()
+
+
+def _openshell_gateway_endpoint() -> str:
+    configured_endpoint = os.getenv("OPENSHELL_GATEWAY_ENDPOINT")
+    if configured_endpoint:
+        return configured_endpoint
+
+    gateway_name = os.getenv("OPENSHELL_GATEWAY", "").strip()
+    if not gateway_name:
+        try:
+            gateway_name = (_openshell_config_dir() / "active_gateway").read_text(encoding="utf-8").strip()
+        except OSError:
+            gateway_name = ""
+    if gateway_name:
+        try:
+            metadata = json.loads(
+                (_openshell_config_dir() / "gateways" / gateway_name / "metadata.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+        except (OSError, json.JSONDecodeError):
+            metadata = {}
+        endpoint = metadata.get("gateway_endpoint") if isinstance(metadata, dict) else None
+        if isinstance(endpoint, str) and endpoint.strip():
+            return endpoint.strip()
+
+    return f"https://127.0.0.1:{os.getenv('OPENSHELL_GATEWAY_PORT', '8080')}"
 
 def _env_host(name: str, default: str = DEFAULT_HOST) -> str:
     return os.getenv(name, default).strip() or default
@@ -55,6 +96,42 @@ def _web_ui_host() -> str:
 
 def _docker_publish_host(host: str) -> str:
     return "127.0.0.1" if host == "localhost" else host
+
+def _detect_lan_ip() -> str:
+    try:
+        return socket.gethostbyname(socket.gethostname())
+    except socket.gaierror:
+        pass
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("10.255.255.255", 1))
+        return probe.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+    finally:
+        probe.close()
+
+def _compose_runtime_env(env: dict[str, str], ip: Optional[str]) -> dict[str, str]:
+    compose_env = dict(env)
+    compose_env.setdefault("MN_DIST_PORT", DEFAULT_DIST_PORT)
+    compose_env.setdefault("MN_NODE_ROLE", "runtime")
+
+    if ip:
+        local_ip = _detect_lan_ip()
+        compose_env.setdefault("MN_NODE_NAME", f"mirror_neuron@{local_ip}")
+        if not compose_env.get("MN_CLUSTER_NODES") or compose_env.get("MN_CLUSTER_NODES") == ip:
+            compose_env["MN_CLUSTER_NODES"] = f"mirror_neuron@{ip}"
+        compose_env["MN_REDIS_URL"] = compose_env.get("MN_REDIS_URL") or f"redis://{ip}:6379/0"
+
+    if compose_env.get("MN_NODE_NAME"):
+        dist_port = compose_env.get("MN_DIST_PORT", DEFAULT_DIST_PORT)
+        compose_env.setdefault(
+            "ERL_AFLAGS",
+            f"-kernel inet_dist_listen_min {dist_port} inet_dist_listen_max {dist_port}",
+        )
+
+    return compose_env
 
 def _resolve_mn_cookie() -> str:
     env_cookie = os.getenv("MN_COOKIE", "").strip()
@@ -138,6 +215,20 @@ def check_status(pid_file: Path) -> int:
             return 1 # Stale
     return 2 # Not running
 
+def runtime_compose_available() -> bool:
+    return RUNTIME_COMPOSE_FILE.exists() and RUNTIME_COMPOSE_ENV.exists()
+
+def runtime_compose_cmd(*args: str) -> list[str]:
+    return [
+        "docker",
+        "compose",
+        "--env-file",
+        str(RUNTIME_COMPOSE_ENV),
+        "-f",
+        str(RUNTIME_COMPOSE_FILE),
+        *args,
+    ]
+
 def kill_tree(parent_pid: int):
     try:
         os.kill(parent_pid, 0)
@@ -205,7 +296,7 @@ def _print_service_endpoints(ip: Optional[str], web_ui_available: bool):
     redis_host, redis_port = _redis_host_port(ip)
     epmd_host = _epmd_host()
     dist_host = _dist_host()
-    dist_port = os.getenv("MN_DIST_PORT", "9000-9010" if os.uname().sysname == "Darwin" else "dynamic")
+    dist_port = os.getenv("MN_DIST_PORT", DEFAULT_DIST_PORT)
     web_ui_host = _web_ui_host()
 
     table = Table(title="Service endpoints", show_header=True, header_style="bold")
@@ -216,9 +307,31 @@ def _print_service_endpoints(ip: Optional[str], web_ui_available: bool):
 
     table.add_row("Core gRPC", grpc_host, grpc_port, f"{grpc_host}:{grpc_port}")
     table.add_row("REST API", api_host, api_port, f"http://{api_host}:{api_port}/api/v1")
-    table.add_row("Redis", redis_host, redis_port, f"redis://{redis_host}:{redis_port}/0")
-    table.add_row("Erlang EPMD", epmd_host, "4369", f"{epmd_host}:4369")
-    table.add_row("Erlang dist", dist_host, dist_port, f"{dist_host}:{dist_port}")
+    if runtime_compose_available():
+        table.add_row("Redis", "compose", "6379", "redis://redis:6379/0 (internal)")
+        table.add_row(
+            "Erlang EPMD",
+            os.getenv("MN_EPMD_BIND_HOST", "127.0.0.1"),
+            os.getenv("MN_EPMD_PORT", "4369"),
+            f"{os.getenv('MN_EPMD_BIND_HOST', '127.0.0.1')}:{os.getenv('MN_EPMD_PORT', '4369')}",
+        )
+        table.add_row(
+            "Erlang dist",
+            os.getenv("MN_DIST_BIND_HOST", "127.0.0.1"),
+            dist_port,
+            f"{os.getenv('MN_DIST_BIND_HOST', '127.0.0.1')}:{dist_port}",
+        )
+        table.add_row("Context engine", "compose", "50052", "membrane-context-engine:50052 (internal)")
+        table.add_row(
+            "OpenShell",
+            os.getenv("OPENSHELL_GATEWAY_BIND_HOST", "127.0.0.1"),
+            os.getenv("OPENSHELL_GATEWAY_PORT", "8080"),
+            _openshell_gateway_endpoint(),
+        )
+    else:
+        table.add_row("Redis", redis_host, redis_port, f"redis://{redis_host}:{redis_port}/0")
+        table.add_row("Erlang EPMD", epmd_host, "4369", f"{epmd_host}:4369")
+        table.add_row("Erlang dist", dist_host, dist_port, f"{dist_host}:{dist_port}")
     if web_ui_available:
         table.add_row("Web UI", web_ui_host, WEB_UI_PORT, f"http://{web_ui_host}:{WEB_UI_PORT}")
 
@@ -260,16 +373,18 @@ def _start_server(ip: str = None):
         console.print("[red]Error: MirrorNeuron API is already running.[/red]")
         console.print("Use 'mn stop' to stop it first.")
         raise typer.Exit(1)
-        
-    try:
-        docker_status = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", "mirror-neuron-core"], capture_output=True, text=True)
-        if docker_status.stdout.strip() == "true":
-            console.print("[red]Error: MirrorNeuron Core (Docker) is already running.[/red]")
-            console.print("Use 'mn stop' to stop it first.")
+
+    compose_runtime = runtime_compose_available()
+    if not compose_runtime:
+        try:
+            docker_status = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", "mirror-neuron-core"], capture_output=True, text=True)
+            if docker_status.stdout.strip() == "true":
+                console.print("[red]Error: MirrorNeuron Core (Docker) is already running.[/red]")
+                console.print("Use 'mn stop' to stop it first.")
+                raise typer.Exit(1)
+        except FileNotFoundError:
+            console.print("[red]Error: Docker is not installed or not in PATH.[/red]")
             raise typer.Exit(1)
-    except FileNotFoundError:
-        console.print("[red]Error: Docker is not installed or not in PATH.[/red]")
-        raise typer.Exit(1)
 
     PID_DIR.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -296,97 +411,92 @@ def _start_server(ip: str = None):
     if ip:
         env["MN_CLUSTER_NODES"] = ip
 
-    console.print("=> Starting MirrorNeuron Core Service (Docker)...")
-    logger.info("Starting MirrorNeuron Core Docker container")
-    subprocess.run(["docker", "rm", "-f", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-    
-    cmd = ["docker", "run", "-d", "--name", "mirror-neuron-core"]
-    
-    # We want clustering to work, so we need to set the node name.
-    import socket
-    try:
-        local_ip = socket.gethostbyname(socket.gethostname())
-    except socket.gaierror:
-        local_ip = "127.0.0.1"
-    # As a fallback or override, you could prompt the user, but we'll try to guess it.
-    # To be safe for this specific test, we know local is 192.168.4.25 and remote is 192.168.4.173.
-    # Let's see if we can get the actual external IP:
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        # doesn't even have to be reachable
-        s.connect(('10.255.255.255', 1))
-        local_ip = s.getsockname()[0]
-    except Exception:
-        local_ip = '127.0.0.1'
-    finally:
-        s.close()
-        
-    cmd.extend(["-e", f"MN_NODE_NAME=mirror_neuron@{local_ip}"])
-    cmd.extend(["-e", f"MN_COOKIE={_resolve_mn_cookie()}"])
-    cmd.extend(["-e", f"MN_GRPC_AUTH_TOKEN={env['MN_GRPC_AUTH_TOKEN']}"])
-    cmd.extend(["-e", f"MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN={env['MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN']}"])
-    
-    core_publish_host = _docker_publish_host(env["MN_CORE_HOST"])
-    epmd_publish_host = _docker_publish_host(env["MN_EPMD_HOST"])
-    dist_publish_host = _docker_publish_host(env["MN_DIST_HOST"])
-
-    system_name = os.uname().sysname
-
-    if system_name == "Darwin":
-        cmd.extend(["-p", f"{core_publish_host}:50051:50051", "-p", f"{epmd_publish_host}:4369:4369"])
-        # Publish the distribution ports too
-        for port in range(9000, 9011):
-            cmd.extend(["-p", f"{dist_publish_host}:{port}:{port}"])
-        cmd.extend(["-e", "MN_REDIS_URL=redis://host.docker.internal:6379/0"])
-        cmd.extend(["-e", "MN_EXECUTOR_MAX_CONCURRENCY=50"])
+    if compose_runtime:
+        env = _compose_runtime_env(env, ip)
+        console.print("=> Starting MirrorNeuron Docker runtime (Compose)...")
+        logger.info("Starting MirrorNeuron Docker Compose runtime")
+        try:
+            subprocess.run(runtime_compose_cmd("up", "-d"), check=True, stdout=subprocess.DEVNULL, env=env)
+            console.print("   [green][Started][/green] Docker runtime (Compose project: mirror-neuron)")
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            console.print("[red]Failed to start MirrorNeuron Docker Compose runtime.[/red]")
+            raise typer.Exit(1)
     else:
-        cmd.extend(["--network", "host"])
-        cmd.extend(["-e", "MN_EXECUTOR_MAX_CONCURRENCY=50"])
+        console.print("=> Starting MirrorNeuron Core Service (Docker)...")
+        logger.info("Starting MirrorNeuron Core Docker container")
+        subprocess.run(["docker", "rm", "-f", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
-    if system_name == "Darwin":
-        cmd.extend(["-e", "MN_CORE_HOST=0.0.0.0"])
-    else:
-        cmd.extend(["-e", f"MN_CORE_HOST={env['MN_CORE_HOST']}"])
-        cmd.extend(["-e", f"MN_REDIS_HOST={env['MN_REDIS_HOST']}"])
-        cmd.extend(["-e", f"ERL_EPMD_ADDRESS={env['MN_EPMD_HOST']}"])
+        cmd = ["docker", "run", "-d", "--name", "mirror-neuron-core"]
 
-    if ip:
-        cmd.extend(["-e", f"MN_CLUSTER_NODES=mirror_neuron@{ip}"])
-        # A node joining another should also point its redis to the main cluster leader if not specified
-        cmd.extend(["-e", f"MN_REDIS_URL=redis://{ip}:6379/0"])
+        # We want clustering to work, so we need to set the node name.
+        local_ip = _detect_lan_ip()
 
-    for env_name in [
-        "SLACK_BOT_TOKEN",
-        "SLACK_DEFAULT_CHANNEL",
-        "SLACK_API_BASE_URL",
-        "MN_SLACK_BOT_TOKEN",
-        "MN_SLACK_DEFAULT_CHANNEL",
-        "MN_SLACK_API_BASE_URL",
-    ]:
-        if os.getenv(env_name):
-            cmd.extend(["-e", env_name])
+        cmd.extend(["-e", f"MN_NODE_NAME=mirror_neuron@{local_ip}"])
+        cmd.extend(["-e", f"MN_COOKIE={_resolve_mn_cookie()}"])
+        cmd.extend(["-e", f"MN_GRPC_AUTH_TOKEN={env['MN_GRPC_AUTH_TOKEN']}"])
+        cmd.extend(["-e", f"MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN={env['MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN']}"])
 
-    openshell_container_config_dir = Path(
-        os.getenv(
-            "OPENSHELL_CONTAINER_CONFIG_DIR",
-            str(Path.home() / ".config" / "openshell-mirror-neuron"),
+        core_publish_host = _docker_publish_host(env["MN_CORE_HOST"])
+        epmd_publish_host = _docker_publish_host(env["MN_EPMD_HOST"])
+        dist_publish_host = _docker_publish_host(env["MN_DIST_HOST"])
+
+        system_name = os.uname().sysname
+
+        if system_name == "Darwin":
+            cmd.extend(["-p", f"{core_publish_host}:50051:50051", "-p", f"{epmd_publish_host}:4369:4369"])
+            dist_port = os.getenv("MN_DIST_PORT", DEFAULT_DIST_PORT)
+            cmd.extend(["-p", f"{dist_publish_host}:{dist_port}:{dist_port}"])
+            cmd.extend(["-e", "MN_REDIS_URL=redis://host.docker.internal:6379/0"])
+            cmd.extend(["-e", "MN_EXECUTOR_MAX_CONCURRENCY=50"])
+        else:
+            cmd.extend(["--network", "host"])
+            cmd.extend(["-e", "MN_EXECUTOR_MAX_CONCURRENCY=50"])
+
+        if system_name == "Darwin":
+            cmd.extend(["-e", "MN_CORE_HOST=0.0.0.0"])
+        else:
+            cmd.extend(["-e", f"MN_CORE_HOST={env['MN_CORE_HOST']}"])
+            cmd.extend(["-e", f"MN_REDIS_HOST={env['MN_REDIS_HOST']}"])
+            cmd.extend(["-e", f"ERL_EPMD_ADDRESS={env['MN_EPMD_HOST']}"])
+
+        if ip:
+            cmd.extend(["-e", f"MN_CLUSTER_NODES=mirror_neuron@{ip}"])
+            cmd.extend(["-e", f"MN_REDIS_URL=redis://{ip}:6379/0"])
+
+        cmd.extend(["-e", f"MN_DIST_PORT={os.getenv('MN_DIST_PORT', DEFAULT_DIST_PORT)}"])
+
+        for env_name in [
+            "SLACK_BOT_TOKEN",
+            "SLACK_DEFAULT_CHANNEL",
+            "SLACK_API_BASE_URL",
+            "MN_SLACK_BOT_TOKEN",
+            "MN_SLACK_DEFAULT_CHANNEL",
+            "MN_SLACK_API_BASE_URL",
+        ]:
+            if os.getenv(env_name):
+                cmd.extend(["-e", env_name])
+
+        openshell_container_config_dir = Path(
+            os.getenv(
+                "OPENSHELL_CONTAINER_CONFIG_DIR",
+                str(Path.home() / ".config" / "openshell-mirror-neuron"),
+            )
         )
-    )
-    openshell_config_dir = openshell_container_config_dir
-    if not (openshell_config_dir / "gateways" / "openshell").is_dir():
-        openshell_config_dir = Path.home() / ".config" / "openshell"
-    if (openshell_config_dir / "gateways" / "openshell").is_dir():
-        cmd.extend(["-v", f"{openshell_config_dir}:/root/.config/openshell:ro"])
-        cmd.extend(["-v", f"{openshell_config_dir}:/opt/mirror_neuron/.config/openshell:ro"])
-    
-    cmd.append("mirror-neuron-core:latest")
-    
-    try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
-        console.print("   [green][Started][/green] Core Service (Docker: mirror-neuron-core)")
-    except subprocess.CalledProcessError:
-        console.print("[red]Failed to start Core Service Docker container.[/red]")
-        raise typer.Exit(1)
+        openshell_config_dir = openshell_container_config_dir
+        if not (openshell_config_dir / "gateways" / "openshell").is_dir():
+            openshell_config_dir = Path.home() / ".config" / "openshell"
+        if (openshell_config_dir / "gateways" / "openshell").is_dir():
+            cmd.extend(["-v", f"{openshell_config_dir}:/root/.config/openshell:ro"])
+            cmd.extend(["-v", f"{openshell_config_dir}:/opt/mirror_neuron/.config/openshell:ro"])
+
+        cmd.append("mirror-neuron-core:latest")
+
+        try:
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
+            console.print("   [green][Started][/green] Core Service (Docker: mirror-neuron-core)")
+        except subprocess.CalledProcessError:
+            console.print("[red]Failed to start Core Service Docker container.[/red]")
+            raise typer.Exit(1)
 
     console.print("=> Waiting for Elixir to boot...")
     time.sleep(3)

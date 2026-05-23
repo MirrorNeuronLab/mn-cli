@@ -1,7 +1,7 @@
 import json
 import subprocess
 
-from mn_cli.libs.blueprint_resources import cleanup_blueprint_resources
+from mn_cli.libs.blueprint_resources import cleanup_blueprint_host_hooks, cleanup_blueprint_resources
 
 
 def _completed(command, stdout="", returncode=0, stderr=""):
@@ -143,6 +143,46 @@ def test_cleanup_stops_blueprint_pre_launch_process_with_run_record(mocker, tmp_
     assert not run_dir.exists()
     mock_killpg.assert_called_once_with(5252, 15)
     assert summary["process_removed"][0]["pid"] == 5252
+
+
+def test_cleanup_runs_blueprint_post_launch_hook_with_ready_env(mocker, tmp_path):
+    run_dir = tmp_path / "runs" / "video-run"
+    run_dir.mkdir(parents=True)
+    script = tmp_path / "bundle" / "scripts" / "post-launch.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text("#!/usr/bin/env bash\n")
+    (run_dir / "pre_launch.ready").write_text(json.dumps({
+        "status": "ready",
+        "env": {
+            "RTSP_PORT": "8567",
+            "WEBRTC_PORT": "8891",
+        },
+    }))
+    (run_dir / "post_launch_hook.json").write_text(json.dumps({
+        "command": ["bash", str(script)],
+        "script": str(script),
+        "cwd": str(script.parent.parent),
+        "log": str(run_dir / "post_launch.log"),
+        "run_id": "video-run",
+        "bundle_dir": str(script.parent.parent),
+        "state_file": str(run_dir / "post_launch_state.json"),
+        "pre_launch_ready_file": str(run_dir / "pre_launch.ready"),
+        "pre_launch_process_file": str(run_dir / "pre_launch_process.json"),
+    }))
+    mock_run = mocker.patch(
+        "mn_cli.libs.blueprint_resources.subprocess.run",
+        return_value=subprocess.CompletedProcess(["bash", str(script)], 0),
+    )
+
+    summary = {"process_removed": [], "process_skipped": [], "errors": []}
+    cleanup_blueprint_host_hooks(run_dir, dry_run=False, summary=summary, reason="job_cancelled")
+
+    mock_run.assert_called_once()
+    assert mock_run.call_args.args[0] == ["bash", str(script)]
+    assert mock_run.call_args.kwargs["env"]["MN_POST_LAUNCH_REASON"] == "job_cancelled"
+    assert mock_run.call_args.kwargs["env"]["RTSP_PORT"] == "8567"
+    assert mock_run.call_args.kwargs["env"]["WEBRTC_PORT"] == "8891"
+    assert summary["process_removed"][0]["script"] == str(script)
 
 
 def test_cleanup_removes_dead_labeled_and_named_docker_resources(mocker, tmp_path):

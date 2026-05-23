@@ -1,7 +1,9 @@
 import pytest
 import subprocess
 from io import StringIO
+from pathlib import Path
 from rich.console import Console
+import mn_cli.server_cmds as server_cmds
 from mn_cli.server_cmds import (
     check_status,
     kill_tree,
@@ -11,16 +13,38 @@ from mn_cli.server_cmds import (
     _start_server,
     find_web_ui_dir,
     _start_web_ui_if_installed,
+    _compose_runtime_env,
     _print_service_endpoints,
+    runtime_compose_cmd,
 )
 import typer
+
+ORIGINAL_WEB_UI_DIRS = server_cmds.WEB_UI_DIRS
 
 @pytest.fixture(autouse=True)
 def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_COOKIE", raising=False)
     monkeypatch.delenv("MN_GRPC_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN", raising=False)
-    mocker.patch('mn_cli.server_cmds.DIR', tmp_path / ".mirror_neuron")
+    state_dir = tmp_path / ".mirror_neuron"
+    log_dir = state_dir / ".logs"
+    pid_dir = state_dir / ".pids"
+    mocker.patch('mn_cli.server_cmds.DIR', state_dir)
+    mocker.patch('mn_cli.server_cmds.PID_DIR', pid_dir)
+    mocker.patch('mn_cli.server_cmds.LOG_DIR', log_dir)
+    mocker.patch('mn_cli.server_cmds.BEAM_PID_FILE', pid_dir / "beam.pid")
+    mocker.patch('mn_cli.server_cmds.API_PID_FILE', pid_dir / "api.pid")
+    mocker.patch('mn_cli.server_cmds.WEB_UI_PID_FILE', pid_dir / "web-ui.pid")
+    mocker.patch('mn_cli.server_cmds.BEAM_LOG', log_dir / "beam.log")
+    mocker.patch('mn_cli.server_cmds.API_LOG', log_dir / "api.log")
+    mocker.patch('mn_cli.server_cmds.WEB_UI_LOG', log_dir / "web-ui.log")
+    mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path / "mn_venv")
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_FILE', state_dir / "docker-compose.yml")
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', state_dir / "docker-compose.env")
+    mocker.patch(
+        'mn_cli.server_cmds.WEB_UI_DIRS',
+        (state_dir / "webui", state_dir / "web-ui-source"),
+    )
 
 def test_check_status_running(mocker, tmp_path):
     pid_file = tmp_path / "test.pid"
@@ -168,6 +192,109 @@ def test_start_server_docker_start_fails(mocker, tmp_path):
         _start_server()
     assert exc.value.exit_code == 1
 
+def test_runtime_compose_cmd_uses_installed_runtime_files(mocker, tmp_path):
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_env = tmp_path / "docker-compose.env"
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_FILE', compose_file)
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
+
+    assert runtime_compose_cmd("up", "-d") == [
+        "docker",
+        "compose",
+        "--env-file",
+        str(compose_env),
+        "-f",
+        str(compose_file),
+        "up",
+        "-d",
+    ]
+
+def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_env = tmp_path / "docker-compose.env"
+    compose_file.write_text("services: {}\n")
+    compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
+
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_FILE', compose_file)
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
+    mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
+    mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', ())
+    mocker.patch('mn_cli.server_cmds.time.sleep')
+    mocker.patch('mn_cli.server_cmds.PID_DIR', tmp_path / ".pids")
+    mocker.patch('mn_cli.server_cmds.LOG_DIR', tmp_path / ".logs")
+    mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
+    mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
+    mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path)
+
+    commands = []
+
+    def mock_run(cmd, **kwargs):
+        commands.append(cmd)
+        m = mocker.Mock()
+        m.stdout = "false\n"
+        return m
+
+    mocker.patch('mn_cli.server_cmds.subprocess.run', side_effect=mock_run)
+
+    _start_server()
+
+    assert runtime_compose_cmd("up", "-d") in commands
+    assert all(cmd[:2] != ["docker", "inspect"] for cmd in commands)
+    assert all(cmd[:3] != ["docker", "run", "-d"] for cmd in commands)
+
+def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_env = tmp_path / "docker-compose.env"
+    compose_file.write_text("services: {}\n")
+    compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
+
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_FILE', compose_file)
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
+    mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
+    mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', ())
+    mocker.patch('mn_cli.server_cmds.time.sleep')
+    mocker.patch('mn_cli.server_cmds.PID_DIR', tmp_path / ".pids")
+    mocker.patch('mn_cli.server_cmds.LOG_DIR', tmp_path / ".logs")
+    mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
+    mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
+    mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path)
+    mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.99")
+
+    calls = []
+
+    def mock_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        m = mocker.Mock()
+        m.stdout = "false\n"
+        return m
+
+    mocker.patch('mn_cli.server_cmds.subprocess.run', side_effect=mock_run)
+
+    _start_server(ip="192.168.4.173")
+
+    compose_call = next(item for item in calls if item[0] == runtime_compose_cmd("up", "-d"))
+    env = compose_call[1]["env"]
+    assert env["MN_NODE_NAME"] == "mirror_neuron@192.168.4.99"
+    assert env["MN_CLUSTER_NODES"] == "mirror_neuron@192.168.4.173"
+    assert env["MN_REDIS_URL"] == "redis://192.168.4.173:6379/0"
+    assert env["MN_DIST_PORT"] == "4370"
+    assert env["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 4370 inet_dist_listen_max 4370"
+
+def test_compose_runtime_env_respects_explicit_cluster_names(monkeypatch):
+    env = {
+        "MN_NODE_NAME": "mn2@192.168.4.173",
+        "MN_CLUSTER_NODES": "mn1@192.168.4.10,mn2@192.168.4.173",
+        "MN_REDIS_URL": "redis://192.168.4.10:6379/0",
+        "MN_DIST_PORT": "4500",
+    }
+
+    resolved = _compose_runtime_env(env, ip="192.168.4.10")
+
+    assert resolved["MN_NODE_NAME"] == "mn2@192.168.4.173"
+    assert resolved["MN_CLUSTER_NODES"] == "mn1@192.168.4.10,mn2@192.168.4.173"
+    assert resolved["MN_REDIS_URL"] == "redis://192.168.4.10:6379/0"
+    assert resolved["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 4500 inet_dist_listen_max 4500"
+
 def test_start_server_success(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
     mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', ())
@@ -269,6 +396,12 @@ def test_start_server_passes_slack_env_to_docker(mocker, tmp_path, monkeypatch):
         docker_run.index("SLACK_DEFAULT_CHANNEL") - 1 : docker_run.index("SLACK_DEFAULT_CHANNEL") + 1
     ]
 
+def test_default_web_ui_dirs_use_nested_install_path():
+    assert ORIGINAL_WEB_UI_DIRS == (
+        Path.home() / ".mn" / "webui",
+        Path.home() / ".mn" / "web-ui-source",
+    )
+
 def test_find_web_ui_dir_installed(tmp_path, mocker):
     missing = tmp_path / "missing"
     installed = tmp_path / "web-ui"
@@ -361,3 +494,29 @@ def test_print_service_endpoints_defaults_to_localhost(mocker, monkeypatch):
     assert "localhost" in rendered
     assert "0.0.0.0" not in rendered
     assert "127.0.0.1" not in rendered
+
+def test_print_service_endpoints_marks_compose_internal_services(mocker, monkeypatch, tmp_path):
+    output = StringIO()
+    mocker.patch('mn_cli.server_cmds.console', Console(file=output, force_terminal=False, width=120))
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_env = tmp_path / "docker-compose.env"
+    compose_file.write_text("services: {}\n")
+    compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_FILE', compose_file)
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
+
+    _print_service_endpoints(ip=None, web_ui_available=False)
+
+    rendered = output.getvalue()
+    assert "Core gRPC" in rendered
+    assert "REST API" in rendered
+    assert "Redis" in rendered
+    assert "Redis host" not in rendered
+    assert "redis://redis:6379/0 (internal)" in rendered
+    assert "Context engine" in rendered
+    assert "membrane-context-engine:50052 (internal)" in rendered
+    assert "OpenShell" in rendered
+    assert "https://127.0.0.1:8080" in rendered
+    assert "Erlang EPMD" in rendered
+    assert "Erlang dist" in rendered
+    assert "4370" in rendered

@@ -386,12 +386,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
     procps \\
     && rm -rf /var/lib/apt/lists/*
 
-ARG OPENSHELL_VERSION=v0.0.16
+ARG OPENSHELL_VERSION=v0.0.47
 RUN set -eux; \\
     arch="$(dpkg --print-architecture)"; \\
     case "$arch" in \\
-      arm64) openshell_target="aarch64-unknown-linux-musl"; openshell_sha="7301b47e37f498e6535c0fa3c1f8db505d385719cbe94de10fc1dc69b83e37fb" ;; \\
-      amd64) openshell_target="x86_64-unknown-linux-musl"; openshell_sha="c95ffd08705f3fce6198e5cb9992fa4e8c5eea63b581758c761db5925b92fec5" ;; \\
+      arm64) openshell_target="aarch64-unknown-linux-musl"; openshell_sha="a6aa05593aa5bd6936bbb87fa3958510c1a6d82ef11b8ed8498e884de50847c0" ;; \\
+      amd64) openshell_target="x86_64-unknown-linux-musl"; openshell_sha="75ea23c19c23a931ac34b274f719c60dd20c6f788f2a4551862ec17572d84c17" ;; \\
       *) echo "unsupported architecture for OpenShell: $arch" >&2; exit 1 ;; \\
     esac; \\
     curl -fLsS -o /tmp/openshell.tar.gz \\
@@ -409,7 +409,7 @@ WORKDIR /opt/mirror_neuron
 COPY mirror_neuron /opt/mirror_neuron
 
 ENV HOME=/opt/mirror_neuron
-EXPOSE 50051 4369 9000-9010
+EXPOSE 50051 4369 4370
 
 CMD ["bin/mirror_neuron", "foreground"]
 """

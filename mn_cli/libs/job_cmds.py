@@ -1,10 +1,11 @@
 import json
 import os
+import subprocess
 from pathlib import Path
 from rich.table import Table
 from mn_cli.shared import console, client, logger
 from mn_cli.error_handler import handle_cli_error
-from mn_cli.libs.blueprint_resources import cleanup_pre_launch_process, cleanup_web_ui_process
+from mn_cli.libs.blueprint_resources import cleanup_blueprint_host_hooks, cleanup_web_ui_process
 import typer
 
 
@@ -87,13 +88,18 @@ def _cleanup_cancelled_job_web_ui(job_id: str) -> None:
         return
 
     summary = {"process_removed": [], "process_skipped": [], "errors": []}
-    cleanup_pre_launch_process(run_dir, dry_run=False, summary=summary, reason="job_cancelled")
+    cleanup_blueprint_host_hooks(run_dir, dry_run=False, summary=summary, reason="job_cancelled")
     cleanup_web_ui_process(run_dir, dry_run=False, summary=summary, reason="job_cancelled")
+    _cleanup_local_openshell_sandboxes(job_id, summary)
     for error in summary["errors"]:
         logger.warning("Failed to cleanup web UI for cancelled job %s: %s", job_id, error)
 
 
 def _blueprint_run_id_for_job(job_id: str) -> str | None:
+    run_id = _blueprint_run_id_from_run_store(job_id)
+    if run_id:
+        return run_id
+
     snapshot_path = Path(f"/tmp/mn_{job_id}") / "job_snapshot.json"
     if snapshot_path.is_file():
         try:
@@ -114,6 +120,54 @@ def _blueprint_run_id_for_job(job_id: str) -> str | None:
     run_id = mn_cli_metadata.get("blueprint_run_id") if isinstance(mn_cli_metadata, dict) else None
     return run_id if isinstance(run_id, str) and run_id else None
 
+
+def _blueprint_run_id_from_run_store(job_id: str) -> str | None:
+    runs_root = Path(os.getenv("MN_RUNS_ROOT") or "~/.mn/runs").expanduser()
+    if not runs_root.is_dir():
+        return None
+    for job_file in runs_root.glob("*/job.json"):
+        try:
+            payload = json.loads(job_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if payload.get("job_id") == job_id:
+            run_id = payload.get("run_id") or job_file.parent.name
+            return run_id if isinstance(run_id, str) and run_id else None
+    return None
+
+
+def _cleanup_local_openshell_sandboxes(job_id: str, summary: dict[str, list[str]]) -> None:
+    try:
+        result = subprocess.run(
+            [
+                "docker",
+                "ps",
+                "-a",
+                "--filter",
+                f"name=openshell-mirror-neuron-job-{job_id}",
+                "--format",
+                "{{.Names}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception as error:
+        summary["errors"].append(f"Failed to list OpenShell sandboxes for {job_id}: {error}")
+        return
+
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        summary["errors"].append(f"Failed to list OpenShell sandboxes for {job_id}: {detail}")
+        return
+
+    for name in [line.strip() for line in result.stdout.splitlines() if line.strip()]:
+        remove = subprocess.run(["docker", "rm", "-f", name], capture_output=True, text=True, timeout=20)
+        if remove.returncode == 0:
+            summary["process_removed"].append(name)
+        else:
+            detail = remove.stderr.strip() or remove.stdout.strip()
+            summary["errors"].append(f"Failed to remove OpenShell sandbox {name}: {detail}")
 
 def pause(job_id: str):
     """Pause a running job"""
