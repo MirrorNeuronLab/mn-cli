@@ -259,6 +259,19 @@ def nodes():
         handle_cli_error(e, console, 'nodes')
 
 
+def reconcile_node(
+    node_name: str,
+    reason: str = typer.Option("", "--reason", help="Reason recorded on reconciliation events."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Plan reconciliation without moving work."),
+):
+    """Reconcile jobs affected by an unavailable node"""
+    try:
+        result_json = client.reconcile_node(node_name, reason=reason, dry_run=dry_run)
+        console.print_json(data=json.loads(result_json))
+    except Exception as e:
+        handle_cli_error(e, console, 'reconcile-node')
+
+
 def metrics():
     """Show runtime metrics derived from the core system summary"""
     try:

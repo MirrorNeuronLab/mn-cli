@@ -222,6 +222,24 @@ def test_nodes_error(mocker):
     assert "Error fetching nodes: Fail" in result.stdout
 
 
+def test_reconcile_node_success(mocker):
+    mock_reconcile = mocker.patch(
+        'mn_cli.libs.job_cmds.client.reconcile_node',
+        return_value=json.dumps({"checked": 1, "recovered": 1}),
+    )
+    result = runner.invoke(app, ["reconcile-node", "node@lab", "--reason", "test", "--dry-run"])
+    assert result.exit_code == 0
+    assert '"recovered": 1' in result.stdout
+    mock_reconcile.assert_called_once_with("node@lab", reason="test", dry_run=True)
+
+
+def test_reconcile_node_error(mocker):
+    mocker.patch('mn_cli.libs.job_cmds.client.reconcile_node', side_effect=Exception("Fail"))
+    result = runner.invoke(app, ["reconcile-node", "node@lab"])
+    assert result.exit_code == 0
+    assert "Error reconciling node: Fail" in result.stdout
+
+
 def test_metrics_success(mocker):
     mocker.patch(
         'mn_cli.libs.job_cmds.client.get_system_summary',

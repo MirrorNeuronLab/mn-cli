@@ -65,6 +65,7 @@ app.command(name="pause")(job_cmds.pause)
 app.command(name="resume")(job_cmds.resume)
 app.command(name="unfinished")(job_cmds.unfinished)
 app.command(name="nodes")(job_cmds.nodes)
+app.command(name="reconcile-node")(job_cmds.reconcile_node)
 app.command(name="metrics")(job_cmds.metrics)
 app.command(name="dead-letters")(job_cmds.dead_letters)
 
