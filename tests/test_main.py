@@ -2,7 +2,8 @@ from importlib import metadata
 
 from typer.testing import CliRunner
 
-from mn_cli.main import MN_ASCII_ART, app
+from mn_cli.banner import format_banner
+from mn_cli.main import app
 
 runner = CliRunner()
 
@@ -14,7 +15,7 @@ def test_version_prints_installed_package_version(mocker):
     result = runner.invoke(app, ["--version"])
 
     assert result.exit_code == 0
-    assert result.stdout == f"{MN_ASCII_ART}\nversion 1.2.3\n"
+    assert result.stdout == f"{format_banner('MirrorNeuron CLI')}\nversion 1.2.3\n"
     mock_update_prompt.assert_not_called()
 
 
@@ -27,7 +28,7 @@ def test_version_uses_fallback_when_package_metadata_is_missing(mocker):
     result = runner.invoke(app, ["--version"])
 
     assert result.exit_code == 0
-    assert result.stdout == f"{MN_ASCII_ART}\nversion 0.0.0\n"
+    assert result.stdout == f"{format_banner('MirrorNeuron CLI')}\nversion 0.0.0\n"
 
 
 def test_short_version_flag_prints_banner(mocker):
@@ -36,4 +37,4 @@ def test_short_version_flag_prints_banner(mocker):
     result = runner.invoke(app, ["-v"])
 
     assert result.exit_code == 0
-    assert result.stdout == f"{MN_ASCII_ART}\nversion 1.2.3\n"
+    assert result.stdout == f"{format_banner('MirrorNeuron CLI')}\nversion 1.2.3\n"

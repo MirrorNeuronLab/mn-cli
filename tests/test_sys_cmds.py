@@ -1,6 +1,7 @@
 import subprocess
 
 from typer.testing import CliRunner
+from mn_cli.banner import format_banner
 from mn_cli.main import app
 
 runner = CliRunner()
@@ -9,6 +10,7 @@ def test_start_success(mocker):
     mock_start_server = mocker.patch('mn_cli.libs.sys_cmds._start_server')
     result = runner.invoke(app, ["start"])
     assert result.exit_code == 0
+    assert format_banner("MirrorNeuron Local Runtime") in result.stdout
     mock_start_server.assert_called_once_with()
 
 def test_expose_node_success(mocker):

@@ -5,6 +5,7 @@ from typing import Optional
 
 import typer
 
+from mn_cli.banner import format_banner
 from mn_cli.shared import console
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.server_cmds import (
@@ -24,6 +25,7 @@ from mn_cli.server_cmds import (
 
 def start():
     """Start MirrorNeuron services"""
+    console.print(format_banner("MirrorNeuron Local Runtime"))
     _start_server()
 
 def join(

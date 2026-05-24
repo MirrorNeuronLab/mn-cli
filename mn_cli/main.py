@@ -2,18 +2,12 @@ from importlib import metadata
 
 import typer
 from mn_cli import update_cmds
+from mn_cli.banner import MN_ASCII_ART, format_banner
 from mn_cli.libs import deployment_cmds, job_cmds, resource_cmds, run_cmds, schedule_cmds, service_cmds, sys_cmds
 from mn_cli.libs.blueprint_cmds import blueprint_app
 
 PACKAGE_NAME = "mirrorneuron-cli"
 FALLBACK_VERSION = "0.0.0"
-MN_ASCII_ART = r"""
- __  __ _   _
-|  \/  | \ | |
-| |\/| |  \| |
-| |  | | |\  |
-|_|  |_|_| \_|
-""".strip()
 
 app = typer.Typer(help="MirrorNeuron CLI")
 
@@ -26,7 +20,7 @@ def get_version() -> str:
 
 
 def format_version() -> str:
-    return f"{MN_ASCII_ART}\nversion {get_version()}"
+    return f"{format_banner('MirrorNeuron CLI')}\nversion {get_version()}"
 
 
 def version_callback(value: bool):
