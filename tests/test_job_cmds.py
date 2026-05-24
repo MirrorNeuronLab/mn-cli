@@ -29,12 +29,23 @@ def test_submit_error(mocker, tmp_path):
     assert "Error submitting job: Failed API call" in result.stdout
 
 def test_status_success(mocker):
-    mock_get = mocker.patch('mn_cli.libs.job_cmds.client.get_job', return_value='{"status": "running"}')
+    mock_get = mocker.patch(
+        'mn_cli.libs.job_cmds.client.get_job',
+        return_value=json.dumps({
+            "status": "running",
+            "restart_policy": {"attempts": 3},
+            "reschedule_policy": {"unlimited": True},
+            "policy_state": {"agents": {"worker": {"next_action": "restart"}}},
+        }),
+    )
     
     result = runner.invoke(app, ["status", "job-123"])
     
     assert result.exit_code == 0
     assert "running" in result.stdout
+    assert "restart_policy" in result.stdout
+    assert "policy_state" in result.stdout
+    assert "next_action" in result.stdout
     mock_get.assert_called_once_with("job-123")
 
 def test_status_error(mocker):
@@ -240,6 +251,71 @@ def test_reconcile_node_error(mocker):
     assert "Error reconciling node: Fail" in result.stdout
 
 
+def test_drain_node_success(mocker):
+    mock_drain = mocker.patch(
+        'mn_cli.libs.job_cmds.client.drain_node',
+        return_value=json.dumps({"node": "node@lab", "status": "dry_run"}),
+    )
+    result = runner.invoke(
+        app,
+        ["drain-node", "node@lab", "--reason", "update", "--deadline", "10s", "--dry-run"],
+    )
+    assert result.exit_code == 0
+    assert '"status": "dry_run"' in result.stdout
+    mock_drain.assert_called_once_with(
+        "node@lab",
+        reason="update",
+        deadline_ms=10_000,
+        dry_run=True,
+        ignore_system_jobs=True,
+        wait=False,
+    )
+
+
+def test_drain_node_wait_polls_status(mocker):
+    mocker.patch(
+        'mn_cli.libs.job_cmds.client.drain_node',
+        return_value=json.dumps({"node": "node@lab", "status": "draining"}),
+    )
+    mock_status = mocker.patch(
+        'mn_cli.libs.job_cmds.client.get_node_drain_status',
+        return_value=json.dumps({
+            "node": "node@lab",
+            "status": "maintenance",
+            "scheduling_eligible": False,
+            "drain": {"status": "complete"},
+        }),
+    )
+    mocker.patch('time.sleep')
+
+    result = runner.invoke(app, ["drain-node", "node@lab", "--wait"])
+    assert result.exit_code == 0
+    assert '"status": "complete"' in result.stdout
+    mock_status.assert_called_once_with("node@lab")
+
+
+def test_undrain_node_success(mocker):
+    mock_undrain = mocker.patch(
+        'mn_cli.libs.job_cmds.client.cancel_node_drain',
+        return_value=json.dumps({"node": "node@lab", "scheduling_eligible": True}),
+    )
+    result = runner.invoke(app, ["undrain-node", "node@lab", "--mark-eligible"])
+    assert result.exit_code == 0
+    assert '"scheduling_eligible": true' in result.stdout
+    mock_undrain.assert_called_once_with("node@lab", reason="", mark_eligible=True)
+
+
+def test_maintenance_node_success(mocker):
+    mock_maintenance = mocker.patch(
+        'mn_cli.libs.job_cmds.client.set_node_maintenance',
+        return_value=json.dumps({"node": "node@lab", "status": "maintenance"}),
+    )
+    result = runner.invoke(app, ["maintenance-node", "node@lab", "--enable", "--reason", "patch"])
+    assert result.exit_code == 0
+    assert '"status": "maintenance"' in result.stdout
+    mock_maintenance.assert_called_once_with("node@lab", True, reason="patch")
+
+
 def test_metrics_success(mocker):
     mocker.patch(
         'mn_cli.libs.job_cmds.client.get_system_summary',
@@ -253,12 +329,24 @@ def test_metrics_success(mocker):
 def test_resource_list_success(mocker):
     mock_resource = mocker.patch(
         'mn_cli.libs.resource_cmds.client.get_resource',
-        return_value=json.dumps({"totals": {"cpu_cores": 8}, "limits": {"cpu": 100}}),
+        return_value=json.dumps({
+            "mode": "cluster",
+            "node_count": 2,
+            "nodes": [
+                {"name": "mn1", "cpu_cores": 8, "gpu_count": 2, "memory_gb": 16.0},
+                {"name": "mn2", "cpu_cores": 4, "gpu_count": 0, "memory_gb": 8.0},
+            ],
+            "limits": {"cpu": 100},
+        }),
         create=True,
     )
     result = runner.invoke(app, ["resource", "list"])
     assert result.exit_code == 0
-    assert '"cpu_cores": 8' in result.stdout
+    assert '"combined"' in result.stdout
+    assert '"cpu_cores": 12' in result.stdout
+    assert '"gpu_count": 2' in result.stdout
+    assert '"memory_gb": 24.0' in result.stdout
+    assert '"name": "mn1"' in result.stdout
     mock_resource.assert_called_once()
 
 

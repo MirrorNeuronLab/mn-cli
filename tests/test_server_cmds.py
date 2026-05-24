@@ -10,7 +10,11 @@ from mn_cli.server_cmds import (
     _resolve_grpc_admin_token,
     _resolve_grpc_auth_token,
     _resolve_mn_cookie,
+    _resolve_network_token,
+    _derive_network_secret,
     _start_server,
+    _start_network_seed,
+    _join_network,
     find_web_ui_dir,
     _start_web_ui_if_installed,
     _compose_runtime_env,
@@ -41,6 +45,7 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path / "mn_venv")
     mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_FILE', state_dir / "docker-compose.yml")
     mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', state_dir / "docker-compose.env")
+    mocker.patch('mn_cli.server_cmds.NETWORK_TOKEN_FILE', state_dir / "network.token")
     mocker.patch(
         'mn_cli.server_cmds.WEB_UI_DIRS',
         (state_dir / "webui", state_dir / "web-ui-source"),
@@ -145,6 +150,93 @@ def test_resolve_grpc_admin_token_prefers_env(monkeypatch):
 
     assert _resolve_grpc_admin_token() == "admin-token"
 
+def test_resolve_network_token_generates_and_reuses_persistent_token(tmp_path, mocker):
+    token_dir = tmp_path / "state"
+    mocker.patch('mn_cli.server_cmds.DIR', token_dir)
+    mocker.patch('mn_cli.server_cmds.NETWORK_TOKEN_FILE', token_dir / "network.token")
+    mocker.patch('mn_cli.server_cmds.secrets.token_urlsafe', return_value="fixed-token")
+
+    token = _resolve_network_token()
+
+    assert token == "fixed-token"
+    assert (token_dir / "network.token").read_text().strip() == "fixed-token"
+    assert (token_dir / "network.token").stat().st_mode & 0o777 == 0o600
+    assert _resolve_network_token() == "fixed-token"
+
+def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path):
+    token_file = tmp_path / "network.token"
+    mocker.patch('mn_cli.server_cmds.DIR', tmp_path)
+    mocker.patch('mn_cli.server_cmds.NETWORK_TOKEN_FILE', token_file)
+    mocker.patch('mn_cli.server_cmds.secrets.token_urlsafe', return_value="seed-token")
+    mocker.patch('mn_cli.server_cmds._docker_container_running', return_value=False)
+
+    commands = []
+
+    def mock_run(cmd, **kwargs):
+        commands.append(cmd)
+        m = mocker.Mock()
+        m.returncode = 1 if cmd[:3] == ["docker", "network", "inspect"] else 0
+        m.stdout = "false\n"
+        return m
+
+    mocker.patch('mn_cli.server_cmds.subprocess.run', side_effect=mock_run)
+
+    assert _start_network_seed(
+        host="192.168.4.10",
+        grpc_port=50055,
+        dist_port=4500,
+        redis_port=6380,
+    ) == "seed-token"
+
+    assert token_file.read_text().strip() == "seed-token"
+    assert any(cmd[:4] == ["docker", "run", "-d", "--name"] and cmd[4] == "mirror-neuron-network-redis" for cmd in commands)
+    core_run = next(cmd for cmd in commands if len(cmd) > 4 and cmd[:4] == ["docker", "run", "-d", "--name"] and cmd[4] == "mirror-neuron-network-core")
+    assert "mirror-neuron-core:latest" in core_run
+    assert "redis:7" not in core_run
+    assert "-p" in core_run
+    assert f"MN_COOKIE={_derive_network_secret('seed-token', 'cookie')}" in core_run
+    assert "MN_NETWORK_ONLY=true" in core_run
+    assert "MN_NODE_NAME=mirror_neuron@192.168.4.10" in core_run
+    assert "MN_CLUSTER_NODES=mirror_neuron@192.168.4.10" in core_run
+    assert (
+        f"MN_REDIS_URL=redis://:{_derive_network_secret('seed-token', 'redis')}"
+        "@mirror-neuron-network-redis:6379/0"
+    ) in core_run
+
+def test_add_node_uses_handshake_and_local_core(mocker, tmp_path):
+    import mn_sdk
+    import mn_cli.shared
+
+    mocker.patch('mn_cli.server_cmds.DIR', tmp_path)
+    mocker.patch('mn_cli.server_cmds._docker_container_running', return_value=False)
+
+    class StubClient:
+        def __init__(self, target, auth_token, timeout):
+            assert target == "192.168.4.10:50055"
+            assert auth_token == ""
+            assert timeout == 10
+
+        def network_handshake(self, token):
+            assert token == "join-token"
+            return {
+                "node_name": "mirror_neuron@192.168.4.10",
+                "redis_host": "192.168.4.10",
+                "redis_port": 6380,
+            }
+
+    mocker.patch.object(mn_sdk, "Client", StubClient)
+    mock_add_node = mocker.patch.object(mn_cli.shared.client, "add_node", return_value="connected")
+    mock_run = mocker.patch('mn_cli.server_cmds.subprocess.run')
+
+    _join_network(
+        "192.168.4.10",
+        "join-token",
+        grpc_port=50055,
+    )
+
+    mock_run.assert_not_called()
+    mock_add_node.assert_called_once_with("mirror_neuron@192.168.4.10", token="join-token")
+
 def test_start_server_already_running(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
     (tmp_path / "api.pid").write_text("1234")
@@ -224,6 +316,15 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.LOG_DIR', tmp_path / ".logs")
     mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
+    mocker.patch(
+        'mn_cli.server_cmds._handshake_with_main_node',
+        return_value={
+            "node_name": "mirror_neuron@127.0.0.1",
+            "redis_host": "127.0.0.1",
+            "redis_port": 6379,
+            "redis_url": "redis://127.0.0.1:6379/0",
+        },
+    )
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path)
 
     commands = []
@@ -259,6 +360,15 @@ def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path)
     mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.99")
+    mocker.patch(
+        'mn_cli.server_cmds._handshake_with_main_node',
+        return_value={
+            "node_name": "mirror_neuron@192.168.4.173",
+            "redis_host": "192.168.4.173",
+            "redis_port": 6380,
+            "redis_url": "redis://:redis-secret@192.168.4.173:6380/0",
+        },
+    )
 
     calls = []
 
@@ -270,13 +380,15 @@ def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
 
     mocker.patch('mn_cli.server_cmds.subprocess.run', side_effect=mock_run)
 
-    _start_server(ip="192.168.4.173")
+    _start_server(ip="192.168.4.173", token="join-token")
 
     compose_call = next(item for item in calls if item[0] == runtime_compose_cmd("up", "-d"))
     env = compose_call[1]["env"]
     assert env["MN_NODE_NAME"] == "mirror_neuron@192.168.4.99"
     assert env["MN_CLUSTER_NODES"] == "mirror_neuron@192.168.4.173"
-    assert env["MN_REDIS_URL"] == "redis://192.168.4.173:6379/0"
+    assert env["MN_REDIS_URL"] == "redis://:redis-secret@192.168.4.173:6380/0"
+    assert env["MN_NETWORK_JOIN_TOKEN"] == "join-token"
+    assert env["MN_COOKIE"] == _derive_network_secret("join-token", "cookie")
     assert env["MN_DIST_PORT"] == "4370"
     assert env["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 4370 inet_dist_listen_max 4370"
 
@@ -310,6 +422,15 @@ def test_start_server_success(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.LOG_DIR', tmp_path / ".logs")
     mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
+    mocker.patch(
+        'mn_cli.server_cmds._handshake_with_main_node',
+        return_value={
+            "node_name": "mirror_neuron@127.0.0.1",
+            "redis_host": "127.0.0.1",
+            "redis_port": 6379,
+            "redis_url": "redis://127.0.0.1:6379/0",
+        },
+    )
     
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -324,7 +445,7 @@ def test_start_server_success(mocker, tmp_path):
         sysname = "Linux"
     mocker.patch('mn_cli.server_cmds.os.uname', return_value=UnameMock())
     
-    _start_server(ip="127.0.0.1")
+    _start_server(ip="127.0.0.1", token="join-token")
     
     assert (tmp_path / "api.pid").exists()
     assert (tmp_path / "api.pid").read_text() == "9999"
@@ -498,6 +619,8 @@ def test_print_service_endpoints_defaults_to_localhost(mocker, monkeypatch):
 def test_print_service_endpoints_marks_compose_internal_services(mocker, monkeypatch, tmp_path):
     output = StringIO()
     mocker.patch('mn_cli.server_cmds.console', Console(file=output, force_terminal=False, width=120))
+    monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
+    monkeypatch.setenv("OPENSHELL_CONFIG_DIR", str(tmp_path / "missing-openshell"))
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
     compose_file.write_text("services: {}\n")

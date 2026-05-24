@@ -11,11 +11,64 @@ def test_start_success(mocker):
     assert result.exit_code == 0
     mock_start_server.assert_called_once_with()
 
+def test_expose_node_success(mocker):
+    mock_expose_node = mocker.patch('mn_cli.libs.sys_cmds._start_network_seed')
+    result = runner.invoke(
+        app,
+        [
+            "expose-node",
+            "--host",
+            "192.168.4.10",
+            "--grpc-port",
+            "50055",
+            "--dist-port",
+            "4500",
+            "--redis-port",
+            "6380",
+            "--force-new-token",
+        ],
+    )
+    assert result.exit_code == 0
+    mock_expose_node.assert_called_once_with(
+        host="192.168.4.10",
+        grpc_port=50055,
+        dist_port=4500,
+        redis_port=6380,
+        force_new_token=True,
+    )
+
+def test_add_node_success(mocker):
+    mock_add_node = mocker.patch('mn_cli.libs.sys_cmds._join_network')
+    result = runner.invoke(
+        app,
+        [
+            "add-node",
+            "192.168.4.10",
+            "--token",
+            "join-token",
+            "--grpc-port",
+            "50055",
+        ],
+    )
+    assert result.exit_code == 0
+    mock_add_node.assert_called_once_with(
+        seed_host="192.168.4.10",
+        token="join-token",
+        grpc_port=50055,
+    )
+
 def test_join_success(mocker):
     mock_start_server = mocker.patch('mn_cli.libs.sys_cmds._start_server')
-    result = runner.invoke(app, ["join", "192.168.1.1"])
+    result = runner.invoke(app, ["join", "192.168.1.1", "--token", "join-token"])
     assert result.exit_code == 0
-    mock_start_server.assert_called_once_with("192.168.1.1")
+    mock_start_server.assert_called_once_with(
+        "192.168.1.1",
+        token="join-token",
+        host=None,
+        grpc_port=50051,
+        dist_port=4370,
+        redis_port=None,
+    )
 
 def test_leave_success(mocker):
     import mn_cli.shared
@@ -33,6 +86,7 @@ def test_leave_error(mocker):
     assert "Error removing node: Timeout" in result.stdout
 
 def test_stop(mocker, tmp_path):
+    mocker.patch('mn_cli.libs.sys_cmds._stop_network_runtime')
     mocker.patch('mn_cli.libs.sys_cmds.subprocess.run')
     mock_kill_tree = mocker.patch('mn_cli.libs.sys_cmds.kill_tree')
     mocker.patch('mn_cli.libs.sys_cmds.os.kill')
@@ -57,6 +111,7 @@ def test_stop(mocker, tmp_path):
     assert not (tmp_path / "web-ui.pid").exists()
 
 def test_stop_uses_compose_runtime_when_available(mocker, tmp_path):
+    mocker.patch('mn_cli.libs.sys_cmds._stop_network_runtime')
     mock_run = mocker.patch('mn_cli.libs.sys_cmds.subprocess.run')
     mocker.patch('mn_cli.libs.sys_cmds.runtime_compose_available', return_value=True)
     mocker.patch('mn_cli.libs.sys_cmds.runtime_compose_cmd', return_value=["docker", "compose", "down"])
@@ -75,6 +130,7 @@ def test_stop_uses_compose_runtime_when_available(mocker, tmp_path):
     assert mock_kill_tree.call_count == 1
 
 def test_stop_pid_file_invalid(mocker, tmp_path):
+    mocker.patch('mn_cli.libs.sys_cmds._stop_network_runtime')
     mocker.patch('mn_cli.libs.sys_cmds.subprocess.run')
     mock_kill_tree = mocker.patch('mn_cli.libs.sys_cmds.kill_tree')
     
@@ -91,6 +147,7 @@ def test_stop_pid_file_invalid(mocker, tmp_path):
     assert mock_kill_tree.call_count == 0
 
 def test_stop_kill_oserror(mocker, tmp_path):
+    mocker.patch('mn_cli.libs.sys_cmds._stop_network_runtime')
     mocker.patch('mn_cli.libs.sys_cmds.subprocess.run')
     mock_kill_tree = mocker.patch('mn_cli.libs.sys_cmds.kill_tree')
     mocker.patch('mn_cli.libs.sys_cmds.os.kill', side_effect=OSError("Process not found"))

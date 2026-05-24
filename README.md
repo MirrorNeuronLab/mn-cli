@@ -57,6 +57,7 @@ pip install -e .
 | `MN_GRPC_TIMEOUT_SECONDS` | `10` | RPC timeout. Use `0` or `none` to disable. |
 | `MN_GRPC_AUTH_TOKEN` | `~/.mn/grpc_auth.token` when present | Optional bearer metadata for protected gateways; falls back to the legacy `~/.mirror_neuron/grpc_auth.token` during migration. |
 | `MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN` | unset | Admin token for destructive gRPC operations such as `mn clear`; falls back to `~/.mn/grpc_admin.token`, then the legacy `~/.mirror_neuron/grpc_admin.token`. |
+| `MN_NETWORK_JOIN_TOKEN` | `~/.mn/network.token` for `mn start` and `mn expose-node` | Stable token used to derive cluster cookies and network-mode Redis secrets. |
 | `MN_CLI_LOG_PATH` | `~/.mn/logs/cli.log` | CLI log file path. |
 | `MN_CLI_OUTPUT` | `rich` | Set to `plain` to disable Rich formatting. |
 | `MN_DISABLE_UPDATE_CHECK` | unset | Set to `1`, `true`, or `yes` to disable automatic update checks. |
@@ -106,8 +107,34 @@ Manage local services:
 
 ```bash
 mn start
+mn join <main-host> --token <token>
+mn expose-node
+mn add-node <host> --token <token>
 mn stop
 ```
+
+`mn start` starts the regular local runtime and prints a stable join token stored
+at `~/.mn/network.token`. A second box can join that main runtime with:
+
+```bash
+mn join 192.168.4.10 --token <token>
+```
+
+For the inverse flow, run a core-only exposed node on the second box:
+
+```bash
+mn expose-node
+```
+
+Then add it from the main box:
+
+```bash
+mn add-node 192.168.4.20 --token <token>
+```
+
+`mn expose-node` does not start the REST API process, Web UI, OpenShell, context
+engine, or SDK-facing helpers. Use `mn nodes` or `mn resource list` after join/add
+to inspect aggregate CPU, GPU, memory, and disk across the cluster.
 
 ## Blueprint Commands
 

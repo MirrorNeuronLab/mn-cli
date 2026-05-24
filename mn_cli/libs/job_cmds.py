@@ -272,6 +272,132 @@ def reconcile_node(
         handle_cli_error(e, console, 'reconcile-node')
 
 
+def drain_node(
+    node_name: str,
+    reason: str = typer.Option("", "--reason", help="Reason recorded on drain events."),
+    deadline: str = typer.Option("30m", "--deadline", help="Drain deadline, e.g. 30m, 10s, 1h."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Plan the drain without changing node state."),
+    wait: bool = typer.Option(False, "--wait", help="Poll drain status until it completes or blocks."),
+    ignore_system_jobs: bool = typer.Option(
+        True,
+        "--ignore-system-jobs/--include-system-jobs",
+        help="Ignore system/sysbatch jobs while draining.",
+    ),
+):
+    """Drain a node and move safe workloads elsewhere"""
+    try:
+        deadline_ms = parse_duration_ms(deadline)
+        result_json = client.drain_node(
+            node_name,
+            reason=reason,
+            deadline_ms=deadline_ms,
+            dry_run=dry_run,
+            ignore_system_jobs=ignore_system_jobs,
+            wait=wait,
+        )
+        result = json.loads(result_json)
+
+        if wait and not dry_run:
+            result = wait_for_drain(node_name, result)
+
+        console.print_json(data=result)
+    except Exception as e:
+        handle_cli_error(e, console, 'drain-node')
+
+
+def undrain_node(
+    node_name: str,
+    reason: str = typer.Option("", "--reason", help="Reason recorded on undrain events."),
+    mark_eligible: bool = typer.Option(
+        False,
+        "--mark-eligible",
+        help="Make the node schedulable after cancelling/completing drain.",
+    ),
+):
+    """Cancel node drain and optionally make the node schedulable"""
+    try:
+        result_json = client.cancel_node_drain(
+            node_name,
+            reason=reason,
+            mark_eligible=mark_eligible,
+        )
+        console.print_json(data=json.loads(result_json))
+    except Exception as e:
+        handle_cli_error(e, console, 'undrain-node')
+
+
+def maintenance_node(
+    node_name: str,
+    enable: bool = typer.Option(
+        True,
+        "--enable/--disable",
+        help="Enable or disable maintenance mode.",
+    ),
+    reason: str = typer.Option("", "--reason", help="Reason recorded on maintenance events."),
+):
+    """Toggle node maintenance mode without moving existing work"""
+    try:
+        result_json = client.set_node_maintenance(node_name, enable, reason=reason)
+        console.print_json(data=json.loads(result_json))
+    except Exception as e:
+        handle_cli_error(e, console, 'maintenance-node')
+
+
+def parse_duration_ms(value: str) -> int:
+    text = str(value or "").strip().lower()
+    if not text:
+        raise typer.BadParameter("deadline must not be empty")
+
+    units = {
+        "ms": 1,
+        "s": 1_000,
+        "m": 60_000,
+        "h": 3_600_000,
+    }
+
+    for suffix, multiplier in units.items():
+        if text.endswith(suffix):
+            number = text[: -len(suffix)]
+            break
+    else:
+        number = text
+        multiplier = 1
+
+    try:
+        amount = float(number)
+    except ValueError as exc:
+        raise typer.BadParameter("deadline must be a duration like 30m, 10s, 1h, or 5000ms") from exc
+
+    if amount < 0:
+        raise typer.BadParameter("deadline must be non-negative")
+
+    return int(amount * multiplier)
+
+
+def wait_for_drain(node_name: str, first_result: dict) -> dict:
+    import time
+
+    result = first_result
+    terminal = {"complete", "blocked_no_placement", "paused_for_review", "dry_run"}
+
+    for _ in range(120):
+        if result.get("status") in terminal:
+            return result
+
+        time.sleep(1)
+        status_json = client.get_node_drain_status(node_name)
+        status = json.loads(status_json)
+        drain = status.get("drain") or {}
+        result = {
+            "node": node_name,
+            "status": drain.get("status", status.get("status", "unknown")),
+            "scheduling_eligible": status.get("scheduling_eligible"),
+            "drain": drain,
+        }
+
+    return result
+
+
 def metrics():
     """Show runtime metrics derived from the core system summary"""
     try:
