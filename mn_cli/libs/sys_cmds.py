@@ -16,6 +16,8 @@ from mn_cli.server_cmds import (
     BEAM_PID_FILE,
     API_PID_FILE,
     WEB_UI_PID_FILE,
+    DEFAULT_GRPC_PORT,
+    DEFAULT_DIST_PORT,
     runtime_compose_available,
     runtime_compose_cmd,
 )
@@ -32,8 +34,8 @@ def join(
         "--host",
         help="Advertised host or IP for this joining node.",
     ),
-    grpc_port: int = typer.Option(50051, "--grpc-port", help="Main node gRPC port."),
-    dist_port: int = typer.Option(4370, "--dist-port", help="Local Erlang distribution port."),
+    grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Main node gRPC port."),
+    dist_port: int = typer.Option(int(DEFAULT_DIST_PORT), "--dist-port", help="Local Erlang distribution port."),
     redis_port: Optional[int] = typer.Option(
         None,
         "--redis-port",
@@ -56,8 +58,8 @@ def expose_node(
         "--host",
         help="Advertised host or IP that the main MirrorNeuron node can reach.",
     ),
-    grpc_port: int = typer.Option(50051, "--grpc-port", help="Core gRPC port."),
-    dist_port: int = typer.Option(4370, "--dist-port", help="Erlang distribution port."),
+    grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Core gRPC port."),
+    dist_port: int = typer.Option(int(DEFAULT_DIST_PORT), "--dist-port", help="Erlang distribution port."),
     redis_port: Optional[int] = typer.Option(
         None,
         "--redis-port",
@@ -81,7 +83,7 @@ def expose_node(
 def add_node(
     host: str,
     token: str = typer.Option(..., "--token", help="Token printed by mn expose-node on the remote box."),
-    grpc_port: int = typer.Option(50051, "--grpc-port", help="Remote exposed node gRPC port."),
+    grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Remote exposed node gRPC port."),
 ):
     """Add a remote exposed node to the local/main MirrorNeuron cluster"""
     _join_network(

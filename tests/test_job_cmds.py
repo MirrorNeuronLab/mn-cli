@@ -475,6 +475,7 @@ def test_resource_list_success(mocker):
     assert '"gpu_memory_total_mb": 48000.0' in result.stdout
     assert '"memory_gb": 24.0' in result.stdout
     assert '"name": "mn1"' in result.stdout
+    assert '"native_ports"' in result.stdout
     mock_resource.assert_called_once()
 
 

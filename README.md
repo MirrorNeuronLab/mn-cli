@@ -52,7 +52,7 @@ pip install -e .
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `MN_GRPC_TARGET` | `localhost:50051` | Core gRPC target. |
+| `MN_GRPC_TARGET` | `localhost:55051` | Core gRPC target. |
 | `MN_CORE_GRPC_TARGET` | unset | Fallback core gRPC target. |
 | `MN_GRPC_TIMEOUT_SECONDS` | `10` | RPC timeout. Use `0` or `none` to disable. |
 | `MN_GRPC_AUTH_TOKEN` | `~/.mn/grpc_auth.token` when present | Optional bearer metadata for protected gateways; falls back to the legacy `~/.mirror_neuron/grpc_auth.token` during migration. |

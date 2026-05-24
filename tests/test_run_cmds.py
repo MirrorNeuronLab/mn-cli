@@ -453,7 +453,7 @@ def test_run_prebuilds_custom_openshell_image_from_payload_directory(mocker, tmp
     assert result.exit_code == 0
     assert "OpenShell sandbox image ready" in result.stdout
     mock_build.assert_called_once()
-    assert mock_build.call_args.kwargs["env"]["OPENSHELL_GATEWAY_ENDPOINT"] == "https://127.0.0.1:8080"
+    assert mock_build.call_args.kwargs["env"]["OPENSHELL_GATEWAY_ENDPOINT"] == "http://127.0.0.1:58080"
     manifest = json.loads(mock_submit.call_args.args[0])
     assert manifest["nodes"][0]["config"]["custom_openshell_image"] == "detector/openshell_sandbox"
     assert manifest["nodes"][0]["config"]["from"] == "openshell/sandbox-from:123"
@@ -854,7 +854,7 @@ def test_run_starts_pre_launch_hook_before_submit(mocker, tmp_path, monkeypatch)
     command = popen.call_args.args[0]
     env = popen.call_args.kwargs["env"]
     assert command == ["bash", str(script_path.resolve())]
-    assert env["OPENSHELL_GATEWAY_ENDPOINT"] == "https://127.0.0.1:8080"
+    assert env["OPENSHELL_GATEWAY_ENDPOINT"] == "http://127.0.0.1:58080"
     assert env["MN_RUN_ID"].startswith("pre-launch-")
     assert env["MN_BLUEPRINT_BUNDLE_DIR"] == str(bundle_dir)
     assert json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])["video_source"]["uri"].startswith("rtsp://")

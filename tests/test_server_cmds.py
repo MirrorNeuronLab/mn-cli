@@ -164,7 +164,8 @@ def test_resolve_network_token_generates_and_reuses_persistent_token(tmp_path, m
     assert (token_dir / "network.token").stat().st_mode & 0o777 == 0o600
     assert _resolve_network_token() == "fixed-token"
 
-def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path):
+def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeypatch):
+    monkeypatch.delenv("MN_REDIS_URL", raising=False)
     token_file = tmp_path / "network.token"
     mocker.patch('mn_cli.server_cmds.DIR', tmp_path)
     mocker.patch('mn_cli.server_cmds.NETWORK_TOKEN_FILE', token_file)
@@ -481,8 +482,8 @@ def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
     assert env["MN_CONTEXT_REDIS_URL"] == f"redis://:{redis_password}@192.168.4.173:6380/1"
     assert env["MN_NETWORK_JOIN_TOKEN"] == "join-token"
     assert env["MN_COOKIE"] == _derive_network_secret("join-token", "cookie")
-    assert env["MN_DIST_PORT"] == "4370"
-    assert env["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 4370 inet_dist_listen_max 4370"
+    assert env["MN_DIST_PORT"] == "54370"
+    assert env["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 54370 inet_dist_listen_max 54370"
 
 def test_compose_runtime_env_respects_explicit_cluster_names(monkeypatch):
     env = {
@@ -644,7 +645,7 @@ def test_start_web_ui_if_installed(mocker, tmp_path):
     assert (tmp_path / "web-ui.pid").read_text() == "5173"
     mock_popen.assert_called_once()
     assert mock_popen.call_args.args[0][:3] == ["npm", "run", "dev"]
-    assert mock_popen.call_args.args[0][-1] == "localhost"
+    assert mock_popen.call_args.args[0][-3:] == ["localhost", "--port", "55173"]
     assert mock_popen.call_args.kwargs["cwd"] == web_ui_dir
 
 def test_start_web_ui_missing_noop(mocker, tmp_path):
@@ -662,7 +663,7 @@ def test_print_service_endpoints(mocker, monkeypatch):
     monkeypatch.setenv("MN_API_HOST", "127.0.0.1")
     monkeypatch.setenv("MN_API_PORT", "4401")
     monkeypatch.setenv("MN_REDIS_URL", "redis://redis.local:6380/0")
-    monkeypatch.setenv("MN_DIST_PORT", "4370")
+    monkeypatch.setenv("MN_DIST_PORT", "54370")
 
     _print_service_endpoints(ip=None, web_ui_available=True)
 
@@ -678,9 +679,9 @@ def test_print_service_endpoints(mocker, monkeypatch):
     assert "6380" in rendered
     assert "Erlang EPMD" in rendered
     assert "Erlang dist" in rendered
-    assert "4370" in rendered
+    assert "54370" in rendered
     assert "Web UI" in rendered
-    assert "5173" in rendered
+    assert "55173" in rendered
 
 def test_print_service_endpoints_defaults_to_localhost(mocker, monkeypatch):
     output = StringIO()
@@ -709,7 +710,7 @@ def test_print_service_endpoints_defaults_to_localhost(mocker, monkeypatch):
     assert "0.0.0.0" not in rendered
     assert "127.0.0.1" not in rendered
 
-def test_print_service_endpoints_marks_compose_internal_services(mocker, monkeypatch, tmp_path):
+def test_print_service_endpoints_shows_compose_native_ports(mocker, monkeypatch, tmp_path):
     output = StringIO()
     mocker.patch('mn_cli.server_cmds.console', Console(file=output, force_terminal=False, width=120))
     monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
@@ -735,10 +736,10 @@ def test_print_service_endpoints_marks_compose_internal_services(mocker, monkeyp
     assert "192.168.4.10" in rendered
     assert "56379" in rendered
     assert "auth required" in rendered
-    assert "Context engine" in rendered
-    assert "membrane-context-engine:50052 (internal)" in rendered
+    assert "Context engine" not in rendered
+    assert "internal" not in rendered
     assert "OpenShell" in rendered
-    assert "https://127.0.0.1:8080" in rendered
+    assert "http://127.0.0.1:58080" in rendered
     assert "Erlang EPMD" in rendered
     assert "Erlang dist" in rendered
-    assert "4370" in rendered
+    assert "54370" in rendered

@@ -39,9 +39,20 @@ WEB_UI_DIRS = (
     DIR / "webui",
     DIR / "web-ui-source",
 )
-WEB_UI_PORT = "5173"
 DEFAULT_HOST = "localhost"
-DEFAULT_DIST_PORT = "4370"
+DEFAULT_GRPC_PORT = "55051"
+DEFAULT_API_PORT = "54001"
+DEFAULT_EPMD_PORT = "54369"
+DEFAULT_DIST_PORT = "54370"
+DEFAULT_WEB_UI_PORT = "55173"
+DEFAULT_OPENSHELL_GATEWAY_PORT = "58080"
+LEGACY_GRPC_PORT = "50051"
+LEGACY_API_PORT = "4001"
+LEGACY_EPMD_PORT = "4369"
+LEGACY_DIST_PORT = "4370"
+LEGACY_WEB_UI_PORT = "5173"
+LEGACY_OPENSHELL_GATEWAY_PORT = "8080"
+WEB_UI_PORT = DEFAULT_WEB_UI_PORT
 REDIS_CONTAINER_PORT = 6379
 REDIS_DYNAMIC_PORT_START = 56379
 REDIS_DYNAMIC_PORT_END = 56478
@@ -56,12 +67,13 @@ def _openshell_config_dir() -> Path:
     return Path(os.getenv("OPENSHELL_CONFIG_DIR", str(Path.home() / ".config" / "openshell"))).expanduser()
 
 
-def _openshell_gateway_endpoint() -> str:
-    configured_endpoint = os.getenv("OPENSHELL_GATEWAY_ENDPOINT")
+def _openshell_gateway_endpoint(env: Optional[dict[str, str]] = None) -> str:
+    values = env or os.environ
+    configured_endpoint = values.get("OPENSHELL_GATEWAY_ENDPOINT")
     if configured_endpoint:
         return configured_endpoint
 
-    gateway_name = os.getenv("OPENSHELL_GATEWAY", "").strip()
+    gateway_name = values.get("OPENSHELL_GATEWAY", "").strip()
     if not gateway_name:
         try:
             gateway_name = (_openshell_config_dir() / "active_gateway").read_text(encoding="utf-8").strip()
@@ -80,7 +92,7 @@ def _openshell_gateway_endpoint() -> str:
         if isinstance(endpoint, str) and endpoint.strip():
             return endpoint.strip()
 
-    return f"https://127.0.0.1:{os.getenv('OPENSHELL_GATEWAY_PORT', '8080')}"
+    return f"http://127.0.0.1:{values.get('OPENSHELL_GATEWAY_PORT', DEFAULT_OPENSHELL_GATEWAY_PORT)}"
 
 def _env_host(name: str, default: str = DEFAULT_HOST) -> str:
     return os.getenv(name, default).strip() or default
@@ -257,8 +269,8 @@ def _redis_url_with_database(redis_url: str, database: str) -> str:
 def _avoid_local_compose_port_conflicts(env: dict[str, str]) -> dict[str, str]:
     adjusted = dict(env)
     checks = (
-        ("MN_EPMD_BIND_HOST", "MN_EPMD_PORT", 4369, 14369, "Erlang EPMD"),
-        ("MN_DIST_BIND_HOST", "MN_DIST_PORT", int(DEFAULT_DIST_PORT), 14370, "Erlang distribution"),
+        ("MN_EPMD_BIND_HOST", "MN_EPMD_PORT", int(DEFAULT_EPMD_PORT), int(DEFAULT_EPMD_PORT) + 100, "Erlang EPMD"),
+        ("MN_DIST_BIND_HOST", "MN_DIST_PORT", int(DEFAULT_DIST_PORT), int(DEFAULT_DIST_PORT) + 100, "Erlang distribution"),
     )
 
     for host_key, port_key, default_port, fallback_start, label in checks:
@@ -274,6 +286,13 @@ def _avoid_local_compose_port_conflicts(env: dict[str, str]) -> dict[str, str]:
                 adjusted["ERL_AFLAGS"] = (
                     f"-kernel inet_dist_listen_min {available_port} inet_dist_listen_max {available_port}"
                 )
+    if runtime_compose_available():
+        updates = {
+            key: adjusted[key]
+            for key in ("MN_EPMD_PORT", "MN_DIST_PORT", "ERL_AFLAGS")
+            if key in adjusted
+        }
+        _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
 
     return adjusted
 
@@ -547,7 +566,7 @@ def _start_network_core(env: dict[str, str], host: str, grpc_port: int, dist_por
 
 def _start_network_seed(
     host: Optional[str] = None,
-    grpc_port: int = 50051,
+    grpc_port: int = int(DEFAULT_GRPC_PORT),
     dist_port: int = int(DEFAULT_DIST_PORT),
     redis_port: Optional[int] = None,
     force_new_token: bool = False,
@@ -605,7 +624,7 @@ def _join_network(
     seed_host: str,
     token: str,
     host: Optional[str] = None,
-    grpc_port: int = 50051,
+    grpc_port: int = int(DEFAULT_GRPC_PORT),
     dist_port: int = int(DEFAULT_DIST_PORT),
     redis_port: Optional[int] = None,
 ) -> dict:
@@ -699,6 +718,95 @@ def _runtime_base_env(compose_runtime: bool) -> dict[str, str]:
     env = _read_env_file(RUNTIME_COMPOSE_ENV) if compose_runtime else {}
     env.update(os.environ)
     return env
+
+def _env_or_default(env: dict[str, str], key: str, default: str, legacy_default: Optional[str] = None) -> str:
+    value = str(env.get(key) or "").strip()
+    if os.getenv(key, "").strip():
+        return os.getenv(key, "").strip()
+    if not value or (legacy_default is not None and value == legacy_default):
+        return default
+    return value
+
+def _valid_port_text(value: str, default: str) -> str:
+    parsed = _parse_configured_port(value)
+    if parsed is None:
+        return default
+    return str(parsed)
+
+def _native_endpoint_host(host: str) -> str:
+    normalized = (host or "").strip()
+    if normalized in {"", "0.0.0.0", "::"}:
+        return "127.0.0.1"
+    return normalized
+
+def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
+    adjusted = dict(env)
+    grpc_port = _valid_port_text(
+        _env_or_default(adjusted, "MN_GRPC_PORT", DEFAULT_GRPC_PORT, LEGACY_GRPC_PORT),
+        DEFAULT_GRPC_PORT,
+    )
+    api_port = _valid_port_text(
+        _env_or_default(adjusted, "MN_API_PORT", DEFAULT_API_PORT, LEGACY_API_PORT),
+        DEFAULT_API_PORT,
+    )
+    epmd_port = _valid_port_text(
+        _env_or_default(adjusted, "MN_EPMD_PORT", DEFAULT_EPMD_PORT, LEGACY_EPMD_PORT),
+        DEFAULT_EPMD_PORT,
+    )
+    dist_port = _valid_port_text(
+        _env_or_default(adjusted, "MN_DIST_PORT", DEFAULT_DIST_PORT, LEGACY_DIST_PORT),
+        DEFAULT_DIST_PORT,
+    )
+    web_ui_port = _valid_port_text(
+        _env_or_default(adjusted, "MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT, LEGACY_WEB_UI_PORT),
+        DEFAULT_WEB_UI_PORT,
+    )
+    openshell_port = _valid_port_text(
+        _env_or_default(
+            adjusted,
+            "OPENSHELL_GATEWAY_PORT",
+            DEFAULT_OPENSHELL_GATEWAY_PORT,
+            LEGACY_OPENSHELL_GATEWAY_PORT,
+        ),
+        DEFAULT_OPENSHELL_GATEWAY_PORT,
+    )
+    openshell_bind_host = adjusted.get("OPENSHELL_GATEWAY_BIND_HOST") or "127.0.0.1"
+    openshell_endpoint = _env_or_default(
+        adjusted,
+        "OPENSHELL_GATEWAY_ENDPOINT",
+        f"http://{_native_endpoint_host(openshell_bind_host)}:{openshell_port}",
+        f"http://127.0.0.1:{LEGACY_OPENSHELL_GATEWAY_PORT}",
+    )
+    if not os.getenv("OPENSHELL_GATEWAY_ENDPOINT", "").strip() and openshell_endpoint == (
+        f"https://127.0.0.1:{LEGACY_OPENSHELL_GATEWAY_PORT}"
+    ):
+        openshell_endpoint = f"http://{_native_endpoint_host(openshell_bind_host)}:{openshell_port}"
+    core_grpc_target = adjusted.get("MN_CORE_GRPC_TARGET") or f"localhost:{grpc_port}"
+    if not os.getenv("MN_CORE_GRPC_TARGET", "").strip() and core_grpc_target == f"localhost:{LEGACY_GRPC_PORT}":
+        core_grpc_target = f"localhost:{grpc_port}"
+
+    updates = {
+        "MN_GRPC_BIND_HOST": adjusted.get("MN_GRPC_BIND_HOST") or "127.0.0.1",
+        "MN_GRPC_PORT": grpc_port,
+        "MN_CORE_GRPC_TARGET": core_grpc_target,
+        "MN_API_HOST": adjusted.get("MN_API_HOST") or DEFAULT_HOST,
+        "MN_API_PORT": api_port,
+        "MN_EPMD_BIND_HOST": adjusted.get("MN_EPMD_BIND_HOST") or "127.0.0.1",
+        "MN_EPMD_PORT": epmd_port,
+        "MN_DIST_BIND_HOST": adjusted.get("MN_DIST_BIND_HOST") or "127.0.0.1",
+        "MN_DIST_PORT": dist_port,
+        "MN_WEB_UI_HOST": adjusted.get("MN_WEB_UI_HOST") or DEFAULT_HOST,
+        "MN_WEB_UI_PORT": web_ui_port,
+        "OPENSHELL_GATEWAY_BIND_HOST": openshell_bind_host,
+        "OPENSHELL_GATEWAY_PORT": openshell_port,
+        "OPENSHELL_GATEWAY_ENDPOINT": openshell_endpoint,
+    }
+    if not adjusted.get("ERL_AFLAGS") or LEGACY_DIST_PORT in adjusted.get("ERL_AFLAGS", ""):
+        updates["ERL_AFLAGS"] = f"-kernel inet_dist_listen_min {dist_port} inet_dist_listen_max {dist_port}"
+
+    adjusted.update(updates)
+    _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
+    return adjusted
 
 def _ensure_compose_redis_publish_settings(
     env: dict[str, str],
@@ -838,24 +946,107 @@ def _redis_host_port(ip: Optional[str]) -> tuple[str, str]:
         "6379",
     )
 
-def _print_service_endpoints(ip: Optional[str], web_ui_available: bool):
+def _native_service_endpoints(ip: Optional[str] = None, web_ui_available: bool = False) -> list[dict[str, str]]:
     runtime_env = _runtime_base_env(runtime_compose_available())
-    core_host = runtime_env.get("MN_CORE_HOST") or _core_host()
-    grpc_host, grpc_port = _host_port_from_target(
-        runtime_env.get(
-            "MN_GRPC_TARGET",
-            runtime_env.get("MN_CORE_GRPC_TARGET", f"{core_host}:50051"),
-        ),
-        core_host,
-        runtime_env.get("MN_GRPC_PORT", "50051"),
+    rows: list[dict[str, str]] = []
+
+    if runtime_compose_available():
+        grpc_host = _native_endpoint_host(runtime_env.get("MN_GRPC_BIND_HOST", "127.0.0.1"))
+        grpc_port = runtime_env.get("MN_GRPC_PORT", DEFAULT_GRPC_PORT)
+        api_host = _native_endpoint_host(runtime_env.get("MN_API_HOST") or _api_host())
+        api_port = runtime_env.get("MN_API_PORT", DEFAULT_API_PORT)
+        redis_host = _native_endpoint_host(
+            runtime_env.get("MN_NETWORK_REDIS_HOST")
+            or runtime_env.get("MN_REDIS_BIND_HOST", "0.0.0.0")
+        )
+        redis_port = runtime_env.get("MN_NETWORK_REDIS_PORT") or runtime_env.get(
+            "MN_REDIS_PORT", str(REDIS_CONTAINER_PORT)
+        )
+        epmd_host = _native_endpoint_host(runtime_env.get("MN_EPMD_BIND_HOST", "127.0.0.1"))
+        epmd_port = runtime_env.get("MN_EPMD_PORT", DEFAULT_EPMD_PORT)
+        dist_host = _native_endpoint_host(runtime_env.get("MN_DIST_BIND_HOST", "127.0.0.1"))
+        dist_port = runtime_env.get("MN_DIST_PORT", DEFAULT_DIST_PORT)
+        openshell_host = _native_endpoint_host(runtime_env.get("OPENSHELL_GATEWAY_BIND_HOST", "127.0.0.1"))
+        openshell_port = runtime_env.get("OPENSHELL_GATEWAY_PORT", DEFAULT_OPENSHELL_GATEWAY_PORT)
+        openshell_endpoint = _openshell_gateway_endpoint(runtime_env)
+    else:
+        core_host = runtime_env.get("MN_CORE_HOST") or _core_host()
+        grpc_host, grpc_port = _host_port_from_target(
+            runtime_env.get(
+                "MN_GRPC_TARGET",
+                runtime_env.get("MN_CORE_GRPC_TARGET", f"{core_host}:{DEFAULT_GRPC_PORT}"),
+            ),
+            core_host,
+            runtime_env.get("MN_GRPC_PORT", DEFAULT_GRPC_PORT),
+        )
+        api_host = runtime_env.get("MN_API_HOST") or _api_host()
+        api_port = runtime_env.get("MN_API_PORT", DEFAULT_API_PORT)
+        redis_host, redis_port = _redis_host_port(ip)
+        epmd_host = runtime_env.get("MN_EPMD_HOST") or _epmd_host()
+        epmd_port = runtime_env.get("MN_EPMD_PORT", DEFAULT_EPMD_PORT)
+        dist_host = runtime_env.get("MN_DIST_HOST") or _dist_host()
+        dist_port = runtime_env.get("MN_DIST_PORT", DEFAULT_DIST_PORT)
+        openshell_host = ""
+        openshell_port = ""
+        openshell_endpoint = ""
+
+    rows.extend(
+        [
+            {"service": "Core gRPC", "host": grpc_host, "port": str(grpc_port), "target": f"{grpc_host}:{grpc_port}"},
+            {
+                "service": "REST API",
+                "host": api_host,
+                "port": str(api_port),
+                "target": f"http://{api_host}:{api_port}/api/v1",
+            },
+            {
+                "service": "Redis",
+                "host": redis_host,
+                "port": str(redis_port),
+                "target": f"redis://{redis_host}:{redis_port}/0"
+                + (" (auth required)" if runtime_compose_available() else ""),
+            },
+            {
+                "service": "Erlang EPMD",
+                "host": epmd_host,
+                "port": str(epmd_port),
+                "target": f"{epmd_host}:{epmd_port}",
+            },
+            {
+                "service": "Erlang dist",
+                "host": dist_host,
+                "port": str(dist_port),
+                "target": f"{dist_host}:{dist_port}",
+            },
+        ]
     )
-    api_host = runtime_env.get("MN_API_HOST") or _api_host()
-    api_port = runtime_env.get("MN_API_PORT", "4001")
-    redis_host, redis_port = _redis_host_port(ip)
-    epmd_host = runtime_env.get("MN_EPMD_HOST") or _epmd_host()
-    dist_host = runtime_env.get("MN_DIST_HOST") or _dist_host()
-    dist_port = runtime_env.get("MN_DIST_PORT", DEFAULT_DIST_PORT)
-    web_ui_host = runtime_env.get("MN_WEB_UI_HOST") or _web_ui_host()
+    if runtime_compose_available():
+        rows.append(
+            {
+                "service": "OpenShell",
+                "host": openshell_host,
+                "port": str(openshell_port),
+                "target": openshell_endpoint,
+            }
+        )
+    if web_ui_available:
+        web_ui_host = runtime_env.get("MN_WEB_UI_HOST") or _web_ui_host()
+        web_ui_port = runtime_env.get("MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT)
+        rows.append(
+            {
+                "service": "Web UI",
+                "host": web_ui_host,
+                "port": str(web_ui_port),
+                "target": f"http://{web_ui_host}:{web_ui_port}",
+            }
+        )
+    return rows
+
+def native_service_ports() -> list[dict[str, str]]:
+    return _native_service_endpoints(web_ui_available=True)
+
+def _print_service_endpoints(ip: Optional[str], web_ui_available: bool):
+    rows = _native_service_endpoints(ip=ip, web_ui_available=web_ui_available)
 
     table = Table(title="Service endpoints", show_header=True, header_style="bold")
     table.add_column("Service")
@@ -863,46 +1054,12 @@ def _print_service_endpoints(ip: Optional[str], web_ui_available: bool):
     table.add_column("Port")
     table.add_column("URL / target")
 
-    table.add_row("Core gRPC", grpc_host, grpc_port, f"{grpc_host}:{grpc_port}")
-    table.add_row("REST API", api_host, api_port, f"http://{api_host}:{api_port}/api/v1")
-    if runtime_compose_available():
-        published_redis_host = runtime_env.get("MN_NETWORK_REDIS_HOST") or runtime_env.get("MN_REDIS_BIND_HOST", "0.0.0.0")
-        published_redis_port = runtime_env.get("MN_NETWORK_REDIS_PORT") or runtime_env.get("MN_REDIS_PORT", str(REDIS_CONTAINER_PORT))
-        table.add_row(
-            "Redis",
-            published_redis_host,
-            published_redis_port,
-            f"redis://{published_redis_host}:{published_redis_port}/0 (auth required)",
-        )
-        table.add_row(
-            "Erlang EPMD",
-            runtime_env.get("MN_EPMD_BIND_HOST", "127.0.0.1"),
-            runtime_env.get("MN_EPMD_PORT", "4369"),
-            f"{runtime_env.get('MN_EPMD_BIND_HOST', '127.0.0.1')}:{runtime_env.get('MN_EPMD_PORT', '4369')}",
-        )
-        table.add_row(
-            "Erlang dist",
-            runtime_env.get("MN_DIST_BIND_HOST", "127.0.0.1"),
-            dist_port,
-            f"{runtime_env.get('MN_DIST_BIND_HOST', '127.0.0.1')}:{dist_port}",
-        )
-        table.add_row("Context engine", "compose", "50052", "membrane-context-engine:50052 (internal)")
-        table.add_row(
-            "OpenShell",
-            os.getenv("OPENSHELL_GATEWAY_BIND_HOST", "127.0.0.1"),
-            os.getenv("OPENSHELL_GATEWAY_PORT", "8080"),
-            _openshell_gateway_endpoint(),
-        )
-    else:
-        table.add_row("Redis", redis_host, redis_port, f"redis://{redis_host}:{redis_port}/0")
-        table.add_row("Erlang EPMD", epmd_host, "4369", f"{epmd_host}:4369")
-        table.add_row("Erlang dist", dist_host, dist_port, f"{dist_host}:{dist_port}")
-    if web_ui_available:
-        table.add_row("Web UI", web_ui_host, WEB_UI_PORT, f"http://{web_ui_host}:{WEB_UI_PORT}")
+    for row in rows:
+        table.add_row(row["service"], row["host"], row["port"], row["target"])
 
     console.print(table)
 
-def _start_web_ui_if_installed() -> bool:
+def _start_web_ui_if_installed(runtime_env: Optional[dict[str, str]] = None) -> bool:
     web_ui_dir = find_web_ui_dir()
     if not web_ui_dir:
         return False
@@ -914,15 +1071,19 @@ def _start_web_ui_if_installed() -> bool:
     if status == 1:
         WEB_UI_PID_FILE.unlink(missing_ok=True)
 
-    web_ui_host = _web_ui_host()
     env = os.environ.copy()
+    if runtime_env:
+        env.update(runtime_env)
+    web_ui_host = env.get("MN_WEB_UI_HOST") or _web_ui_host()
     env.setdefault("MN_WEB_UI_HOST", web_ui_host)
     env.setdefault("MN_API_HOST", _api_host())
-    env.setdefault("MN_API_PORT", os.getenv("MN_API_PORT", "4001"))
-    console.print(f"=> Starting mn-web-ui (Vite on {web_ui_host}:5173)...")
+    env.setdefault("MN_API_PORT", os.getenv("MN_API_PORT", DEFAULT_API_PORT))
+    web_ui_port = env.get("MN_WEB_UI_PORT") or os.getenv("MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT)
+    env["MN_WEB_UI_PORT"] = web_ui_port
+    console.print(f"=> Starting mn-web-ui (Vite on {web_ui_host}:{web_ui_port})...")
     with open(WEB_UI_LOG, "w") as out:
         p_web = subprocess.Popen(
-            ["npm", "run", "dev", "--", "--host", web_ui_host],
+            ["npm", "run", "dev", "--", "--host", web_ui_host, "--port", web_ui_port],
             cwd=web_ui_dir,
             stdout=out,
             stderr=subprocess.STDOUT,
@@ -938,7 +1099,7 @@ def _start_server(
     *,
     token: Optional[str] = None,
     host: Optional[str] = None,
-    grpc_port: int = 50051,
+    grpc_port: int = int(DEFAULT_GRPC_PORT),
     dist_port: int = int(DEFAULT_DIST_PORT),
     redis_port: Optional[int] = None,
 ):
@@ -977,6 +1138,7 @@ def _start_server(
     env = _runtime_base_env(compose_runtime)
     local_redis_port: Optional[int] = None
     if compose_runtime:
+        env = _ensure_compose_native_port_settings(env)
         env, local_redis_port = _ensure_compose_redis_publish_settings(
             env,
             token=network_token,
@@ -1004,7 +1166,11 @@ def _start_server(
     env.setdefault("MN_EPMD_HOST", "0.0.0.0")
     env.setdefault("MN_DIST_HOST", "0.0.0.0")
     env.setdefault("MN_WEB_UI_HOST", _web_ui_host())
-    env.setdefault("MN_CORE_GRPC_TARGET", f"localhost:{os.getenv('MN_GRPC_PORT', '50051')}")
+    env.setdefault("MN_GRPC_PORT", str(grpc_port))
+    env.setdefault("MN_API_PORT", DEFAULT_API_PORT)
+    env.setdefault("MN_EPMD_PORT", DEFAULT_EPMD_PORT)
+    env.setdefault("MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT)
+    env.setdefault("MN_CORE_GRPC_TARGET", f"localhost:{env.get('MN_GRPC_PORT', DEFAULT_GRPC_PORT)}")
     env["MN_NETWORK_JOIN_TOKEN"] = network_token
     env["MN_NETWORK_ADVERTISE_HOST"] = advertised_host
     env["MN_NETWORK_REDIS_HOST"] = seed_redis_host
@@ -1093,6 +1259,7 @@ def _start_server(
         cmd.extend(["-e", f"MN_NETWORK_REDIS_PORT={env['MN_NETWORK_REDIS_PORT']}"])
         cmd.extend(["-e", f"MN_CLUSTER_NODES={env['MN_CLUSTER_NODES']}"])
         cmd.extend(["-e", f"MN_NODE_ROLE={env['MN_NODE_ROLE']}"])
+        cmd.extend(["-e", f"MN_GRPC_PORT={env['MN_GRPC_PORT']}"])
         cmd.extend(["-e", f"MN_DIST_PORT={env['MN_DIST_PORT']}"])
         cmd.extend(["-e", f"ERL_AFLAGS={env['ERL_AFLAGS']}"])
 
@@ -1103,7 +1270,14 @@ def _start_server(
         system_name = os.uname().sysname
 
         if system_name == "Darwin":
-            cmd.extend(["-p", f"{core_publish_host}:50051:50051", "-p", f"{epmd_publish_host}:4369:4369"])
+            cmd.extend(
+                [
+                    "-p",
+                    f"{core_publish_host}:{env['MN_GRPC_PORT']}:{env['MN_GRPC_PORT']}",
+                    "-p",
+                    f"{epmd_publish_host}:{env['MN_EPMD_PORT']}:4369",
+                ]
+            )
             cmd.extend(["-p", f"{dist_publish_host}:{env['MN_DIST_PORT']}:{env['MN_DIST_PORT']}"])
             cmd.extend(["-e", f"MN_REDIS_URL={env.get('MN_REDIS_URL', 'redis://host.docker.internal:6379/0')}"])
             cmd.extend(["-e", "MN_EXECUTOR_MAX_CONCURRENCY=50"])
@@ -1158,7 +1332,7 @@ def _start_server(
 
     api_bin = VENV_DIR / "bin" / "mn-api"
     if api_bin.exists():
-        console.print("=> Starting mn-api (REST on port 4001)...")
+        console.print(f"=> Starting mn-api (REST on port {env.get('MN_API_PORT', DEFAULT_API_PORT)})...")
         with open(API_LOG, "w") as out:
             p_api = subprocess.Popen(
                 [str(api_bin)],
@@ -1172,7 +1346,7 @@ def _start_server(
     else:
         console.print("[yellow]=> Warning: mn-api not found, skipping.[/yellow]")
 
-    web_ui_available = _start_web_ui_if_installed()
+    web_ui_available = _start_web_ui_if_installed(env)
 
     console.print("\n===========================================")
     if ip:

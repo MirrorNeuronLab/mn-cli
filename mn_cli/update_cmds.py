@@ -409,7 +409,7 @@ WORKDIR /opt/mirror_neuron
 COPY mirror_neuron /opt/mirror_neuron
 
 ENV HOME=/opt/mirror_neuron
-EXPOSE 50051 4369 4370
+EXPOSE 55051 4369 54370
 
 CMD ["bin/mirror_neuron", "foreground"]
 """

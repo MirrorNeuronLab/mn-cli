@@ -7,7 +7,7 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class CliConfig:
-    grpc_target: str = "localhost:50051"
+    grpc_target: str = "localhost:55051"
     grpc_timeout_seconds: float | None = 10.0
     grpc_auth_token: str = ""
     grpc_admin_token: str = ""
@@ -16,11 +16,18 @@ class CliConfig:
 
     @classmethod
     def from_env(cls) -> "CliConfig":
-        core_host = os.getenv("MN_CORE_HOST", "localhost")
+        runtime_env = _read_env_file(_mn_home() / "docker-compose.env")
+        core_host = os.getenv("MN_CORE_HOST") or runtime_env.get("MN_CORE_HOST") or "localhost"
+        grpc_port = os.getenv("MN_GRPC_PORT") or runtime_env.get("MN_GRPC_PORT") or "55051"
         return cls(
             grpc_target=os.getenv(
                 "MN_GRPC_TARGET",
-                os.getenv("MN_CORE_GRPC_TARGET", f"{core_host}:50051"),
+                os.getenv(
+                    "MN_CORE_GRPC_TARGET",
+                    runtime_env.get("MN_GRPC_TARGET")
+                    or runtime_env.get("MN_CORE_GRPC_TARGET")
+                    or f"{core_host}:{grpc_port}",
+                ),
             ),
             grpc_timeout_seconds=_timeout(),
             grpc_auth_token=_grpc_auth_token(),
@@ -38,6 +45,22 @@ class CliConfig:
 def _mn_home() -> Path:
     configured_home = os.getenv("MN_HOME") or os.getenv("MIRROR_NEURON_HOME")
     return Path(configured_home).expanduser() if configured_home else Path.home() / ".mn"
+
+
+def _read_env_file(path: Path) -> dict[str, str]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+
+    values: dict[str, str] = {}
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        values[key] = value
+    return values
 
 
 def _timeout() -> float | None:

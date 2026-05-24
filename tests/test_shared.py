@@ -36,7 +36,7 @@ def test_shared_client_omits_admin_token_for_older_sdk(monkeypatch, tmp_path):
 
     assert calls == [
         {
-            "target": "localhost:50051",
+            "target": "localhost:55051",
             "timeout": 10.0,
             "auth_token": "",
         }
@@ -63,7 +63,7 @@ def test_shared_client_passes_admin_token_for_current_sdk(monkeypatch, tmp_path)
 
     assert calls == [
         {
-            "target": "localhost:50051",
+            "target": "localhost:55051",
             "timeout": 10.0,
             "auth_token": "",
             "admin_token": "admin-secret",

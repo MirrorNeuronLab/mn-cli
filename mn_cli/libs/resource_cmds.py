@@ -15,9 +15,21 @@ def list_resources():
     """Show CPU, GPU, memory, and disk resources reported by the core"""
     try:
         resource = json.loads(client.get_resource())
-        console.print_json(data=ensure_combined_resource_totals(resource))
+        enriched = ensure_combined_resource_totals(resource)
+        if isinstance(enriched, dict):
+            enriched = dict(enriched)
+            enriched["native_ports"] = native_ports_payload()
+        console.print_json(data=enriched)
     except Exception as e:
         handle_cli_error(e, console, "resource list")
+
+
+@resource_app.command(name="ports")
+def list_native_ports():
+    """Show native OS ports used by the local runtime"""
+    from mn_cli.server_cmds import _print_service_endpoints
+
+    _print_service_endpoints(ip=None, web_ui_available=True)
 
 
 @resource_app.command(name="set")
@@ -118,3 +130,9 @@ def resource_number(value: Any) -> float:
         except ValueError:
             return 0.0
     return 0.0
+
+
+def native_ports_payload() -> list[dict[str, str]]:
+    from mn_cli.server_cmds import native_service_ports
+
+    return native_service_ports()

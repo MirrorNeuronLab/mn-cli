@@ -65,8 +65,8 @@ def test_join_success(mocker):
         "192.168.1.1",
         token="join-token",
         host=None,
-        grpc_port=50051,
-        dist_port=4370,
+        grpc_port=55051,
+        dist_port=54370,
         redis_port=None,
     )
 

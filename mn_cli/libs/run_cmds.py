@@ -941,7 +941,7 @@ def _openshell_gateway_endpoint() -> str:
         if isinstance(endpoint, str) and endpoint.strip():
             return endpoint.strip()
 
-    return f"https://127.0.0.1:{os.getenv('OPENSHELL_GATEWAY_PORT', '8080')}"
+    return f"http://127.0.0.1:{os.getenv('OPENSHELL_GATEWAY_PORT', '58080')}"
 
 
 def _openshell_env() -> dict[str, str]:
