@@ -42,7 +42,11 @@ WEB_UI_DIRS = (
 WEB_UI_PORT = "5173"
 DEFAULT_HOST = "localhost"
 DEFAULT_DIST_PORT = "4370"
+REDIS_CONTAINER_PORT = 6379
+REDIS_DYNAMIC_PORT_START = 56379
+REDIS_DYNAMIC_PORT_END = 56478
 NETWORK_TOKEN_FILE = DIR / "network.token"
+NETWORK_REDIS_ENV_FILE = DIR / "network-redis.env"
 NETWORK_DOCKER_NETWORK = "mirror-neuron-network"
 NETWORK_CORE_CONTAINER = "mirror-neuron-network-core"
 NETWORK_REDIS_CONTAINER = "mirror-neuron-network-redis"
@@ -125,24 +129,153 @@ def _detect_lan_ip() -> str:
 
 def _compose_runtime_env(env: dict[str, str], ip: Optional[str]) -> dict[str, str]:
     compose_env = dict(env)
-    compose_env.setdefault("MN_DIST_PORT", DEFAULT_DIST_PORT)
     compose_env.setdefault("MN_NODE_ROLE", "runtime")
 
     if ip:
+        compose_env.setdefault("MN_DIST_PORT", DEFAULT_DIST_PORT)
         local_ip = _detect_lan_ip()
         compose_env.setdefault("MN_NODE_NAME", f"mirror_neuron@{local_ip}")
         if not compose_env.get("MN_CLUSTER_NODES") or compose_env.get("MN_CLUSTER_NODES") == ip:
             compose_env["MN_CLUSTER_NODES"] = f"mirror_neuron@{ip}"
         compose_env["MN_REDIS_URL"] = compose_env.get("MN_REDIS_URL") or f"redis://{ip}:6379/0"
 
-    if compose_env.get("MN_NODE_NAME"):
-        dist_port = compose_env.get("MN_DIST_PORT", DEFAULT_DIST_PORT)
-        compose_env.setdefault(
-            "ERL_AFLAGS",
-            f"-kernel inet_dist_listen_min {dist_port} inet_dist_listen_max {dist_port}",
-        )
+        if compose_env.get("MN_NODE_NAME"):
+            dist_port = compose_env.get("MN_DIST_PORT", DEFAULT_DIST_PORT)
+            compose_env.setdefault(
+                "ERL_AFLAGS",
+                f"-kernel inet_dist_listen_min {dist_port} inet_dist_listen_max {dist_port}",
+            )
 
     return compose_env
+
+def _host_port_available(host: str, port: int) -> bool:
+    bind_host = "127.0.0.1" if host in {"", "localhost"} else host
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind((bind_host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+def _container_publishes_port(container_name: str, target_port: int, published_port: int) -> bool:
+    try:
+        result = subprocess.run(
+            ["docker", "port", container_name, f"{target_port}/tcp"],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return False
+    if result.returncode != 0:
+        return False
+
+    for line in result.stdout.splitlines():
+        _, _, port_text = line.rpartition(":")
+        try:
+            if int(port_text) == published_port:
+                return True
+        except ValueError:
+            continue
+    return False
+
+def _port_available_or_owned(host: str, port: int, owner_container: str, target_port: int) -> bool:
+    return _host_port_available(host, port) or _container_publishes_port(owner_container, target_port, port)
+
+def _find_available_port(host: str, preferred: int, fallback_start: int) -> int:
+    if _host_port_available(host, preferred):
+        return preferred
+
+    for candidate in range(fallback_start, fallback_start + 100):
+        if _host_port_available(host, candidate):
+            return candidate
+    return preferred
+
+def _find_available_published_port(host: str, preferred: int, owner_container: str, target_port: int) -> int:
+    if _port_available_or_owned(host, preferred, owner_container, target_port):
+        return preferred
+
+    for candidate in range(REDIS_DYNAMIC_PORT_START, REDIS_DYNAMIC_PORT_END + 1):
+        if _port_available_or_owned(host, candidate, owner_container, target_port):
+            return candidate
+    return 0
+
+def _parse_configured_port(value: object) -> Optional[int]:
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        port = int(str(value).strip())
+    except ValueError:
+        return None
+    if 1 <= port <= 65535:
+        return port
+    return None
+
+def _resolve_published_redis_port(
+    *,
+    bind_host: str,
+    configured_port: object,
+    explicit: bool,
+    owner_container: str,
+) -> int:
+    requested_port = _parse_configured_port(configured_port)
+    if explicit:
+        if requested_port is None:
+            console.print("[red]Error: MN_REDIS_PORT must be a TCP port between 1 and 65535.[/red]")
+            raise typer.Exit(1)
+        if not _port_available_or_owned(bind_host, requested_port, owner_container, REDIS_CONTAINER_PORT):
+            console.print(f"[red]Error: Redis port {requested_port} is already in use.[/red]")
+            raise typer.Exit(1)
+        return requested_port
+
+    preferred = requested_port or REDIS_DYNAMIC_PORT_START
+    if not (REDIS_DYNAMIC_PORT_START <= preferred <= REDIS_DYNAMIC_PORT_END):
+        preferred = REDIS_DYNAMIC_PORT_START
+
+    selected = _find_available_published_port(
+        bind_host,
+        preferred,
+        owner_container,
+        REDIS_CONTAINER_PORT,
+    )
+    if selected == 0:
+        console.print(
+            f"[red]Error: No Redis port is available in {REDIS_DYNAMIC_PORT_START}-{REDIS_DYNAMIC_PORT_END}.[/red]"
+        )
+        raise typer.Exit(1)
+    return selected
+
+def _redis_url_with_database(redis_url: str, database: str) -> str:
+    parsed = urlparse(redis_url)
+    scheme = parsed.scheme or "redis"
+    netloc = parsed.netloc
+    if not netloc and parsed.hostname:
+        netloc = parsed.hostname
+    return f"{scheme}://{netloc}/{database}"
+
+def _avoid_local_compose_port_conflicts(env: dict[str, str]) -> dict[str, str]:
+    adjusted = dict(env)
+    checks = (
+        ("MN_EPMD_BIND_HOST", "MN_EPMD_PORT", 4369, 14369, "Erlang EPMD"),
+        ("MN_DIST_BIND_HOST", "MN_DIST_PORT", int(DEFAULT_DIST_PORT), 14370, "Erlang distribution"),
+    )
+
+    for host_key, port_key, default_port, fallback_start, label in checks:
+        host = adjusted.get(host_key) or "127.0.0.1"
+        port = _parse_port(adjusted.get(port_key), default_port)
+        available_port = _find_available_port(host, port, fallback_start)
+        if available_port != port:
+            adjusted[port_key] = str(available_port)
+            console.print(
+                f"[yellow]=> {label} port {port} is already in use; using {available_port} for this local runtime.[/yellow]"
+            )
+            if port_key == "MN_DIST_PORT":
+                adjusted["ERL_AFLAGS"] = (
+                    f"-kernel inet_dist_listen_min {available_port} inet_dist_listen_max {available_port}"
+                )
+
+    return adjusted
 
 def _resolve_mn_cookie() -> str:
     env_cookie = os.getenv("MN_COOKIE", "").strip()
@@ -291,12 +424,6 @@ def _handshake_with_main_node(seed_host: str, token: str, grpc_port: int) -> dic
 
     if not handshake.get("node_name"):
         handshake["node_name"] = _network_node_name(seed_host)
-    if not handshake.get("redis_host"):
-        handshake["redis_host"] = seed_host
-    if not handshake.get("redis_port"):
-        handshake["redis_port"] = 6379
-    if not handshake.get("redis_url"):
-        handshake["redis_url"] = f"redis://{handshake['redis_host']}:{handshake['redis_port']}/0"
     return handshake
 
 def _docker_container_running(name: str) -> bool:
@@ -422,7 +549,7 @@ def _start_network_seed(
     host: Optional[str] = None,
     grpc_port: int = 50051,
     dist_port: int = int(DEFAULT_DIST_PORT),
-    redis_port: int = 6379,
+    redis_port: Optional[int] = None,
     force_new_token: bool = False,
 ) -> str:
     if _docker_container_running(NETWORK_CORE_CONTAINER):
@@ -434,21 +561,22 @@ def _start_network_seed(
     token = _resolve_network_token(force_new=force_new_token)
     node_name = _network_node_name(host)
     external_redis_url = os.getenv("MN_REDIS_URL", "").strip()
+    selected_redis_port = _resolve_network_seed_redis_port(host, redis_port) if not external_redis_url else None
     redis_url = external_redis_url or _network_redis_url(token, NETWORK_REDIS_CONTAINER, 6379)
     redis_public_host, redis_public_port_value = _host_port_from_target(
         external_redis_url,
         host,
-        str(redis_port),
-    ) if external_redis_url else (host, str(redis_port))
+        str(selected_redis_port or REDIS_CONTAINER_PORT),
+    ) if external_redis_url else (host, str(selected_redis_port))
     try:
         redis_public_port = int(redis_public_port_value)
     except ValueError:
-        redis_public_port = redis_port
+        redis_public_port = selected_redis_port or REDIS_CONTAINER_PORT
 
     _ensure_network_docker_network()
     if not external_redis_url:
         console.print("=> Starting network Redis...")
-        _start_network_redis(host, redis_port, token)
+        _start_network_redis(host, redis_public_port, token)
 
     env = _network_core_env(
         token=token,
@@ -487,8 +615,10 @@ def _join_network(
     target = f"{seed_host}:{grpc_port}"
     handshake = Client(target=target, auth_token="", timeout=10).network_handshake(token)
     remote_node = handshake.get("node_name") or _network_node_name(seed_host)
+    redis_host, redis_port, redis_url = _validate_remote_redis_details(handshake, seed_host, token)
 
     console.print(f"=> Adding MirrorNeuron network node {remote_node} from {target}...")
+    console.print(f"=> Remote Redis advertised at {redis_host}:{redis_port}.")
     try:
         status = local_client.add_node(remote_node, token=token)
     except TypeError:
@@ -499,6 +629,7 @@ def _join_network(
         console.print(f"[dim]{exc}[/dim]")
         raise typer.Exit(1) from exc
     console.print(f"[green]Remote node added. Status: {status}[/green]")
+    console.print(f"Remote Redis URL: {redis_url}")
     console.print("Run 'mn nodes' or 'mn resource list' to inspect aggregate cluster resources.")
     return handshake
 
@@ -519,6 +650,130 @@ def check_status(pid_file: Path) -> int:
 
 def runtime_compose_available() -> bool:
     return RUNTIME_COMPOSE_FILE.exists() and RUNTIME_COMPOSE_ENV.exists()
+
+def _read_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return values
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        values[key] = value
+    return values
+
+def _write_env_file_values(path: Path, updates: dict[str, str]) -> None:
+    try:
+        original_lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        original_lines = []
+
+    lines: list[str] = []
+    seen: set[str] = set()
+    for line in original_lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key, _ = stripped.split("=", 1)
+            if key in updates:
+                lines.append(f"{key}={updates[key]}")
+                seen.add(key)
+                continue
+        lines.append(line)
+
+    for key, value in updates.items():
+        if key not in seen:
+            lines.append(f"{key}={value}")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        logger.debug("Failed to chmod env file %s", path, exc_info=True)
+
+def _runtime_base_env(compose_runtime: bool) -> dict[str, str]:
+    env = _read_env_file(RUNTIME_COMPOSE_ENV) if compose_runtime else {}
+    env.update(os.environ)
+    return env
+
+def _ensure_compose_redis_publish_settings(
+    env: dict[str, str],
+    *,
+    token: str,
+    advertised_host: str,
+) -> tuple[dict[str, str], int]:
+    adjusted = dict(env)
+    bind_host = adjusted.get("MN_REDIS_BIND_HOST") or "0.0.0.0"
+    explicit_port = bool(os.getenv("MN_REDIS_PORT", "").strip())
+    redis_port = _resolve_published_redis_port(
+        bind_host=bind_host,
+        configured_port=adjusted.get("MN_REDIS_PORT"),
+        explicit=explicit_port,
+        owner_container="mirror-neuron-redis",
+    )
+    redis_password = _derive_network_secret(token, "redis")
+
+    adjusted["MN_REDIS_BIND_HOST"] = bind_host
+    adjusted["MN_REDIS_PORT"] = str(redis_port)
+    adjusted["MN_REDIS_PASSWORD"] = redis_password
+    adjusted["MN_REDIS_URL"] = f"redis://:{redis_password}@redis:{REDIS_CONTAINER_PORT}/0"
+    adjusted["MN_CONTEXT_REDIS_URL"] = f"redis://:{redis_password}@redis:{REDIS_CONTAINER_PORT}/1"
+    adjusted.setdefault("MN_NETWORK_JOIN_TOKEN", token)
+    adjusted["MN_NETWORK_REDIS_HOST"] = os.getenv("MN_NETWORK_REDIS_HOST", "").strip() or advertised_host
+    adjusted["MN_NETWORK_REDIS_PORT"] = str(redis_port)
+
+    _write_env_file_values(
+        RUNTIME_COMPOSE_ENV,
+        {
+            "MN_NETWORK_JOIN_TOKEN": token,
+            "MN_REDIS_BIND_HOST": bind_host,
+            "MN_REDIS_PORT": str(redis_port),
+            "MN_REDIS_PASSWORD": redis_password,
+            "MN_REDIS_URL": adjusted["MN_REDIS_URL"],
+            "MN_CONTEXT_REDIS_URL": adjusted["MN_CONTEXT_REDIS_URL"],
+            "MN_NETWORK_REDIS_HOST": adjusted["MN_NETWORK_REDIS_HOST"],
+            "MN_NETWORK_REDIS_PORT": adjusted["MN_NETWORK_REDIS_PORT"],
+        },
+    )
+    return adjusted, redis_port
+
+def _resolve_network_seed_redis_port(host: str, requested_port: Optional[int]) -> int:
+    persisted = _read_env_file(NETWORK_REDIS_ENV_FILE).get("MN_REDIS_PORT")
+    env_port = os.getenv("MN_REDIS_PORT", "").strip()
+    explicit = requested_port is not None or bool(env_port)
+    configured_port: object = requested_port if requested_port is not None else (env_port or persisted)
+    publish_host = _network_publish_host(host)
+    selected_port = _resolve_published_redis_port(
+        bind_host=publish_host,
+        configured_port=configured_port,
+        explicit=explicit,
+        owner_container=NETWORK_REDIS_CONTAINER,
+    )
+    _write_env_file_values(NETWORK_REDIS_ENV_FILE, {"MN_REDIS_PORT": str(selected_port)})
+    return selected_port
+
+def _validate_remote_redis_details(handshake: dict, seed_host: str, token: str) -> tuple[str, int, str]:
+    redis_host = str(handshake.get("redis_host") or "").strip()
+    redis_port = _parse_configured_port(handshake.get("redis_port"))
+    redis_url = str(handshake.get("redis_url") or "").strip()
+
+    if not redis_host or redis_port is None or not redis_url:
+        console.print(f"[red]Error: Remote node at {seed_host} did not advertise complete Redis details.[/red]")
+        raise typer.Exit(1)
+
+    parsed = urlparse(redis_url)
+    if parsed.scheme not in {"redis", "rediss"} or not parsed.hostname or not parsed.port:
+        console.print(f"[red]Error: Remote node at {seed_host} returned an invalid Redis URL.[/red]")
+        raise typer.Exit(1)
+    if parsed.password != _derive_network_secret(token, "redis"):
+        console.print(f"[red]Error: Remote node at {seed_host} did not advertise token-authenticated Redis.[/red]")
+        raise typer.Exit(1)
+
+    return redis_host, redis_port, redis_url
 
 def runtime_compose_cmd(*args: str) -> list[str]:
     return [
@@ -584,22 +839,23 @@ def _redis_host_port(ip: Optional[str]) -> tuple[str, str]:
     )
 
 def _print_service_endpoints(ip: Optional[str], web_ui_available: bool):
-    core_host = _core_host()
+    runtime_env = _runtime_base_env(runtime_compose_available())
+    core_host = runtime_env.get("MN_CORE_HOST") or _core_host()
     grpc_host, grpc_port = _host_port_from_target(
-        os.getenv(
+        runtime_env.get(
             "MN_GRPC_TARGET",
-            os.getenv("MN_CORE_GRPC_TARGET", f"{core_host}:50051"),
+            runtime_env.get("MN_CORE_GRPC_TARGET", f"{core_host}:50051"),
         ),
         core_host,
-        os.getenv("MN_GRPC_PORT", "50051"),
+        runtime_env.get("MN_GRPC_PORT", "50051"),
     )
-    api_host = _api_host()
-    api_port = os.getenv("MN_API_PORT", "4001")
+    api_host = runtime_env.get("MN_API_HOST") or _api_host()
+    api_port = runtime_env.get("MN_API_PORT", "4001")
     redis_host, redis_port = _redis_host_port(ip)
-    epmd_host = _epmd_host()
-    dist_host = _dist_host()
-    dist_port = os.getenv("MN_DIST_PORT", DEFAULT_DIST_PORT)
-    web_ui_host = _web_ui_host()
+    epmd_host = runtime_env.get("MN_EPMD_HOST") or _epmd_host()
+    dist_host = runtime_env.get("MN_DIST_HOST") or _dist_host()
+    dist_port = runtime_env.get("MN_DIST_PORT", DEFAULT_DIST_PORT)
+    web_ui_host = runtime_env.get("MN_WEB_UI_HOST") or _web_ui_host()
 
     table = Table(title="Service endpoints", show_header=True, header_style="bold")
     table.add_column("Service")
@@ -610,18 +866,25 @@ def _print_service_endpoints(ip: Optional[str], web_ui_available: bool):
     table.add_row("Core gRPC", grpc_host, grpc_port, f"{grpc_host}:{grpc_port}")
     table.add_row("REST API", api_host, api_port, f"http://{api_host}:{api_port}/api/v1")
     if runtime_compose_available():
-        table.add_row("Redis", "compose", "6379", "redis://redis:6379/0 (internal)")
+        published_redis_host = runtime_env.get("MN_NETWORK_REDIS_HOST") or runtime_env.get("MN_REDIS_BIND_HOST", "0.0.0.0")
+        published_redis_port = runtime_env.get("MN_NETWORK_REDIS_PORT") or runtime_env.get("MN_REDIS_PORT", str(REDIS_CONTAINER_PORT))
+        table.add_row(
+            "Redis",
+            published_redis_host,
+            published_redis_port,
+            f"redis://{published_redis_host}:{published_redis_port}/0 (auth required)",
+        )
         table.add_row(
             "Erlang EPMD",
-            os.getenv("MN_EPMD_BIND_HOST", "127.0.0.1"),
-            os.getenv("MN_EPMD_PORT", "4369"),
-            f"{os.getenv('MN_EPMD_BIND_HOST', '127.0.0.1')}:{os.getenv('MN_EPMD_PORT', '4369')}",
+            runtime_env.get("MN_EPMD_BIND_HOST", "127.0.0.1"),
+            runtime_env.get("MN_EPMD_PORT", "4369"),
+            f"{runtime_env.get('MN_EPMD_BIND_HOST', '127.0.0.1')}:{runtime_env.get('MN_EPMD_PORT', '4369')}",
         )
         table.add_row(
             "Erlang dist",
-            os.getenv("MN_DIST_BIND_HOST", "127.0.0.1"),
+            runtime_env.get("MN_DIST_BIND_HOST", "127.0.0.1"),
             dist_port,
-            f"{os.getenv('MN_DIST_BIND_HOST', '127.0.0.1')}:{dist_port}",
+            f"{runtime_env.get('MN_DIST_BIND_HOST', '127.0.0.1')}:{dist_port}",
         )
         table.add_row("Context engine", "compose", "50052", "membrane-context-engine:50052 (internal)")
         table.add_row(
@@ -709,10 +972,23 @@ def _start_server(
     advertised_host = _advertised_network_host(host)
     local_node_name = _network_node_name(advertised_host)
     join_handshake = _handshake_with_main_node(ip, network_token, grpc_port) if ip else None
+    if join_handshake:
+        _validate_remote_redis_details(join_handshake, ip, network_token)
+    env = _runtime_base_env(compose_runtime)
+    local_redis_port: Optional[int] = None
+    if compose_runtime:
+        env, local_redis_port = _ensure_compose_redis_publish_settings(
+            env,
+            token=network_token,
+            advertised_host=advertised_host,
+        )
+
     seed_node_name = join_handshake["node_name"] if join_handshake else local_node_name
     seed_redis_host = join_handshake["redis_host"] if join_handshake else advertised_host
     seed_redis_port = redis_port or (
-        _parse_port(join_handshake["redis_port"], 6379) if join_handshake else _parse_port(os.getenv("MN_REDIS_PORT"), 6379)
+        _parse_port(join_handshake["redis_port"], REDIS_CONTAINER_PORT)
+        if join_handshake
+        else (local_redis_port or _parse_port(os.getenv("MN_REDIS_PORT"), REDIS_CONTAINER_PORT))
     )
 
     console.print("===========================================")
@@ -722,7 +998,6 @@ def _start_server(
         console.print("Starting Services in Detached Mode...")
     console.print("===========================================")
 
-    env = os.environ.copy()
     env.setdefault("MN_CORE_HOST", "0.0.0.0")
     env.setdefault("MN_API_HOST", _api_host())
     env.setdefault("MN_REDIS_HOST", _redis_host())
@@ -736,13 +1011,18 @@ def _start_server(
     env["MN_NETWORK_REDIS_PORT"] = str(seed_redis_port)
     env.setdefault("MN_NODE_NAME", local_node_name)
     env.setdefault("MN_NODE_ROLE", "runtime")
-    env["MN_DIST_PORT"] = str(dist_port)
+    if ip or not compose_runtime:
+        env["MN_DIST_PORT"] = str(dist_port)
+    else:
+        env.setdefault("MN_DIST_PORT", str(dist_port))
     if not env.get("MN_COOKIE") or env.get("MN_COOKIE") == "mirrorneuron":
-        env["MN_COOKIE"] = _derive_network_secret(network_token, "cookie")
+        if compose_runtime and not ip:
+            env["MN_COOKIE"] = _resolve_mn_cookie()
+        else:
+            env["MN_COOKIE"] = _derive_network_secret(network_token, "cookie")
     env.setdefault("MN_GRPC_BIND_HOST", "0.0.0.0")
     env.setdefault("MN_EPMD_BIND_HOST", "0.0.0.0")
     env.setdefault("MN_DIST_BIND_HOST", "0.0.0.0")
-    env.setdefault("MN_REDIS_BIND_HOST", "0.0.0.0")
     env.setdefault("ERL_EPMD_ADDRESS", "0.0.0.0")
     env.setdefault(
         "ERL_AFLAGS",
@@ -756,14 +1036,28 @@ def _start_server(
             seed_redis_port,
         )
         env["MN_REDIS_URL"] = redis_url
+        env["MN_CONTEXT_REDIS_URL"] = _redis_url_with_database(redis_url, "1")
         env["MN_CLUSTER_NODES"] = seed_node_name
+        if compose_runtime:
+            _write_env_file_values(
+                RUNTIME_COMPOSE_ENV,
+                {
+                    "MN_NODE_NAME": env["MN_NODE_NAME"],
+                    "MN_CLUSTER_NODES": seed_node_name,
+                    "MN_REDIS_URL": redis_url,
+                    "MN_CONTEXT_REDIS_URL": env["MN_CONTEXT_REDIS_URL"],
+                    "MN_NETWORK_REDIS_HOST": seed_redis_host,
+                    "MN_NETWORK_REDIS_PORT": str(seed_redis_port),
+                    "MN_COOKIE": env["MN_COOKIE"],
+                },
+            )
     else:
         env.setdefault("MN_CLUSTER_NODES", local_node_name)
-        if not env.get("MN_REDIS_URL") and compose_runtime and _compose_supports_redis_password():
+        if compose_runtime and _compose_supports_redis_password():
             redis_password = _derive_network_secret(network_token, "redis")
             env["MN_REDIS_PASSWORD"] = redis_password
-            env["MN_REDIS_URL"] = f"redis://:{redis_password}@redis:6379/0"
-            env.setdefault("MN_CONTEXT_REDIS_URL", f"redis://:{redis_password}@redis:6379/1")
+            env["MN_REDIS_URL"] = f"redis://:{redis_password}@redis:{REDIS_CONTAINER_PORT}/0"
+            env["MN_CONTEXT_REDIS_URL"] = f"redis://:{redis_password}@redis:{REDIS_CONTAINER_PORT}/1"
 
     if not env.get("MN_GRPC_AUTH_TOKEN"):
         env["MN_GRPC_AUTH_TOKEN"] = _resolve_grpc_auth_token()
@@ -772,6 +1066,8 @@ def _start_server(
 
     if compose_runtime:
         env = _compose_runtime_env(env, ip)
+        if not ip:
+            env = _avoid_local_compose_port_conflicts(env)
         console.print("=> Starting MirrorNeuron Docker runtime (Compose)...")
         logger.info("Starting MirrorNeuron Docker Compose runtime")
         try:

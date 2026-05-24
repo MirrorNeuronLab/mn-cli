@@ -58,7 +58,11 @@ def expose_node(
     ),
     grpc_port: int = typer.Option(50051, "--grpc-port", help="Core gRPC port."),
     dist_port: int = typer.Option(4370, "--dist-port", help="Erlang distribution port."),
-    redis_port: int = typer.Option(6379, "--redis-port", help="Redis port for this exposed node."),
+    redis_port: Optional[int] = typer.Option(
+        None,
+        "--redis-port",
+        help="Explicit Redis port for this exposed node; defaults to a persisted dynamic port.",
+    ),
     force_new_token: bool = typer.Option(
         False,
         "--force-new-token",

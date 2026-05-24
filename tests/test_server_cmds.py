@@ -46,6 +46,7 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_FILE', state_dir / "docker-compose.yml")
     mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', state_dir / "docker-compose.env")
     mocker.patch('mn_cli.server_cmds.NETWORK_TOKEN_FILE', state_dir / "network.token")
+    mocker.patch('mn_cli.server_cmds.NETWORK_REDIS_ENV_FILE', state_dir / "network-redis.env")
     mocker.patch(
         'mn_cli.server_cmds.WEB_UI_DIRS',
         (state_dir / "webui", state_dir / "web-ui-source"),
@@ -209,6 +210,7 @@ def test_add_node_uses_handshake_and_local_core(mocker, tmp_path):
 
     mocker.patch('mn_cli.server_cmds.DIR', tmp_path)
     mocker.patch('mn_cli.server_cmds._docker_container_running', return_value=False)
+    redis_password = _derive_network_secret("join-token", "redis")
 
     class StubClient:
         def __init__(self, target, auth_token, timeout):
@@ -222,6 +224,7 @@ def test_add_node_uses_handshake_and_local_core(mocker, tmp_path):
                 "node_name": "mirror_neuron@192.168.4.10",
                 "redis_host": "192.168.4.10",
                 "redis_port": 6380,
+                "redis_url": f"redis://:{redis_password}@192.168.4.10:6380/0",
             }
 
     mocker.patch.object(mn_sdk, "Client", StubClient)
@@ -236,6 +239,49 @@ def test_add_node_uses_handshake_and_local_core(mocker, tmp_path):
 
     mock_run.assert_not_called()
     mock_add_node.assert_called_once_with("mirror_neuron@192.168.4.10", token="join-token")
+
+def test_add_node_rejects_missing_remote_redis_details(mocker, tmp_path):
+    import mn_sdk
+
+    mocker.patch('mn_cli.server_cmds.DIR', tmp_path)
+
+    class StubClient:
+        def __init__(self, target, auth_token, timeout):
+            assert target == "192.168.4.10:50055"
+
+        def network_handshake(self, token):
+            return {"node_name": "mirror_neuron@192.168.4.10"}
+
+    mocker.patch.object(mn_sdk, "Client", StubClient)
+
+    with pytest.raises(typer.Exit) as exc:
+        _join_network("192.168.4.10", "join-token", grpc_port=50055)
+
+    assert exc.value.exit_code == 1
+
+def test_add_node_rejects_redis_url_without_token_password(mocker, tmp_path):
+    import mn_sdk
+
+    mocker.patch('mn_cli.server_cmds.DIR', tmp_path)
+
+    class StubClient:
+        def __init__(self, target, auth_token, timeout):
+            assert target == "192.168.4.10:50055"
+
+        def network_handshake(self, token):
+            return {
+                "node_name": "mirror_neuron@192.168.4.10",
+                "redis_host": "192.168.4.10",
+                "redis_port": 6380,
+                "redis_url": "redis://192.168.4.10:6380/0",
+            }
+
+    mocker.patch.object(mn_sdk, "Client", StubClient)
+
+    with pytest.raises(typer.Exit) as exc:
+        _join_network("192.168.4.10", "join-token", grpc_port=50055)
+
+    assert exc.value.exit_code == 1
 
 def test_start_server_already_running(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
@@ -301,6 +347,50 @@ def test_runtime_compose_cmd_uses_installed_runtime_files(mocker, tmp_path):
         "-d",
     ]
 
+def test_compose_redis_publish_settings_persists_dynamic_port(mocker, tmp_path):
+    compose_env = tmp_path / "docker-compose.env"
+    compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
+
+    def available(host, port, owner_container, target_port):
+        return port == 56380
+
+    mocker.patch('mn_cli.server_cmds._port_available_or_owned', side_effect=available)
+
+    env, port = server_cmds._ensure_compose_redis_publish_settings(
+        {"MN_REDIS_BIND_HOST": "0.0.0.0"},
+        token="join-token",
+        advertised_host="192.168.4.10",
+    )
+
+    redis_password = _derive_network_secret("join-token", "redis")
+    assert port == 56380
+    assert env["MN_REDIS_PORT"] == "56380"
+    assert env["MN_REDIS_PASSWORD"] == redis_password
+    assert env["MN_REDIS_URL"] == f"redis://:{redis_password}@redis:6379/0"
+    compose_env_text = compose_env.read_text()
+    assert "MN_REDIS_BIND_HOST=0.0.0.0" in compose_env_text
+    assert "MN_REDIS_PORT=56380" in compose_env_text
+    assert f"MN_REDIS_PASSWORD={redis_password}" in compose_env_text
+    assert "MN_NETWORK_REDIS_HOST=192.168.4.10" in compose_env_text
+    assert "MN_NETWORK_REDIS_PORT=56380" in compose_env_text
+
+def test_compose_redis_explicit_port_must_be_available(mocker, tmp_path, monkeypatch):
+    compose_env = tmp_path / "docker-compose.env"
+    compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
+    mocker.patch('mn_cli.server_cmds._port_available_or_owned', return_value=False)
+    monkeypatch.setenv("MN_REDIS_PORT", "56379")
+
+    with pytest.raises(typer.Exit) as exc:
+        server_cmds._ensure_compose_redis_publish_settings(
+            {},
+            token="join-token",
+            advertised_host="192.168.4.10",
+        )
+
+    assert exc.value.exit_code == 1
+
 def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
@@ -360,13 +450,14 @@ def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path)
     mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.99")
+    redis_password = _derive_network_secret("join-token", "redis")
     mocker.patch(
         'mn_cli.server_cmds._handshake_with_main_node',
         return_value={
             "node_name": "mirror_neuron@192.168.4.173",
             "redis_host": "192.168.4.173",
             "redis_port": 6380,
-            "redis_url": "redis://:redis-secret@192.168.4.173:6380/0",
+            "redis_url": f"redis://:{redis_password}@192.168.4.173:6380/0",
         },
     )
 
@@ -386,7 +477,8 @@ def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
     env = compose_call[1]["env"]
     assert env["MN_NODE_NAME"] == "mirror_neuron@192.168.4.99"
     assert env["MN_CLUSTER_NODES"] == "mirror_neuron@192.168.4.173"
-    assert env["MN_REDIS_URL"] == "redis://:redis-secret@192.168.4.173:6380/0"
+    assert env["MN_REDIS_URL"] == f"redis://:{redis_password}@192.168.4.173:6380/0"
+    assert env["MN_CONTEXT_REDIS_URL"] == f"redis://:{redis_password}@192.168.4.173:6380/1"
     assert env["MN_NETWORK_JOIN_TOKEN"] == "join-token"
     assert env["MN_COOKIE"] == _derive_network_secret("join-token", "cookie")
     assert env["MN_DIST_PORT"] == "4370"
@@ -410,6 +502,7 @@ def test_compose_runtime_env_respects_explicit_cluster_names(monkeypatch):
 def test_start_server_success(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
     mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', ())
+    redis_password = _derive_network_secret("join-token", "redis")
     
     def mock_run(cmd, **kwargs):
         m = mocker.Mock()
@@ -428,7 +521,7 @@ def test_start_server_success(mocker, tmp_path):
             "node_name": "mirror_neuron@127.0.0.1",
             "redis_host": "127.0.0.1",
             "redis_port": 6379,
-            "redis_url": "redis://127.0.0.1:6379/0",
+            "redis_url": f"redis://:{redis_password}@127.0.0.1:6379/0",
         },
     )
     
@@ -624,7 +717,11 @@ def test_print_service_endpoints_marks_compose_internal_services(mocker, monkeyp
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
     compose_file.write_text("services: {}\n")
-    compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
+    compose_env.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_NETWORK_REDIS_HOST=192.168.4.10\n"
+        "MN_NETWORK_REDIS_PORT=56379\n"
+    )
     mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_FILE', compose_file)
     mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
 
@@ -635,7 +732,9 @@ def test_print_service_endpoints_marks_compose_internal_services(mocker, monkeyp
     assert "REST API" in rendered
     assert "Redis" in rendered
     assert "Redis host" not in rendered
-    assert "redis://redis:6379/0 (internal)" in rendered
+    assert "192.168.4.10" in rendered
+    assert "56379" in rendered
+    assert "auth required" in rendered
     assert "Context engine" in rendered
     assert "membrane-context-engine:50052 (internal)" in rendered
     assert "OpenShell" in rendered
