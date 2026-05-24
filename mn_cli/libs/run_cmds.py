@@ -34,7 +34,9 @@ from mn_cli.libs.run_manifest import (
     run_mode_label as _run_mode_label,
     with_shared_run_store_config as _with_shared_run_store_config,
 )
-from mn_cli.libs.blueprint_observability import make_blueprint_run_id as _make_blueprint_run_id
+from mn_cli.libs.blueprint_observability import (
+    make_blueprint_run_id as _make_blueprint_run_id,
+)
 from mn_cli.libs.blueprint_resources import cleanup_blueprint_host_hooks
 from mn_cli.shared import console, client, logger
 from mn_cli.error_handler import handle_cli_error
@@ -63,7 +65,7 @@ _HELPER_COMPAT = (
 def fetch_and_save_results(job_id: str, data: dict = None):
     log_dir = Path(f"/tmp/mn_{job_id}")
     log_dir.mkdir(parents=True, exist_ok=True)
-    
+
     if data is None:
         try:
             job_json = client.get_job(job_id)
@@ -74,26 +76,28 @@ def fetch_and_save_results(job_id: str, data: dict = None):
 
     job = data.get("job", {})
     status = job.get("status")
-    
+
     # Save final result if completed
     if status == "completed":
         result = job.get("result")
         if result:
             with open(log_dir / "result.txt", "w") as f:
                 json.dump(result, f, indent=2)
-                
+
     # Save stream results (progressive)
     stream_events = []
-    
+
     try:
         full_events = []
         for ev_str in client.stream_events(job_id):
             try:
                 full_events.append(json.loads(ev_str))
             except Exception:
-                logger.exception("Failed to decode event while saving results for %s", job_id)
+                logger.exception(
+                    "Failed to decode event while saving results for %s", job_id
+                )
                 pass
-        
+
         for ev in full_events:
             ev_type = ev.get("type")
             if ev_type not in STANDARD_EVENTS:
@@ -101,7 +105,7 @@ def fetch_and_save_results(job_id: str, data: dict = None):
     except Exception:
         logger.exception("Failed to stream events while saving results for %s", job_id)
         pass
-        
+
     if stream_events:
         with open(log_dir / "result_stream.txt", "w") as f:
             for se in stream_events:
@@ -120,10 +124,10 @@ def _stream_and_format_events(
         if follow_seconds is None
         else follow_seconds
     )
-    
+
     status_text = "Unknown / Detached"
     msg_count = 0
-    
+
     try:
         with Progress(
             SpinnerColumn(),
@@ -142,7 +146,9 @@ def _stream_and_format_events(
                     _write_result_stream_event(log_dir, event)
                     web_ui_url = log_writer.record_web_ui_url(event)
                     if web_ui_url:
-                        progress.console.print(f"[green]Blueprint Web UI:[/green] {web_ui_url}")
+                        progress.console.print(
+                            f"[green]Blueprint Web UI:[/green] {web_ui_url}"
+                        )
 
                     if event_type == "job_pending":
                         progress.update(
@@ -164,7 +170,10 @@ def _stream_and_format_events(
                             job_task,
                             description="[green]Running: streaming live job events...",
                         )
-                    elif event_type in ["agent_message_received", "aggregator_received"]:
+                    elif event_type in [
+                        "agent_message_received",
+                        "aggregator_received",
+                    ]:
                         msg_count += 1
                         progress.update(
                             job_task,
@@ -193,12 +202,12 @@ def _stream_and_format_events(
                         )
                 except Exception:
                     log_writer.run_logger.exception("Failed to process streamed event")
-                        
+
         if status_text in ["Success", "Failed"]:
             panel = generate_summary_panel(
                 job_id=job_id,
                 status="completed" if status_text == "Success" else "failed",
-                log_dir=log_dir
+                log_dir=log_dir,
             )
             console.print(panel)
         else:
@@ -219,13 +228,17 @@ def _stream_and_format_events(
                     progress=progress,
                     task_id=follow_task,
                 )
-            console.print(generate_detached_panel(job_id, log_dir, status, log_writer.event_count))
+            console.print(
+                generate_detached_panel(job_id, log_dir, status, log_writer.event_count)
+            )
             status_text = status
-        
+
     except KeyboardInterrupt:
         console.print("[yellow]Detached from log stream.[/yellow]")
         status, _data = _follow_job_events(job_id, log_writer, 0)
-        console.print(generate_detached_panel(job_id, log_dir, status, log_writer.event_count))
+        console.print(
+            generate_detached_panel(job_id, log_dir, status, log_writer.event_count)
+        )
         status_text = status
 
     if status_text == "Success":
@@ -264,7 +277,9 @@ def _follow_job_events(
                 _write_result_stream_event(log_writer.log_dir, event)
                 web_ui_url = log_writer.record_web_ui_url(event)
                 if web_ui_url and progress is not None:
-                    progress.console.print(f"[green]Blueprint Web UI:[/green] {web_ui_url}")
+                    progress.console.print(
+                        f"[green]Blueprint Web UI:[/green] {web_ui_url}"
+                    )
 
         if progress is not None and task_id is not None:
             remaining = max(deadline - time.monotonic(), 0)
@@ -322,35 +337,58 @@ def validate(
                 console.print(f"[red]Error: manifest.json is not valid JSON. {e}[/red]")
                 raise typer.Exit(1)
 
-        required_keys = ["manifest_version", "graph_id", "job_name", "entrypoints", "nodes"]
+        required_keys = [
+            "manifest_version",
+            "graph_id",
+            "job_name",
+            "entrypoints",
+            "nodes",
+        ]
         missing = [k for k in required_keys if k not in manifest]
         if missing:
-            console.print(f"[red]Error: manifest.json is missing required keys: {', '.join(missing)}[/red]")
+            console.print(
+                f"[red]Error: manifest.json is missing required keys: {', '.join(missing)}[/red]"
+            )
             raise typer.Exit(1)
 
         if not isinstance(manifest.get("nodes"), type([])):
             console.print("[red]Error: 'nodes' must be a list in manifest.json[/red]")
             raise typer.Exit(1)
 
-        if "requiredContextEngine" in manifest and not isinstance(manifest.get("requiredContextEngine"), bool):
-            console.print("[red]Error: 'requiredContextEngine' must be true or false in manifest.json[/red]")
+        if "requiredContextEngine" in manifest and not isinstance(
+            manifest.get("requiredContextEngine"), bool
+        ):
+            console.print(
+                "[red]Error: 'requiredContextEngine' must be true or false in manifest.json[/red]"
+            )
             raise typer.Exit(1)
 
         python_environment_errors = validate_python_environments(bundle_dir, manifest)
         if python_environment_errors:
             report = make_validation_report(
-                [_legacy_validation_issue(error, source="manifest") for error in python_environment_errors]
+                [
+                    _legacy_validation_issue(error, source="manifest")
+                    for error in python_environment_errors
+                ]
             )
-            _emit_validation_report(report, output_format, title="Manifest validation failed")
+            _emit_validation_report(
+                report, output_format, title="Manifest validation failed"
+            )
             raise typer.Exit(1)
 
-        manifest_spec_issues = validate_requirements_spec_issues(manifest) + validate_input_validation_spec_issues(manifest)
+        manifest_spec_issues = validate_requirements_spec_issues(
+            manifest
+        ) + validate_input_validation_spec_issues(manifest)
         if manifest_spec_issues:
             report = make_validation_report(manifest_spec_issues)
-            _emit_validation_report(report, output_format, title="Manifest validation failed")
+            _emit_validation_report(
+                report, output_format, title="Manifest validation failed"
+            )
             raise typer.Exit(1)
 
-        validation_result = _validate_manifest_inputs_or_exit(bundle_dir, manifest, output_format=output_format)
+        validation_result = _validate_manifest_inputs_or_exit(
+            bundle_dir, manifest, output_format=output_format
+        )
 
         if output_format == "json":
             console.print_json(data=validation_result)
@@ -360,16 +398,20 @@ def validate(
         console.print(f"  - Job Name: {manifest.get('job_name')}")
         console.print(f"  - Graph ID: {manifest.get('graph_id')}")
         console.print(f"  - Nodes count: {len(manifest.get('nodes'))}")
-        console.print(f"  - Input validation rules: {len(validation_result.get('results') or [])}")
-        
+        console.print(
+            f"  - Input validation rules: {len(validation_result.get('results') or [])}"
+        )
+
     except typer.Exit:
         raise
     except Exception as e:
-        handle_cli_error(e, console, 'validate')
+        handle_cli_error(e, console, "validate")
         raise typer.Exit(1)
 
 
-def validate_python_environments(bundle_dir: Path, manifest: dict[str, Any]) -> list[str]:
+def validate_python_environments(
+    bundle_dir: Path, manifest: dict[str, Any]
+) -> list[str]:
     errors: list[str] = []
     nodes = manifest.get("nodes")
     if not isinstance(nodes, list):
@@ -386,7 +428,9 @@ def validate_python_environments(bundle_dir: Path, manifest: dict[str, Any]) -> 
         runner_module = config.get("runner_module")
         python_environment = config.get("python_environment")
         if runner_module != "MirrorNeuron.Runner.HostLocal":
-            errors.append(f"{node_id}: python_environment is only supported with MirrorNeuron.Runner.HostLocal")
+            errors.append(
+                f"{node_id}: python_environment is only supported with MirrorNeuron.Runner.HostLocal"
+            )
             continue
         if not isinstance(python_environment, dict):
             errors.append(f"{node_id}: python_environment must be an object")
@@ -395,20 +439,28 @@ def validate_python_environments(bundle_dir: Path, manifest: dict[str, Any]) -> 
         requirements = python_environment.get("requirements")
         if requirements not in (None, ""):
             if not isinstance(requirements, str):
-                errors.append(f"{node_id}: python_environment.requirements must be a string")
+                errors.append(
+                    f"{node_id}: python_environment.requirements must be a string"
+                )
             elif not _is_safe_payload_relative_path(requirements):
                 errors.append(
                     f"{node_id}: python_environment.requirements must be a relative path inside payloads/"
                 )
             elif not (bundle_dir / "payloads" / requirements).is_file():
-                errors.append(f"{node_id}: python_environment requirements file not found: payloads/{requirements}")
+                errors.append(
+                    f"{node_id}: python_environment requirements file not found: payloads/{requirements}"
+                )
 
         packages = python_environment.get("packages")
         if packages is not None and (
             not isinstance(packages, list)
-            or not all(isinstance(package, str) and package.strip() for package in packages)
+            or not all(
+                isinstance(package, str) and package.strip() for package in packages
+            )
         ):
-            errors.append(f"{node_id}: python_environment.packages must be a list of non-empty strings")
+            errors.append(
+                f"{node_id}: python_environment.packages must be a list of non-empty strings"
+            )
 
     return errors
 
@@ -427,7 +479,13 @@ def _validate_manifest_inputs_or_exit(
         config=config,
         config_overrides=config_overrides,
     )
-    env.update({key: str(value) for key, value in (env_overrides or {}).items() if value is not None})
+    env.update(
+        {
+            key: str(value)
+            for key, value in (env_overrides or {}).items()
+            if value is not None
+        }
+    )
     result = run_input_validation(bundle_dir, manifest, config=config, env=env)
     if result.get("ok"):
         return result
@@ -460,7 +518,9 @@ def _normalize_validation_output(output: str) -> str:
     raise typer.Exit(1)
 
 
-def _emit_validation_report(report: dict[str, Any], output_format: str, *, title: str) -> None:
+def _emit_validation_report(
+    report: dict[str, Any], output_format: str, *, title: str
+) -> None:
     if output_format == "json":
         console.print_json(data=report)
         return
@@ -475,13 +535,17 @@ def _emit_validation_report(report: dict[str, Any], output_format: str, *, title
     console.print("Field | Problem | Fix | Rule", markup=False)
     console.print("--- | --- | --- | ---", markup=False)
     for issue in issues:
-        location = issue.get("location") if isinstance(issue.get("location"), dict) else {}
+        location = (
+            issue.get("location") if isinstance(issue.get("location"), dict) else {}
+        )
         rule = issue.get("rule") if isinstance(issue.get("rule"), dict) else {}
         console.print(
             " | ".join(
                 [
                     str(location.get("path") or location.get("pointer") or "-"),
-                    str(issue.get("message") or issue.get("code") or "Validation failed"),
+                    str(
+                        issue.get("message") or issue.get("code") or "Validation failed"
+                    ),
                     str(issue.get("help") or "-"),
                     str(rule.get("name") or rule.get("id") or "-"),
                 ]
@@ -509,7 +573,11 @@ def _legacy_validation_issue(error: str, *, source: str) -> dict[str, Any]:
 
 def _is_safe_payload_relative_path(path: str) -> bool:
     candidate = Path(path)
-    return not candidate.is_absolute() and path not in ("", ".") and ".." not in candidate.parts
+    return (
+        not candidate.is_absolute()
+        and path not in ("", ".")
+        and ".." not in candidate.parts
+    )
 
 
 def run(
@@ -571,17 +639,26 @@ def run_bundle(
             if config_script.exists():
                 import subprocess
                 import sys
-                console.print(f"[yellow]Bundle requires configuration. Auto-running {config_script.name}...[/yellow]")
-                res = subprocess.run([sys.executable, config_script.name], cwd=bundle_dir)
+
+                console.print(
+                    f"[yellow]Bundle requires configuration. Auto-running {config_script.name}...[/yellow]"
+                )
+                res = subprocess.run(
+                    [sys.executable, config_script.name], cwd=bundle_dir
+                )
                 if res.returncode != 0:
-                    console.print("[red]Configuration failed or cancelled. Aborting run.[/red]")
+                    console.print(
+                        "[red]Configuration failed or cancelled. Aborting run.[/red]"
+                    )
                     raise typer.Exit(1)
-                
+
                 # Reload manifest after configuration
                 with open(manifest_file, "r") as f:
                     manifest_dict = json.load(f)
             else:
-                console.print("[red]Bundle requires configuration, but config.py was not found.[/red]")
+                console.print(
+                    "[red]Bundle requires configuration, but config.py was not found.[/red]"
+                )
                 raise typer.Exit(1)
 
         _ensure_local_run_store_identity(
@@ -591,10 +668,16 @@ def run_bundle(
             submission_metadata,
             config_overrides=config_overrides,
         )
-        blueprint_run_id = submission_metadata.get("blueprint_run_id") or env_overrides.get("MN_RUN_ID")
+        blueprint_run_id = submission_metadata.get(
+            "blueprint_run_id"
+        ) or env_overrides.get("MN_RUN_ID")
         if blueprint_run_id:
-            pre_launch_run_dir = _blueprint_run_dir(str(blueprint_run_id), env_overrides)
-            _register_post_launch_hook(bundle_dir, str(blueprint_run_id), env_overrides=env_overrides)
+            pre_launch_run_dir = _blueprint_run_dir(
+                str(blueprint_run_id), env_overrides
+            )
+            _register_post_launch_hook(
+                bundle_dir, str(blueprint_run_id), env_overrides=env_overrides
+            )
             pre_launch_process = _start_pre_launch_hook(
                 bundle_dir,
                 str(blueprint_run_id),
@@ -609,7 +692,9 @@ def run_bundle(
                 config_overrides=config_overrides,
             )
         else:
-            console.print("[yellow]Validation skipped because --force was provided; input checks and runtime requirements will be bypassed for this run.[/yellow]")
+            console.print(
+                "[yellow]Validation skipped because --force was provided; input checks and runtime requirements will be bypassed for this run.[/yellow]"
+            )
         manifest_dict = prepare_manifest_for_submission(
             bundle_dir,
             manifest_dict,
@@ -631,11 +716,17 @@ def run_bundle(
                     with open(filepath, "rb") as f:
                         payloads[rel_path] = f.read()
 
-        blueprint_run_dir = _blueprint_run_dir(blueprint_run_id, env_overrides) if blueprint_run_id else None
+        blueprint_run_dir = (
+            _blueprint_run_dir(blueprint_run_id, env_overrides)
+            if blueprint_run_id
+            else None
+        )
         job_id = client.submit_job(manifest, payloads, force=force)
         log_writer = JobLogWriter(job_id, run_dir=blueprint_run_dir)
         if blueprint_run_id:
-            _write_blueprint_job_mapping(blueprint_run_id, job_id, submission_metadata, env_overrides)
+            _write_blueprint_job_mapping(
+                blueprint_run_id, job_id, submission_metadata, env_overrides
+            )
             _write_local_web_ui_handle(
                 bundle_dir,
                 blueprint_run_id,
@@ -660,7 +751,9 @@ def run_bundle(
                 blueprint_revision=submission_metadata.get("blueprint_revision"),
             )
         )
-        final_status = _stream_and_format_events(job_id, log_writer, resolved_follow_seconds)
+        final_status = _stream_and_format_events(
+            job_id, log_writer, resolved_follow_seconds
+        )
         if blueprint_run_dir is not None:
             _start_background_event_relay_if_needed(
                 bundle_dir,
@@ -674,7 +767,11 @@ def run_bundle(
                 cleanup_blueprint_host_hooks(
                     blueprint_run_dir,
                     dry_run=False,
-                    summary={"process_removed": [], "process_skipped": [], "errors": []},
+                    summary={
+                        "process_removed": [],
+                        "process_skipped": [],
+                        "errors": [],
+                    },
                     reason=f"job_{final_status}",
                 )
     except typer.Exit:
@@ -696,7 +793,7 @@ def run_bundle(
                 summary={"process_removed": [], "process_skipped": [], "errors": []},
                 reason="launch_failed",
             )
-        handle_cli_error(e, console, 'run bundle')
+        handle_cli_error(e, console, "run bundle")
         raise typer.Exit(1)
 
 
@@ -714,7 +811,11 @@ def _ensure_local_run_store_identity(
     config = load_blueprint_config(bundle_dir, config_overrides=config_overrides) or {}
     identity = config.get("identity") if isinstance(config, dict) else {}
     identity = identity if isinstance(identity, dict) else {}
-    metadata = manifest_dict.get("metadata") if isinstance(manifest_dict.get("metadata"), dict) else {}
+    metadata = (
+        manifest_dict.get("metadata")
+        if isinstance(manifest_dict.get("metadata"), dict)
+        else {}
+    )
     blueprint_id = (
         identity.get("blueprint_id")
         or metadata.get("blueprint_id")
@@ -727,7 +828,9 @@ def _ensure_local_run_store_identity(
     submission_metadata["blueprint_run_id"] = str(run_id)
 
 
-def _prepare_openshell_custom_images(bundle_dir: Path, manifest_dict: dict[str, Any]) -> None:
+def _prepare_openshell_custom_images(
+    bundle_dir: Path, manifest_dict: dict[str, Any]
+) -> None:
     nodes = manifest_dict.get("nodes")
     if not isinstance(nodes, list):
         return
@@ -756,7 +859,9 @@ def _prepare_openshell_custom_images(bundle_dir: Path, manifest_dict: dict[str, 
         if source_path is None:
             continue
 
-        config["from"] = _build_openshell_from_image(source_path, node.get("node_id") or "openshell")
+        config["from"] = _build_openshell_from_image(
+            source_path, node.get("node_id") or "openshell"
+        )
 
 
 def _openshell_gateway_endpoint() -> str:
@@ -788,7 +893,9 @@ def _openshell_env() -> dict[str, str]:
 
 
 def _openshell_config_dir() -> Path:
-    return Path(os.getenv("OPENSHELL_CONFIG_DIR", str(Path.home() / ".config" / "openshell"))).expanduser()
+    return Path(
+        os.getenv("OPENSHELL_CONFIG_DIR", str(Path.home() / ".config" / "openshell"))
+    ).expanduser()
 
 
 def _openshell_gateway_name(*, env: dict[str, str] | None = None) -> str:
@@ -799,7 +906,9 @@ def _openshell_gateway_name(*, env: dict[str, str] | None = None) -> str:
 
     config_dir = _openshell_config_dir()
     try:
-        active_gateway = (config_dir / "active_gateway").read_text(encoding="utf-8").strip()
+        active_gateway = (
+            (config_dir / "active_gateway").read_text(encoding="utf-8").strip()
+        )
         if active_gateway:
             return active_gateway
     except OSError:
@@ -814,7 +923,9 @@ def _openshell_gateway_metadata(gateway_name: str) -> dict[str, Any]:
     if not gateway_name:
         return {}
 
-    metadata_path = _openshell_config_dir() / "gateways" / gateway_name / "metadata.json"
+    metadata_path = (
+        _openshell_config_dir() / "gateways" / gateway_name / "metadata.json"
+    )
     try:
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -831,7 +942,11 @@ def _openshell_local_from_path(bundle_dir: Path, source: Any) -> Path | None:
         return None
 
     raw = Path(source).expanduser()
-    candidates = [raw] if raw.is_absolute() else [bundle_dir / "payloads" / source, bundle_dir / source]
+    candidates = (
+        [raw]
+        if raw.is_absolute()
+        else [bundle_dir / "payloads" / source, bundle_dir / source]
+    )
 
     for candidate in candidates:
         candidate = candidate.resolve()
@@ -843,7 +958,9 @@ def _openshell_local_from_path(bundle_dir: Path, source: Any) -> Path | None:
 
 
 def _build_openshell_from_image(source_path: Path, node_id: Any) -> str:
-    console.print(f"[yellow]Building OpenShell sandbox image for {node_id} from {source_path}...[/yellow]")
+    console.print(
+        f"[yellow]Building OpenShell sandbox image for {node_id} from {source_path}...[/yellow]"
+    )
     if _openshell_gateway_uses_local_docker():
         image_ref = _build_local_docker_sandbox_image(source_path)
         console.print(f"[green]✓ OpenShell sandbox image ready:[/green] {image_ref}")
@@ -867,14 +984,18 @@ def _build_openshell_from_image(source_path: Path, node_id: Any) -> str:
     )
     output = f"{result.stdout}\n{result.stderr}"
     if result.returncode != 0:
-        console.print(f"[red]Failed to build OpenShell sandbox image for {node_id}.[/red]")
+        console.print(
+            f"[red]Failed to build OpenShell sandbox image for {node_id}.[/red]"
+        )
         if output.strip():
             console.print(output.strip())
         raise typer.Exit(1)
 
     matches = re.findall(r"Image\s+([^\s]+)\s+is available in the gateway", output)
     if not matches:
-        console.print(f"[red]OpenShell did not report an image reference for {node_id}.[/red]")
+        console.print(
+            f"[red]OpenShell did not report an image reference for {node_id}.[/red]"
+        )
         if output.strip():
             console.print(output.strip())
         raise typer.Exit(1)
@@ -934,14 +1055,22 @@ def _write_blueprint_job_mapping(
             "submitted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         tmp = run_dir / f".job.json.{os.getpid()}.tmp"
-        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        tmp.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
         tmp.replace(run_dir / "job.json")
     except OSError:
-        logger.exception("Failed to write blueprint job mapping for run_id=%s job_id=%s", blueprint_run_id, job_id)
+        logger.exception(
+            "Failed to write blueprint job mapping for run_id=%s job_id=%s",
+            blueprint_run_id,
+            job_id,
+        )
 
 
 def _blueprint_run_dir(blueprint_run_id: str, env_overrides: dict[str, str]) -> Path:
-    runs_root = Path(env_overrides.get("MN_RUNS_ROOT") or os.getenv("MN_RUNS_ROOT") or "~/.mn/runs").expanduser()
+    runs_root = Path(
+        env_overrides.get("MN_RUNS_ROOT") or os.getenv("MN_RUNS_ROOT") or "~/.mn/runs"
+    ).expanduser()
     return runs_root / blueprint_run_id
 
 
@@ -1008,7 +1137,13 @@ def _start_pre_launch_hook(
 
     env = _openshell_env()
     env.update(runtime_env)
-    env.update({key: str(value) for key, value in (env_overrides or {}).items() if value is not None})
+    env.update(
+        {
+            key: str(value)
+            for key, value in (env_overrides or {}).items()
+            if value is not None
+        }
+    )
     env.update(
         {
             "MN_RUN_ID": blueprint_run_id,
@@ -1061,11 +1196,15 @@ def _start_pre_launch_hook(
         _terminate_pre_launch_process(process, reason="pre_launch_failed")
         raise
 
-    console.print("[green]Blueprint pre-launch hook ready:[/green] scripts/pre-launch.sh")
+    console.print(
+        "[green]Blueprint pre-launch hook ready:[/green] scripts/pre-launch.sh"
+    )
     return process
 
 
-def _wait_for_pre_launch_ready(run_dir: Path, process: subprocess.Popen[Any], ready_file: Path) -> None:
+def _wait_for_pre_launch_ready(
+    run_dir: Path, process: subprocess.Popen[Any], ready_file: Path
+) -> None:
     try:
         timeout = max(float(os.getenv("MN_PRE_LAUNCH_TIMEOUT_SECONDS", "30")), 0)
     except ValueError:
@@ -1097,13 +1236,21 @@ def _apply_pre_launch_ready_metadata(
     try:
         metadata = json.loads(raw)
     except json.JSONDecodeError:
-        logger.warning("Ignoring non-JSON pre-launch ready metadata from %s", ready_file)
+        logger.warning(
+            "Ignoring non-JSON pre-launch ready metadata from %s", ready_file
+        )
         return
     if not isinstance(metadata, dict):
         return
     env_patch = metadata.get("env")
     if isinstance(env_patch, dict):
-        env_overrides.update({str(key): str(value) for key, value in env_patch.items() if value is not None})
+        env_overrides.update(
+            {
+                str(key): str(value)
+                for key, value in env_patch.items()
+                if value is not None
+            }
+        )
     config_patch = metadata.get("config") or metadata.get("config_overrides")
     if isinstance(config_patch, dict):
         merged = _deep_merge_dict(config_overrides, config_patch)
@@ -1121,7 +1268,9 @@ def _deep_merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str
     return result
 
 
-def _terminate_pre_launch_process(process: subprocess.Popen[Any] | None, *, reason: str) -> None:
+def _terminate_pre_launch_process(
+    process: subprocess.Popen[Any] | None, *, reason: str
+) -> None:
     if process is None:
         return
     poll = getattr(process, "poll", None)
@@ -1168,10 +1317,16 @@ def _write_local_web_ui_handle(
     if not isinstance(web_ui, dict) or web_ui.get("enabled") is False:
         return
 
-    dashboard = web_ui.get("dashboard") if isinstance(web_ui.get("dashboard"), dict) else {}
+    dashboard = (
+        web_ui.get("dashboard") if isinstance(web_ui.get("dashboard"), dict) else {}
+    )
     output = web_ui.get("output") if isinstance(web_ui.get("output"), dict) else {}
-    identity = config.get("identity") if isinstance(config.get("identity"), dict) else {}
-    runs_root = Path(env_overrides.get("MN_RUNS_ROOT") or os.getenv("MN_RUNS_ROOT") or "~/.mn/runs").expanduser()
+    identity = (
+        config.get("identity") if isinstance(config.get("identity"), dict) else {}
+    )
+    runs_root = Path(
+        env_overrides.get("MN_RUNS_ROOT") or os.getenv("MN_RUNS_ROOT") or "~/.mn/runs"
+    ).expanduser()
     run_dir = runs_root / blueprint_run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1209,7 +1364,9 @@ def _write_local_web_ui_handle(
                 "adapter": str(output.get("adapter") or "custom"),
                 "kind": "output",
                 "url": custom_url,
-                "title": str(output.get("title") or identity.get("name") or bundle_dir.name),
+                "title": str(
+                    output.get("title") or identity.get("name") or bundle_dir.name
+                ),
                 "status": "external",
                 "metadata": {
                     "blueprint_id": identity.get("blueprint_id"),
@@ -1237,7 +1394,12 @@ def _start_background_event_relay_if_needed(
         return
     if not _is_live_manifest(manifest_dict):
         return
-    if os.getenv("MN_RUN_BACKGROUND_EVENT_RELAY", "1").strip().lower() in {"0", "false", "no", "off"}:
+    if os.getenv("MN_RUN_BACKGROUND_EVENT_RELAY", "1").strip().lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }:
         return
 
     config = load_blueprint_config(bundle_dir, config_overrides=config_overrides) or {}
@@ -1290,12 +1452,22 @@ def _start_background_event_relay_if_needed(
         json.dumps(relay_info, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    console.print("[green]Live event relay:[/green] keeping the local dashboard stream updated in the background.")
+    console.print(
+        "[green]Live event relay:[/green] keeping the local dashboard stream updated in the background."
+    )
 
 
 def _is_live_manifest(manifest_dict: dict[str, Any]) -> bool:
-    policies = manifest_dict.get("policies") if isinstance(manifest_dict.get("policies"), dict) else {}
-    return manifest_dict.get("daemon") is True or policies.get("stream_mode") == "live"
+    policies = (
+        manifest_dict.get("policies")
+        if isinstance(manifest_dict.get("policies"), dict)
+        else {}
+    )
+    return (
+        manifest_dict.get("daemon") is True
+        or str(manifest_dict.get("type") or "batch").lower() == "service"
+        or policies.get("stream_mode") == "live"
+    )
 
 
 def _background_event_relay_poll_seconds(config: dict[str, Any]) -> float:
@@ -1337,8 +1509,16 @@ def _web_ui_registration_script(
     output: dict[str, Any],
     dashboard: dict[str, Any],
 ) -> Path | None:
-    registration = web_ui.get("registration") if isinstance(web_ui.get("registration"), dict) else {}
-    dashboard_registration = dashboard.get("registration") if isinstance(dashboard.get("registration"), dict) else {}
+    registration = (
+        web_ui.get("registration")
+        if isinstance(web_ui.get("registration"), dict)
+        else {}
+    )
+    dashboard_registration = (
+        dashboard.get("registration")
+        if isinstance(dashboard.get("registration"), dict)
+        else {}
+    )
     for raw_value in (
         output.get("launch_script"),
         output.get("registration_script"),
@@ -1356,8 +1536,16 @@ def _web_ui_registration_module(
     output: dict[str, Any],
     dashboard: dict[str, Any],
 ) -> str | None:
-    registration = web_ui.get("registration") if isinstance(web_ui.get("registration"), dict) else {}
-    dashboard_registration = dashboard.get("registration") if isinstance(dashboard.get("registration"), dict) else {}
+    registration = (
+        web_ui.get("registration")
+        if isinstance(web_ui.get("registration"), dict)
+        else {}
+    )
+    dashboard_registration = (
+        dashboard.get("registration")
+        if isinstance(dashboard.get("registration"), dict)
+        else {}
+    )
     for raw_value in (
         output.get("launch_module"),
         output.get("registration_module"),
@@ -1463,7 +1651,9 @@ def _launch_blueprint_web_ui_command(
 ) -> None:
     web_ui = config.get("web_ui") if isinstance(config.get("web_ui"), dict) else {}
     output = web_ui.get("output") if isinstance(web_ui.get("output"), dict) else {}
-    identity = config.get("identity") if isinstance(config.get("identity"), dict) else {}
+    identity = (
+        config.get("identity") if isinstance(config.get("identity"), dict) else {}
+    )
     host = _web_ui_bind_host(output, env_overrides)
     port = _web_ui_port(output, host=host)
     base_url = _web_ui_base_url(output, host, port)
@@ -1524,10 +1714,14 @@ def _launch_blueprint_web_ui_command(
             process_info["script"] = script
         if module:
             process_info["module"] = module
-        (run_dir / "web_ui_process.json").write_text(json.dumps(process_info, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        (run_dir / "web_ui_process.json").write_text(
+            json.dumps(process_info, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
         _wait_for_blueprint_web_ui(run_dir, process)
     except OSError:
-        logger.exception("Failed to launch blueprint web UI for run_id=%s", blueprint_run_id)
+        logger.exception(
+            "Failed to launch blueprint web UI for run_id=%s", blueprint_run_id
+        )
 
 
 def _inject_local_blueprint_support_pythonpath(env: dict[str, str]) -> None:
@@ -1586,16 +1780,22 @@ def _web_ui_port_available(host: str, port: int) -> bool:
 
 def _web_ui_port_range() -> tuple[int, int]:
     start = _parse_web_ui_port(
-        os.getenv("MN_BLUEPRINT_WEB_UI_PORT_START", str(DEFAULT_BLUEPRINT_WEB_UI_PORT_START)),
+        os.getenv(
+            "MN_BLUEPRINT_WEB_UI_PORT_START", str(DEFAULT_BLUEPRINT_WEB_UI_PORT_START)
+        ),
         name="MN_BLUEPRINT_WEB_UI_PORT_START",
     )
     end = _parse_web_ui_port(
-        os.getenv("MN_BLUEPRINT_WEB_UI_PORT_END", str(DEFAULT_BLUEPRINT_WEB_UI_PORT_END)),
+        os.getenv(
+            "MN_BLUEPRINT_WEB_UI_PORT_END", str(DEFAULT_BLUEPRINT_WEB_UI_PORT_END)
+        ),
         name="MN_BLUEPRINT_WEB_UI_PORT_END",
     )
     assert start is not None and end is not None
     if end < start:
-        raise RuntimeError("MN_BLUEPRINT_WEB_UI_PORT_END must be greater than or equal to MN_BLUEPRINT_WEB_UI_PORT_START.")
+        raise RuntimeError(
+            "MN_BLUEPRINT_WEB_UI_PORT_END must be greater than or equal to MN_BLUEPRINT_WEB_UI_PORT_START."
+        )
     return start, end
 
 
@@ -1604,7 +1804,9 @@ def _web_ui_port(output: dict[str, Any], *, host: str = "127.0.0.1") -> int:
     explicit_port = _parse_web_ui_port(raw_port, name="web_ui.output.port")
     if explicit_port is not None:
         if not _web_ui_port_available(host, explicit_port):
-            raise RuntimeError(f"Blueprint web UI port {explicit_port} is unavailable on {host}.")
+            raise RuntimeError(
+                f"Blueprint web UI port {explicit_port} is unavailable on {host}."
+            )
         return explicit_port
 
     start, end = _web_ui_port_range()
@@ -1618,7 +1820,9 @@ def _web_ui_base_url(output: dict[str, Any], host: str, port: int) -> str:
     configured_url = output.get("base_url") or os.getenv("MN_BLUEPRINT_WEB_UI_BASE_URL")
     if isinstance(configured_url, str) and configured_url.strip():
         return configured_url.rstrip("/")
-    public_host = output.get("public_host") or os.getenv("MN_BLUEPRINT_WEB_UI_PUBLIC_HOST")
+    public_host = output.get("public_host") or os.getenv(
+        "MN_BLUEPRINT_WEB_UI_PUBLIC_HOST"
+    )
     if not isinstance(public_host, str) or not public_host.strip():
         public_host = "localhost" if host in {"127.0.0.1", "0.0.0.0", "::"} else host
     scheme = str(output.get("scheme") or "http")
@@ -1627,7 +1831,9 @@ def _web_ui_base_url(output: dict[str, Any], host: str, port: int) -> str:
 
 def _wait_for_blueprint_web_ui(run_dir: Path, process: subprocess.Popen[Any]) -> None:
     try:
-        timeout = max(float(os.getenv("MN_BLUEPRINT_WEB_UI_START_TIMEOUT_SECONDS", "5")), 0)
+        timeout = max(
+            float(os.getenv("MN_BLUEPRINT_WEB_UI_START_TIMEOUT_SECONDS", "5")), 0
+        )
     except ValueError:
         timeout = 5.0
     deadline = time.monotonic() + timeout
@@ -1656,14 +1862,22 @@ def _write_static_web_ui_handle(
     config: dict[str, Any],
 ) -> None:
     web_ui = config.get("web_ui") if isinstance(config.get("web_ui"), dict) else {}
-    dashboard = web_ui.get("dashboard") if isinstance(web_ui.get("dashboard"), dict) else {}
+    dashboard = (
+        web_ui.get("dashboard") if isinstance(web_ui.get("dashboard"), dict) else {}
+    )
     output = web_ui.get("output") if isinstance(web_ui.get("output"), dict) else {}
-    identity = config.get("identity") if isinstance(config.get("identity"), dict) else {}
+    identity = (
+        config.get("identity") if isinstance(config.get("identity"), dict) else {}
+    )
     adapter = str(output.get("adapter") or web_ui.get("kind") or "").lower()
-    if adapter not in {"static_html", "html"} and not (output.get("path") or dashboard.get("path") or web_ui.get("path")):
+    if adapter not in {"static_html", "html"} and not (
+        output.get("path") or dashboard.get("path") or web_ui.get("path")
+    ):
         return
 
-    html_path = _safe_bundle_file(bundle_dir, output.get("path") or dashboard.get("path") or web_ui.get("path"))
+    html_path = _safe_bundle_file(
+        bundle_dir, output.get("path") or dashboard.get("path") or web_ui.get("path")
+    )
     if html_path is None:
         return
 
@@ -1685,7 +1899,9 @@ def _write_static_web_ui_handle(
             "adapter": "static_html",
             "kind": "output",
             "url": url,
-            "title": str(output.get("title") or identity.get("name") or bundle_dir.name),
+            "title": str(
+                output.get("title") or identity.get("name") or bundle_dir.name
+            ),
             "path": str(html_path),
             "status": "available",
             "metadata": {
@@ -1702,15 +1918,27 @@ def _write_static_web_ui_handle(
 def _write_web_ui_handle(run_dir: Path, handle: dict[str, Any]) -> None:
     try:
         run_dir.mkdir(parents=True, exist_ok=True)
-        (run_dir / "web_ui.json").write_text(json.dumps(handle, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        (run_dir / "web_ui.json").write_text(
+            json.dumps(handle, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
     except OSError:
-        logger.exception("Failed to write blueprint web UI handle for run_dir=%s", run_dir)
+        logger.exception(
+            "Failed to write blueprint web UI handle for run_dir=%s", run_dir
+        )
 
 
 def _web_ui_video_source(config: dict[str, Any], bundle_dir: Path) -> str:
-    video_source = ((config.get("video_source") or {}) if isinstance(config.get("video_source"), dict) else {}).get("uri")
+    video_source = (
+        (config.get("video_source") or {})
+        if isinstance(config.get("video_source"), dict)
+        else {}
+    ).get("uri")
     if not isinstance(video_source, str) or not video_source:
-        dashboard = (config.get("web_ui") or {}).get("dashboard") if isinstance(config.get("web_ui"), dict) else {}
+        dashboard = (
+            (config.get("web_ui") or {}).get("dashboard")
+            if isinstance(config.get("web_ui"), dict)
+            else {}
+        )
         video_source = (dashboard or {}).get("default_video_source") or ""
     if not isinstance(video_source, str) or not video_source:
         return ""
@@ -1731,31 +1959,35 @@ def _live_monitor(job_id: str):
     import select
     import time
     from rich.live import Live
-    
+
     is_tty = sys.stdin.isatty()
     old_settings = None
     if is_tty:
         import tty
         import termios
+
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
         tty.setcbreak(fd)
-        
+
     class MonitorView:
         def __init__(self):
             self.data = None
+
         def __rich__(self):
             if not self.data:
                 from rich.panel import Panel
+
                 return Panel("Connecting...", style="cyan")
             if "error" in self.data:
                 from rich.panel import Panel
+
                 return Panel(f"Error fetching job: {self.data['error']}", style="red")
             return generate_live_layout(job_id, self.data)
 
     final_status = "unknown"
     view = MonitorView()
-    
+
     try:
         with Live(view, refresh_per_second=12, console=console):
             while True:
@@ -1764,32 +1996,33 @@ def _live_monitor(job_id: str):
                     data = json.loads(job_json)
                 except Exception as e:
                     data = {"error": str(e)}
-                    
+
                 view.data = data
-                
+
                 if data and "error" not in data:
                     status = data.get("summary", {}).get("status", "unknown")
                     if status in ["completed", "failed", "cancelled"]:
                         final_status = status
                         break
-                
+
                 if is_tty:
                     i, o, e = select.select([sys.stdin], [], [], 0.5)
                     if i:
                         key = sys.stdin.read(1)
-                        if key.lower() == 'q' or key == '\x03': # \x03 is Ctrl-C
+                        if key.lower() == "q" or key == "\x03":  # \x03 is Ctrl-C
                             break
                 else:
                     time.sleep(0.5)
                     break
-                    
+
     except KeyboardInterrupt:
         pass
     finally:
         if is_tty and old_settings:
             import termios
+
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-            
+
     if final_status in ["completed", "failed", "cancelled"]:
         # Save results and print final summary
         fetch_and_save_results(job_id, data)
@@ -1806,7 +2039,7 @@ def monitor(job_id: str):
     try:
         _live_monitor(job_id)
     except Exception as e:
-        handle_cli_error(e, console, 'monitor stream')
+        handle_cli_error(e, console, "monitor stream")
 
 
 def result(job_id: str):
@@ -1814,18 +2047,20 @@ def result(job_id: str):
     try:
         console.print(f"Fetching results for {job_id}...")
         fetch_and_save_results(job_id)
-        
+
         log_dir = Path(f"/tmp/mn_{job_id}")
         res_file = log_dir / "result.txt"
         stream_file = log_dir / "result_stream.txt"
-        
+
         if res_file.exists():
             console.print(f"[green]Final result saved to: {res_file}[/green]")
         else:
-            console.print("[yellow]No final result found (job might not be completed).[/yellow]")
-            
+            console.print(
+                "[yellow]No final result found (job might not be completed).[/yellow]"
+            )
+
         if stream_file.exists():
             console.print(f"[green]Stream results saved to: {stream_file}[/green]")
-            
+
     except Exception as e:
-        handle_cli_error(e, console, 'fetch results')
+        handle_cli_error(e, console, "fetch results")

@@ -22,7 +22,11 @@ def _inject_local_blueprint_support_path() -> None:
 
 
 def workspace_root() -> Path:
-    for name in ("MN_WORKSPACE_ROOT", "MIRROR_NEURON_WORKSPACE", "OTTERDESK_MIRROR_NEURON_WORKSPACE"):
+    for name in (
+        "MN_WORKSPACE_ROOT",
+        "MIRROR_NEURON_WORKSPACE",
+        "OTTERDESK_MIRROR_NEURON_WORKSPACE",
+    ):
         value = os.getenv(name)
         if value:
             return Path(value).expanduser().resolve()
@@ -31,7 +35,9 @@ def workspace_root() -> Path:
 
 def runtime_path_environment() -> dict[str, str]:
     root = workspace_root()
-    membrane_project_path = Path(os.getenv("MN_MEMBRANE_PROJECT_PATH") or root / "Membrane").expanduser()
+    membrane_project_path = Path(
+        os.getenv("MN_MEMBRANE_PROJECT_PATH") or root / "Membrane"
+    ).expanduser()
     membrane_sdk_path = Path(
         os.getenv("MN_MEMBRANE_SDK_PATH")
         or os.getenv("MN_CONTEXT_PYTHON_SDK_PATH")
@@ -90,7 +96,13 @@ def prepare_manifest_for_submission(
     if run_id:
         runtime_env.setdefault("MN_RUN_ID", str(run_id))
         runtime_env["MN_RUNS_ROOT"] = runs_root
-    runtime_env.update({key: str(value) for key, value in (env_overrides or {}).items() if value is not None})
+    runtime_env.update(
+        {
+            key: str(value)
+            for key, value in (env_overrides or {}).items()
+            if value is not None
+        }
+    )
     if runtime_env:
         inject_node_environment(prepared, runtime_env)
     normalize_host_local_uploads(prepared)
@@ -101,20 +113,30 @@ def prepare_manifest_for_submission(
 
 def render_agent_templates_for_submission(manifest: dict[str, Any]) -> None:
     nodes = manifest.get("nodes")
-    if not isinstance(nodes, list) or not any(isinstance(node, dict) and "uses" in node for node in nodes):
+    if not isinstance(nodes, list) or not any(
+        isinstance(node, dict) and "uses" in node for node in nodes
+    ):
         return
     _inject_local_blueprint_support_path()
     try:
         from mn_blueprint_support import render_manifest_agent_templates
     except ImportError as exc:
-        raise RuntimeError("Manifest uses agent templates, but mn_blueprint_support is not installed.") from exc
+        raise RuntimeError(
+            "Manifest uses agent templates, but mn_blueprint_support is not installed."
+        ) from exc
     rendered = render_manifest_agent_templates(manifest)
     manifest.clear()
     manifest.update(rendered)
 
 
 def _shared_runs_root(env_overrides: Optional[dict[str, str]] = None) -> str:
-    return str(Path((env_overrides or {}).get("MN_RUNS_ROOT") or os.getenv("MN_RUNS_ROOT") or DEFAULT_RUNS_ROOT).expanduser())
+    return str(
+        Path(
+            (env_overrides or {}).get("MN_RUNS_ROOT")
+            or os.getenv("MN_RUNS_ROOT")
+            or DEFAULT_RUNS_ROOT
+        ).expanduser()
+    )
 
 
 def with_shared_run_store_config(
@@ -144,7 +166,9 @@ def blueprint_runtime_environment(
         config = load_blueprint_config(bundle_dir, config_overrides=config_overrides)
     if config is not None:
         env["MN_BLUEPRINT_CONFIG_JSON"] = json.dumps(config, sort_keys=True)
-        projected_config = load_blueprint_config_overwrites(bundle_dir, config_overrides=config_overrides)
+        projected_config = load_blueprint_config_overwrites(
+            bundle_dir, config_overrides=config_overrides
+        )
         if projected_config is not None:
             env.update(config_to_environment(projected_config))
 
@@ -154,7 +178,9 @@ def blueprint_runtime_environment(
     return env
 
 
-def apply_manifest_config_bindings(manifest: dict[str, Any], config: dict[str, Any]) -> None:
+def apply_manifest_config_bindings(
+    manifest: dict[str, Any], config: dict[str, Any]
+) -> None:
     bindings = config.get("manifest_config_bindings") or []
     if not isinstance(bindings, list):
         return
@@ -184,7 +210,10 @@ def config_to_environment(config: dict[str, Any]) -> dict[str, str]:
         ("video_source.frame_jpeg_max_width", ("FRAME_JPEG_MAX_WIDTH",)),
         ("vl_model.base_url", ("VL_MODEL_BASE_URL", "OLLAMA_BASE_URL")),
         ("vl_model.model", ("VL_MODEL_NAME", "OLLAMA_MODEL")),
-        ("vl_model.timeout_seconds", ("VL_MODEL_TIMEOUT_SECONDS", "OLLAMA_TIMEOUT_SECONDS")),
+        (
+            "vl_model.timeout_seconds",
+            ("VL_MODEL_TIMEOUT_SECONDS", "OLLAMA_TIMEOUT_SECONDS"),
+        ),
         ("vl_model.temperature", ("VL_MODEL_TEMPERATURE", "OLLAMA_TEMPERATURE")),
         ("llm.api_base", ("MN_LLM_API_BASE", "LITELLM_API_BASE")),
         ("llm.model", ("MN_LLM_MODEL", "LITELLM_MODEL")),
@@ -246,12 +275,14 @@ def _list_targets(items: list[Any], selector: str) -> list[Any]:
         return [
             item
             for item in items
-            if isinstance(item, dict) and str(item.get("node_id") or "").startswith(prefix)
+            if isinstance(item, dict)
+            and str(item.get("node_id") or "").startswith(prefix)
         ]
     return [
         item
         for item in items
-        if isinstance(item, dict) and (item.get("node_id") == selector or item.get("edge_id") == selector)
+        if isinstance(item, dict)
+        and (item.get("node_id") == selector or item.get("edge_id") == selector)
     ]
 
 
@@ -347,9 +378,16 @@ def normalize_host_local_uploads(manifest: dict[str, Any]) -> None:
 
 
 def run_mode_label(manifest: dict) -> str:
-    is_live = manifest.get("daemon") is True or manifest.get("policies", {}).get("stream_mode") == "live"
+    manifest_type = str(manifest.get("type") or "batch").lower()
+    is_live = (
+        manifest.get("daemon") is True
+        or manifest_type == "service"
+        or manifest.get("policies", {}).get("stream_mode") == "live"
+    )
     if is_live and manifest.get("daemon") is True:
         return "Live daemon"
+    if manifest_type == "service":
+        return "Live service"
     if is_live:
         return "Live"
     return "Batch"
