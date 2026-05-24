@@ -236,7 +236,7 @@ def test_cleanup_reports_docker_failures_without_crashing(mocker, tmp_path):
     mocker.patch("mn_cli.libs.blueprint_resources.shutil.which", return_value="/usr/local/bin/docker")
 
     def fake_run(command, **kwargs):
-        return _completed(command, returncode=1, stderr="daemon unavailable")
+        return _completed(command, returncode=1, stderr="docker unavailable")
 
     mocker.patch("mn_cli.libs.blueprint_resources.subprocess.run", side_effect=fake_run)
 

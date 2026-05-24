@@ -52,7 +52,12 @@ from mn_cli.libs.run_cmds import run_bundle as _run_bundle
 from mn_cli.libs.run_manifest import load_blueprint_config as _load_blueprint_config
 
 blueprint_app = typer.Typer(help="Manage and run MirrorNeuron blueprints")
-human_app = typer.Typer(help="Inspect and respond to human collaboration events")
+human_app = typer.Typer(
+    help="Inspect and respond to human collaboration events",
+    invoke_without_command=True,
+    no_args_is_help=False,
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
 _PATCH_COMPAT = (subprocess, _git_checkout, _git_fetch)
 
 
@@ -860,6 +865,47 @@ def blueprint_resources(
         console.print(f"\n[yellow]Stopped resource monitor for {run_id}.[/yellow]")
 
 
+@blueprint_app.command("human")
+def blueprint_human_command(
+    args: list[str] = typer.Argument(None, help="Run ID, or respond/ack subcommand arguments."),
+    pending: bool = typer.Option(False, "--pending", help="Show only pending human input requests."),
+    decision: Optional[str] = typer.Option(None, "--decision", help="Decision for respond."),
+    notes: str = typer.Option("", "--notes", help="Optional reviewer notes."),
+    reviewer: str = typer.Option("cli", "--reviewer", help="Reviewer identity label."),
+    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default ~/.mn/runs directory."),
+):
+    """Inspect and respond to human collaboration events."""
+    args = args or []
+    if args and args[0] == "respond":
+        if len(args) < 3:
+            console.print("[red]respond expects run_id and request_id.[/red]")
+            raise typer.Exit(1)
+        if not decision:
+            console.print("[red]--decision is required for respond.[/red]")
+            raise typer.Exit(1)
+        return blueprint_human_respond(args[1], args[2], decision=decision, notes=notes, reviewer=reviewer, runs_root=runs_root)
+
+    if args and args[0] == "ack":
+        if len(args) < 3:
+            console.print("[red]ack expects run_id and notice_id.[/red]")
+            raise typer.Exit(1)
+        return blueprint_human_ack(args[1], args[2], reviewer=reviewer, runs_root=runs_root)
+
+    run_id = args[0] if args else None
+    if not run_id:
+        console.print("[red]run_id is required unless using a human subcommand.[/red]")
+        raise typer.Exit(1)
+    _load_run_or_exit(run_id, runs_root)
+    tools = _load_observability_tools()
+    events = (
+        tools["list_pending_human_requests"](run_id, runs_root=runs_root)
+        if pending
+        else tools["read_human_events"](run_id, runs_root=runs_root)
+    )
+    for event in events:
+        console.print(json.dumps(event, sort_keys=True), markup=False)
+
+
 @human_app.callback(invoke_without_command=True)
 def blueprint_human(
     ctx: typer.Context,
@@ -870,6 +916,8 @@ def blueprint_human(
     """Show human collaboration events for one blueprint run."""
     if ctx.invoked_subcommand is not None:
         return
+    if not run_id and ctx.args:
+        run_id = ctx.args[0]
     if not run_id:
         console.print("[red]run_id is required unless using a human subcommand.[/red]")
         raise typer.Exit(1)
@@ -973,6 +1021,3 @@ def blueprint_export(
     else:
         console.print("[red]Unsupported export format. Use 'json', 'markdown', or 'html'.[/red]")
         raise typer.Exit(1)
-
-
-blueprint_app.add_typer(human_app, name="human")

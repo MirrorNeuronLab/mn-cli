@@ -452,7 +452,14 @@ def test_resource_list_success(mocker):
                 "mode": "cluster",
                 "node_count": 2,
                 "nodes": [
-                    {"name": "mn1", "cpu_cores": 8, "gpu_count": 2, "memory_gb": 16.0},
+                    {
+                        "name": "mn1",
+                        "cpu_cores": 8,
+                        "gpu_count": 2,
+                        "gpu_memory_total_mb": 48_000,
+                        "gpu_memory_free_mb": 32_000,
+                        "memory_gb": 16.0,
+                    },
                     {"name": "mn2", "cpu_cores": 4, "gpu_count": 0, "memory_gb": 8.0},
                 ],
                 "limits": {"cpu": 100},
@@ -465,6 +472,7 @@ def test_resource_list_success(mocker):
     assert '"combined"' in result.stdout
     assert '"cpu_cores": 12' in result.stdout
     assert '"gpu_count": 2' in result.stdout
+    assert '"gpu_memory_total_mb": 48000.0' in result.stdout
     assert '"memory_gb": 24.0' in result.stdout
     assert '"name": "mn1"' in result.stdout
     mock_resource.assert_called_once()

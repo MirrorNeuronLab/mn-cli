@@ -2,7 +2,7 @@ from importlib import metadata
 
 import typer
 from mn_cli import update_cmds
-from mn_cli.libs import job_cmds, resource_cmds, run_cmds, sys_cmds
+from mn_cli.libs import deployment_cmds, job_cmds, resource_cmds, run_cmds, schedule_cmds, service_cmds, sys_cmds
 from mn_cli.libs.blueprint_cmds import blueprint_app
 
 PACKAGE_NAME = "mirrorneuron-cli"
@@ -52,6 +52,7 @@ def main(
 # Run commands
 app.command(name="validate")(run_cmds.validate)
 app.command(name="run")(run_cmds.run)
+app.command(name="deploy")(deployment_cmds.deploy)
 app.command(name="monitor")(run_cmds.monitor)
 app.command(name="result")(run_cmds.result)
 
@@ -84,6 +85,11 @@ app.command(name="update")(update_cmds.update)
 # Sub-apps
 app.add_typer(blueprint_app, name="blueprint")
 app.add_typer(resource_cmds.resource_app, name="resource")
+app.add_typer(service_cmds.service_app, name="service")
+app.add_typer(deployment_cmds.deployment_app, name="deployment")
+app.add_typer(schedule_cmds.schedule_app, name="schedule")
+app.add_typer(schedule_cmds.trigger_app, name="trigger")
+app.add_typer(schedule_cmds.event_app, name="event")
 
 if __name__ == "__main__":
     app()

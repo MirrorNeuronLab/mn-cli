@@ -101,6 +101,35 @@ def test_validate_nodes_not_list(tmp_path):
     assert "'nodes' must be a list" in result.stdout
 
 
+def test_validate_rejects_bad_resource_specs(tmp_path):
+    bundle_dir = tmp_path / "bad_resources"
+    bundle_dir.mkdir()
+    manifest_file = bundle_dir / "manifest.json"
+    manifest_file.write_text(json.dumps({
+        "manifest_version": "1.0",
+        "graph_id": "test_graph",
+        "job_name": "test_job",
+        "entrypoints": ["worker"],
+        "nodes": [
+            {
+                "node_id": "worker",
+                "resources": {
+                    "ports": [{"label": "api", "port": 70000}],
+                    "volumes": [{"name": "models", "source": "relative", "target": "models"}],
+                },
+            }
+        ],
+    }))
+
+    result = runner.invoke(app, ["validate", str(bundle_dir), "--output", "json"])
+
+    assert result.exit_code == 1
+    report = json.loads(result.stdout)
+    codes = {issue["code"] for issue in report["issues"]}
+    assert "manifest.resources.port_number" in codes
+    assert "manifest.resources.volume_source" in codes
+
+
 def test_validate_accepts_host_local_python_environment(tmp_path):
     bundle_dir = tmp_path / "python_env_bundle"
     requirements = bundle_dir / "payloads" / "worker" / "requirements.txt"
@@ -193,6 +222,51 @@ def test_validate_runs_manifest_input_validation(tmp_path):
     assert "camera_url" in result.stdout
     assert "Field" in result.stdout
     assert "Fix" in result.stdout
+
+
+def test_validate_runs_required_service_checks_before_input_validation(tmp_path):
+    bundle_dir = tmp_path / "service_validated_inputs"
+    bundle_dir.mkdir()
+    (bundle_dir / "config").mkdir()
+    (bundle_dir / "config" / "default.json").write_text(json.dumps({
+        "video_source": {"uri": "ftp://camera.local/live"}
+    }))
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "manifest_version": "1.0",
+        "graph_id": "test_graph",
+        "job_name": "test_job",
+        "entrypoints": ["worker"],
+        "nodes": [{"node_id": "worker"}],
+        "required_services": [
+            {
+                "name": "external-probe",
+                "origin": "external",
+                "checks": [
+                    {
+                        "name": "probe",
+                        "type": "script",
+                        "command": [sys.executable, "-c", "import sys; sys.exit(2)"],
+                    }
+                ],
+            }
+        ],
+        "input_validation": {
+            "rules": [
+                {
+                    "name": "camera_url",
+                    "type": "pattern",
+                    "path": "video_source.uri",
+                    "pattern": "^https?://",
+                }
+            ]
+        },
+    }))
+
+    result = runner.invoke(app, ["validate", str(bundle_dir)])
+
+    assert result.exit_code == 1
+    assert "Service validation failed" in result.stdout
+    assert "Input validation failed" not in result.stdout
 
 
 def test_validate_outputs_json_report(tmp_path):
@@ -294,6 +368,11 @@ def test_run_force_skips_input_validation(mocker, tmp_path, monkeypatch):
     manifest = json.loads(mock_submit.call_args.args[0])
     assert manifest["metadata"]["mn_validation"]["force"] is True
     assert manifest["metadata"]["mn_validation"]["status"] == "skipped"
+    assert manifest["metadata"]["mn_validation"]["skipped_checks"] == [
+        "services",
+        "input_validation",
+        "requirements",
+    ]
     assert mock_submit.call_args.kwargs["force"] is True
 
 
@@ -963,18 +1042,23 @@ def test_run_displays_live_job_type_and_follow_status(mocker, tmp_path):
     bundle_dir = tmp_path / "live_bundle"
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text(json.dumps({
-        "daemon": True,
-        "policies": {"stream_mode": "live"},
+        "policies": {"job_type": "service", "stream_mode": "live"},
         "nodes": [],
     }))
 
     result = runner.invoke(app, ["run", str(bundle_dir), "--follow-seconds", "0"])
 
     assert result.exit_code == 0
-    assert "Live daemon" in result.stdout
+    assert "Live service" in result.stdout
     assert "Starting: agents scheduled" in result.stdout
     assert "Following: status running" in result.stdout
     assert "75%" not in result.stdout
+
+
+def test_live_manifest_detection_accepts_scheduler_job_type():
+    assert run_cmds._is_live_manifest(
+        {"policies": {"scheduler": {"job_type": "service"}}}
+    )
 
 
 def test_live_web_ui_run_starts_background_event_relay(mocker, tmp_path, monkeypatch):
@@ -999,7 +1083,7 @@ def test_live_web_ui_run_starts_background_event_relay(mocker, tmp_path, monkeyp
     bundle_dir = tmp_path / "live_ui_bundle"
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text(json.dumps({
-        "daemon": True,
+        "type": "service",
         "policies": {"stream_mode": "live"},
         "nodes": [],
     }))

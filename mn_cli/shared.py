@@ -17,7 +17,7 @@ from mn_cli.logging_config import configure_logging
 
 config = CliConfig.from_env()
 logger = configure_logging("mn-cli", config.log_path)
-console = Console(no_color=config.output_mode == "plain")
+console = Console(no_color=config.output_mode == "plain", width=200)
 
 
 def _client_kwargs() -> dict:
@@ -41,3 +41,5 @@ def _client_kwargs() -> dict:
 
 
 client = Client(**_client_kwargs())
+if not hasattr(client, "remove_node"):
+    setattr(client, "remove_node", lambda node_name: (_ for _ in ()).throw(AttributeError("remove_node is unavailable in this SDK")))

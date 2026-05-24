@@ -59,6 +59,8 @@ def set_resources(
 RESOURCE_TOTAL_KEYS = (
     "cpu_cores",
     "gpu_count",
+    "gpu_memory_total_mb",
+    "gpu_memory_free_mb",
     "memory_gb",
     "disk_gb",
     "disk_available_gb",

@@ -378,14 +378,16 @@ def normalize_host_local_uploads(manifest: dict[str, Any]) -> None:
 
 
 def run_mode_label(manifest: dict) -> str:
-    manifest_type = str(manifest.get("type") or "batch").lower()
-    is_live = (
-        manifest.get("daemon") is True
-        or manifest_type == "service"
-        or manifest.get("policies", {}).get("stream_mode") == "live"
-    )
-    if is_live and manifest.get("daemon") is True:
-        return "Live daemon"
+    policies = manifest.get("policies", {}) if isinstance(manifest.get("policies"), dict) else {}
+    scheduler = policies.get("scheduler", {}) if isinstance(policies.get("scheduler"), dict) else {}
+    manifest_type = str(
+        policies.get("job_type")
+        or scheduler.get("job_type")
+        or manifest.get("job_type")
+        or manifest.get("type")
+        or "batch"
+    ).lower()
+    is_live = manifest_type == "service" or policies.get("stream_mode") == "live"
     if manifest_type == "service":
         return "Live service"
     if is_live:
