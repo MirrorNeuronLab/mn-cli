@@ -49,6 +49,8 @@ FINAL_STATUSES = {"completed", "failed", "cancelled"}
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 PRE_LAUNCH_SCRIPT = Path("scripts/pre-launch.sh")
 POST_LAUNCH_SCRIPT = Path("scripts/post-launch.sh")
+DEFAULT_BLUEPRINT_WEB_UI_PORT_START = 58000
+DEFAULT_BLUEPRINT_WEB_UI_PORT_END = 58049
 _HELPER_COMPAT = (
     _add_mn_llm_aliases,
     _blueprint_runtime_environment,
@@ -1462,8 +1464,8 @@ def _launch_blueprint_web_ui_command(
     web_ui = config.get("web_ui") if isinstance(config.get("web_ui"), dict) else {}
     output = web_ui.get("output") if isinstance(web_ui.get("output"), dict) else {}
     identity = config.get("identity") if isinstance(config.get("identity"), dict) else {}
-    host = str(output.get("host") or env_overrides.get("MN_BLUEPRINT_WEB_UI_HOST") or os.getenv("MN_BLUEPRINT_WEB_UI_HOST") or "127.0.0.1")
-    port = _web_ui_port(output)
+    host = _web_ui_bind_host(output, env_overrides)
+    port = _web_ui_port(output, host=host)
     base_url = _web_ui_base_url(output, host, port)
 
     env = os.environ.copy()
@@ -1547,25 +1549,76 @@ def _inject_local_blueprint_support_pythonpath(env: dict[str, str]) -> None:
     env["PYTHONPATH"] = os.pathsep.join(paths)
 
 
-def _web_ui_port(output: dict[str, Any]) -> int:
-    raw_port = output.get("port")
-    if raw_port not in (None, ""):
-        try:
-            parsed = int(raw_port)
-            if parsed > 0:
-                return parsed
-        except (TypeError, ValueError):
-            pass
+def _web_ui_bind_host(output: dict[str, Any], env_overrides: dict[str, str]) -> str:
+    for value in (
+        env_overrides.get("MN_BLUEPRINT_WEB_UI_BIND_HOST"),
+        env_overrides.get("MN_BLUEPRINT_WEB_UI_HOST"),
+        os.getenv("MN_BLUEPRINT_WEB_UI_BIND_HOST"),
+        os.getenv("MN_BLUEPRINT_WEB_UI_HOST"),
+        output.get("host"),
+    ):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return "127.0.0.1"
+
+
+def _parse_web_ui_port(raw_value: Any, *, name: str) -> int | None:
+    if raw_value in (None, ""):
+        return None
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        raise RuntimeError(f"{name} must be a positive integer.") from None
+    if parsed <= 0 or parsed > 65535:
+        raise RuntimeError(f"{name} must be between 1 and 65535.")
+    return parsed
+
+
+def _web_ui_port_available(host: str, port: int) -> bool:
+    bind_host = host if host and host not in {"::"} else "0.0.0.0"
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+        try:
+            sock.bind((bind_host, port))
+        except OSError:
+            return False
+    return True
+
+
+def _web_ui_port_range() -> tuple[int, int]:
+    start = _parse_web_ui_port(
+        os.getenv("MN_BLUEPRINT_WEB_UI_PORT_START", str(DEFAULT_BLUEPRINT_WEB_UI_PORT_START)),
+        name="MN_BLUEPRINT_WEB_UI_PORT_START",
+    )
+    end = _parse_web_ui_port(
+        os.getenv("MN_BLUEPRINT_WEB_UI_PORT_END", str(DEFAULT_BLUEPRINT_WEB_UI_PORT_END)),
+        name="MN_BLUEPRINT_WEB_UI_PORT_END",
+    )
+    assert start is not None and end is not None
+    if end < start:
+        raise RuntimeError("MN_BLUEPRINT_WEB_UI_PORT_END must be greater than or equal to MN_BLUEPRINT_WEB_UI_PORT_START.")
+    return start, end
+
+
+def _web_ui_port(output: dict[str, Any], *, host: str = "127.0.0.1") -> int:
+    raw_port = output.get("port")
+    explicit_port = _parse_web_ui_port(raw_port, name="web_ui.output.port")
+    if explicit_port is not None:
+        if not _web_ui_port_available(host, explicit_port):
+            raise RuntimeError(f"Blueprint web UI port {explicit_port} is unavailable on {host}.")
+        return explicit_port
+
+    start, end = _web_ui_port_range()
+    for port in range(start, end + 1):
+        if _web_ui_port_available(host, port):
+            return port
+    raise RuntimeError(f"No available blueprint web UI port found in {start}-{end}.")
 
 
 def _web_ui_base_url(output: dict[str, Any], host: str, port: int) -> str:
     configured_url = output.get("base_url") or os.getenv("MN_BLUEPRINT_WEB_UI_BASE_URL")
     if isinstance(configured_url, str) and configured_url.strip():
         return configured_url.rstrip("/")
-    public_host = output.get("public_host")
+    public_host = output.get("public_host") or os.getenv("MN_BLUEPRINT_WEB_UI_PUBLIC_HOST")
     if not isinstance(public_host, str) or not public_host.strip():
         public_host = "localhost" if host in {"127.0.0.1", "0.0.0.0", "::"} else host
     scheme = str(output.get("scheme") or "http")

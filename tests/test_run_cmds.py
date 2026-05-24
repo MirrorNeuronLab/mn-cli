@@ -13,6 +13,7 @@ from mn_cli.libs import run_cmds
 
 runner = CliRunner()
 
+
 def test_validate_success(tmp_path):
     bundle_dir = tmp_path / "valid_bundle"
     bundle_dir.mkdir()
@@ -381,6 +382,9 @@ def test_run_prebuilds_custom_openshell_image_from_payload_directory(mocker, tmp
 
 def test_run_prebuilds_legacy_openshell_from_directory(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    monkeypatch.setenv("OPENSHELL_CONFIG_DIR", str(tmp_path / "openshell-config"))
+    monkeypatch.delenv("OPENSHELL_GATEWAY", raising=False)
+    monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="openshell-from-run")
     mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
@@ -541,6 +545,7 @@ def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_pat
 
 
 def test_write_local_web_ui_handle_launches_blueprint_owned_web_ui_script(tmp_path, monkeypatch, mocker):
+    explicit_port = 28770
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_START_TIMEOUT_SECONDS", "0")
     bundle_dir = tmp_path / "bundle"
@@ -560,7 +565,7 @@ def test_write_local_web_ui_handle_launches_blueprint_owned_web_ui_script(tmp_pa
                         "adapter": "gradio",
                         "title": "Blueprint Gradio",
                         "host": "127.0.0.1",
-                        "port": 7870,
+                        "port": explicit_port,
                         "launch_script": "payloads/web_ui/run_dashboard.py",
                     },
                     "dashboard": {
@@ -574,23 +579,25 @@ def test_write_local_web_ui_handle_launches_blueprint_owned_web_ui_script(tmp_pa
     process.pid = 4242
     process.poll.return_value = None
     popen = mocker.patch("mn_cli.libs.run_cmds.subprocess.Popen", return_value=process)
+    mocker.patch("mn_cli.libs.run_cmds._web_ui_port_available", return_value=True)
 
     run_cmds._write_local_web_ui_handle(bundle_dir, "bp-gradio-run", env_overrides={})
 
     process_info = json.loads((tmp_path / "runs" / "bp-gradio-run" / "web_ui_process.json").read_text())
     assert process_info["pid"] == 4242
-    assert process_info["url"] == "http://localhost:7870"
+    assert process_info["url"] == f"http://localhost:{explicit_port}"
     command = popen.call_args.args[0]
     assert command[1] == str(script_path)
     assert "--run-id" in command
     assert "bp-gradio-run" in command
     assert "--base-url" in command
-    assert "http://localhost:7870" in command
-    assert popen.call_args.kwargs["env"]["MN_BLUEPRINT_WEB_UI_PORT"] == "7870"
+    assert f"http://localhost:{explicit_port}" in command
+    assert popen.call_args.kwargs["env"]["MN_BLUEPRINT_WEB_UI_PORT"] == str(explicit_port)
     assert not (tmp_path / "runs" / "bp-gradio-run" / "ui.json").exists()
 
 
 def test_write_local_web_ui_handle_launches_shared_gradio_support_module(tmp_path, monkeypatch, mocker):
+    explicit_port = 28771
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_START_TIMEOUT_SECONDS", "0")
     bundle_dir = tmp_path / "bundle"
@@ -607,7 +614,7 @@ def test_write_local_web_ui_handle_launches_shared_gradio_support_module(tmp_pat
                         "adapter": "gradio",
                         "title": "Shared Gradio",
                         "host": "127.0.0.1",
-                        "port": 7871,
+                        "port": explicit_port,
                     },
                     "dashboard": {
                         "event_types": ["alert"],
@@ -620,21 +627,96 @@ def test_write_local_web_ui_handle_launches_shared_gradio_support_module(tmp_pat
     process.pid = 4243
     process.poll.return_value = None
     popen = mocker.patch("mn_cli.libs.run_cmds.subprocess.Popen", return_value=process)
+    mocker.patch("mn_cli.libs.run_cmds._web_ui_port_available", return_value=True)
 
     run_cmds._write_local_web_ui_handle(bundle_dir, "bp-shared-gradio-run", env_overrides={})
 
     process_info = json.loads((tmp_path / "runs" / "bp-shared-gradio-run" / "web_ui_process.json").read_text())
     assert process_info["pid"] == 4243
     assert process_info["module"] == "mn_blueprint_support.gradio_dashboard"
-    assert process_info["url"] == "http://localhost:7871"
+    assert process_info["url"] == f"http://localhost:{explicit_port}"
     command = popen.call_args.args[0]
     assert command[:3] == [sys.executable, "-m", "mn_blueprint_support.gradio_dashboard"]
     assert "--run-id" in command
     assert "bp-shared-gradio-run" in command
     assert "--base-url" in command
-    assert "http://localhost:7871" in command
-    assert popen.call_args.kwargs["env"]["MN_BLUEPRINT_WEB_UI_PORT"] == "7871"
+    assert f"http://localhost:{explicit_port}" in command
+    assert popen.call_args.kwargs["env"]["MN_BLUEPRINT_WEB_UI_PORT"] == str(explicit_port)
     assert not (tmp_path / "runs" / "bp-shared-gradio-run" / "ui.json").exists()
+
+
+def test_write_local_web_ui_handle_allocates_configured_publish_range(tmp_path, monkeypatch, mocker):
+    first_port = 28800
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_START_TIMEOUT_SECONDS", "0")
+    monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_BIND_HOST", "0.0.0.0")
+    monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_PUBLIC_HOST", "localhost")
+    monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_PORT_START", str(first_port))
+    monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_PORT_END", str(first_port + 2))
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps(
+            {
+                "identity": {"blueprint_id": "bp-range", "name": "Range Dashboard"},
+                "web_ui": {
+                    "enabled": True,
+                    "output": {
+                        "adapter": "gradio",
+                        "title": "Range Dashboard",
+                    },
+                },
+            }
+        )
+    )
+    process = mocker.Mock(pid=4244)
+    process.poll.return_value = None
+    popen = mocker.patch("mn_cli.libs.run_cmds.subprocess.Popen", return_value=process)
+    mocker.patch("mn_cli.libs.run_cmds._web_ui_port_available", return_value=True)
+
+    run_cmds._write_local_web_ui_handle(bundle_dir, "bp-range-run", env_overrides={})
+
+    process_info = json.loads((tmp_path / "runs" / "bp-range-run" / "web_ui_process.json").read_text())
+    assert process_info["url"] == f"http://localhost:{first_port}"
+    command = popen.call_args.args[0]
+    assert "--host" in command
+    assert command[command.index("--host") + 1] == "0.0.0.0"
+    assert "--port" in command
+    assert command[command.index("--port") + 1] == str(first_port)
+    assert "--base-url" in command
+    assert command[command.index("--base-url") + 1] == f"http://localhost:{first_port}"
+    env = popen.call_args.kwargs["env"]
+    assert env["MN_BLUEPRINT_WEB_UI_HOST"] == "0.0.0.0"
+    assert env["MN_BLUEPRINT_WEB_UI_PORT"] == str(first_port)
+    assert env["MN_BLUEPRINT_WEB_UI_BASE_URL"] == f"http://localhost:{first_port}"
+
+
+def test_web_ui_port_range_skips_busy_ports(monkeypatch):
+    first_port = 28810
+    monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_PORT_START", str(first_port))
+    monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_PORT_END", str(first_port + 1))
+    monkeypatch.setattr(run_cmds, "_web_ui_port_available", lambda host, port: port == first_port + 1)
+
+    assert run_cmds._web_ui_port({}, host="127.0.0.1") == first_port + 1
+
+
+def test_web_ui_port_range_fails_when_all_ports_are_busy(monkeypatch):
+    first_port = 28820
+    monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_PORT_START", str(first_port))
+    monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_PORT_END", str(first_port + 1))
+    monkeypatch.setattr(run_cmds, "_web_ui_port_available", lambda host, port: False)
+
+    with pytest.raises(RuntimeError, match="No available blueprint web UI port"):
+        run_cmds._web_ui_port({}, host="127.0.0.1")
+
+
+def test_web_ui_explicit_port_fails_when_unavailable(monkeypatch):
+    monkeypatch.setattr(run_cmds, "_web_ui_port_available", lambda host, port: False)
+
+    with pytest.raises(RuntimeError, match="Blueprint web UI port 28830 is unavailable on 0.0.0.0"):
+        run_cmds._web_ui_port({"port": 28830}, host="0.0.0.0")
 
 
 def test_run_starts_pre_launch_hook_before_submit(mocker, tmp_path, monkeypatch):
