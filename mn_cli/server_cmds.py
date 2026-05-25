@@ -739,6 +739,14 @@ def _native_endpoint_host(host: str) -> str:
         return "127.0.0.1"
     return normalized
 
+def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
+    updates: dict[str, str] = {}
+    for key in ("MN_BLUEPRINT_REPO", "MN_DEV_LOCAL_BLUEPRINT_REPO", "DEV_LOCAL_BLUEPRINT_REPO", "MN_RUNS_ROOT"):
+        value = str(env.get(key) or "").strip()
+        if value:
+            updates[key] = value
+    return updates
+
 def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
     adjusted = dict(env)
     grpc_port = _valid_port_text(
@@ -801,6 +809,7 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
         "OPENSHELL_GATEWAY_PORT": openshell_port,
         "OPENSHELL_GATEWAY_ENDPOINT": openshell_endpoint,
     }
+    updates.update(_runtime_blueprint_env_updates(adjusted))
     if not adjusted.get("ERL_AFLAGS") or LEGACY_DIST_PORT in adjusted.get("ERL_AFLAGS", ""):
         updates["ERL_AFLAGS"] = f"-kernel inet_dist_listen_min {dist_port} inet_dist_listen_max {dist_port}"
 

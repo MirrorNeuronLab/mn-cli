@@ -392,6 +392,27 @@ def test_compose_redis_explicit_port_must_be_available(mocker, tmp_path, monkeyp
 
     assert exc.value.exit_code == 1
 
+def test_compose_native_settings_persists_runtime_blueprint_env(mocker, tmp_path):
+    compose_env = tmp_path / "docker-compose.env"
+    compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
+
+    env = server_cmds._ensure_compose_native_port_settings(
+        {
+            "MN_BLUEPRINT_REPO": "/opt/mn/blueprints",
+            "MN_DEV_LOCAL_BLUEPRINT_REPO": "/work/mn/otterdesk-blueprints",
+            "MN_RUNS_ROOT": "/opt/mn/runs",
+        }
+    )
+
+    assert env["MN_BLUEPRINT_REPO"] == "/opt/mn/blueprints"
+    assert env["MN_DEV_LOCAL_BLUEPRINT_REPO"] == "/work/mn/otterdesk-blueprints"
+    assert env["MN_RUNS_ROOT"] == "/opt/mn/runs"
+    compose_env_text = compose_env.read_text()
+    assert "MN_BLUEPRINT_REPO=/opt/mn/blueprints" in compose_env_text
+    assert "MN_DEV_LOCAL_BLUEPRINT_REPO=/work/mn/otterdesk-blueprints" in compose_env_text
+    assert "MN_RUNS_ROOT=/opt/mn/runs" in compose_env_text
+
 def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
@@ -500,10 +521,13 @@ def test_compose_runtime_env_respects_explicit_cluster_names(monkeypatch):
     assert resolved["MN_REDIS_URL"] == "redis://192.168.4.10:6379/0"
     assert resolved["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 4500 inet_dist_listen_max 4500"
 
-def test_start_server_success(mocker, tmp_path):
+def test_start_server_success(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
     mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', ())
     redis_password = _derive_network_secret("join-token", "redis")
+    monkeypatch.setenv("MN_BLUEPRINT_REPO", "/opt/mn/blueprints")
+    monkeypatch.setenv("MN_DEV_LOCAL_BLUEPRINT_REPO", "/work/mn/otterdesk-blueprints")
+    monkeypatch.setenv("MN_RUNS_ROOT", "/opt/mn/runs")
     
     def mock_run(cmd, **kwargs):
         m = mocker.Mock()
@@ -543,6 +567,10 @@ def test_start_server_success(mocker, tmp_path):
     
     assert (tmp_path / "api.pid").exists()
     assert (tmp_path / "api.pid").read_text() == "9999"
+    api_env = mock_popen.call_args.kwargs["env"]
+    assert api_env["MN_BLUEPRINT_REPO"] == "/opt/mn/blueprints"
+    assert api_env["MN_DEV_LOCAL_BLUEPRINT_REPO"] == "/work/mn/otterdesk-blueprints"
+    assert api_env["MN_RUNS_ROOT"] == "/opt/mn/runs"
 
 def test_start_server_darwin(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
