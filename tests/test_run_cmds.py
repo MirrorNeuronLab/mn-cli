@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -745,6 +746,7 @@ def test_prepare_manifest_injects_runtime_web_ui_service_from_config(tmp_path, m
 
     node = next(node for node in manifest["nodes"] if node["node_id"] == "web_ui_dashboard")
     command = node["config"]["command"]
+    assert command[0] == "python3"
     assert "--host" in command
     assert command[command.index("--host") + 1] == "0.0.0.0"
     assert "--port" in command
@@ -755,6 +757,9 @@ def test_prepare_manifest_injects_runtime_web_ui_service_from_config(tmp_path, m
     assert env["MN_BLUEPRINT_WEB_UI_HOST"] == "0.0.0.0"
     assert env["MN_BLUEPRINT_WEB_UI_PORT"] == str(first_port)
     assert env["MN_BLUEPRINT_WEB_UI_BASE_URL"] == f"http://localhost:{first_port}"
+    assert ".mn_runtime_web_ui/src" in env["PYTHONPATH"].split(os.pathsep)
+    assert node["config"]["workdir"] == "/sandbox/job/payloads"
+    assert node["config"]["python_environment"]["packages"] == ["gradio>=4.0"]
     assert node["services"][0]["name"] == "blueprint-web-ui"
     assert node["resources"]["ports"][0]["port"] == first_port
 

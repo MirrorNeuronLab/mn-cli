@@ -8,6 +8,7 @@ from mn_cli.libs.run_manifest import (
     apply_manifest_config_bindings,
     load_blueprint_config,
     prepare_manifest_for_submission,
+    stage_local_input_payloads_for_manifest,
 )
 
 
@@ -62,6 +63,61 @@ def test_prepare_manifest_for_submission_merges_runtime_env_and_metadata(tmp_pat
     assert env["MN_LLM_MODEL"] == "ollama/test"
     assert env["MN_LLM_API_KEY"] == "kept"
     assert prepared["metadata"]["mn_cli"]["blueprint_id"] == "bp"
+
+
+def test_stage_local_input_payloads_after_manifest_preparation(tmp_path):
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    docs = tmp_path / "tax_docs"
+    docs.mkdir()
+    (docs / "w2.txt").write_text("wages 100\n", encoding="utf-8")
+    (docs / "ignore.csv").write_text("skip\n", encoding="utf-8")
+    (config_dir / "default.json").write_text(
+        json.dumps(
+            {
+                "tax_documents": {"folder_path": ""},
+                "inputs": {"payload": {"document_folder": ""}},
+                "local_inputs": {
+                    "folders": [
+                        {
+                            "config_path": "tax_documents.folder_path",
+                            "payload_path": "tax_workflow/mn_local_inputs/tax_documents",
+                            "runtime_path": "mn_local_inputs/tax_documents",
+                            "allowed_extensions": [".txt"],
+                            "linked_config_paths": ["inputs.payload.document_folder"],
+                        }
+                    ]
+                },
+            }
+        )
+    )
+    manifest = {
+        "nodes": [
+            {
+                "node_id": "document_intake_agent",
+                "config": {"environment": {}},
+            }
+        ]
+    }
+    prepared = prepare_manifest_for_submission(
+        bundle_dir,
+        manifest,
+        env_overrides={"MN_RUN_ID": "tax-run-cli"},
+        config_overrides={"tax_documents": {"folder_path": str(docs)}},
+    )
+    payloads = {}
+
+    summary = stage_local_input_payloads_for_manifest(prepared, payloads, bundle_dir=bundle_dir)
+
+    env = prepared["nodes"][0]["config"]["environment"]
+    injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
+    assert injected_config["tax_documents"]["folder_path"] == "mn_local_inputs/tax_documents"
+    assert injected_config["inputs"]["payload"]["document_folder"] == "mn_local_inputs/tax_documents"
+    assert payloads["tax_workflow/mn_local_inputs/tax_documents/w2.txt"] == b"wages 100\n"
+    assert "tax_workflow/mn_local_inputs/tax_documents/ignore.csv" not in payloads
+    assert summary["folders"][0]["file_count"] == 1
 
 
 def test_prepare_manifest_for_submission_renders_agent_templates(tmp_path, monkeypatch):

@@ -210,6 +210,55 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
         "@mirror-neuron-network-redis:6379/0"
     ) in core_run
 
+def test_start_network_seed_already_exposed_prints_existing_token(mocker):
+    output = StringIO()
+    mocker.patch('mn_cli.server_cmds.console', Console(file=output, force_terminal=False, width=120))
+    mocker.patch(
+        'mn_cli.server_cmds._docker_container_running',
+        side_effect=lambda name: name == server_cmds.NETWORK_CORE_CONTAINER,
+    )
+    mocker.patch(
+        'mn_cli.server_cmds._docker_container_env_value',
+        side_effect=lambda _name, key: {
+            "MN_NETWORK_JOIN_TOKEN": "seed-token",
+            "MN_NETWORK_ADVERTISE_HOST": "192.168.4.10",
+        }.get(key),
+    )
+    mock_start_redis = mocker.patch('mn_cli.server_cmds._start_network_redis')
+    mock_start_core = mocker.patch('mn_cli.server_cmds._start_network_core')
+
+    token = _start_network_seed(grpc_port=50055, force_new_token=True)
+
+    rendered = output.getvalue()
+    assert token == "seed-token"
+    assert "already ready to join" in rendered
+    assert "Token: seed-token" in rendered
+    assert "mn add-node 192.168.4.10 --token seed-token" in rendered
+    mock_start_redis.assert_not_called()
+    mock_start_core.assert_not_called()
+
+def test_start_network_seed_running_local_runtime_prints_existing_token(mocker):
+    output = StringIO()
+    mocker.patch('mn_cli.server_cmds.console', Console(file=output, force_terminal=False, width=120))
+    server_cmds.API_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    server_cmds.API_PID_FILE.write_text("1234")
+    server_cmds.NETWORK_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    server_cmds.NETWORK_TOKEN_FILE.write_text("runtime-token\n")
+    mocker.patch('mn_cli.server_cmds.os.kill')
+    mocker.patch('mn_cli.server_cmds._docker_container_env_value', return_value=None)
+    mock_start_redis = mocker.patch('mn_cli.server_cmds._start_network_redis')
+    mock_start_core = mocker.patch('mn_cli.server_cmds._start_network_core')
+
+    token = _start_network_seed(host="192.168.4.20")
+
+    rendered = output.getvalue()
+    assert token == "runtime-token"
+    assert "already ready to join" in rendered
+    assert "Token: runtime-token" in rendered
+    assert "mn add-node 192.168.4.20 --token runtime-token" in rendered
+    mock_start_redis.assert_not_called()
+    mock_start_core.assert_not_called()
+
 def test_add_node_uses_handshake_and_local_core(mocker, tmp_path):
     import mn_sdk
     import mn_cli.shared
@@ -413,10 +462,16 @@ def test_compose_native_settings_persists_runtime_blueprint_env(mocker, tmp_path
     assert env["MN_BLUEPRINT_REPO"] == "/opt/mn/blueprints"
     assert env["MN_DEV_LOCAL_BLUEPRINT_REPO"] == "/work/mn/otterdesk-blueprints"
     assert env["MN_RUNS_ROOT"] == "/opt/mn/runs"
+    assert env["MN_BLUEPRINT_WEB_UI_PORT_START"] == "61000"
+    assert env["MN_BLUEPRINT_WEB_UI_PORT_END"] == "61049"
+    assert env["MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE"] == "prepublished"
     compose_env_text = compose_env.read_text()
     assert "MN_BLUEPRINT_REPO=/opt/mn/blueprints" in compose_env_text
     assert "MN_DEV_LOCAL_BLUEPRINT_REPO=/work/mn/otterdesk-blueprints" in compose_env_text
     assert "MN_RUNS_ROOT=/opt/mn/runs" in compose_env_text
+    assert "MN_BLUEPRINT_WEB_UI_PORT_START=61000" in compose_env_text
+    assert "MN_BLUEPRINT_WEB_UI_PORT_END=61049" in compose_env_text
+    assert "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE=prepublished" in compose_env_text
 
 def test_compose_native_settings_defaults_runtime_blueprint_repo(mocker, tmp_path):
     compose_env = tmp_path / "docker-compose.env"
@@ -427,9 +482,15 @@ def test_compose_native_settings_defaults_runtime_blueprint_repo(mocker, tmp_pat
 
     assert env["MN_DEFAULT_BLUEPRINT_REPO"] == "https://github.com/MirrorNeuronLab/mn-blueprints.git"
     assert env["MN_BLUEPRINT_REPO"] == "https://github.com/MirrorNeuronLab/mn-blueprints.git"
+    assert env["MN_BLUEPRINT_WEB_UI_PORT_START"] == "61000"
+    assert env["MN_BLUEPRINT_WEB_UI_PORT_END"] == "61049"
+    assert env["MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE"] == "prepublished"
     compose_env_text = compose_env.read_text()
     assert "MN_DEFAULT_BLUEPRINT_REPO=https://github.com/MirrorNeuronLab/mn-blueprints.git" in compose_env_text
     assert "MN_BLUEPRINT_REPO=https://github.com/MirrorNeuronLab/mn-blueprints.git" in compose_env_text
+    assert "MN_BLUEPRINT_WEB_UI_PORT_START=61000" in compose_env_text
+    assert "MN_BLUEPRINT_WEB_UI_PORT_END=61049" in compose_env_text
+    assert "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE=prepublished" in compose_env_text
 
 def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
     compose_file = tmp_path / "docker-compose.yml"
@@ -629,6 +690,9 @@ def test_start_server_success(mocker, tmp_path, monkeypatch):
     assert api_env["MN_BLUEPRINT_REPO"] == "/opt/mn/blueprints"
     assert api_env["MN_DEV_LOCAL_BLUEPRINT_REPO"] == "/work/mn/otterdesk-blueprints"
     assert api_env["MN_RUNS_ROOT"] == "/opt/mn/runs"
+    assert api_env["MN_BLUEPRINT_WEB_UI_PORT_START"] == "61000"
+    assert api_env["MN_BLUEPRINT_WEB_UI_PORT_END"] == "61049"
+    assert api_env["MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE"] == "prepublished"
     runtime_endpoints = json.loads(server_cmds.RUNTIME_ENDPOINTS_FILE.read_text())
     assert runtime_endpoints["api"]["base_url"] == "http://localhost:54111/api/v1"
     assert runtime_endpoints["api"]["port"] == "54111"

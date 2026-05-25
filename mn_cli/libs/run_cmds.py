@@ -31,7 +31,9 @@ from mn_cli.libs.run_manifest import (
     inject_node_environment as _inject_node_environment,
     load_blueprint_config,
     prepare_manifest_for_submission,
+    runtime_web_ui_support_payloads_for_manifest,
     run_mode_label as _run_mode_label,
+    stage_local_input_payloads_for_manifest,
     with_shared_run_store_config as _with_shared_run_store_config,
 )
 from mn_cli.libs.blueprint_observability import (
@@ -54,8 +56,8 @@ FINAL_STATUSES = {"completed", "failed", "cancelled"}
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 PRE_LAUNCH_SCRIPT = Path("scripts/pre-launch.sh")
 POST_LAUNCH_SCRIPT = Path("scripts/post-launch.sh")
-DEFAULT_BLUEPRINT_WEB_UI_PORT_START = 58000
-DEFAULT_BLUEPRINT_WEB_UI_PORT_END = 58049
+DEFAULT_BLUEPRINT_WEB_UI_PORT_START = 61000
+DEFAULT_BLUEPRINT_WEB_UI_PORT_END = 61049
 _HELPER_COMPAT = (
     _add_mn_llm_aliases,
     _blueprint_runtime_environment,
@@ -770,7 +772,6 @@ def run_bundle(
         if force:
             _mark_manifest_force(manifest_dict)
         _prepare_openshell_custom_images(bundle_dir, manifest_dict)
-        manifest = json.dumps(manifest_dict)
 
         payloads = {}
         payloads_dir = bundle_dir / "payloads"
@@ -780,6 +781,9 @@ def run_bundle(
                     rel_path = filepath.relative_to(payloads_dir).as_posix()
                     with open(filepath, "rb") as f:
                         payloads[rel_path] = f.read()
+        payloads.update(runtime_web_ui_support_payloads_for_manifest(manifest_dict))
+        stage_local_input_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
+        manifest = json.dumps(manifest_dict)
 
         blueprint_run_dir = (
             _blueprint_run_dir(blueprint_run_id, env_overrides)

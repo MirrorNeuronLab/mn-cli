@@ -49,6 +49,9 @@ DEFAULT_DIST_PORT = "54370"
 DEFAULT_WEB_UI_PORT = "55173"
 DEFAULT_OPENSHELL_GATEWAY_PORT = "58080"
 DEFAULT_BLUEPRINT_REPO = "https://github.com/MirrorNeuronLab/mn-blueprints.git"
+DEFAULT_BLUEPRINT_WEB_UI_PORT_START = "61000"
+DEFAULT_BLUEPRINT_WEB_UI_PORT_END = "61049"
+DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE = "prepublished"
 LEGACY_GRPC_PORT = "50051"
 LEGACY_API_PORT = "4001"
 LEGACY_EPMD_PORT = "4369"
@@ -62,6 +65,7 @@ REDIS_DYNAMIC_PORT_END = 56478
 NETWORK_TOKEN_FILE = DIR / "network.token"
 NETWORK_REDIS_ENV_FILE = DIR / "network-redis.env"
 NETWORK_DOCKER_NETWORK = "mirror-neuron-network"
+LOCAL_CORE_CONTAINER = "mirror-neuron-core"
 NETWORK_CORE_CONTAINER = "mirror-neuron-network-core"
 NETWORK_REDIS_CONTAINER = "mirror-neuron-network-redis"
 
@@ -463,6 +467,24 @@ def _docker_container_running(name: str) -> bool:
         raise typer.Exit(1)
     return result.returncode == 0 and result.stdout.strip() == "true"
 
+def _docker_container_env_value(name: str, key: str) -> Optional[str]:
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", name],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return None
+    if result.returncode != 0:
+        return None
+
+    prefix = f"{key}="
+    for line in result.stdout.splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix) :].strip() or None
+    return None
+
 def _ensure_network_docker_network() -> None:
     result = subprocess.run(
         ["docker", "network", "inspect", NETWORK_DOCKER_NETWORK],
@@ -570,6 +592,69 @@ def _start_network_core(env: dict[str, str], host: str, grpc_port: int, dist_por
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
 
+def _running_network_token(container_names: tuple[str, ...] = ()) -> Optional[str]:
+    for container_name in container_names:
+        token = _docker_container_env_value(container_name, "MN_NETWORK_JOIN_TOKEN")
+        if token:
+            return token
+
+    try:
+        token = NETWORK_TOKEN_FILE.read_text(encoding="utf-8").strip()
+        if token:
+            return token
+    except OSError:
+        pass
+
+    token = _read_env_file(RUNTIME_COMPOSE_ENV).get("MN_NETWORK_JOIN_TOKEN", "").strip()
+    if token:
+        return token
+
+    env_token = os.getenv("MN_NETWORK_JOIN_TOKEN", "").strip()
+    return env_token or None
+
+def _running_network_host(host: Optional[str], container_names: tuple[str, ...] = ()) -> str:
+    configured_host = (host or "").strip()
+    if configured_host:
+        return configured_host
+
+    for container_name in container_names:
+        advertised_host = _docker_container_env_value(container_name, "MN_NETWORK_ADVERTISE_HOST")
+        if advertised_host:
+            return advertised_host
+
+    advertised_host = _read_env_file(RUNTIME_COMPOSE_ENV).get("MN_NETWORK_ADVERTISE_HOST", "").strip()
+    if advertised_host:
+        return advertised_host
+
+    return _advertised_network_host(host)
+
+def _print_network_seed_ready(host: str, grpc_port: int, token: str, *, already_running: bool = False) -> None:
+    node_name = _network_node_name(host)
+    if already_running:
+        console.print("\n[green]MirrorNeuron node is already ready to join.[/green]")
+    else:
+        console.print("\n[green]MirrorNeuron exposed node is running.[/green]")
+    console.print(f"Host: {host}")
+    console.print(f"gRPC: {host}:{grpc_port}")
+    console.print(f"Node: {node_name}")
+    console.print(f"Token: {token}")
+    console.print(f"\nOn the main box, add this node with:\n  mn add-node {host} --token {token}")
+
+def _return_running_network_seed(
+    host: Optional[str],
+    grpc_port: int,
+    container_names: tuple[str, ...] = (),
+) -> str:
+    token = _running_network_token(container_names)
+    if not token:
+        console.print("[red]Error: MirrorNeuron is already running, but no network token was found.[/red]")
+        console.print(f"Expected a token in {NETWORK_TOKEN_FILE}.")
+        raise typer.Exit(1)
+
+    advertised_host = _running_network_host(host, container_names)
+    _print_network_seed_ready(advertised_host, grpc_port, token, already_running=True)
+    return token
+
 def _start_network_seed(
     host: Optional[str] = None,
     grpc_port: int = int(DEFAULT_GRPC_PORT),
@@ -577,10 +662,14 @@ def _start_network_seed(
     redis_port: Optional[int] = None,
     force_new_token: bool = False,
 ) -> str:
+    if check_status(API_PID_FILE) == 0:
+        return _return_running_network_seed(host, grpc_port, (LOCAL_CORE_CONTAINER,))
+
     if _docker_container_running(NETWORK_CORE_CONTAINER):
-        console.print("[red]Error: MirrorNeuron network core is already running.[/red]")
-        console.print("Use 'mn stop' to stop it first.")
-        raise typer.Exit(1)
+        return _return_running_network_seed(host, grpc_port, (NETWORK_CORE_CONTAINER,))
+
+    if _docker_container_running(LOCAL_CORE_CONTAINER):
+        return _return_running_network_seed(host, grpc_port, (LOCAL_CORE_CONTAINER,))
 
     host = (host or _detect_lan_ip()).strip() or "127.0.0.1"
     token = _resolve_network_token(force_new=force_new_token)
@@ -618,12 +707,7 @@ def _start_network_seed(
     console.print("=> Starting MirrorNeuron core-only exposed node...")
     _start_network_core(env, host, grpc_port, dist_port)
 
-    console.print("\n[green]MirrorNeuron exposed node is running.[/green]")
-    console.print(f"Host: {host}")
-    console.print(f"gRPC: {host}:{grpc_port}")
-    console.print(f"Node: {node_name}")
-    console.print(f"Token: {token}")
-    console.print(f"\nOn the main box, add this node with:\n  mn add-node {host} --token {token}")
+    _print_network_seed_ready(host, grpc_port, token)
     return token
 
 def _join_network(
@@ -750,6 +834,15 @@ def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
     updates: dict[str, str] = {
         "MN_DEFAULT_BLUEPRINT_REPO": default_repo,
         "MN_BLUEPRINT_REPO": str(env.get("MN_BLUEPRINT_REPO") or "").strip() or default_repo,
+        "MN_BLUEPRINT_WEB_UI_PORT_START": str(
+            env.get("MN_BLUEPRINT_WEB_UI_PORT_START") or DEFAULT_BLUEPRINT_WEB_UI_PORT_START
+        ).strip(),
+        "MN_BLUEPRINT_WEB_UI_PORT_END": str(
+            env.get("MN_BLUEPRINT_WEB_UI_PORT_END") or DEFAULT_BLUEPRINT_WEB_UI_PORT_END
+        ).strip(),
+        "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE": str(
+            env.get("MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE") or DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE
+        ).strip(),
     }
     for key in ("MN_DEV_LOCAL_BLUEPRINT_REPO", "DEV_LOCAL_BLUEPRINT_REPO", "MN_RUNS_ROOT"):
         value = str(env.get(key) or "").strip()
@@ -1236,6 +1329,9 @@ def _start_server(
     env.setdefault("MN_API_PORT", DEFAULT_API_PORT)
     env.setdefault("MN_EPMD_PORT", DEFAULT_EPMD_PORT)
     env.setdefault("MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT)
+    env.setdefault("MN_BLUEPRINT_WEB_UI_PORT_START", DEFAULT_BLUEPRINT_WEB_UI_PORT_START)
+    env.setdefault("MN_BLUEPRINT_WEB_UI_PORT_END", DEFAULT_BLUEPRINT_WEB_UI_PORT_END)
+    env.setdefault("MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE", DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE)
     env.setdefault("MN_CORE_GRPC_TARGET", f"localhost:{env.get('MN_GRPC_PORT', DEFAULT_GRPC_PORT)}")
     env["MN_NETWORK_JOIN_TOKEN"] = network_token
     env["MN_NETWORK_ADVERTISE_HOST"] = advertised_host

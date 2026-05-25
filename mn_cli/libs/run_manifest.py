@@ -146,6 +146,31 @@ def inject_runtime_web_ui_service_for_submission(
     )
 
 
+def runtime_web_ui_support_payloads_for_manifest(manifest: dict[str, Any]) -> dict[str, bytes]:
+    _inject_local_blueprint_support_path()
+    try:
+        from mn_blueprint_support import runtime_web_ui_service_from_manifest, runtime_web_ui_support_payloads
+    except ImportError:
+        return {}
+    if not runtime_web_ui_service_from_manifest(manifest):
+        return {}
+    return runtime_web_ui_support_payloads()
+
+
+def stage_local_input_payloads_for_manifest(
+    manifest: dict[str, Any],
+    payloads: dict[str, bytes],
+    *,
+    bundle_dir: Path,
+) -> dict[str, Any]:
+    _inject_local_blueprint_support_path()
+    try:
+        from mn_blueprint_support import stage_local_input_payloads_for_manifest as stage_payloads
+    except ImportError as exc:
+        raise RuntimeError("Local blueprint input staging requires mn_blueprint_support.") from exc
+    return stage_payloads(manifest, payloads, bundle_dir=bundle_dir)
+
+
 def render_agent_templates_for_submission(manifest: dict[str, Any]) -> None:
     nodes = manifest.get("nodes")
     if not isinstance(nodes, list) or not any(
@@ -377,8 +402,24 @@ def inject_node_environment(manifest: dict[str, Any], env: dict[str, str]) -> No
         environment = config.setdefault("environment", {})
         if not isinstance(environment, dict):
             continue
-        environment.update(env)
+        node_env = dict(env)
+        if environment.get("PYTHONPATH") and node_env.get("PYTHONPATH"):
+            node_env["PYTHONPATH"] = merge_path_values(
+                str(environment["PYTHONPATH"]),
+                str(node_env["PYTHONPATH"]),
+            )
+        environment.update(node_env)
         add_mn_llm_aliases(environment)
+
+
+def merge_path_values(*values: str) -> str:
+    merged: list[str] = []
+    for value in values:
+        for item in value.split(os.pathsep):
+            item = item.strip()
+            if item and item not in merged:
+                merged.append(item)
+    return os.pathsep.join(merged)
 
 
 def add_mn_llm_aliases(environment: dict[str, Any]) -> None:
