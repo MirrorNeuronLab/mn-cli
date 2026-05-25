@@ -462,6 +462,8 @@ def test_compose_native_settings_persists_runtime_blueprint_env(mocker, tmp_path
     assert env["MN_BLUEPRINT_REPO"] == "/opt/mn/blueprints"
     assert env["MN_DEV_LOCAL_BLUEPRINT_REPO"] == "/work/mn/otterdesk-blueprints"
     assert env["MN_RUNS_ROOT"] == "/opt/mn/runs"
+    assert env["MN_BLUEPRINT_WEB_UI_BIND_HOST"] == "0.0.0.0"
+    assert env["MN_BLUEPRINT_WEB_UI_PUBLIC_HOST"] == "localhost"
     assert env["MN_BLUEPRINT_WEB_UI_PORT_START"] == "61000"
     assert env["MN_BLUEPRINT_WEB_UI_PORT_END"] == "61049"
     assert env["MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE"] == "prepublished"
@@ -469,6 +471,8 @@ def test_compose_native_settings_persists_runtime_blueprint_env(mocker, tmp_path
     assert "MN_BLUEPRINT_REPO=/opt/mn/blueprints" in compose_env_text
     assert "MN_DEV_LOCAL_BLUEPRINT_REPO=/work/mn/otterdesk-blueprints" in compose_env_text
     assert "MN_RUNS_ROOT=/opt/mn/runs" in compose_env_text
+    assert "MN_BLUEPRINT_WEB_UI_BIND_HOST=0.0.0.0" in compose_env_text
+    assert "MN_BLUEPRINT_WEB_UI_PUBLIC_HOST=localhost" in compose_env_text
     assert "MN_BLUEPRINT_WEB_UI_PORT_START=61000" in compose_env_text
     assert "MN_BLUEPRINT_WEB_UI_PORT_END=61049" in compose_env_text
     assert "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE=prepublished" in compose_env_text
@@ -690,6 +694,8 @@ def test_start_server_success(mocker, tmp_path, monkeypatch):
     assert api_env["MN_BLUEPRINT_REPO"] == "/opt/mn/blueprints"
     assert api_env["MN_DEV_LOCAL_BLUEPRINT_REPO"] == "/work/mn/otterdesk-blueprints"
     assert api_env["MN_RUNS_ROOT"] == "/opt/mn/runs"
+    assert api_env["MN_BLUEPRINT_WEB_UI_BIND_HOST"] == "0.0.0.0"
+    assert api_env["MN_BLUEPRINT_WEB_UI_PUBLIC_HOST"] == "localhost"
     assert api_env["MN_BLUEPRINT_WEB_UI_PORT_START"] == "61000"
     assert api_env["MN_BLUEPRINT_WEB_UI_PORT_END"] == "61049"
     assert api_env["MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE"] == "prepublished"

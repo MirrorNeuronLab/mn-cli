@@ -49,6 +49,8 @@ DEFAULT_DIST_PORT = "54370"
 DEFAULT_WEB_UI_PORT = "55173"
 DEFAULT_OPENSHELL_GATEWAY_PORT = "58080"
 DEFAULT_BLUEPRINT_REPO = "https://github.com/MirrorNeuronLab/mn-blueprints.git"
+DEFAULT_BLUEPRINT_WEB_UI_BIND_HOST = "0.0.0.0"
+DEFAULT_BLUEPRINT_WEB_UI_PUBLIC_HOST = "localhost"
 DEFAULT_BLUEPRINT_WEB_UI_PORT_START = "61000"
 DEFAULT_BLUEPRINT_WEB_UI_PORT_END = "61049"
 DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE = "prepublished"
@@ -834,6 +836,12 @@ def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
     updates: dict[str, str] = {
         "MN_DEFAULT_BLUEPRINT_REPO": default_repo,
         "MN_BLUEPRINT_REPO": str(env.get("MN_BLUEPRINT_REPO") or "").strip() or default_repo,
+        "MN_BLUEPRINT_WEB_UI_BIND_HOST": str(
+            env.get("MN_BLUEPRINT_WEB_UI_BIND_HOST") or DEFAULT_BLUEPRINT_WEB_UI_BIND_HOST
+        ).strip(),
+        "MN_BLUEPRINT_WEB_UI_PUBLIC_HOST": str(
+            env.get("MN_BLUEPRINT_WEB_UI_PUBLIC_HOST") or DEFAULT_BLUEPRINT_WEB_UI_PUBLIC_HOST
+        ).strip(),
         "MN_BLUEPRINT_WEB_UI_PORT_START": str(
             env.get("MN_BLUEPRINT_WEB_UI_PORT_START") or DEFAULT_BLUEPRINT_WEB_UI_PORT_START
         ).strip(),
@@ -1329,6 +1337,8 @@ def _start_server(
     env.setdefault("MN_API_PORT", DEFAULT_API_PORT)
     env.setdefault("MN_EPMD_PORT", DEFAULT_EPMD_PORT)
     env.setdefault("MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT)
+    env.setdefault("MN_BLUEPRINT_WEB_UI_BIND_HOST", DEFAULT_BLUEPRINT_WEB_UI_BIND_HOST)
+    env.setdefault("MN_BLUEPRINT_WEB_UI_PUBLIC_HOST", DEFAULT_BLUEPRINT_WEB_UI_PUBLIC_HOST)
     env.setdefault("MN_BLUEPRINT_WEB_UI_PORT_START", DEFAULT_BLUEPRINT_WEB_UI_PORT_START)
     env.setdefault("MN_BLUEPRINT_WEB_UI_PORT_END", DEFAULT_BLUEPRINT_WEB_UI_PORT_END)
     env.setdefault("MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE", DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE)
