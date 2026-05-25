@@ -4,12 +4,22 @@ import importlib
 import sys
 from types import SimpleNamespace
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def restore_shared_module():
+    yield
+    sys.modules.pop("mn_cli.shared", None)
+
 
 def _fresh_shared(monkeypatch, tmp_path, client_class):
     sys.modules.pop("mn_cli.shared", None)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("MN_CORE_GRPC_TARGET", raising=False)
     monkeypatch.delenv("MN_CORE_HOST", raising=False)
+    monkeypatch.delenv("MN_HOME", raising=False)
+    monkeypatch.delenv("MIRROR_NEURON_HOME", raising=False)
     monkeypatch.delenv("MN_GRPC_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("MN_GRPC_TARGET", raising=False)
     monkeypatch.delenv("MN_GRPC_TIMEOUT_SECONDS", raising=False)
@@ -67,5 +77,45 @@ def test_shared_client_passes_admin_token_for_current_sdk(monkeypatch, tmp_path)
             "timeout": 10.0,
             "auth_token": "",
             "admin_token": "admin-secret",
+        }
+    ]
+
+
+def test_shared_client_reads_runtime_env_target_and_tokens(monkeypatch, tmp_path):
+    calls = []
+    state_dir = tmp_path / ".mn"
+    state_dir.mkdir()
+    (state_dir / "docker-compose.env").write_text(
+        "\n".join(
+            [
+                "MN_GRPC_PORT=55111",
+                "MN_CORE_GRPC_TARGET=127.0.0.1:55111",
+                "MN_GRPC_AUTH_TOKEN=auth-from-state",
+                "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN=admin-from-state",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class CurrentClient:
+        def __init__(self, target=None, timeout=None, auth_token=None, admin_token=None):
+            calls.append(
+                {
+                    "target": target,
+                    "timeout": timeout,
+                    "auth_token": auth_token,
+                    "admin_token": admin_token,
+                }
+            )
+
+    _fresh_shared(monkeypatch, tmp_path, CurrentClient)
+
+    assert calls == [
+        {
+            "target": "127.0.0.1:55111",
+            "timeout": 10.0,
+            "auth_token": "auth-from-state",
+            "admin_token": "admin-from-state",
         }
     ]

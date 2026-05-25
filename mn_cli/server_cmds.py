@@ -1238,6 +1238,14 @@ def _start_server(
         env["MN_GRPC_AUTH_TOKEN"] = _resolve_grpc_auth_token()
     if not env.get("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN"):
         env["MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN"] = _resolve_grpc_admin_token()
+    if compose_runtime:
+        _write_env_file_values(
+            RUNTIME_COMPOSE_ENV,
+            {
+                "MN_GRPC_AUTH_TOKEN": env["MN_GRPC_AUTH_TOKEN"],
+                "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN": env["MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN"],
+            },
+        )
 
     if compose_runtime:
         env = _compose_runtime_env(env, ip)

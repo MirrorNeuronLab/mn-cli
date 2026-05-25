@@ -781,6 +781,15 @@ def test_web_ui_port_range_skips_busy_ports(monkeypatch):
     assert run_cmds._web_ui_port({}, host="127.0.0.1") == first_port + 1
 
 
+def test_web_ui_port_uses_ephemeral_fallback_when_default_range_is_busy(monkeypatch):
+    monkeypatch.delenv("MN_BLUEPRINT_WEB_UI_PORT_START", raising=False)
+    monkeypatch.delenv("MN_BLUEPRINT_WEB_UI_PORT_END", raising=False)
+    monkeypatch.setattr(run_cmds, "_web_ui_port_available", lambda host, port: False)
+    monkeypatch.setattr(run_cmds, "_ephemeral_web_ui_port", lambda host: 61234)
+
+    assert run_cmds._web_ui_port({}, host="127.0.0.1") == 61234
+
+
 def test_web_ui_port_range_fails_when_all_ports_are_busy(monkeypatch):
     first_port = 28820
     monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_PORT_START", str(first_port))

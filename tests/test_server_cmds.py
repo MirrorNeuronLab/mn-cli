@@ -171,6 +171,7 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     mocker.patch('mn_cli.server_cmds.NETWORK_TOKEN_FILE', token_file)
     mocker.patch('mn_cli.server_cmds.secrets.token_urlsafe', return_value="seed-token")
     mocker.patch('mn_cli.server_cmds._docker_container_running', return_value=False)
+    mocker.patch('mn_cli.server_cmds._port_available_or_owned', return_value=True)
 
     commands = []
 
@@ -448,12 +449,16 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
         return m
 
     mocker.patch('mn_cli.server_cmds.subprocess.run', side_effect=mock_run)
+    mocker.patch('mn_cli.server_cmds._find_available_published_port', return_value=56379)
 
     _start_server()
 
     assert runtime_compose_cmd("up", "-d") in commands
     assert all(cmd[:2] != ["docker", "inspect"] for cmd in commands)
     assert all(cmd[:3] != ["docker", "run", "-d"] for cmd in commands)
+    compose_env_text = compose_env.read_text()
+    assert "MN_GRPC_AUTH_TOKEN=" in compose_env_text
+    assert "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN=" in compose_env_text
 
 def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
     compose_file = tmp_path / "docker-compose.yml"
@@ -492,6 +497,7 @@ def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
         return m
 
     mocker.patch('mn_cli.server_cmds.subprocess.run', side_effect=mock_run)
+    mocker.patch('mn_cli.server_cmds._find_available_published_port', return_value=56379)
 
     _start_server(ip="192.168.4.173", token="join-token")
 

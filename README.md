@@ -52,11 +52,11 @@ pip install -e .
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `MN_GRPC_TARGET` | `localhost:55051` | Core gRPC target. |
-| `MN_CORE_GRPC_TARGET` | unset | Fallback core gRPC target. |
+| `MN_GRPC_TARGET` | `~/.mn/docker-compose.env`, then `localhost:55051` | Core gRPC target. |
+| `MN_CORE_GRPC_TARGET` | `~/.mn/docker-compose.env` when present | Fallback core gRPC target. |
 | `MN_GRPC_TIMEOUT_SECONDS` | `10` | RPC timeout. Use `0` or `none` to disable. |
-| `MN_GRPC_AUTH_TOKEN` | `~/.mn/grpc_auth.token` when present | Optional bearer metadata for protected gateways; falls back to the legacy `~/.mirror_neuron/grpc_auth.token` during migration. |
-| `MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN` | unset | Admin token for destructive gRPC operations such as `mn clear`; falls back to `~/.mn/grpc_admin.token`, then the legacy `~/.mirror_neuron/grpc_admin.token`. |
+| `MN_GRPC_AUTH_TOKEN` | `~/.mn/docker-compose.env`, then `~/.mn/grpc_auth.token` when present | Optional bearer metadata for protected gateways; falls back to the legacy `~/.mirror_neuron/grpc_auth.token` during migration. |
+| `MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN` | `~/.mn/docker-compose.env`, then `~/.mn/grpc_admin.token` when present | Admin token for destructive gRPC operations such as `mn clear`; falls back to the legacy `~/.mirror_neuron/grpc_admin.token`. |
 | `MN_NETWORK_JOIN_TOKEN` | `~/.mn/network.token` for `mn start` and `mn expose-node` | Stable token used to derive cluster cookies and network-mode Redis secrets. |
 | `MN_CLI_LOG_PATH` | `~/.mn/logs/cli.log` | CLI log file path. |
 | `MN_CLI_OUTPUT` | `rich` | Set to `plain` to disable Rich formatting. |

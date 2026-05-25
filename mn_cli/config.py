@@ -30,8 +30,8 @@ class CliConfig:
                 ),
             ),
             grpc_timeout_seconds=_timeout(),
-            grpc_auth_token=_grpc_auth_token(),
-            grpc_admin_token=_grpc_admin_token(),
+            grpc_auth_token=_grpc_auth_token(runtime_env),
+            grpc_admin_token=_grpc_admin_token(runtime_env),
             log_path=Path(
                 os.getenv(
                     "MN_CLI_LOG_PATH",
@@ -73,16 +73,22 @@ def _timeout() -> float | None:
         raise ValueError("MN_GRPC_TIMEOUT_SECONDS must be a number, 0, or none") from exc
 
 
-def _grpc_auth_token() -> str:
+def _grpc_auth_token(runtime_env: dict[str, str] | None = None) -> str:
     token = os.getenv("MN_GRPC_AUTH_TOKEN")
+    if token:
+        return token
+    token = (runtime_env or {}).get("MN_GRPC_AUTH_TOKEN", "")
     if token:
         return token
 
     return _read_token_file("grpc_auth.token")
 
 
-def _grpc_admin_token() -> str:
+def _grpc_admin_token(runtime_env: dict[str, str] | None = None) -> str:
     token = os.getenv("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN")
+    if token:
+        return token
+    token = (runtime_env or {}).get("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN", "")
     if token:
         return token
 

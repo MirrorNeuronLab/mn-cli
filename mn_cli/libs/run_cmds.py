@@ -1847,6 +1847,13 @@ def _web_ui_port_available(host: str, port: int) -> bool:
     return True
 
 
+def _web_ui_port_range_configured() -> bool:
+    return (
+        os.getenv("MN_BLUEPRINT_WEB_UI_PORT_START") not in (None, "")
+        or os.getenv("MN_BLUEPRINT_WEB_UI_PORT_END") not in (None, "")
+    )
+
+
 def _web_ui_port_range() -> tuple[int, int]:
     start = _parse_web_ui_port(
         os.getenv(
@@ -1868,6 +1875,13 @@ def _web_ui_port_range() -> tuple[int, int]:
     return start, end
 
 
+def _ephemeral_web_ui_port(host: str) -> int:
+    bind_host = host if host and host not in {"::"} else "0.0.0.0"
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((bind_host, 0))
+        return int(sock.getsockname()[1])
+
+
 def _web_ui_port(output: dict[str, Any], *, host: str = "127.0.0.1") -> int:
     raw_port = output.get("port")
     explicit_port = _parse_web_ui_port(raw_port, name="web_ui.output.port")
@@ -1882,6 +1896,8 @@ def _web_ui_port(output: dict[str, Any], *, host: str = "127.0.0.1") -> int:
     for port in range(start, end + 1):
         if _web_ui_port_available(host, port):
             return port
+    if not _web_ui_port_range_configured():
+        return _ephemeral_web_ui_port(host)
     raise RuntimeError(f"No available blueprint web UI port found in {start}-{end}.")
 
 
