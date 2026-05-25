@@ -1,3 +1,4 @@
+import json
 import pytest
 import subprocess
 from io import StringIO
@@ -15,10 +16,12 @@ from mn_cli.server_cmds import (
     _start_server,
     _start_network_seed,
     _join_network,
+    _avoid_local_compose_port_conflicts,
     find_web_ui_dir,
     _start_web_ui_if_installed,
     _compose_runtime_env,
     _print_service_endpoints,
+    _runtime_endpoint_snapshot,
     runtime_compose_cmd,
 )
 import typer
@@ -45,6 +48,7 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path / "mn_venv")
     mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_FILE', state_dir / "docker-compose.yml")
     mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', state_dir / "docker-compose.env")
+    mocker.patch('mn_cli.server_cmds.RUNTIME_ENDPOINTS_FILE', state_dir / "runtime-endpoints.json")
     mocker.patch('mn_cli.server_cmds.NETWORK_TOKEN_FILE', state_dir / "network.token")
     mocker.patch('mn_cli.server_cmds.NETWORK_REDIS_ENV_FILE', state_dir / "network-redis.env")
     mocker.patch(
@@ -414,6 +418,19 @@ def test_compose_native_settings_persists_runtime_blueprint_env(mocker, tmp_path
     assert "MN_DEV_LOCAL_BLUEPRINT_REPO=/work/mn/otterdesk-blueprints" in compose_env_text
     assert "MN_RUNS_ROOT=/opt/mn/runs" in compose_env_text
 
+def test_compose_native_settings_defaults_runtime_blueprint_repo(mocker, tmp_path):
+    compose_env = tmp_path / "docker-compose.env"
+    compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\nMN_BLUEPRINT_REPO=\n")
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
+
+    env = server_cmds._ensure_compose_native_port_settings({})
+
+    assert env["MN_DEFAULT_BLUEPRINT_REPO"] == "https://github.com/MirrorNeuronLab/mn-blueprints.git"
+    assert env["MN_BLUEPRINT_REPO"] == "https://github.com/MirrorNeuronLab/mn-blueprints.git"
+    compose_env_text = compose_env.read_text()
+    assert "MN_DEFAULT_BLUEPRINT_REPO=https://github.com/MirrorNeuronLab/mn-blueprints.git" in compose_env_text
+    assert "MN_BLUEPRINT_REPO=https://github.com/MirrorNeuronLab/mn-blueprints.git" in compose_env_text
+
 def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
@@ -527,10 +544,45 @@ def test_compose_runtime_env_respects_explicit_cluster_names(monkeypatch):
     assert resolved["MN_REDIS_URL"] == "redis://192.168.4.10:6379/0"
     assert resolved["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 4500 inet_dist_listen_max 4500"
 
+def test_compose_port_conflict_resolution_reserves_selected_ports(mocker):
+    mocker.patch("mn_cli.server_cmds.runtime_compose_available", return_value=False)
+    mocker.patch("mn_cli.server_cmds._host_port_available", side_effect=lambda _host, port: port not in {54469, 54470})
+
+    resolved = _avoid_local_compose_port_conflicts({
+        "MN_EPMD_BIND_HOST": "127.0.0.1",
+        "MN_EPMD_PORT": "54469",
+        "MN_DIST_BIND_HOST": "127.0.0.1",
+        "MN_DIST_PORT": "54470",
+        "ERL_AFLAGS": "-kernel inet_dist_listen_min 54470 inet_dist_listen_max 54470",
+    })
+
+    assert resolved["MN_EPMD_PORT"] == "54471"
+    assert resolved["MN_DIST_PORT"] == "54472"
+    assert resolved["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 54472 inet_dist_listen_max 54472"
+
+def test_runtime_endpoint_snapshot_uses_local_hosts_for_wildcard_binds():
+    snapshot = _runtime_endpoint_snapshot(
+        {
+            "MN_API_HOST": "0.0.0.0",
+            "MN_API_PORT": "54111",
+            "MN_GRPC_BIND_HOST": "0.0.0.0",
+            "MN_GRPC_PORT": "55111",
+            "MN_WEB_UI_HOST": "::",
+            "MN_WEB_UI_PORT": "55174",
+        },
+        web_ui_available=True,
+    )
+
+    assert snapshot["api"]["base_url"] == "http://127.0.0.1:54111/api/v1"
+    assert snapshot["api"]["host"] == "127.0.0.1"
+    assert snapshot["grpc"]["target"] == "127.0.0.1:55111"
+    assert snapshot["web_ui"]["url"] == "http://127.0.0.1:55174"
+
 def test_start_server_success(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
     mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', ())
     redis_password = _derive_network_secret("join-token", "redis")
+    monkeypatch.setenv("MN_API_PORT", "54111")
     monkeypatch.setenv("MN_BLUEPRINT_REPO", "/opt/mn/blueprints")
     monkeypatch.setenv("MN_DEV_LOCAL_BLUEPRINT_REPO", "/work/mn/otterdesk-blueprints")
     monkeypatch.setenv("MN_RUNS_ROOT", "/opt/mn/runs")
@@ -577,6 +629,10 @@ def test_start_server_success(mocker, tmp_path, monkeypatch):
     assert api_env["MN_BLUEPRINT_REPO"] == "/opt/mn/blueprints"
     assert api_env["MN_DEV_LOCAL_BLUEPRINT_REPO"] == "/work/mn/otterdesk-blueprints"
     assert api_env["MN_RUNS_ROOT"] == "/opt/mn/runs"
+    runtime_endpoints = json.loads(server_cmds.RUNTIME_ENDPOINTS_FILE.read_text())
+    assert runtime_endpoints["api"]["base_url"] == "http://localhost:54111/api/v1"
+    assert runtime_endpoints["api"]["port"] == "54111"
+    assert "MN_GRPC_AUTH_TOKEN" not in json.dumps(runtime_endpoints)
 
 def test_start_server_darwin(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")

@@ -1395,6 +1395,10 @@ def _write_local_web_ui_handle(
     run_dir = runs_root / blueprint_run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    adapter = str(output.get("adapter") or web_ui.get("kind") or "").lower()
+    if adapter == "gradio":
+        return
+
     script_path = _web_ui_registration_script(bundle_dir, web_ui, output, dashboard)
     if script_path is not None:
         _launch_blueprint_web_ui_script(
@@ -1471,8 +1475,6 @@ def _start_background_event_relay_if_needed(
     web_ui = config.get("web_ui") if isinstance(config.get("web_ui"), dict) else {}
     if not isinstance(web_ui, dict) or web_ui.get("enabled") is False:
         return
-    if not (run_dir / "web_ui.json").exists() and not (run_dir / "ui.json").exists():
-        return
 
     max_seconds = _background_event_relay_max_seconds(config)
     poll_seconds = _background_event_relay_poll_seconds(config)
@@ -1481,7 +1483,7 @@ def _start_background_event_relay_if_needed(
     command = [
         sys.executable,
         "-m",
-        "mn_cli.libs.event_relay",
+        "mn_blueprint_support.event_relay",
         "--job-id",
         job_id,
         "--run-dir",
@@ -1494,6 +1496,7 @@ def _start_background_event_relay_if_needed(
 
     env = os.environ.copy()
     env["MN_RUN_EVENT_RELAY_CHILD"] = "1"
+    _inject_local_blueprint_support_pythonpath(env)
     with open(log_path, "a", encoding="utf-8") as relay_log:
         process = subprocess.Popen(
             command,

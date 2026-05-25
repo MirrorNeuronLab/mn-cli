@@ -113,8 +113,9 @@ mn add-node <host> --token <token>
 mn stop
 ```
 
-`mn start` starts the regular local runtime and prints a stable join token stored
-at `~/.mn/network.token`. A second box can join that main runtime with:
+`mn start` starts the regular local runtime, writes the live REST/gRPC endpoints
+to `~/.mn/runtime-endpoints.json`, and prints a stable join token stored at
+`~/.mn/network.token`. A second box can join that main runtime with:
 
 ```bash
 mn join 192.168.4.10 --token <token>

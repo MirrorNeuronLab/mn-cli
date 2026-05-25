@@ -88,6 +88,15 @@ def prepare_manifest_for_submission(
         config = with_shared_run_store_config(config, str(run_id), runs_root)
     if config is not None:
         apply_manifest_config_bindings(prepared, config)
+    if run_id and config is not None:
+        inject_runtime_web_ui_service_for_submission(
+            prepared,
+            bundle_dir=bundle_dir,
+            config=config,
+            run_id=str(run_id),
+            runs_root=runs_root,
+            env_overrides=env_overrides,
+        )
     runtime_env = blueprint_runtime_environment(
         bundle_dir,
         config=config,
@@ -109,6 +118,32 @@ def prepare_manifest_for_submission(
     if metadata:
         prepared.setdefault("metadata", {}).setdefault("mn_cli", {}).update(metadata)
     return prepared
+
+
+def inject_runtime_web_ui_service_for_submission(
+    manifest: dict[str, Any],
+    *,
+    bundle_dir: Path,
+    config: dict[str, Any],
+    run_id: str,
+    runs_root: str,
+    env_overrides: Optional[dict[str, str]] = None,
+) -> dict[str, Any] | None:
+    _inject_local_blueprint_support_path()
+    try:
+        from mn_blueprint_support import inject_runtime_web_ui_service
+    except ImportError as exc:
+        raise RuntimeError(
+            "Blueprint web UI service injection requires mn_blueprint_support."
+        ) from exc
+    return inject_runtime_web_ui_service(
+        manifest,
+        bundle_dir=bundle_dir,
+        config=config,
+        run_id=run_id,
+        runs_root=runs_root,
+        env_overrides=env_overrides,
+    )
 
 
 def render_agent_templates_for_submission(manifest: dict[str, Any]) -> None:

@@ -6,6 +6,7 @@ import secrets
 import socket
 import subprocess
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -35,6 +36,7 @@ WEB_UI_LOG = LOG_DIR / "web-ui.log"
 VENV_DIR = Path.home() / ".local" / "share" / "mn_venv"
 RUNTIME_COMPOSE_FILE = DIR / "docker-compose.yml"
 RUNTIME_COMPOSE_ENV = DIR / "docker-compose.env"
+RUNTIME_ENDPOINTS_FILE = DIR / "runtime-endpoints.json"
 WEB_UI_DIRS = (
     DIR / "webui",
     DIR / "web-ui-source",
@@ -46,6 +48,7 @@ DEFAULT_EPMD_PORT = "54369"
 DEFAULT_DIST_PORT = "54370"
 DEFAULT_WEB_UI_PORT = "55173"
 DEFAULT_OPENSHELL_GATEWAY_PORT = "58080"
+DEFAULT_BLUEPRINT_REPO = "https://github.com/MirrorNeuronLab/mn-blueprints.git"
 LEGACY_GRPC_PORT = "50051"
 LEGACY_API_PORT = "4001"
 LEGACY_EPMD_PORT = "4369"
@@ -195,12 +198,13 @@ def _container_publishes_port(container_name: str, target_port: int, published_p
 def _port_available_or_owned(host: str, port: int, owner_container: str, target_port: int) -> bool:
     return _host_port_available(host, port) or _container_publishes_port(owner_container, target_port, port)
 
-def _find_available_port(host: str, preferred: int, fallback_start: int) -> int:
-    if _host_port_available(host, preferred):
+def _find_available_port(host: str, preferred: int, fallback_start: int, reserved: Optional[set[int]] = None) -> int:
+    reserved = reserved or set()
+    if preferred not in reserved and _host_port_available(host, preferred):
         return preferred
 
     for candidate in range(fallback_start, fallback_start + 100):
-        if _host_port_available(host, candidate):
+        if candidate not in reserved and _host_port_available(host, candidate):
             return candidate
     return preferred
 
@@ -273,10 +277,12 @@ def _avoid_local_compose_port_conflicts(env: dict[str, str]) -> dict[str, str]:
         ("MN_DIST_BIND_HOST", "MN_DIST_PORT", int(DEFAULT_DIST_PORT), int(DEFAULT_DIST_PORT) + 100, "Erlang distribution"),
     )
 
+    reserved_ports: set[int] = set()
     for host_key, port_key, default_port, fallback_start, label in checks:
         host = adjusted.get(host_key) or "127.0.0.1"
         port = _parse_port(adjusted.get(port_key), default_port)
-        available_port = _find_available_port(host, port, fallback_start)
+        available_port = _find_available_port(host, port, fallback_start, reserved_ports)
+        reserved_ports.add(available_port)
         if available_port != port:
             adjusted[port_key] = str(available_port)
             console.print(
@@ -740,12 +746,63 @@ def _native_endpoint_host(host: str) -> str:
     return normalized
 
 def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
-    updates: dict[str, str] = {}
-    for key in ("MN_BLUEPRINT_REPO", "MN_DEV_LOCAL_BLUEPRINT_REPO", "DEV_LOCAL_BLUEPRINT_REPO", "MN_RUNS_ROOT"):
+    default_repo = str(env.get("MN_DEFAULT_BLUEPRINT_REPO") or os.getenv("MN_DEFAULT_BLUEPRINT_REPO") or DEFAULT_BLUEPRINT_REPO).strip()
+    updates: dict[str, str] = {
+        "MN_DEFAULT_BLUEPRINT_REPO": default_repo,
+        "MN_BLUEPRINT_REPO": str(env.get("MN_BLUEPRINT_REPO") or "").strip() or default_repo,
+    }
+    for key in ("MN_DEV_LOCAL_BLUEPRINT_REPO", "DEV_LOCAL_BLUEPRINT_REPO", "MN_RUNS_ROOT"):
         value = str(env.get(key) or "").strip()
         if value:
             updates[key] = value
     return updates
+
+def _runtime_endpoint_snapshot(env: dict[str, str], web_ui_available: bool = False) -> dict[str, object]:
+    api_host = _native_endpoint_host(str(env.get("MN_API_HOST") or DEFAULT_HOST))
+    api_port = _valid_port_text(str(env.get("MN_API_PORT") or DEFAULT_API_PORT), DEFAULT_API_PORT)
+    api_base_url = str(env.get("MN_API_BASE_URL") or f"http://{api_host}:{api_port}/api/v1")
+    grpc_host = _native_endpoint_host(
+        str(env.get("MN_GRPC_BIND_HOST") or env.get("MN_CORE_HOST") or DEFAULT_HOST)
+    )
+    grpc_port = _valid_port_text(str(env.get("MN_GRPC_PORT") or DEFAULT_GRPC_PORT), DEFAULT_GRPC_PORT)
+    grpc_target = str(
+        env.get("MN_GRPC_TARGET")
+        or env.get("MN_CORE_GRPC_TARGET")
+        or f"{grpc_host}:{grpc_port}"
+    ).strip()
+    snapshot: dict[str, object] = {
+        "version": 1,
+        "updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "api": {
+            "base_url": api_base_url,
+            "host": api_host,
+            "port": api_port,
+        },
+        "grpc": {
+            "target": grpc_target,
+            "host": grpc_host,
+            "port": grpc_port,
+        },
+    }
+    if web_ui_available:
+        web_ui_host = _native_endpoint_host(str(env.get("MN_WEB_UI_HOST") or DEFAULT_HOST))
+        web_ui_port = _valid_port_text(str(env.get("MN_WEB_UI_PORT") or DEFAULT_WEB_UI_PORT), DEFAULT_WEB_UI_PORT)
+        snapshot["web_ui"] = {
+            "url": f"http://{web_ui_host}:{web_ui_port}",
+            "host": web_ui_host,
+            "port": web_ui_port,
+        }
+    return snapshot
+
+def _write_runtime_endpoints_file(env: dict[str, str], web_ui_available: bool = False) -> dict[str, object]:
+    snapshot = _runtime_endpoint_snapshot(env, web_ui_available=web_ui_available)
+    RUNTIME_ENDPOINTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    RUNTIME_ENDPOINTS_FILE.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    try:
+        RUNTIME_ENDPOINTS_FILE.chmod(0o600)
+    except OSError:
+        logger.debug("Failed to chmod runtime endpoint file %s", RUNTIME_ENDPOINTS_FILE, exc_info=True)
+    return snapshot
 
 def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
     adjusted = dict(env)
@@ -1347,6 +1404,7 @@ def _start_server(
     console.print("=> Waiting for Elixir to boot...")
     time.sleep(3)
 
+    api_started = False
     api_bin = VENV_DIR / "bin" / "mn-api"
     if api_bin.exists():
         console.print(f"=> Starting mn-api (REST on port {env.get('MN_API_PORT', DEFAULT_API_PORT)})...")
@@ -1359,11 +1417,16 @@ def _start_server(
                 start_new_session=True
             )
         API_PID_FILE.write_text(str(p_api.pid))
+        api_started = True
         console.print(f"   [green][Started][/green] REST API (PID: {p_api.pid})")
     else:
         console.print("[yellow]=> Warning: mn-api not found, skipping.[/yellow]")
 
     web_ui_available = _start_web_ui_if_installed(env)
+    if api_started:
+        endpoint_snapshot = _write_runtime_endpoints_file(env, web_ui_available=web_ui_available)
+        console.print(f"   Runtime endpoints: {RUNTIME_ENDPOINTS_FILE}")
+        logger.info("Wrote MirrorNeuron runtime endpoints: %s", endpoint_snapshot.get("api", {}))
 
     console.print("\n===========================================")
     if ip:

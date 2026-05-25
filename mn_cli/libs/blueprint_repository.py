@@ -13,7 +13,7 @@ import typer
 from mn_cli.shared import console, logger
 
 
-DEFAULT_BLUEPRINT_REPO = "https://github.com/MirrorNeuronLab/mn-blueprints"
+DEFAULT_BLUEPRINT_REPO = "https://github.com/MirrorNeuronLab/mn-blueprints.git"
 DEFAULT_BLUEPRINT_STORAGE = "~/.mn/blueprints"
 CUSTOM_BLUEPRINT_STORAGE_ROOT = "~/.mn/blueprint_repos"
 BLUEPRINT_REPO_CONTEXT_KEY = "blueprint_repo"
