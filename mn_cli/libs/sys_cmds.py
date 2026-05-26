@@ -12,6 +12,7 @@ from mn_cli.server_cmds import (
     _start_server,
     _start_network_seed,
     _join_network,
+    _refresh_network_token,
     _stop_network_runtime,
     kill_tree,
     BEAM_PID_FILE,
@@ -135,3 +136,11 @@ def leave(node_name: str):
         console.print(f"[green]Successfully requested {node_name} to leave. Status: {status}[/green]")
     except Exception as e:
         handle_cli_error(e, console, 'leave')
+
+def refresh_token():
+    """Rotate the persistent MirrorNeuron network join token"""
+    token = _refresh_network_token()
+    console.print("[green]MirrorNeuron network join token refreshed.[/green]")
+    console.print("Restart MirrorNeuron on cluster boxes for the new token to take effect.")
+    console.print("New token:")
+    console.print(f"  {token}")

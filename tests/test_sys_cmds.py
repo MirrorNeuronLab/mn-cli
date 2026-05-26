@@ -87,6 +87,14 @@ def test_leave_error(mocker):
     assert result.exit_code == 0
     assert "Error removing node: Timeout" in result.stdout
 
+def test_refresh_token_success(mocker):
+    mock_refresh = mocker.patch('mn_cli.libs.sys_cmds._refresh_network_token', return_value="new-token")
+    result = runner.invoke(app, ["refresh-token"])
+    assert result.exit_code == 0
+    assert "network join token refreshed" in result.stdout
+    assert "new-token" in result.stdout
+    mock_refresh.assert_called_once_with()
+
 def test_stop(mocker, tmp_path):
     mocker.patch('mn_cli.libs.sys_cmds._stop_network_runtime')
     mocker.patch('mn_cli.libs.sys_cmds.subprocess.run')

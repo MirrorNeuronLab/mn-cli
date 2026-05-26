@@ -74,6 +74,7 @@ app.command(name="join")(sys_cmds.join)
 app.command(name="expose-node")(sys_cmds.expose_node)
 app.command(name="add-node")(sys_cmds.add_node)
 app.command(name="leave")(sys_cmds.leave)
+app.command(name="refresh-token")(sys_cmds.refresh_token)
 app.command(name="update")(update_cmds.update)
 
 # Sub-apps

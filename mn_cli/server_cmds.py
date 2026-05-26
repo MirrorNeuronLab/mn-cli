@@ -502,23 +502,37 @@ def _resolve_grpc_admin_token() -> str:
     return generated_token
 
 def _resolve_network_token(force_new: bool = False) -> str:
+    if force_new:
+        return _refresh_network_token()
+
+    try:
+        existing_token = NETWORK_TOKEN_FILE.read_text().strip()
+        if existing_token:
+            return existing_token
+    except FileNotFoundError:
+        pass
+
+    compose_token = _read_env_file(RUNTIME_COMPOSE_ENV).get("MN_NETWORK_JOIN_TOKEN", "").strip()
+    if compose_token:
+        _write_network_token(compose_token)
+        return compose_token
+
     env_token = os.getenv("MN_NETWORK_JOIN_TOKEN", "").strip()
-    if env_token and not force_new:
+    if env_token:
         _write_network_token(env_token)
         return env_token
-
-    if not force_new:
-        try:
-            existing_token = NETWORK_TOKEN_FILE.read_text().strip()
-            if existing_token:
-                return existing_token
-        except FileNotFoundError:
-            pass
 
     DIR.mkdir(parents=True, exist_ok=True)
     generated_token = secrets.token_urlsafe(32)
     _write_network_token(generated_token)
     return generated_token
+
+def _refresh_network_token() -> str:
+    token = secrets.token_urlsafe(32)
+    _write_network_token(token)
+    if RUNTIME_COMPOSE_ENV.exists():
+        _write_env_file_values(RUNTIME_COMPOSE_ENV, {"MN_NETWORK_JOIN_TOKEN": token})
+    return token
 
 def _write_network_token(token: str) -> None:
     DIR.mkdir(parents=True, exist_ok=True)
@@ -536,6 +550,12 @@ def _derive_network_secret(token: str, label: str) -> str:
 
 def _network_node_name(host: str) -> str:
     return f"mirror_neuron@{host}"
+
+def _network_node_host(node_name: object) -> str:
+    normalized = str(node_name or "").strip()
+    if "@" not in normalized:
+        return ""
+    return normalized.rsplit("@", 1)[1].strip()
 
 def _node_name_unset(value: object) -> bool:
     return str(value or "").strip() in {"", "nonode@nohost"}
@@ -562,6 +582,15 @@ def _generated_cluster_setting_should_update(value: object, desired: str) -> boo
     normalized = str(value or "").strip()
     return _cluster_nodes_unset(normalized) or (
         _generated_network_node_name(normalized) and normalized != desired
+    )
+
+def _persisted_join_profile(env: dict[str, str]) -> bool:
+    cluster_nodes = str(env.get("MN_CLUSTER_NODES") or "").strip()
+    node_name = str(env.get("MN_NODE_NAME") or "").strip()
+    return (
+        _generated_network_node_name(cluster_nodes)
+        and _generated_network_node_name(node_name)
+        and cluster_nodes != node_name
     )
 
 def _advertised_network_host(host: Optional[str] = None) -> str:
@@ -823,7 +852,9 @@ def _start_network_seed(
         return _return_running_network_seed(host, grpc_port, (LOCAL_CORE_CONTAINER,))
 
     host = (host or _detect_lan_ip()).strip() or "127.0.0.1"
-    token = _resolve_network_token(force_new=force_new_token)
+    if force_new_token:
+        console.print("[yellow]--force-new-token is deprecated; run 'mn refresh-token' to rotate the join token.[/yellow]")
+    token = _resolve_network_token()
     node_name = _network_node_name(host)
     external_redis_url = os.getenv("MN_REDIS_URL", "").strip()
     selected_redis_port = _resolve_network_seed_redis_port(host, redis_port) if not external_redis_url else None
@@ -1529,26 +1560,42 @@ def _start_server(
     if join_handshake:
         _validate_remote_redis_details(join_handshake, ip, network_token)
     env = _runtime_base_env(compose_runtime)
+    reconnecting_joined_node = bool(compose_runtime and not ip and _persisted_join_profile(env))
     local_redis_port: Optional[int] = None
     if compose_runtime:
         env = _ensure_compose_native_port_settings(env)
         env = _ensure_compose_cluster_bind_settings(env, advertised_host)
-        env, local_redis_port = _ensure_compose_redis_publish_settings(
-            env,
-            token=network_token,
-            advertised_host=advertised_host,
-        )
+        if not reconnecting_joined_node:
+            env, local_redis_port = _ensure_compose_redis_publish_settings(
+                env,
+                token=network_token,
+                advertised_host=advertised_host,
+            )
     else:
         env.update(_runtime_blueprint_env_updates(env))
     _ensure_host_artifacts_dir(env)
 
-    seed_node_name = join_handshake["node_name"] if join_handshake else local_node_name
-    seed_redis_host = join_handshake["redis_host"] if join_handshake else advertised_host
-    seed_redis_port = redis_port or (
-        _parse_port(join_handshake["redis_port"], REDIS_CONTAINER_PORT)
-        if join_handshake
-        else (local_redis_port or _parse_port(os.getenv("MN_REDIS_PORT"), REDIS_CONTAINER_PORT))
-    )
+    if join_handshake:
+        seed_node_name = join_handshake["node_name"]
+        seed_redis_host = join_handshake["redis_host"]
+        seed_redis_port = redis_port or _parse_port(join_handshake["redis_port"], REDIS_CONTAINER_PORT)
+    elif reconnecting_joined_node:
+        seed_node_name = str(env.get("MN_CLUSTER_NODES") or "").strip()
+        seed_redis_host = (
+            str(env.get("MN_NETWORK_REDIS_HOST") or "").strip()
+            or _network_node_host(seed_node_name)
+            or advertised_host
+        )
+        parsed_redis_url = urlparse(str(env.get("MN_REDIS_URL") or ""))
+        seed_redis_port = redis_port or (
+            _parse_configured_port(env.get("MN_NETWORK_REDIS_PORT"))
+            or _parse_configured_port(parsed_redis_url.port)
+            or REDIS_CONTAINER_PORT
+        )
+    else:
+        seed_node_name = local_node_name
+        seed_redis_host = advertised_host
+        seed_redis_port = redis_port or (local_redis_port or _parse_port(os.getenv("MN_REDIS_PORT"), REDIS_CONTAINER_PORT))
 
     console.print("===========================================")
     if ip:
@@ -1623,9 +1670,12 @@ def _start_server(
                 },
             )
     else:
-        if _generated_cluster_setting_should_update(env.get("MN_CLUSTER_NODES"), local_node_name):
+        if (
+            not reconnecting_joined_node
+            and _generated_cluster_setting_should_update(env.get("MN_CLUSTER_NODES"), local_node_name)
+        ):
             env["MN_CLUSTER_NODES"] = local_node_name
-        if compose_runtime and _compose_supports_redis_password():
+        if compose_runtime and not reconnecting_joined_node and _compose_supports_redis_password():
             redis_password = _derive_network_secret(network_token, "redis")
             env["MN_REDIS_PASSWORD"] = redis_password
             env["MN_REDIS_URL"] = f"redis://:{redis_password}@redis:{REDIS_CONTAINER_PORT}/0"

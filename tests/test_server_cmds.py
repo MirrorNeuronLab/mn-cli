@@ -12,6 +12,7 @@ from mn_cli.server_cmds import (
     _resolve_grpc_auth_token,
     _resolve_mn_cookie,
     _resolve_network_token,
+    _refresh_network_token,
     _derive_network_secret,
     _start_server,
     _start_network_seed,
@@ -36,6 +37,7 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_NODE_GPU", raising=False)
     monkeypatch.delenv("MN_NODE_GPU_COUNT", raising=False)
     monkeypatch.delenv("MN_NODE_DISPLAY_NAME", raising=False)
+    monkeypatch.delenv("MN_NETWORK_JOIN_TOKEN", raising=False)
     state_dir = tmp_path / ".mirror_neuron"
     log_dir = state_dir / ".logs"
     pid_dir = state_dir / ".pids"
@@ -221,6 +223,33 @@ def test_resolve_network_token_generates_and_reuses_persistent_token(tmp_path, m
     assert (token_dir / "network.token").read_text().strip() == "fixed-token"
     assert (token_dir / "network.token").stat().st_mode & 0o777 == 0o600
     assert _resolve_network_token() == "fixed-token"
+
+def test_resolve_network_token_does_not_override_persisted_token_from_env(monkeypatch):
+    server_cmds.NETWORK_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    server_cmds.NETWORK_TOKEN_FILE.write_text("persisted-token\n")
+    monkeypatch.setenv("MN_NETWORK_JOIN_TOKEN", "env-token")
+
+    assert _resolve_network_token() == "persisted-token"
+    assert server_cmds.NETWORK_TOKEN_FILE.read_text().strip() == "persisted-token"
+
+def test_resolve_network_token_seeds_missing_file_from_compose_env(mocker):
+    server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
+    server_cmds.RUNTIME_COMPOSE_ENV.write_text("MN_NETWORK_JOIN_TOKEN=compose-token\n")
+    mocker.patch('mn_cli.server_cmds.secrets.token_urlsafe', return_value="new-token")
+
+    assert _resolve_network_token() == "compose-token"
+    assert server_cmds.NETWORK_TOKEN_FILE.read_text().strip() == "compose-token"
+
+def test_refresh_network_token_rotates_only_when_requested(mocker):
+    server_cmds.NETWORK_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    server_cmds.NETWORK_TOKEN_FILE.write_text("old-token\n")
+    server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
+    server_cmds.RUNTIME_COMPOSE_ENV.write_text("MN_NETWORK_JOIN_TOKEN=old-token\n")
+    mocker.patch('mn_cli.server_cmds.secrets.token_urlsafe', return_value="new-token")
+
+    assert _refresh_network_token() == "new-token"
+    assert server_cmds.NETWORK_TOKEN_FILE.read_text().strip() == "new-token"
+    assert "MN_NETWORK_JOIN_TOKEN=new-token" in server_cmds.RUNTIME_COMPOSE_ENV.read_text()
 
 def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_REDIS_URL", raising=False)
@@ -484,6 +513,21 @@ def test_compose_redis_publish_settings_persists_dynamic_port(mocker, tmp_path):
     assert "MN_NETWORK_REDIS_HOST=192.168.4.10" in compose_env_text
     assert "MN_NETWORK_REDIS_PORT=56380" in compose_env_text
 
+def test_compose_redis_publish_settings_replaces_stale_loopback_bind(mocker, tmp_path):
+    compose_env = tmp_path / "docker-compose.env"
+    compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\nMN_REDIS_BIND_HOST=127.0.0.1\n")
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
+    mocker.patch('mn_cli.server_cmds._port_available_or_owned', return_value=True)
+
+    env, _port = server_cmds._ensure_compose_redis_publish_settings(
+        {"MN_REDIS_BIND_HOST": "127.0.0.1"},
+        token="join-token",
+        advertised_host="192.168.4.10",
+    )
+
+    assert env["MN_REDIS_BIND_HOST"] == "0.0.0.0"
+    assert "MN_REDIS_BIND_HOST=0.0.0.0" in compose_env.read_text()
+
 def test_compose_redis_explicit_port_must_be_available(mocker, tmp_path, monkeypatch):
     compose_env = tmp_path / "docker-compose.env"
     compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
@@ -734,6 +778,57 @@ def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
     assert env["MN_COOKIE"] == _derive_network_secret("join-token", "cookie")
     assert env["MN_DIST_PORT"] == "54370"
     assert env["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 54370 inet_dist_listen_max 54370"
+
+def test_start_server_preserves_persisted_join_profile_on_restart(mocker, tmp_path):
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_env = tmp_path / "docker-compose.env"
+    redis_password = _derive_network_secret("join-token", "redis")
+    compose_file.write_text("services: {}\n")
+    compose_env.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_NETWORK_JOIN_TOKEN=join-token\n"
+        "MN_NODE_NAME=mirror_neuron@192.168.4.173\n"
+        "MN_CLUSTER_NODES=mirror_neuron@192.168.4.35\n"
+        "MN_NETWORK_REDIS_HOST=192.168.4.35\n"
+        "MN_NETWORK_REDIS_PORT=56381\n"
+        f"MN_REDIS_URL=redis://:{redis_password}@192.168.4.35:56381/0\n"
+        f"MN_CONTEXT_REDIS_URL=redis://:{redis_password}@192.168.4.35:56381/1\n"
+    )
+
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_FILE', compose_file)
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
+    mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
+    mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', ())
+    mocker.patch('mn_cli.server_cmds.time.sleep')
+    mocker.patch('mn_cli.server_cmds.PID_DIR', tmp_path / ".pids")
+    mocker.patch('mn_cli.server_cmds.LOG_DIR', tmp_path / ".logs")
+    mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
+    mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
+    mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path)
+    mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.173")
+
+    calls = []
+
+    def mock_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        m = mocker.Mock()
+        m.stdout = "false\n"
+        return m
+
+    mocker.patch('mn_cli.server_cmds.subprocess.run', side_effect=mock_run)
+    ensure_redis = mocker.patch('mn_cli.server_cmds._ensure_compose_redis_publish_settings')
+
+    _start_server()
+
+    compose_call = next(item for item in calls if item[0] == runtime_compose_cmd("up", "-d"))
+    env = compose_call[1]["env"]
+    assert env["MN_NETWORK_JOIN_TOKEN"] == "join-token"
+    assert env["MN_NODE_NAME"] == "mirror_neuron@192.168.4.173"
+    assert env["MN_CLUSTER_NODES"] == "mirror_neuron@192.168.4.35"
+    assert env["MN_NETWORK_REDIS_HOST"] == "192.168.4.35"
+    assert env["MN_NETWORK_REDIS_PORT"] == "56381"
+    assert env["MN_REDIS_URL"] == f"redis://:{redis_password}@192.168.4.35:56381/0"
+    ensure_redis.assert_not_called()
 
 def test_compose_runtime_env_respects_explicit_cluster_names(monkeypatch):
     env = {
