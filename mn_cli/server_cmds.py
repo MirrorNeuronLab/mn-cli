@@ -297,6 +297,9 @@ def _container_publishes_port(container_name: str, target_port: int, published_p
     return False
 
 def _published_container_port(container_name: str, target_port: int) -> Optional[int]:
+    if not _docker_container_running(container_name):
+        return None
+
     try:
         result = subprocess.run(
             ["docker", "port", container_name, f"{target_port}/tcp"],
@@ -644,12 +647,38 @@ def _redis_url_with_public_endpoint(redis_url: str, host: str, port: int) -> str
         userinfo = f"{parsed.netloc.rsplit('@', 1)[0]}@"
     return f"{scheme}://{userinfo}{host}:{port}{path}"
 
-def _handshake_with_main_node(seed_host: str, token: str, grpc_port: int) -> dict:
+def _handshake_node_info(local_host: str) -> dict[str, object]:
+    hostname = ""
+    try:
+        hostname = socket.gethostname().strip()
+    except OSError:
+        pass
+
+    return {
+        "node_name": _network_node_name(local_host),
+        "display_name": _node_display_name(),
+        "hostname": hostname,
+        "gpu_count": _detect_host_gpu_count(),
+    }
+
+def _handshake_with_main_node(
+    seed_host: str,
+    token: str,
+    grpc_port: int,
+    *,
+    local_host: Optional[str] = None,
+) -> dict:
     from mn_sdk import Client
 
     target = f"{seed_host}:{grpc_port}"
+    local_node_name = _network_node_name(local_host) if local_host else ""
+    local_node_info = _handshake_node_info(local_host) if local_host else None
     try:
-        handshake = Client(target=target, auth_token="", timeout=10).network_handshake(token)
+        handshake = Client(target=target, auth_token="", timeout=10).network_handshake(
+            token,
+            node_name=local_node_name,
+            node_info=local_node_info,
+        )
     except Exception as exc:
         console.print(f"[red]Error: Could not join MirrorNeuron node at {target}.[/red]")
         console.print("Check the host, gRPC port, and token printed by 'mn start' on the main box.")
@@ -930,7 +959,12 @@ def _join_network(
     from mn_cli.shared import client as local_client
 
     target = f"{seed_host}:{grpc_port}"
-    handshake = Client(target=target, auth_token="", timeout=10).network_handshake(token)
+    local_host = (host or _detect_lan_ip()).strip()
+    handshake = Client(target=target, auth_token="", timeout=10).network_handshake(
+        token,
+        node_name=_network_node_name(local_host),
+        node_info=_handshake_node_info(local_host),
+    )
     remote_node = handshake.get("node_name") or _network_node_name(seed_host)
     redis_host, redis_port, redis_url = _validate_remote_redis_details(handshake, seed_host, token)
 
@@ -1582,7 +1616,11 @@ def _start_server(
         _write_network_token(network_token)
     advertised_host = _advertised_network_host(host)
     local_node_name = _network_node_name(advertised_host)
-    join_handshake = _handshake_with_main_node(ip, network_token, grpc_port) if ip else None
+    join_handshake = (
+        _handshake_with_main_node(ip, network_token, grpc_port, local_host=advertised_host)
+        if ip
+        else None
+    )
     if join_handshake:
         _validate_remote_redis_details(join_handshake, ip, network_token)
     env = _runtime_base_env(compose_runtime)

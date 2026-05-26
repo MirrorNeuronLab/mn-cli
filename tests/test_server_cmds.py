@@ -349,6 +349,7 @@ def test_add_node_uses_handshake_and_local_core(mocker, tmp_path):
 
     mocker.patch('mn_cli.server_cmds.DIR', tmp_path)
     mocker.patch('mn_cli.server_cmds._docker_container_running', return_value=False)
+    mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=1)
     redis_password = _derive_network_secret("join-token", "redis")
 
     class StubClient:
@@ -357,8 +358,11 @@ def test_add_node_uses_handshake_and_local_core(mocker, tmp_path):
             assert auth_token == ""
             assert timeout == 10
 
-        def network_handshake(self, token):
+        def network_handshake(self, token, node_name="", node_info=None):
             assert token == "join-token"
+            assert node_name
+            assert node_info["node_name"] == node_name
+            assert "display_name" in node_info
             return {
                 "node_name": "mirror_neuron@192.168.4.10",
                 "redis_host": "192.168.4.10",
@@ -383,12 +387,13 @@ def test_add_node_rejects_missing_remote_redis_details(mocker, tmp_path):
     import mn_sdk
 
     mocker.patch('mn_cli.server_cmds.DIR', tmp_path)
+    mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=1)
 
     class StubClient:
         def __init__(self, target, auth_token, timeout):
             assert target == "192.168.4.10:50055"
 
-        def network_handshake(self, token):
+        def network_handshake(self, token, node_name="", node_info=None):
             return {"node_name": "mirror_neuron@192.168.4.10"}
 
     mocker.patch.object(mn_sdk, "Client", StubClient)
@@ -402,12 +407,13 @@ def test_add_node_rejects_redis_url_without_token_password(mocker, tmp_path):
     import mn_sdk
 
     mocker.patch('mn_cli.server_cmds.DIR', tmp_path)
+    mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=1)
 
     class StubClient:
         def __init__(self, target, auth_token, timeout):
             assert target == "192.168.4.10:50055"
 
-        def network_handshake(self, token):
+        def network_handshake(self, token, node_name="", node_info=None):
             return {
                 "node_name": "mirror_neuron@192.168.4.10",
                 "redis_host": "192.168.4.10",
