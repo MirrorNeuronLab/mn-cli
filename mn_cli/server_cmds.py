@@ -54,6 +54,7 @@ DEFAULT_BLUEPRINT_WEB_UI_PUBLIC_HOST = "localhost"
 DEFAULT_BLUEPRINT_WEB_UI_PORT_START = "61000"
 DEFAULT_BLUEPRINT_WEB_UI_PORT_END = "61049"
 DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE = "prepublished"
+DEFAULT_CONTAINER_RUNS_ROOT = "/root/.mn/runs"
 LEGACY_GRPC_PORT = "50051"
 LEGACY_API_PORT = "4001"
 LEGACY_EPMD_PORT = "4369"
@@ -150,13 +151,16 @@ def _detect_lan_ip() -> str:
 
 def _compose_runtime_env(env: dict[str, str], ip: Optional[str]) -> dict[str, str]:
     compose_env = dict(env)
-    compose_env.setdefault("MN_NODE_ROLE", "runtime")
+    if not str(compose_env.get("MN_NODE_ROLE") or "").strip():
+        compose_env["MN_NODE_ROLE"] = "runtime"
 
     if ip:
-        compose_env.setdefault("MN_DIST_PORT", DEFAULT_DIST_PORT)
+        if not str(compose_env.get("MN_DIST_PORT") or "").strip():
+            compose_env["MN_DIST_PORT"] = DEFAULT_DIST_PORT
         local_ip = _detect_lan_ip()
-        compose_env.setdefault("MN_NODE_NAME", f"mirror_neuron@{local_ip}")
-        if not compose_env.get("MN_CLUSTER_NODES") or compose_env.get("MN_CLUSTER_NODES") == ip:
+        if _node_name_unset(compose_env.get("MN_NODE_NAME")):
+            compose_env["MN_NODE_NAME"] = f"mirror_neuron@{local_ip}"
+        if _cluster_nodes_unset(compose_env.get("MN_CLUSTER_NODES")) or compose_env.get("MN_CLUSTER_NODES") == ip:
             compose_env["MN_CLUSTER_NODES"] = f"mirror_neuron@{ip}"
         compose_env["MN_REDIS_URL"] = compose_env.get("MN_REDIS_URL") or f"redis://{ip}:6379/0"
 
@@ -416,6 +420,13 @@ def _derive_network_secret(token: str, label: str) -> str:
 def _network_node_name(host: str) -> str:
     return f"mirror_neuron@{host}"
 
+def _node_name_unset(value: object) -> bool:
+    return str(value or "").strip() in {"", "nonode@nohost"}
+
+def _cluster_nodes_unset(value: object) -> bool:
+    normalized = str(value or "").strip()
+    return normalized in {"", "nonode@nohost"}
+
 def _advertised_network_host(host: Optional[str] = None) -> str:
     configured = host or os.getenv("MN_NETWORK_ADVERTISE_HOST", "").strip()
     return (configured or _detect_lan_ip()).strip() or "127.0.0.1"
@@ -453,7 +464,7 @@ def _handshake_with_main_node(seed_host: str, token: str, grpc_port: int) -> dic
         console.print(f"[dim]{exc}[/dim]")
         raise typer.Exit(1) from exc
 
-    if not handshake.get("node_name"):
+    if _node_name_unset(handshake.get("node_name")):
         handshake["node_name"] = _network_node_name(seed_host)
     return handshake
 
@@ -831,11 +842,32 @@ def _native_endpoint_host(host: str) -> str:
         return "127.0.0.1"
     return normalized
 
+def _cluster_endpoint_host(env: dict[str, str], host: str) -> str:
+    normalized = (host or "").strip()
+    advertised = str(env.get("MN_NETWORK_ADVERTISE_HOST") or "").strip()
+    if advertised and _network_publish_host(advertised) == "0.0.0.0":
+        if normalized in {"", "0.0.0.0", "::", "127.0.0.1", "localhost", "::1"}:
+            return advertised
+    return _native_endpoint_host(normalized)
+
 def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
     default_repo = str(env.get("MN_DEFAULT_BLUEPRINT_REPO") or os.getenv("MN_DEFAULT_BLUEPRINT_REPO") or DEFAULT_BLUEPRINT_REPO).strip()
+    host_mn_dir = str(env.get("MN_HOST_MN_DIR") or os.getenv("MN_HOST_MN_DIR") or DIR).strip()
+    configured_runs_root = str(env.get("MN_RUNS_ROOT") or os.getenv("MN_RUNS_ROOT") or "").strip()
+    host_artifacts_dir = str(
+        env.get("MN_HOST_ARTIFACTS_DIR") or os.getenv("MN_HOST_ARTIFACTS_DIR") or configured_runs_root
+    ).strip()
+    if not host_artifacts_dir:
+        host_artifacts_dir = str(Path(host_mn_dir).expanduser() / "runs")
+    container_runs_root = str(
+        env.get("MN_CONTAINER_RUNS_ROOT") or os.getenv("MN_CONTAINER_RUNS_ROOT") or DEFAULT_CONTAINER_RUNS_ROOT
+    ).strip()
     updates: dict[str, str] = {
         "MN_DEFAULT_BLUEPRINT_REPO": default_repo,
         "MN_BLUEPRINT_REPO": str(env.get("MN_BLUEPRINT_REPO") or "").strip() or default_repo,
+        "MN_HOST_ARTIFACTS_DIR": host_artifacts_dir,
+        "MN_RUNS_ROOT": configured_runs_root or host_artifacts_dir,
+        "MN_CONTAINER_RUNS_ROOT": container_runs_root,
         "MN_BLUEPRINT_WEB_UI_BIND_HOST": str(
             env.get("MN_BLUEPRINT_WEB_UI_BIND_HOST") or DEFAULT_BLUEPRINT_WEB_UI_BIND_HOST
         ).strip(),
@@ -852,11 +884,20 @@ def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
             env.get("MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE") or DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE
         ).strip(),
     }
-    for key in ("MN_DEV_LOCAL_BLUEPRINT_REPO", "DEV_LOCAL_BLUEPRINT_REPO", "MN_RUNS_ROOT"):
+    for key in ("MN_DEV_LOCAL_BLUEPRINT_REPO", "DEV_LOCAL_BLUEPRINT_REPO"):
         value = str(env.get(key) or "").strip()
         if value:
             updates[key] = value
     return updates
+
+def _ensure_host_artifacts_dir(env: dict[str, str]) -> None:
+    path_text = str(env.get("MN_HOST_ARTIFACTS_DIR") or env.get("MN_RUNS_ROOT") or "").strip()
+    if not path_text:
+        return
+    try:
+        Path(path_text).expanduser().mkdir(parents=True, exist_ok=True)
+    except OSError:
+        logger.warning("Failed to create shared artifact directory %s", path_text, exc_info=True)
 
 def _runtime_endpoint_snapshot(env: dict[str, str], web_ui_available: bool = False) -> dict[str, object]:
     api_host = _native_endpoint_host(str(env.get("MN_API_HOST") or DEFAULT_HOST))
@@ -973,6 +1014,34 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
 
     adjusted.update(updates)
     _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
+    return adjusted
+
+def _ensure_compose_cluster_bind_settings(env: dict[str, str], advertised_host: str) -> dict[str, str]:
+    adjusted = dict(env)
+    publish_host = _network_publish_host(advertised_host)
+    updates: dict[str, str] = {}
+    loopback_hosts = {"", "127.0.0.1", "localhost", "::1"}
+
+    for key in ("MN_GRPC_BIND_HOST", "MN_EPMD_BIND_HOST", "MN_DIST_BIND_HOST"):
+        current = str(adjusted.get(key) or "").strip()
+        if os.getenv(key, "").strip():
+            continue
+        if publish_host == "0.0.0.0" and current in loopback_hosts:
+            updates[key] = publish_host
+        elif not current:
+            updates[key] = publish_host
+
+    current_epmd_address = str(adjusted.get("ERL_EPMD_ADDRESS") or "").strip()
+    if (
+        publish_host == "0.0.0.0"
+        and not os.getenv("ERL_EPMD_ADDRESS", "").strip()
+        and current_epmd_address in loopback_hosts
+    ):
+        updates["ERL_EPMD_ADDRESS"] = publish_host
+
+    if updates:
+        adjusted.update(updates)
+        _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
     return adjusted
 
 def _ensure_compose_redis_publish_settings(
@@ -1118,20 +1187,21 @@ def _native_service_endpoints(ip: Optional[str] = None, web_ui_available: bool =
     rows: list[dict[str, str]] = []
 
     if runtime_compose_available():
-        grpc_host = _native_endpoint_host(runtime_env.get("MN_GRPC_BIND_HOST", "127.0.0.1"))
+        grpc_host = _cluster_endpoint_host(runtime_env, runtime_env.get("MN_GRPC_BIND_HOST", "127.0.0.1"))
         grpc_port = runtime_env.get("MN_GRPC_PORT", DEFAULT_GRPC_PORT)
         api_host = _native_endpoint_host(runtime_env.get("MN_API_HOST") or _api_host())
         api_port = runtime_env.get("MN_API_PORT", DEFAULT_API_PORT)
-        redis_host = _native_endpoint_host(
+        redis_host = _cluster_endpoint_host(
+            runtime_env,
             runtime_env.get("MN_NETWORK_REDIS_HOST")
             or runtime_env.get("MN_REDIS_BIND_HOST", "0.0.0.0")
         )
         redis_port = runtime_env.get("MN_NETWORK_REDIS_PORT") or runtime_env.get(
             "MN_REDIS_PORT", str(REDIS_CONTAINER_PORT)
         )
-        epmd_host = _native_endpoint_host(runtime_env.get("MN_EPMD_BIND_HOST", "127.0.0.1"))
+        epmd_host = _cluster_endpoint_host(runtime_env, runtime_env.get("MN_EPMD_BIND_HOST", "127.0.0.1"))
         epmd_port = runtime_env.get("MN_EPMD_PORT", DEFAULT_EPMD_PORT)
-        dist_host = _native_endpoint_host(runtime_env.get("MN_DIST_BIND_HOST", "127.0.0.1"))
+        dist_host = _cluster_endpoint_host(runtime_env, runtime_env.get("MN_DIST_BIND_HOST", "127.0.0.1"))
         dist_port = runtime_env.get("MN_DIST_PORT", DEFAULT_DIST_PORT)
         openshell_host = _native_endpoint_host(runtime_env.get("OPENSHELL_GATEWAY_BIND_HOST", "127.0.0.1"))
         openshell_port = runtime_env.get("OPENSHELL_GATEWAY_PORT", DEFAULT_OPENSHELL_GATEWAY_PORT)
@@ -1146,12 +1216,14 @@ def _native_service_endpoints(ip: Optional[str] = None, web_ui_available: bool =
             core_host,
             runtime_env.get("MN_GRPC_PORT", DEFAULT_GRPC_PORT),
         )
+        grpc_host = _cluster_endpoint_host(runtime_env, grpc_host)
         api_host = runtime_env.get("MN_API_HOST") or _api_host()
         api_port = runtime_env.get("MN_API_PORT", DEFAULT_API_PORT)
         redis_host, redis_port = _redis_host_port(ip)
-        epmd_host = runtime_env.get("MN_EPMD_HOST") or _epmd_host()
+        redis_host = _cluster_endpoint_host(runtime_env, redis_host)
+        epmd_host = _cluster_endpoint_host(runtime_env, runtime_env.get("MN_EPMD_HOST") or _epmd_host())
         epmd_port = runtime_env.get("MN_EPMD_PORT", DEFAULT_EPMD_PORT)
-        dist_host = runtime_env.get("MN_DIST_HOST") or _dist_host()
+        dist_host = _cluster_endpoint_host(runtime_env, runtime_env.get("MN_DIST_HOST") or _dist_host())
         dist_port = runtime_env.get("MN_DIST_PORT", DEFAULT_DIST_PORT)
         openshell_host = ""
         openshell_port = ""
@@ -1249,14 +1321,18 @@ def _start_web_ui_if_installed(runtime_env: Optional[dict[str, str]] = None) -> 
     env["MN_WEB_UI_PORT"] = web_ui_port
     console.print(f"=> Starting mn-web-ui (Vite on {web_ui_host}:{web_ui_port})...")
     with open(WEB_UI_LOG, "w") as out:
-        p_web = subprocess.Popen(
-            ["npm", "run", "dev", "--", "--host", web_ui_host, "--port", web_ui_port],
-            cwd=web_ui_dir,
-            stdout=out,
-            stderr=subprocess.STDOUT,
-            env=env,
-            start_new_session=True
-        )
+        try:
+            p_web = subprocess.Popen(
+                ["npm", "run", "dev", "--", "--host", web_ui_host, "--port", web_ui_port],
+                cwd=web_ui_dir,
+                stdout=out,
+                stderr=subprocess.STDOUT,
+                env=env,
+                start_new_session=True
+            )
+        except FileNotFoundError:
+            console.print("[yellow]=> Warning: npm not found, skipping Web UI.[/yellow]")
+            return False
     WEB_UI_PID_FILE.write_text(str(p_web.pid))
     console.print(f"   [green][Started][/green] Web UI (PID: {p_web.pid})")
     return True
@@ -1306,11 +1382,15 @@ def _start_server(
     local_redis_port: Optional[int] = None
     if compose_runtime:
         env = _ensure_compose_native_port_settings(env)
+        env = _ensure_compose_cluster_bind_settings(env, advertised_host)
         env, local_redis_port = _ensure_compose_redis_publish_settings(
             env,
             token=network_token,
             advertised_host=advertised_host,
         )
+    else:
+        env.update(_runtime_blueprint_env_updates(env))
+    _ensure_host_artifacts_dir(env)
 
     seed_node_name = join_handshake["node_name"] if join_handshake else local_node_name
     seed_redis_host = join_handshake["redis_host"] if join_handshake else advertised_host
@@ -1347,17 +1427,19 @@ def _start_server(
     env["MN_NETWORK_ADVERTISE_HOST"] = advertised_host
     env["MN_NETWORK_REDIS_HOST"] = seed_redis_host
     env["MN_NETWORK_REDIS_PORT"] = str(seed_redis_port)
-    env.setdefault("MN_NODE_NAME", local_node_name)
-    env.setdefault("MN_NODE_ROLE", "runtime")
+    if _node_name_unset(env.get("MN_NODE_NAME")):
+        env["MN_NODE_NAME"] = local_node_name
+    if not str(env.get("MN_NODE_ROLE") or "").strip():
+        env["MN_NODE_ROLE"] = "runtime"
     if ip or not compose_runtime:
         env["MN_DIST_PORT"] = str(dist_port)
     else:
         env.setdefault("MN_DIST_PORT", str(dist_port))
-    if not env.get("MN_COOKIE") or env.get("MN_COOKIE") == "mirrorneuron":
-        if compose_runtime and not ip:
-            env["MN_COOKIE"] = _resolve_mn_cookie()
-        else:
-            env["MN_COOKIE"] = _derive_network_secret(network_token, "cookie")
+    explicit_cookie = os.getenv("MN_COOKIE", "").strip()
+    if explicit_cookie and explicit_cookie != "mirrorneuron":
+        env["MN_COOKIE"] = explicit_cookie
+    else:
+        env["MN_COOKIE"] = _derive_network_secret(network_token, "cookie")
     env.setdefault("MN_GRPC_BIND_HOST", "0.0.0.0")
     env.setdefault("MN_EPMD_BIND_HOST", "0.0.0.0")
     env.setdefault("MN_DIST_BIND_HOST", "0.0.0.0")
@@ -1390,7 +1472,8 @@ def _start_server(
                 },
             )
     else:
-        env.setdefault("MN_CLUSTER_NODES", local_node_name)
+        if _cluster_nodes_unset(env.get("MN_CLUSTER_NODES")):
+            env["MN_CLUSTER_NODES"] = local_node_name
         if compose_runtime and _compose_supports_redis_password():
             redis_password = _derive_network_secret(network_token, "redis")
             env["MN_REDIS_PASSWORD"] = redis_password
@@ -1407,6 +1490,7 @@ def _start_server(
             {
                 "MN_GRPC_AUTH_TOKEN": env["MN_GRPC_AUTH_TOKEN"],
                 "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN": env["MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN"],
+                "MN_COOKIE": env["MN_COOKIE"],
             },
         )
 
@@ -1441,6 +1525,7 @@ def _start_server(
         cmd.extend(["-e", f"MN_NODE_ROLE={env['MN_NODE_ROLE']}"])
         cmd.extend(["-e", f"MN_GRPC_PORT={env['MN_GRPC_PORT']}"])
         cmd.extend(["-e", f"MN_DIST_PORT={env['MN_DIST_PORT']}"])
+        cmd.extend(["-e", f"MN_RUNS_ROOT={env.get('MN_CONTAINER_RUNS_ROOT', DEFAULT_CONTAINER_RUNS_ROOT)}"])
         cmd.extend(["-e", f"ERL_AFLAGS={env['ERL_AFLAGS']}"])
 
         core_publish_host = _docker_publish_host(env["MN_CORE_HOST"])
@@ -1497,6 +1582,14 @@ def _start_server(
         if (openshell_config_dir / "gateways" / "openshell").is_dir():
             cmd.extend(["-v", f"{openshell_config_dir}:/root/.config/openshell:ro"])
             cmd.extend(["-v", f"{openshell_config_dir}:/opt/mirror_neuron/.config/openshell:ro"])
+
+        host_mn_dir = str(env.get("MN_HOST_MN_DIR") or DIR)
+        host_artifacts_dir = str(env.get("MN_HOST_ARTIFACTS_DIR") or Path(host_mn_dir).expanduser() / "runs")
+        container_runs_root = str(env.get("MN_CONTAINER_RUNS_ROOT") or DEFAULT_CONTAINER_RUNS_ROOT)
+        cmd.extend(["-v", f"{host_mn_dir}:/root/.mn"])
+        cmd.extend(["-v", f"{host_mn_dir}:/opt/mirror_neuron/.mn"])
+        cmd.extend(["-v", f"{host_artifacts_dir}:{container_runs_root}"])
+        cmd.extend(["-v", f"{host_artifacts_dir}:/opt/mirror_neuron/.mn/runs"])
 
         cmd.append("mirror-neuron-core:latest")
 

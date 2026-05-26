@@ -462,6 +462,8 @@ def test_compose_native_settings_persists_runtime_blueprint_env(mocker, tmp_path
     assert env["MN_BLUEPRINT_REPO"] == "/opt/mn/blueprints"
     assert env["MN_DEV_LOCAL_BLUEPRINT_REPO"] == "/work/mn/otterdesk-blueprints"
     assert env["MN_RUNS_ROOT"] == "/opt/mn/runs"
+    assert env["MN_HOST_ARTIFACTS_DIR"] == "/opt/mn/runs"
+    assert env["MN_CONTAINER_RUNS_ROOT"] == "/root/.mn/runs"
     assert env["MN_BLUEPRINT_WEB_UI_BIND_HOST"] == "0.0.0.0"
     assert env["MN_BLUEPRINT_WEB_UI_PUBLIC_HOST"] == "localhost"
     assert env["MN_BLUEPRINT_WEB_UI_PORT_START"] == "61000"
@@ -470,7 +472,9 @@ def test_compose_native_settings_persists_runtime_blueprint_env(mocker, tmp_path
     compose_env_text = compose_env.read_text()
     assert "MN_BLUEPRINT_REPO=/opt/mn/blueprints" in compose_env_text
     assert "MN_DEV_LOCAL_BLUEPRINT_REPO=/work/mn/otterdesk-blueprints" in compose_env_text
+    assert "MN_HOST_ARTIFACTS_DIR=/opt/mn/runs" in compose_env_text
     assert "MN_RUNS_ROOT=/opt/mn/runs" in compose_env_text
+    assert "MN_CONTAINER_RUNS_ROOT=/root/.mn/runs" in compose_env_text
     assert "MN_BLUEPRINT_WEB_UI_BIND_HOST=0.0.0.0" in compose_env_text
     assert "MN_BLUEPRINT_WEB_UI_PUBLIC_HOST=localhost" in compose_env_text
     assert "MN_BLUEPRINT_WEB_UI_PORT_START=61000" in compose_env_text
@@ -486,21 +490,90 @@ def test_compose_native_settings_defaults_runtime_blueprint_repo(mocker, tmp_pat
 
     assert env["MN_DEFAULT_BLUEPRINT_REPO"] == "https://github.com/MirrorNeuronLab/mn-blueprints.git"
     assert env["MN_BLUEPRINT_REPO"] == "https://github.com/MirrorNeuronLab/mn-blueprints.git"
+    assert env["MN_HOST_ARTIFACTS_DIR"].endswith(".mirror_neuron/runs")
+    assert env["MN_RUNS_ROOT"].endswith(".mirror_neuron/runs")
+    assert env["MN_CONTAINER_RUNS_ROOT"] == "/root/.mn/runs"
     assert env["MN_BLUEPRINT_WEB_UI_PORT_START"] == "61000"
     assert env["MN_BLUEPRINT_WEB_UI_PORT_END"] == "61049"
     assert env["MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE"] == "prepublished"
     compose_env_text = compose_env.read_text()
     assert "MN_DEFAULT_BLUEPRINT_REPO=https://github.com/MirrorNeuronLab/mn-blueprints.git" in compose_env_text
     assert "MN_BLUEPRINT_REPO=https://github.com/MirrorNeuronLab/mn-blueprints.git" in compose_env_text
+    assert "MN_HOST_ARTIFACTS_DIR=" in compose_env_text
+    assert "MN_RUNS_ROOT=" in compose_env_text
+    assert "MN_CONTAINER_RUNS_ROOT=/root/.mn/runs" in compose_env_text
     assert "MN_BLUEPRINT_WEB_UI_PORT_START=61000" in compose_env_text
     assert "MN_BLUEPRINT_WEB_UI_PORT_END=61049" in compose_env_text
     assert "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE=prepublished" in compose_env_text
+
+def test_compose_cluster_bind_settings_exposes_lan_advertised_host(mocker, tmp_path, monkeypatch):
+    for name in ("MN_GRPC_BIND_HOST", "MN_EPMD_BIND_HOST", "MN_DIST_BIND_HOST", "ERL_EPMD_ADDRESS"):
+        monkeypatch.delenv(name, raising=False)
+    compose_env = tmp_path / "docker-compose.env"
+    compose_env.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_GRPC_BIND_HOST=127.0.0.1\n"
+        "MN_EPMD_BIND_HOST=127.0.0.1\n"
+        "MN_DIST_BIND_HOST=127.0.0.1\n"
+        "ERL_EPMD_ADDRESS=127.0.0.1\n"
+    )
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
+
+    env = server_cmds._ensure_compose_cluster_bind_settings(
+        {
+            "MN_GRPC_BIND_HOST": "127.0.0.1",
+            "MN_EPMD_BIND_HOST": "127.0.0.1",
+            "MN_DIST_BIND_HOST": "127.0.0.1",
+            "ERL_EPMD_ADDRESS": "127.0.0.1",
+        },
+        "192.168.4.173",
+    )
+
+    assert env["MN_GRPC_BIND_HOST"] == "0.0.0.0"
+    assert env["MN_EPMD_BIND_HOST"] == "0.0.0.0"
+    assert env["MN_DIST_BIND_HOST"] == "0.0.0.0"
+    assert env["ERL_EPMD_ADDRESS"] == "0.0.0.0"
+    compose_env_text = compose_env.read_text()
+    assert "MN_GRPC_BIND_HOST=0.0.0.0" in compose_env_text
+    assert "MN_EPMD_BIND_HOST=0.0.0.0" in compose_env_text
+    assert "MN_DIST_BIND_HOST=0.0.0.0" in compose_env_text
+    assert "ERL_EPMD_ADDRESS=0.0.0.0" in compose_env_text
+
+def test_compose_cluster_bind_settings_preserves_explicit_env(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_GRPC_BIND_HOST", "127.0.0.1")
+    for name in ("MN_EPMD_BIND_HOST", "MN_DIST_BIND_HOST", "ERL_EPMD_ADDRESS"):
+        monkeypatch.delenv(name, raising=False)
+    compose_env = tmp_path / "docker-compose.env"
+    compose_env.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_GRPC_BIND_HOST=127.0.0.1\n"
+        "MN_EPMD_BIND_HOST=127.0.0.1\n"
+        "MN_DIST_BIND_HOST=127.0.0.1\n"
+    )
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
+
+    env = server_cmds._ensure_compose_cluster_bind_settings(
+        {
+            "MN_GRPC_BIND_HOST": "127.0.0.1",
+            "MN_EPMD_BIND_HOST": "127.0.0.1",
+            "MN_DIST_BIND_HOST": "127.0.0.1",
+        },
+        "192.168.4.173",
+    )
+
+    assert env["MN_GRPC_BIND_HOST"] == "127.0.0.1"
+    assert env["MN_EPMD_BIND_HOST"] == "0.0.0.0"
+    assert env["MN_DIST_BIND_HOST"] == "0.0.0.0"
 
 def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
     compose_file.write_text("services: {}\n")
-    compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
+    compose_env.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_NODE_NAME=\n"
+        "MN_CLUSTER_NODES=nonode@nohost\n"
+    )
 
     mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_FILE', compose_file)
     mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
@@ -521,11 +594,12 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
         },
     )
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path)
+    mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.99")
 
-    commands = []
+    calls = []
 
     def mock_run(cmd, **kwargs):
-        commands.append(cmd)
+        calls.append((cmd, kwargs))
         m = mocker.Mock()
         m.stdout = "false\n"
         return m
@@ -535,12 +609,22 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
 
     _start_server()
 
+    commands = [call[0] for call in calls]
     assert runtime_compose_cmd("up", "-d") in commands
     assert all(cmd[:2] != ["docker", "inspect"] for cmd in commands)
     assert all(cmd[:3] != ["docker", "run", "-d"] for cmd in commands)
+    compose_call = next(item for item in calls if item[0] == runtime_compose_cmd("up", "-d"))
+    env = compose_call[1]["env"]
+    assert env["MN_NODE_NAME"] == "mirror_neuron@192.168.4.99"
+    assert env["MN_CLUSTER_NODES"] == "mirror_neuron@192.168.4.99"
+    assert env["MN_COOKIE"] == _derive_network_secret(env["MN_NETWORK_JOIN_TOKEN"], "cookie")
     compose_env_text = compose_env.read_text()
     assert "MN_GRPC_AUTH_TOKEN=" in compose_env_text
     assert "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN=" in compose_env_text
+    assert "MN_COOKIE=" in compose_env_text
+    assert "MN_HOST_ARTIFACTS_DIR=" in compose_env_text
+    assert "MN_RUNS_ROOT=" in compose_env_text
+    assert "MN_CONTAINER_RUNS_ROOT=/root/.mn/runs" in compose_env_text
 
 def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
     compose_file = tmp_path / "docker-compose.yml"
@@ -607,6 +691,22 @@ def test_compose_runtime_env_respects_explicit_cluster_names(monkeypatch):
     assert resolved["MN_NODE_NAME"] == "mn2@192.168.4.173"
     assert resolved["MN_CLUSTER_NODES"] == "mn1@192.168.4.10,mn2@192.168.4.173"
     assert resolved["MN_REDIS_URL"] == "redis://192.168.4.10:6379/0"
+    assert resolved["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 4500 inet_dist_listen_max 4500"
+
+def test_compose_runtime_env_replaces_blank_or_stale_cluster_names(mocker):
+    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.99")
+    env = {
+        "MN_NODE_NAME": "",
+        "MN_NODE_ROLE": "",
+        "MN_CLUSTER_NODES": "nonode@nohost",
+        "MN_DIST_PORT": "4500",
+    }
+
+    resolved = _compose_runtime_env(env, ip="192.168.4.173")
+
+    assert resolved["MN_NODE_NAME"] == "mirror_neuron@192.168.4.99"
+    assert resolved["MN_NODE_ROLE"] == "runtime"
+    assert resolved["MN_CLUSTER_NODES"] == "mirror_neuron@192.168.4.173"
     assert resolved["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 4500 inet_dist_listen_max 4500"
 
 def test_compose_port_conflict_resolution_reserves_selected_ports(mocker):
@@ -694,6 +794,8 @@ def test_start_server_success(mocker, tmp_path, monkeypatch):
     assert api_env["MN_BLUEPRINT_REPO"] == "/opt/mn/blueprints"
     assert api_env["MN_DEV_LOCAL_BLUEPRINT_REPO"] == "/work/mn/otterdesk-blueprints"
     assert api_env["MN_RUNS_ROOT"] == "/opt/mn/runs"
+    assert api_env["MN_HOST_ARTIFACTS_DIR"] == "/opt/mn/runs"
+    assert api_env["MN_CONTAINER_RUNS_ROOT"] == "/root/.mn/runs"
     assert api_env["MN_BLUEPRINT_WEB_UI_BIND_HOST"] == "0.0.0.0"
     assert api_env["MN_BLUEPRINT_WEB_UI_PUBLIC_HOST"] == "localhost"
     assert api_env["MN_BLUEPRINT_WEB_UI_PORT_START"] == "61000"
@@ -761,9 +863,17 @@ def test_start_server_passes_slack_env_to_docker(mocker, tmp_path, monkeypatch):
     cookie_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_COOKIE="))
     auth_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_GRPC_AUTH_TOKEN="))
     admin_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN="))
+    runs_root_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_RUNS_ROOT="))
     assert cookie_env != "MN_COOKIE=mirrorneuron"
     assert auth_env != "MN_GRPC_AUTH_TOKEN="
     assert admin_env != "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN="
+    assert runs_root_env == "MN_RUNS_ROOT=/root/.mn/runs"
+    assert ["-v", f"{server_cmds.DIR}:/root/.mn"] == docker_run[
+        docker_run.index(f"{server_cmds.DIR}:/root/.mn") - 1 : docker_run.index(f"{server_cmds.DIR}:/root/.mn") + 1
+    ]
+    assert ["-v", f"{server_cmds.DIR / 'runs'}:/root/.mn/runs"] == docker_run[
+        docker_run.index(f"{server_cmds.DIR / 'runs'}:/root/.mn/runs") - 1 : docker_run.index(f"{server_cmds.DIR / 'runs'}:/root/.mn/runs") + 1
+    ]
     assert ["-e", "SLACK_BOT_TOKEN"] == docker_run[
         docker_run.index("SLACK_BOT_TOKEN") - 1 : docker_run.index("SLACK_BOT_TOKEN") + 1
     ]
@@ -816,6 +926,20 @@ def test_start_web_ui_missing_noop(mocker, tmp_path):
 
     mock_popen.assert_not_called()
 
+def test_start_web_ui_missing_npm_skips(mocker, tmp_path):
+    web_ui_dir = tmp_path / "web-ui"
+    web_ui_dir.mkdir()
+    (web_ui_dir / "package.json").write_text("{}")
+    (web_ui_dir / "node_modules").mkdir()
+
+    mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', (web_ui_dir,))
+    mocker.patch('mn_cli.server_cmds.WEB_UI_PID_FILE', tmp_path / "web-ui.pid")
+    mocker.patch('mn_cli.server_cmds.WEB_UI_LOG', tmp_path / "web-ui.log")
+    mocker.patch('mn_cli.server_cmds.subprocess.Popen', side_effect=FileNotFoundError)
+
+    assert _start_web_ui_if_installed() is False
+    assert not (tmp_path / "web-ui.pid").exists()
+
 def test_print_service_endpoints(mocker, monkeypatch):
     output = StringIO()
     mocker.patch('mn_cli.server_cmds.console', Console(file=output, force_terminal=False, width=120))
@@ -856,6 +980,7 @@ def test_print_service_endpoints_defaults_to_localhost(mocker, monkeypatch):
         "MN_EPMD_HOST",
         "MN_DIST_HOST",
         "MN_WEB_UI_HOST",
+        "MN_NETWORK_ADVERTISE_HOST",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -903,3 +1028,33 @@ def test_print_service_endpoints_shows_compose_native_ports(mocker, monkeypatch,
     assert "Erlang EPMD" in rendered
     assert "Erlang dist" in rendered
     assert "54370" in rendered
+
+def test_print_service_endpoints_shows_advertised_cluster_host(mocker, monkeypatch, tmp_path):
+    output = StringIO()
+    mocker.patch('mn_cli.server_cmds.console', Console(file=output, force_terminal=False, width=120))
+    monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
+    monkeypatch.setenv("OPENSHELL_CONFIG_DIR", str(tmp_path / "missing-openshell"))
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_env = tmp_path / "docker-compose.env"
+    compose_file.write_text("services: {}\n")
+    compose_env.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_NETWORK_ADVERTISE_HOST=192.168.4.173\n"
+        "MN_GRPC_BIND_HOST=0.0.0.0\n"
+        "MN_EPMD_BIND_HOST=0.0.0.0\n"
+        "MN_DIST_BIND_HOST=0.0.0.0\n"
+        "MN_NETWORK_REDIS_HOST=192.168.4.173\n"
+        "MN_NETWORK_REDIS_PORT=56379\n"
+    )
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_FILE', compose_file)
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
+
+    _print_service_endpoints(ip=None, web_ui_available=False)
+
+    rendered = output.getvalue()
+    assert "192.168.4.173" in rendered
+    assert "192.168.4.173:55051" in rendered
+    assert "192.168.4.173:54369" in rendered
+    assert "192.168.4.173:54370" in rendered
+    assert "redis://192.168.4.173:56379/0" in rendered
+    assert "0.0.0.0" not in rendered

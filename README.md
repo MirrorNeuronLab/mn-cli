@@ -57,6 +57,9 @@ pip install -e .
 | `MN_GRPC_TIMEOUT_SECONDS` | `10` | RPC timeout. Use `0` or `none` to disable. |
 | `MN_GRPC_AUTH_TOKEN` | `~/.mn/docker-compose.env`, then `~/.mn/grpc_auth.token` when present | Optional bearer metadata for protected gateways; falls back to the legacy `~/.mirror_neuron/grpc_auth.token` during migration. |
 | `MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN` | `~/.mn/docker-compose.env`, then `~/.mn/grpc_admin.token` when present | Admin token for destructive gRPC operations such as `mn clear`; falls back to the legacy `~/.mirror_neuron/grpc_admin.token`. |
+| `MN_RUNS_ROOT` | `~/.mn/runs` | Host/API run-artifact store. Large blueprint results, logs, reports, and PDFs are read from this filesystem path instead of being embedded in gRPC job details. |
+| `MN_HOST_ARTIFACTS_DIR` | `${MN_HOST_MN_DIR}/runs` | Host directory bind-mounted into the core container as the shared blob-transfer path. |
+| `MN_CONTAINER_RUNS_ROOT` | `/root/.mn/runs` | Container path exported to `mirror-neuron-core` as `MN_RUNS_ROOT`. |
 | `MN_NETWORK_JOIN_TOKEN` | `~/.mn/network.token` for `mn start` and `mn expose-node` | Stable token used to derive cluster cookies and network-mode Redis secrets. |
 | `MN_CLI_LOG_PATH` | `~/.mn/logs/cli.log` | CLI log file path. |
 | `MN_CLI_OUTPUT` | `rich` | Set to `plain` to disable Rich formatting. |
@@ -188,6 +191,8 @@ Blueprint run artifacts are stored under:
 ```text
 ~/.mn/runs/<run_id>/
 ```
+
+In Docker Compose installs, `~/.mn/runs` is explicitly bind-mounted into `mirror-neuron-core` as `/root/.mn/runs`. gRPC carries job control and compact status; large result files stay in the run directory and are referenced by path, size, checksum, and content type.
 
 Use `--runs-root <path>` with observability commands such as `monitor`, `tail`, `logs`, `human`, `resources`, `compare`, or `export` to inspect a custom run directory.
 
