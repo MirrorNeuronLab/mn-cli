@@ -134,20 +134,106 @@ def _network_publish_host(host: str) -> str:
         return "127.0.0.1"
     return "0.0.0.0"
 
-def _detect_lan_ip() -> str:
-    try:
-        return socket.gethostbyname(socket.gethostname())
-    except socket.gaierror:
-        pass
+def _loopback_host(host: str) -> bool:
+    normalized = (host or "").strip().lower()
+    return normalized in {"", "localhost", "127.0.0.1", "::1"} or normalized.startswith("127.")
 
+def _detect_lan_ip() -> str:
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         probe.connect(("10.255.255.255", 1))
-        return probe.getsockname()[0]
+        detected = probe.getsockname()[0]
+        if not _loopback_host(detected):
+            return detected
     except Exception:
-        return "127.0.0.1"
+        pass
     finally:
         probe.close()
+
+    try:
+        detected = socket.gethostbyname(socket.gethostname())
+        if not _loopback_host(detected):
+            return detected
+    except socket.gaierror:
+        pass
+
+    return "127.0.0.1"
+
+def _parse_gpu_count(value: object) -> Optional[int]:
+    try:
+        count = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return count if count >= 0 else None
+
+def _host_gpu_count_from_command(command: list[str]) -> int:
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=5)
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return 0
+    if result.returncode != 0:
+        return 0
+    return len([line for line in result.stdout.splitlines() if line.strip()])
+
+def _detect_host_gpu_count() -> int:
+    explicit_count = _parse_gpu_count(os.getenv("MN_NODE_GPU_COUNT"))
+    if explicit_count is not None:
+        return explicit_count
+
+    explicit_gpu = os.getenv("MN_NODE_GPU", "").strip().lower()
+    if explicit_gpu in {"0", "false", "no", "off"}:
+        return 0
+    if explicit_gpu in {"1", "true", "yes", "on"}:
+        return 1
+
+    system_name = os.uname().sysname
+    if system_name == "Darwin":
+        try:
+            result = subprocess.run(
+                ["system_profiler", "SPDisplaysDataType"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (FileNotFoundError, subprocess.SubprocessError):
+            return 0
+        if result.returncode == 0:
+            return sum(1 for line in result.stdout.splitlines() if "Chipset Model:" in line)
+        return 0
+    if system_name == "Linux":
+        count = _host_gpu_count_from_command(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"]
+        )
+        if count:
+            return count
+
+    return 0
+
+def _node_display_name() -> str:
+    explicit = os.getenv("MN_NODE_DISPLAY_NAME", "").strip()
+    if explicit:
+        return explicit
+    try:
+        hostname = socket.gethostname().strip()
+        if hostname:
+            return hostname.split(".", 1)[0]
+    except OSError:
+        pass
+    return "local"
+
+def _ensure_node_advertisement_settings(env: dict[str, str]) -> dict[str, str]:
+    adjusted = dict(env)
+    if not os.getenv("MN_NODE_DISPLAY_NAME", "").strip():
+        adjusted["MN_NODE_DISPLAY_NAME"] = _node_display_name()
+
+    detected_gpu_count = _detect_host_gpu_count()
+    existing_gpu_count = _parse_gpu_count(adjusted.get("MN_NODE_GPU_COUNT"))
+    if os.getenv("MN_NODE_GPU_COUNT", "").strip():
+        adjusted["MN_NODE_GPU_COUNT"] = str(detected_gpu_count)
+    elif detected_gpu_count > 0 or existing_gpu_count is None:
+        adjusted["MN_NODE_GPU_COUNT"] = str(detected_gpu_count)
+
+    return adjusted
 
 def _compose_runtime_env(env: dict[str, str], ip: Optional[str]) -> dict[str, str]:
     compose_env = dict(env)
@@ -157,11 +243,16 @@ def _compose_runtime_env(env: dict[str, str], ip: Optional[str]) -> dict[str, st
     if ip:
         if not str(compose_env.get("MN_DIST_PORT") or "").strip():
             compose_env["MN_DIST_PORT"] = DEFAULT_DIST_PORT
-        local_ip = _detect_lan_ip()
-        if _node_name_unset(compose_env.get("MN_NODE_NAME")):
-            compose_env["MN_NODE_NAME"] = f"mirror_neuron@{local_ip}"
-        if _cluster_nodes_unset(compose_env.get("MN_CLUSTER_NODES")) or compose_env.get("MN_CLUSTER_NODES") == ip:
-            compose_env["MN_CLUSTER_NODES"] = f"mirror_neuron@{ip}"
+        local_host = str(compose_env.get("MN_NETWORK_ADVERTISE_HOST") or "").strip() or _detect_lan_ip()
+        local_node_name = _network_node_name(local_host)
+        seed_node_name = _network_node_name(ip)
+        if _generated_node_setting_should_update("MN_NODE_NAME", compose_env.get("MN_NODE_NAME"), local_node_name):
+            compose_env["MN_NODE_NAME"] = local_node_name
+        if (
+            _generated_cluster_setting_should_update(compose_env.get("MN_CLUSTER_NODES"), seed_node_name)
+            or compose_env.get("MN_CLUSTER_NODES") == ip
+        ):
+            compose_env["MN_CLUSTER_NODES"] = seed_node_name
         compose_env["MN_REDIS_URL"] = compose_env.get("MN_REDIS_URL") or f"redis://{ip}:6379/0"
 
         if compose_env.get("MN_NODE_NAME"):
@@ -282,6 +373,7 @@ def _redis_url_with_database(redis_url: str, database: str) -> str:
 
 def _avoid_local_compose_port_conflicts(env: dict[str, str]) -> dict[str, str]:
     adjusted = dict(env)
+    cluster_advertised = _network_publish_host(str(adjusted.get("MN_NETWORK_ADVERTISE_HOST") or "")) == "0.0.0.0"
     checks = (
         ("MN_EPMD_BIND_HOST", "MN_EPMD_PORT", int(DEFAULT_EPMD_PORT), int(DEFAULT_EPMD_PORT) + 100, "Erlang EPMD"),
         ("MN_DIST_BIND_HOST", "MN_DIST_PORT", int(DEFAULT_DIST_PORT), int(DEFAULT_DIST_PORT) + 100, "Erlang distribution"),
@@ -291,7 +383,32 @@ def _avoid_local_compose_port_conflicts(env: dict[str, str]) -> dict[str, str]:
     for host_key, port_key, default_port, fallback_start, label in checks:
         host = adjusted.get(host_key) or "127.0.0.1"
         port = _parse_port(adjusted.get(port_key), default_port)
-        available_port = _find_available_port(host, port, fallback_start, reserved_ports)
+        if cluster_advertised and port_key == "MN_EPMD_PORT":
+            reserved_ports.add(port)
+            continue
+        owner_container = "mirror-neuron-core"
+        if (
+            port not in reserved_ports
+            and (
+                _host_port_available(host, port)
+                or (
+                    runtime_compose_available()
+                    and _container_publishes_port(owner_container, port, port)
+                )
+            )
+        ):
+            available_port = port
+        else:
+            available_port = port
+            for candidate in range(fallback_start, fallback_start + 100):
+                if candidate in reserved_ports:
+                    continue
+                if _host_port_available(host, candidate) or (
+                    runtime_compose_available()
+                    and _container_publishes_port(owner_container, candidate, candidate)
+                ):
+                    available_port = candidate
+                    break
         reserved_ports.add(available_port)
         if available_port != port:
             adjusted[port_key] = str(available_port)
@@ -427,6 +544,26 @@ def _cluster_nodes_unset(value: object) -> bool:
     normalized = str(value or "").strip()
     return normalized in {"", "nonode@nohost"}
 
+def _generated_network_node_name(value: object) -> bool:
+    normalized = str(value or "").strip()
+    return normalized.startswith("mirror_neuron@") and "," not in normalized
+
+def _generated_node_setting_should_update(key: str, value: object, desired: str) -> bool:
+    if os.getenv(key, "").strip():
+        return False
+    normalized = str(value or "").strip()
+    return _node_name_unset(normalized) or (
+        _generated_network_node_name(normalized) and normalized != desired
+    )
+
+def _generated_cluster_setting_should_update(value: object, desired: str) -> bool:
+    if os.getenv("MN_CLUSTER_NODES", "").strip():
+        return False
+    normalized = str(value or "").strip()
+    return _cluster_nodes_unset(normalized) or (
+        _generated_network_node_name(normalized) and normalized != desired
+    )
+
 def _advertised_network_host(host: Optional[str] = None) -> str:
     configured = host or os.getenv("MN_NETWORK_ADVERTISE_HOST", "").strip()
     return (configured or _detect_lan_ip()).strip() or "127.0.0.1"
@@ -545,6 +682,7 @@ def _network_core_env(
             "ERL_AFLAGS": f"-kernel inet_dist_listen_min {dist_port} inet_dist_listen_max {dist_port}",
         }
     )
+    env = _ensure_node_advertisement_settings(env)
     return env
 
 def _docker_env_args(env: dict[str, str]) -> list[str]:
@@ -903,15 +1041,19 @@ def _runtime_endpoint_snapshot(env: dict[str, str], web_ui_available: bool = Fal
     api_host = _native_endpoint_host(str(env.get("MN_API_HOST") or DEFAULT_HOST))
     api_port = _valid_port_text(str(env.get("MN_API_PORT") or DEFAULT_API_PORT), DEFAULT_API_PORT)
     api_base_url = str(env.get("MN_API_BASE_URL") or f"http://{api_host}:{api_port}/api/v1")
-    grpc_host = _native_endpoint_host(
+    grpc_host = _cluster_endpoint_host(
+        env,
         str(env.get("MN_GRPC_BIND_HOST") or env.get("MN_CORE_HOST") or DEFAULT_HOST)
     )
     grpc_port = _valid_port_text(str(env.get("MN_GRPC_PORT") or DEFAULT_GRPC_PORT), DEFAULT_GRPC_PORT)
-    grpc_target = str(
-        env.get("MN_GRPC_TARGET")
-        or env.get("MN_CORE_GRPC_TARGET")
-        or f"{grpc_host}:{grpc_port}"
-    ).strip()
+    grpc_target = str(env.get("MN_GRPC_TARGET") or "").strip()
+    if not grpc_target:
+        core_grpc_target = str(env.get("MN_CORE_GRPC_TARGET") or "").strip()
+        target_host, target_port = _host_port_from_target(core_grpc_target, grpc_host, grpc_port)
+        if core_grpc_target and _cluster_endpoint_host(env, target_host) == target_host:
+            grpc_target = core_grpc_target
+        else:
+            grpc_target = f"{grpc_host}:{target_port}"
     snapshot: dict[str, object] = {
         "version": 1,
         "updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -1427,7 +1569,7 @@ def _start_server(
     env["MN_NETWORK_ADVERTISE_HOST"] = advertised_host
     env["MN_NETWORK_REDIS_HOST"] = seed_redis_host
     env["MN_NETWORK_REDIS_PORT"] = str(seed_redis_port)
-    if _node_name_unset(env.get("MN_NODE_NAME")):
+    if _generated_node_setting_should_update("MN_NODE_NAME", env.get("MN_NODE_NAME"), local_node_name):
         env["MN_NODE_NAME"] = local_node_name
     if not str(env.get("MN_NODE_ROLE") or "").strip():
         env["MN_NODE_ROLE"] = "runtime"
@@ -1448,6 +1590,7 @@ def _start_server(
         "ERL_AFLAGS",
         f"-kernel inet_dist_listen_min {env['MN_DIST_PORT']} inet_dist_listen_max {env['MN_DIST_PORT']}",
     )
+    env = _ensure_node_advertisement_settings(env)
 
     if join_handshake:
         redis_url = _redis_url_with_public_endpoint(
@@ -1472,13 +1615,29 @@ def _start_server(
                 },
             )
     else:
-        if _cluster_nodes_unset(env.get("MN_CLUSTER_NODES")):
+        if _generated_cluster_setting_should_update(env.get("MN_CLUSTER_NODES"), local_node_name):
             env["MN_CLUSTER_NODES"] = local_node_name
         if compose_runtime and _compose_supports_redis_password():
             redis_password = _derive_network_secret(network_token, "redis")
             env["MN_REDIS_PASSWORD"] = redis_password
             env["MN_REDIS_URL"] = f"redis://:{redis_password}@redis:{REDIS_CONTAINER_PORT}/0"
             env["MN_CONTEXT_REDIS_URL"] = f"redis://:{redis_password}@redis:{REDIS_CONTAINER_PORT}/1"
+
+    if compose_runtime:
+        _write_env_file_values(
+            RUNTIME_COMPOSE_ENV,
+            {
+                "MN_NETWORK_ADVERTISE_HOST": env["MN_NETWORK_ADVERTISE_HOST"],
+                "MN_NODE_NAME": env["MN_NODE_NAME"],
+                "MN_NODE_ROLE": env["MN_NODE_ROLE"],
+                "MN_CLUSTER_NODES": env["MN_CLUSTER_NODES"],
+                "MN_NETWORK_REDIS_HOST": env["MN_NETWORK_REDIS_HOST"],
+                "MN_NETWORK_REDIS_PORT": env["MN_NETWORK_REDIS_PORT"],
+                "MN_DIST_PORT": env["MN_DIST_PORT"],
+                "MN_NODE_DISPLAY_NAME": env["MN_NODE_DISPLAY_NAME"],
+                "MN_NODE_GPU_COUNT": env["MN_NODE_GPU_COUNT"],
+            },
+        )
 
     if not env.get("MN_GRPC_AUTH_TOKEN"):
         env["MN_GRPC_AUTH_TOKEN"] = _resolve_grpc_auth_token()
@@ -1523,6 +1682,8 @@ def _start_server(
         cmd.extend(["-e", f"MN_NETWORK_REDIS_PORT={env['MN_NETWORK_REDIS_PORT']}"])
         cmd.extend(["-e", f"MN_CLUSTER_NODES={env['MN_CLUSTER_NODES']}"])
         cmd.extend(["-e", f"MN_NODE_ROLE={env['MN_NODE_ROLE']}"])
+        cmd.extend(["-e", f"MN_NODE_DISPLAY_NAME={env['MN_NODE_DISPLAY_NAME']}"])
+        cmd.extend(["-e", f"MN_NODE_GPU_COUNT={env['MN_NODE_GPU_COUNT']}"])
         cmd.extend(["-e", f"MN_GRPC_PORT={env['MN_GRPC_PORT']}"])
         cmd.extend(["-e", f"MN_DIST_PORT={env['MN_DIST_PORT']}"])
         cmd.extend(["-e", f"MN_RUNS_ROOT={env.get('MN_CONTAINER_RUNS_ROOT', DEFAULT_CONTAINER_RUNS_ROOT)}"])

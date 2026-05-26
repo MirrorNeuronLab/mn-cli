@@ -33,6 +33,9 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_COOKIE", raising=False)
     monkeypatch.delenv("MN_GRPC_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("MN_NODE_GPU", raising=False)
+    monkeypatch.delenv("MN_NODE_GPU_COUNT", raising=False)
+    monkeypatch.delenv("MN_NODE_DISPLAY_NAME", raising=False)
     state_dir = tmp_path / ".mirror_neuron"
     log_dir = state_dir / ".logs"
     pid_dir = state_dir / ".pids"
@@ -76,6 +79,57 @@ def test_check_status_invalid(tmp_path):
 def test_check_status_missing(tmp_path):
     pid_file = tmp_path / "test.pid"
     assert check_status(pid_file) == 2
+
+def test_detect_lan_ip_prefers_route_selected_non_loopback(mocker):
+    class ProbeSocket:
+        def connect(self, _target):
+            pass
+
+        def getsockname(self):
+            return ("192.168.4.35", 50123)
+
+        def close(self):
+            pass
+
+    mocker.patch("mn_cli.server_cmds.socket.socket", return_value=ProbeSocket())
+    mocker.patch("mn_cli.server_cmds.socket.gethostname", return_value="loopback-host")
+    mocker.patch("mn_cli.server_cmds.socket.gethostbyname", return_value="127.0.0.1")
+
+    assert server_cmds._detect_lan_ip() == "192.168.4.35"
+
+def test_detect_host_gpu_count_uses_macos_system_profiler(mocker):
+    class UnameMock:
+        sysname = "Darwin"
+
+    mocker.patch("mn_cli.server_cmds.os.uname", return_value=UnameMock())
+
+    def mock_run(cmd, **kwargs):
+        assert cmd == ["system_profiler", "SPDisplaysDataType"]
+        m = mocker.Mock()
+        m.returncode = 0
+        m.stdout = "Graphics/Displays:\n  Chipset Model: Apple M5\n"
+        return m
+
+    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
+
+    assert server_cmds._detect_host_gpu_count() == 1
+
+def test_detect_host_gpu_count_uses_linux_nvidia_smi(mocker):
+    class UnameMock:
+        sysname = "Linux"
+
+    mocker.patch("mn_cli.server_cmds.os.uname", return_value=UnameMock())
+
+    def mock_run(cmd, **kwargs):
+        assert cmd == ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"]
+        m = mocker.Mock()
+        m.returncode = 0
+        m.stdout = "NVIDIA GB10\n"
+        return m
+
+    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
+
+    assert server_cmds._detect_host_gpu_count() == 1
 
 def test_kill_tree(mocker):
     # Mock os.kill to succeed for existence check
@@ -619,6 +673,9 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
     assert env["MN_CLUSTER_NODES"] == "mirror_neuron@192.168.4.99"
     assert env["MN_COOKIE"] == _derive_network_secret(env["MN_NETWORK_JOIN_TOKEN"], "cookie")
     compose_env_text = compose_env.read_text()
+    assert "MN_NETWORK_ADVERTISE_HOST=192.168.4.99" in compose_env_text
+    assert "MN_NODE_NAME=mirror_neuron@192.168.4.99" in compose_env_text
+    assert "MN_CLUSTER_NODES=mirror_neuron@192.168.4.99" in compose_env_text
     assert "MN_GRPC_AUTH_TOKEN=" in compose_env_text
     assert "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN=" in compose_env_text
     assert "MN_COOKIE=" in compose_env_text
@@ -709,6 +766,23 @@ def test_compose_runtime_env_replaces_blank_or_stale_cluster_names(mocker):
     assert resolved["MN_CLUSTER_NODES"] == "mirror_neuron@192.168.4.173"
     assert resolved["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 4500 inet_dist_listen_max 4500"
 
+def test_compose_runtime_env_replaces_stale_generated_names_after_ip_change(mocker):
+    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.35")
+    env = {
+        "MN_NETWORK_ADVERTISE_HOST": "192.168.4.35",
+        "MN_NODE_NAME": "mirror_neuron@192.168.4.20",
+        "MN_NODE_ROLE": "",
+        "MN_CLUSTER_NODES": "mirror_neuron@192.168.4.20",
+        "MN_DIST_PORT": "4500",
+    }
+
+    resolved = _compose_runtime_env(env, ip="192.168.4.173")
+
+    assert resolved["MN_NODE_NAME"] == "mirror_neuron@192.168.4.35"
+    assert resolved["MN_NODE_ROLE"] == "runtime"
+    assert resolved["MN_CLUSTER_NODES"] == "mirror_neuron@192.168.4.173"
+    assert resolved["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 4500 inet_dist_listen_max 4500"
+
 def test_compose_port_conflict_resolution_reserves_selected_ports(mocker):
     mocker.patch("mn_cli.server_cmds.runtime_compose_available", return_value=False)
     mocker.patch("mn_cli.server_cmds._host_port_available", side_effect=lambda _host, port: port not in {54469, 54470})
@@ -724,6 +798,47 @@ def test_compose_port_conflict_resolution_reserves_selected_ports(mocker):
     assert resolved["MN_EPMD_PORT"] == "54471"
     assert resolved["MN_DIST_PORT"] == "54472"
     assert resolved["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 54472 inet_dist_listen_max 54472"
+
+def test_compose_port_conflict_resolution_keeps_ports_owned_by_core(mocker):
+    mocker.patch("mn_cli.server_cmds.runtime_compose_available", return_value=True)
+    mocker.patch("mn_cli.server_cmds._host_port_available", return_value=False)
+    mocker.patch(
+        "mn_cli.server_cmds._container_publishes_port",
+        side_effect=lambda name, target, published: (
+            name == "mirror-neuron-core"
+            and target == published
+            and published in {54369, 54370}
+        ),
+    )
+
+    resolved = _avoid_local_compose_port_conflicts({
+        "MN_EPMD_BIND_HOST": "0.0.0.0",
+        "MN_EPMD_PORT": "54369",
+        "MN_DIST_BIND_HOST": "0.0.0.0",
+        "MN_DIST_PORT": "54370",
+        "ERL_AFLAGS": "-kernel inet_dist_listen_min 54370 inet_dist_listen_max 54370",
+    })
+
+    assert resolved["MN_EPMD_PORT"] == "54369"
+    assert resolved["MN_DIST_PORT"] == "54370"
+    assert resolved["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 54370 inet_dist_listen_max 54370"
+
+def test_compose_port_conflict_resolution_keeps_epmd_stable_for_advertised_clusters(mocker):
+    mocker.patch("mn_cli.server_cmds.runtime_compose_available", return_value=False)
+    mocker.patch("mn_cli.server_cmds._host_port_available", side_effect=lambda _host, port: port == 54470)
+
+    resolved = _avoid_local_compose_port_conflicts({
+        "MN_NETWORK_ADVERTISE_HOST": "192.168.4.35",
+        "MN_EPMD_BIND_HOST": "0.0.0.0",
+        "MN_EPMD_PORT": "54369",
+        "MN_DIST_BIND_HOST": "0.0.0.0",
+        "MN_DIST_PORT": "54370",
+        "ERL_AFLAGS": "-kernel inet_dist_listen_min 54370 inet_dist_listen_max 54370",
+    })
+
+    assert resolved["MN_EPMD_PORT"] == "54369"
+    assert resolved["MN_DIST_PORT"] == "54470"
+    assert resolved["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 54470 inet_dist_listen_max 54470"
 
 def test_runtime_endpoint_snapshot_uses_local_hosts_for_wildcard_binds():
     snapshot = _runtime_endpoint_snapshot(
@@ -742,6 +857,20 @@ def test_runtime_endpoint_snapshot_uses_local_hosts_for_wildcard_binds():
     assert snapshot["api"]["host"] == "127.0.0.1"
     assert snapshot["grpc"]["target"] == "127.0.0.1:55111"
     assert snapshot["web_ui"]["url"] == "http://127.0.0.1:55174"
+
+def test_runtime_endpoint_snapshot_uses_advertised_grpc_host_for_cluster_binds():
+    snapshot = _runtime_endpoint_snapshot(
+        {
+            "MN_NETWORK_ADVERTISE_HOST": "192.168.4.173",
+            "MN_GRPC_BIND_HOST": "0.0.0.0",
+            "MN_GRPC_PORT": "55051",
+            "MN_CORE_GRPC_TARGET": "localhost:55051",
+        },
+        web_ui_available=False,
+    )
+
+    assert snapshot["grpc"]["host"] == "192.168.4.173"
+    assert snapshot["grpc"]["target"] == "192.168.4.173:55051"
 
 def test_start_server_success(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
