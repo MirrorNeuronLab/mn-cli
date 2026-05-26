@@ -56,6 +56,7 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.RUNTIME_ENDPOINTS_FILE', state_dir / "runtime-endpoints.json")
     mocker.patch('mn_cli.server_cmds.NETWORK_TOKEN_FILE', state_dir / "network.token")
     mocker.patch('mn_cli.server_cmds.NETWORK_REDIS_ENV_FILE', state_dir / "network-redis.env")
+    mocker.patch('mn_cli.server_cmds._published_container_port', return_value=None)
     mocker.patch(
         'mn_cli.server_cmds.WEB_UI_DIRS',
         (state_dir / "webui", state_dir / "web-ui-source"),
@@ -512,6 +513,25 @@ def test_compose_redis_publish_settings_persists_dynamic_port(mocker, tmp_path):
     assert f"MN_REDIS_PASSWORD={redis_password}" in compose_env_text
     assert "MN_NETWORK_REDIS_HOST=192.168.4.10" in compose_env_text
     assert "MN_NETWORK_REDIS_PORT=56380" in compose_env_text
+
+def test_compose_redis_publish_settings_prefers_running_dynamic_port(mocker, tmp_path):
+    compose_env = tmp_path / "docker-compose.env"
+    compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\nMN_REDIS_PORT=56381\n")
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
+    mocker.patch('mn_cli.server_cmds._published_container_port', return_value=56379)
+    mocker.patch('mn_cli.server_cmds._port_available_or_owned', return_value=True)
+
+    env, port = server_cmds._ensure_compose_redis_publish_settings(
+        {"MN_REDIS_BIND_HOST": "0.0.0.0", "MN_REDIS_PORT": "56381"},
+        token="join-token",
+        advertised_host="192.168.4.10",
+    )
+
+    assert port == 56379
+    assert env["MN_REDIS_PORT"] == "56379"
+    compose_env_text = compose_env.read_text()
+    assert "MN_REDIS_PORT=56379" in compose_env_text
+    assert "MN_NETWORK_REDIS_PORT=56379" in compose_env_text
 
 def test_compose_redis_publish_settings_replaces_stale_loopback_bind(mocker, tmp_path):
     compose_env = tmp_path / "docker-compose.env"

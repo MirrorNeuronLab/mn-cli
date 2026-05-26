@@ -296,6 +296,28 @@ def _container_publishes_port(container_name: str, target_port: int, published_p
             continue
     return False
 
+def _published_container_port(container_name: str, target_port: int) -> Optional[int]:
+    try:
+        result = subprocess.run(
+            ["docker", "port", container_name, f"{target_port}/tcp"],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return None
+    if result.returncode != 0:
+        return None
+
+    for line in result.stdout.splitlines():
+        _, _, port_text = line.rpartition(":")
+        try:
+            port = int(port_text)
+        except ValueError:
+            continue
+        if 1 <= port <= 65535:
+            return port
+    return None
+
 def _port_available_or_owned(host: str, port: int, owner_container: str, target_port: int) -> bool:
     return _host_port_available(host, port) or _container_publishes_port(owner_container, target_port, port)
 
@@ -345,6 +367,10 @@ def _resolve_published_redis_port(
             console.print(f"[red]Error: Redis port {requested_port} is already in use.[/red]")
             raise typer.Exit(1)
         return requested_port
+
+    current_port = _published_container_port(owner_container, REDIS_CONTAINER_PORT)
+    if current_port and REDIS_DYNAMIC_PORT_START <= current_port <= REDIS_DYNAMIC_PORT_END:
+        return current_port
 
     preferred = requested_port or REDIS_DYNAMIC_PORT_START
     if not (REDIS_DYNAMIC_PORT_START <= preferred <= REDIS_DYNAMIC_PORT_END):
