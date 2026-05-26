@@ -1193,7 +1193,15 @@ def _ensure_compose_redis_publish_settings(
     advertised_host: str,
 ) -> tuple[dict[str, str], int]:
     adjusted = dict(env)
-    bind_host = adjusted.get("MN_REDIS_BIND_HOST") or "0.0.0.0"
+    explicit_bind_host = os.getenv("MN_REDIS_BIND_HOST", "").strip()
+    bind_host = str(adjusted.get("MN_REDIS_BIND_HOST") or "").strip()
+    publish_host = _network_publish_host(advertised_host)
+    if explicit_bind_host:
+        bind_host = explicit_bind_host
+    elif publish_host == "0.0.0.0" and bind_host in {"", "127.0.0.1", "localhost", "::1"}:
+        bind_host = publish_host
+    elif not bind_host:
+        bind_host = "0.0.0.0"
     explicit_port = bool(os.getenv("MN_REDIS_PORT", "").strip())
     redis_port = _resolve_published_redis_port(
         bind_host=bind_host,
