@@ -101,10 +101,24 @@ Manage jobs:
 ```bash
 mn pause <job_id>
 mn resume <job_id>
+mn backup <job_id_or_run_id_or_blueprint_id> --output ./backups
+mn restore <blueprint_id> --input ./backups/<backup>.zip
 mn cancel <job_id>
 mn dead-letters <job_id>
 mn clear
 ```
+
+`mn backup` only works after the job is already paused. It exports a complete
+runtime clone zip with the raw manifest, payloads, persisted job state, agent
+snapshots, event history, and local run-store files when available. The archive
+is intentionally complete and may contain secrets from manifests, config,
+environment values, runtime state, or payloads; the CLI prints a warning and
+does not redact.
+
+`mn restore <blueprint_id> --input <zip>` creates a clone with a fresh job ID
+and run ID for that blueprint. It preserves the original IDs in restore
+provenance, discards stale leases and node ownership, and leaves the restored
+job paused so it can be inspected before `mn resume <new_job_id>`.
 
 Manage local services:
 

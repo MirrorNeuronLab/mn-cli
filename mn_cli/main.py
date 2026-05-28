@@ -3,7 +3,7 @@ from importlib import metadata
 import typer
 from mn_cli import update_cmds
 from mn_cli.banner import MN_ASCII_ART, format_banner
-from mn_cli.libs import deployment_cmds, job_cmds, resource_cmds, run_cmds, schedule_cmds, service_cmds, sys_cmds
+from mn_cli.libs import backup_cmds, deployment_cmds, job_cmds, resource_cmds, run_cmds, schedule_cmds, service_cmds, sys_cmds
 from mn_cli.libs.blueprint_cmds import blueprint_app
 
 PACKAGE_NAME = "mirrorneuron-cli"
@@ -58,6 +58,8 @@ app.command(name="clear")(job_cmds.clear)
 app.command(name="cancel")(job_cmds.cancel)
 app.command(name="pause")(job_cmds.pause)
 app.command(name="resume")(job_cmds.resume)
+app.command(name="backup")(backup_cmds.backup)
+app.command(name="restore")(backup_cmds.restore)
 app.command(name="unfinished")(job_cmds.unfinished)
 app.command(name="nodes")(job_cmds.nodes)
 app.command(name="reconcile-node")(job_cmds.reconcile_node)

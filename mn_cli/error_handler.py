@@ -14,6 +14,8 @@ CONTEXT_MESSAGES = {
     "cancel": "Error cancelling job",
     "pause": "Error pausing job",
     "resume": "Error resuming job",
+    "backup": "Error backing up job",
+    "restore": "Error restoring job",
     "nodes": "Error fetching nodes",
     "reconcile-node": "Error reconciling node",
     "drain-node": "Error draining node",
