@@ -31,6 +31,7 @@ class JobLogWriter:
         self.snapshot_file = self.log_dir / "job_snapshot.json"
         self.seen = set()
         self.web_ui_urls = set()
+        self.web_ui_url: Optional[str] = None
         self.event_count = 0
         self.max_bytes = int(
             os.getenv("MN_RUN_EVENT_LOG_MAX_BYTES", str(10 * 1024 * 1024))
@@ -164,8 +165,15 @@ class JobLogWriter:
         url = extract_web_ui_url(event)
         if not url or url in self.web_ui_urls:
             return None
-        self.web_ui_urls.add(url)
+        self.remember_web_ui_url(url)
         return url
+
+    def remember_web_ui_url(self, url: str) -> None:
+        if not url:
+            return
+        normalized = str(url)
+        self.web_ui_urls.add(normalized)
+        self.web_ui_url = normalized
 
 
 def extract_web_ui_url(event: dict) -> Optional[str]:

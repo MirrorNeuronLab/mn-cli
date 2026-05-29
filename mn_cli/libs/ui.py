@@ -105,6 +105,7 @@ def generate_run_submitted_panel(
     run_mode: str = "Batch",
     blueprint_run_id: Optional[str] = None,
     blueprint_revision: Optional[str] = None,
+    web_ui_url: Optional[str] = None,
 ) -> Panel:
     table = Table.grid(padding=(0, 1))
     table.add_column(style="bold")
@@ -116,6 +117,8 @@ def generate_run_submitted_panel(
     if blueprint_revision:
         table.add_row("Blueprint Revision", blueprint_revision[:12])
     table.add_row("Type", run_mode)
+    if web_ui_url:
+        table.add_row("Web UI", f"[bold green]{web_ui_url}[/bold green]")
     table.add_row("Payloads", str(payload_count))
     table.add_row("Logs", str(log_dir / "events.log"))
     table.add_row("Snapshot", str(log_dir / "job_snapshot.json"))
@@ -128,7 +131,14 @@ def generate_run_submitted_panel(
         expand=False,
     )
 
-def generate_detached_panel(job_id: str, log_dir, status: str, event_count: int) -> Panel:
+def generate_detached_panel(
+    job_id: str,
+    log_dir,
+    status: str,
+    event_count: int,
+    *,
+    web_ui_url: Optional[str] = None,
+) -> Panel:
     status_color = (
         "green"
         if status == "completed"
@@ -146,6 +156,8 @@ def generate_detached_panel(job_id: str, log_dir, status: str, event_count: int)
     table.add_row("Events Logged", str(event_count))
     table.add_row("Raw Events", str(log_dir / "events.log"))
     table.add_row("Run Log", str(log_dir / "run.log"))
+    if web_ui_url:
+        table.add_row("Web UI", f"[bold green]{web_ui_url}[/bold green]")
     table.add_row("Monitor", f"mn monitor {job_id}")
 
     message = Text()

@@ -121,8 +121,11 @@ def _stream_and_format_events(
     job_id: str,
     log_writer: Optional[JobLogWriter] = None,
     follow_seconds: Optional[float] = None,
+    web_ui_url: Optional[str] = None,
 ) -> str:
     log_writer = log_writer or JobLogWriter(job_id)
+    if web_ui_url:
+        log_writer.remember_web_ui_url(web_ui_url)
     log_dir = log_writer.log_dir
     follow_seconds = (
         float(os.getenv("MN_RUN_DETACH_LOG_SECONDS", "30"))
@@ -234,7 +237,13 @@ def _stream_and_format_events(
                     task_id=follow_task,
                 )
             console.print(
-                generate_detached_panel(job_id, log_dir, status, log_writer.event_count)
+                generate_detached_panel(
+                    job_id,
+                    log_dir,
+                    status,
+                    log_writer.event_count,
+                    web_ui_url=log_writer.web_ui_url,
+                )
             )
             status_text = status
 
@@ -242,7 +251,13 @@ def _stream_and_format_events(
         console.print("[yellow]Detached from log stream.[/yellow]")
         status, _data = _follow_job_events(job_id, log_writer, 0)
         console.print(
-            generate_detached_panel(job_id, log_dir, status, log_writer.event_count)
+            generate_detached_panel(
+                job_id,
+                log_dir,
+                status,
+                log_writer.event_count,
+                web_ui_url=log_writer.web_ui_url,
+            )
         )
         status_text = status
 
@@ -802,6 +817,7 @@ def run_bundle(
                 env_overrides=env_overrides,
                 config_overrides=config_overrides,
             )
+        web_ui_url = _console_web_ui_url(manifest_dict, blueprint_run_dir)
         resolved_follow_seconds = (
             float(os.getenv("MN_RUN_DETACH_LOG_SECONDS", "30"))
             if follow_seconds is None
@@ -818,10 +834,14 @@ def run_bundle(
                 run_mode=_run_mode_label(manifest_dict),
                 blueprint_run_id=blueprint_run_id,
                 blueprint_revision=submission_metadata.get("blueprint_revision"),
+                web_ui_url=web_ui_url,
             )
         )
         final_status = _stream_and_format_events(
-            job_id, log_writer, resolved_follow_seconds
+            job_id,
+            log_writer,
+            resolved_follow_seconds,
+            web_ui_url=web_ui_url,
         )
         if blueprint_run_dir is not None:
             _start_background_event_relay_if_needed(
@@ -864,6 +884,76 @@ def run_bundle(
             )
         handle_cli_error(e, console, "run bundle")
         raise typer.Exit(1)
+
+
+def _console_web_ui_url(
+    manifest_dict: dict[str, Any],
+    run_dir: Optional[Path],
+) -> Optional[str]:
+    return (
+        _console_web_ui_url_from_manifest(manifest_dict)
+        or _console_web_ui_url_from_run_dir(run_dir)
+    )
+
+
+def _console_web_ui_url_from_manifest(manifest_dict: dict[str, Any]) -> Optional[str]:
+    metadata = (
+        manifest_dict.get("metadata")
+        if isinstance(manifest_dict.get("metadata"), dict)
+        else {}
+    )
+    for candidate in (
+        manifest_dict.get("web_ui_service"),
+        manifest_dict.get("blueprint_web_ui_service"),
+        metadata.get("blueprint_web_ui_service"),
+        metadata.get("web_ui_service"),
+    ):
+        url = _web_ui_url_from_mapping(candidate)
+        if url:
+            return url
+
+    nodes = manifest_dict.get("nodes")
+    if not isinstance(nodes, list):
+        return None
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        services = node.get("services")
+        if not isinstance(services, list):
+            continue
+        for service in services:
+            if not isinstance(service, dict):
+                continue
+            tags = service.get("tags") if isinstance(service.get("tags"), list) else []
+            if service.get("name") != "blueprint-web-ui" and "web_ui" not in tags:
+                continue
+            url = _web_ui_url_from_mapping(service.get("meta"))
+            if url:
+                return url
+            port = service.get("port")
+            if port:
+                return f"http://localhost:{port}"
+    return None
+
+
+def _console_web_ui_url_from_run_dir(run_dir: Optional[Path]) -> Optional[str]:
+    if run_dir is None:
+        return None
+    try:
+        handle = json.loads((run_dir / "web_ui.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return _web_ui_url_from_mapping(handle)
+
+
+def _web_ui_url_from_mapping(value: Any) -> Optional[str]:
+    if not isinstance(value, dict):
+        return None
+    for key in ("url", "web_ui_url", "local_url"):
+        candidate = value.get(key)
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return None
 
 
 def _ensure_local_run_store_identity(

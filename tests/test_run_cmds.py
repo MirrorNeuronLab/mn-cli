@@ -340,6 +340,90 @@ def test_run_success(mocker, tmp_path, monkeypatch):
     mock_stream.assert_called_once_with("job-123")
 
 
+def test_run_shows_runtime_web_ui_url_in_submit_and_detach_panels(
+    mocker, tmp_path, monkeypatch
+):
+    web_ui_port = 28910
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    monkeypatch.setenv("MN_RUN_BACKGROUND_EVENT_RELAY", "0")
+    monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_PORT_START", str(web_ui_port))
+    monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_PORT_END", str(web_ui_port))
+    run_manifest_lib._inject_local_blueprint_support_path()
+    mocker.patch(
+        "mn_blueprint_support.runtime_web_ui.web_ui_port_available",
+        return_value=True,
+    )
+    mocker.patch(
+        'mn_cli.libs.run_cmds._make_blueprint_run_id',
+        return_value="web-ui-run",
+    )
+    mock_submit = mocker.patch(
+        'mn_cli.libs.run_cmds.client.submit_job',
+        return_value="job-web-ui",
+    )
+    mocker.patch(
+        'mn_cli.libs.run_cmds.client.stream_events',
+        return_value=[json.dumps({"type": "job_scheduled"})],
+    )
+    mocker.patch(
+        'mn_cli.libs.run_cmds.client.get_job',
+        return_value=json.dumps(
+            {
+                "summary": {"status": "running"},
+                "job": {"status": "running"},
+                "recent_events": [],
+            }
+        ),
+    )
+
+    bundle_dir = tmp_path / "web_ui_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "manifest_version": "1.0",
+                "type": "service",
+                "graph_id": "bp_web_ui_v1",
+                "job_name": "bp-web-ui",
+                "entrypoints": [],
+                "nodes": [],
+            }
+        )
+    )
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps(
+            {
+                "identity": {"blueprint_id": "bp_web_ui", "name": "Blueprint Web UI"},
+                "outputs": {
+                    "adapter": "local_run_store",
+                    "run_root": "~/.mn/runs",
+                    "write_run_store": True,
+                },
+                "web_ui": {
+                    "enabled": True,
+                    "output": {
+                        "adapter": "gradio",
+                        "title": "Blueprint Web UI",
+                    },
+                },
+            }
+        )
+    )
+
+    result = runner.invoke(app, ["run", str(bundle_dir), "--follow-seconds", "0"])
+
+    assert result.exit_code == 0
+    assert "Web UI" in result.stdout
+    assert f"http://localhost:{web_ui_port}" in result.stdout
+    manifest = json.loads(mock_submit.call_args.args[0])
+    assert (
+        manifest["metadata"]["blueprint_web_ui_service"]["url"]
+        == f"http://localhost:{web_ui_port}"
+    )
+
+
 def test_run_force_skips_input_validation(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="forced-run")
@@ -1208,6 +1292,7 @@ def test_job_log_writer_extracts_web_ui_url_once():
     }
 
     assert writer.record_web_ui_url(event) == "http://127.0.0.1:7860"
+    assert writer.web_ui_url == "http://127.0.0.1:7860"
     assert writer.record_web_ui_url(event) is None
 
 def test_run_error_submitting(mocker, tmp_path):
