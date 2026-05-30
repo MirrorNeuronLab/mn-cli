@@ -657,7 +657,48 @@ def _is_safe_payload_relative_path(path: str) -> bool:
 
 
 def run(
-    bundle_path: str,
+    target: Annotated[
+        Optional[str],
+        typer.Argument(
+            help="Catalog blueprint ID to run. Use --folder for local blueprint or bundle folders.",
+        ),
+    ] = None,
+    folder: Annotated[
+        Optional[str],
+        typer.Option(
+            "--folder",
+            help="Run a local blueprint or bundle folder. Local folders must use this option.",
+        ),
+    ] = None,
+    run_id: Annotated[
+        Optional[str],
+        typer.Option("--run-id", help="Use a specific shared blueprint run ID."),
+    ] = None,
+    blueprint_repo: Annotated[
+        Optional[str],
+        typer.Option(
+            "--blueprint-repo",
+            help="Use this blueprint repository URL/path instead of the default catalog.",
+        ),
+    ] = None,
+    update: Annotated[
+        bool,
+        typer.Option(
+            "--update",
+            help="Update the cached blueprint repository before running a catalog blueprint.",
+        ),
+    ] = False,
+    offline: Annotated[
+        bool,
+        typer.Option(
+            "--offline",
+            help="Use only local blueprint files; never clone, fetch, or pull.",
+        ),
+    ] = False,
+    revision: Annotated[
+        Optional[str],
+        typer.Option("--revision", help="Checkout a specific git revision before running."),
+    ] = None,
     follow_seconds: Annotated[
         Optional[float],
         typer.Option(
@@ -673,8 +714,86 @@ def run(
         ),
     ] = False,
 ):
-    """Run a job bundle from a local folder directly"""
-    run_bundle(bundle_path, follow_seconds=follow_seconds, force=force)
+    """Run a catalog blueprint, or a local folder with --folder."""
+    if folder and target:
+        console.print("[red]Error: pass either a blueprint ID or --folder, not both.[/red]")
+        raise typer.Exit(1)
+
+    if folder:
+        _run_local_folder(folder, run_id=run_id, follow_seconds=follow_seconds, force=force)
+        return
+
+    if not target:
+        console.print("[red]Error: mn blueprint run expects a blueprint ID or --folder <path>.[/red]")
+        console.print("Use [bold]mn blueprint run <blueprint-id>[/bold] for catalog blueprints.")
+        console.print("Use [bold]mn blueprint run --folder <path>[/bold] for local blueprint or bundle folders.")
+        raise typer.Exit(1)
+
+    target_path = Path(target).expanduser()
+    if target_path.exists():
+        console.print("[red]Error: local folders must be passed with --folder.[/red]")
+        console.print(f"Use [bold]mn blueprint run --folder {target_path}[/bold].")
+        raise typer.Exit(1)
+
+    from mn_cli.libs.blueprint_cmds import run_catalog_blueprint
+
+    run_catalog_blueprint(
+        target,
+        run_id=run_id,
+        blueprint_repo=blueprint_repo,
+        update=update,
+        offline=offline,
+        revision=revision,
+        follow_seconds=follow_seconds,
+        force=force,
+    )
+
+
+def _run_local_folder(
+    folder: str,
+    *,
+    run_id: Optional[str],
+    follow_seconds: Optional[float],
+    force: bool,
+) -> None:
+    bundle_dir = Path(folder).expanduser()
+    manifest = _load_manifest_for_local_run(bundle_dir)
+    if manifest is not None and _is_python_source_manifest(manifest):
+        from mn_cli.libs.blueprint_cmds import run_local_blueprint_folder
+
+        run_local_blueprint_folder(
+            str(bundle_dir),
+            run_id=run_id,
+            follow_seconds=follow_seconds,
+            force=force,
+        )
+        return
+
+    env_overrides = {"MN_RUN_ID": run_id} if run_id else None
+    submission_metadata = {"blueprint_run_id": run_id} if run_id else None
+    run_bundle(
+        str(bundle_dir),
+        follow_seconds=follow_seconds,
+        env_overrides=env_overrides,
+        submission_metadata=submission_metadata,
+        force=force,
+    )
+
+
+def _load_manifest_for_local_run(bundle_dir: Path) -> Optional[dict[str, Any]]:
+    manifest_file = bundle_dir / "manifest.json"
+    if not manifest_file.exists():
+        return None
+    try:
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return manifest if isinstance(manifest, dict) else None
+
+
+def _is_python_source_manifest(manifest: dict[str, Any]) -> bool:
+    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    return metadata.get("python_source_mode") is True or bool(metadata.get("python_workflow"))
 
 
 def run_bundle(

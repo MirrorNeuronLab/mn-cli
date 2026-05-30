@@ -5,7 +5,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
 import typer
 from rich.table import Table
@@ -48,7 +48,7 @@ from mn_cli.libs.blueprint_resources import (
     default_runs_root as _default_runs_root,
 )
 from mn_cli.shared import console, logger
-from mn_cli.libs.run_cmds import run_bundle as _run_bundle
+from mn_cli.libs.run_cmds import _run_local_folder, run_bundle as _run_bundle
 from mn_cli.libs.run_manifest import load_blueprint_config as _load_blueprint_config
 
 blueprint_app = typer.Typer(help="Manage and run MirrorNeuron blueprints")
@@ -186,8 +186,8 @@ def _reject_local_blueprint_path(target: str) -> None:
     blueprint_dir = Path(target).expanduser()
     if not blueprint_dir.exists():
         return
-    console.print("[red]Error: 'mn blueprint run' accepts catalog blueprint names only.[/red]")
-    console.print(f"Use [bold]mn run {blueprint_dir}[/bold] to run a local blueprint folder.")
+    console.print("[red]Error: local folders must be passed with --folder.[/red]")
+    console.print(f"Use [bold]mn blueprint run --folder {blueprint_dir}[/bold] to run a local blueprint folder.")
     raise typer.Exit(1)
 
 
@@ -408,24 +408,23 @@ def blueprint_list(ctx: typer.Context):
         if blueprint_repo:
             raise typer.Exit(1)
 
-@blueprint_app.command("run")
-def blueprint_run(
-    ctx: typer.Context,
-    blueprint_path_name: str,
-    run_id: Optional[str] = typer.Option(None, "--run-id", help="Use a specific shared blueprint run ID."),
-    source: Optional[str] = typer.Option(None, "--source", help="Use a local blueprint repo/path or clone URL instead of ~/.mn/blueprints."),
-    update: bool = typer.Option(False, "--update", help="Update the cached blueprint repository before running."),
-    offline: bool = typer.Option(False, "--offline", help="Use only local blueprint files; never clone, fetch, or pull."),
-    revision: Optional[str] = typer.Option(None, "--revision", help="Checkout a specific git revision before running."),
-    follow_seconds: Optional[float] = typer.Option(None, "--follow-seconds", help="Seconds to follow runtime events before detaching."),
-    force: bool = typer.Option(False, "--force", help="Run even if blueprint input validation or runtime requirements fail."),
-):
-    """Run a blueprint by catalog name."""
-    _reject_local_blueprint_path(blueprint_path_name)
-
+def run_catalog_blueprint(
+    blueprint_name: str,
+    *,
+    run_id: Optional[str] = None,
+    blueprint_repo: Optional[str] = None,
+    source: Optional[str] = None,
+    update: bool = False,
+    offline: bool = False,
+    revision: Optional[str] = None,
+    follow_seconds: Optional[float] = None,
+    force: bool = False,
+) -> None:
+    """Run a catalog blueprint by name through the shared blueprint runner."""
+    _reject_local_blueprint_path(blueprint_name)
     storage_dir = _ensure_blueprint_source(
         source=source,
-        blueprint_repo=_context_blueprint_repo(ctx),
+        blueprint_repo=blueprint_repo,
         update=update,
         offline=offline,
         revision=revision,
@@ -441,27 +440,145 @@ def blueprint_run(
         
     target_bp = None
     for bp in blueprints:
-        if bp.get("id") == blueprint_path_name or bp.get("path") == blueprint_path_name:
+        if bp.get("id") == blueprint_name or bp.get("path") == blueprint_name:
             target_bp = bp
             break
             
     if not target_bp:
-        console.print(f"[red]Error: Blueprint '{blueprint_path_name}' not found in index.[/red]")
+        console.print(f"[red]Error: Blueprint '{blueprint_name}' not found in index.[/red]")
         raise typer.Exit(1)
         
     bp_path = os.path.join(storage_dir, target_bp.get("path"))
     
-    manifest = _load_blueprint_manifest(Path(bp_path), blueprint_path_name)
-    blueprint_id = str((manifest.get("metadata") or {}).get("blueprint_id") or target_bp.get("id") or blueprint_path_name)
+    manifest = _load_blueprint_manifest(Path(bp_path), blueprint_name)
+    blueprint_id = str((manifest.get("metadata") or {}).get("blueprint_id") or target_bp.get("id") or blueprint_name)
     resolved_revision = _git_revision(Path(storage_dir)) or revision
     _run_resolved_blueprint(
         blueprint_dir=Path(bp_path),
         manifest=manifest,
-        display_name=blueprint_path_name,
+        display_name=blueprint_name,
         blueprint_id=blueprint_id,
         run_id=run_id,
         revision=resolved_revision,
         source_label=str(storage_dir),
+        follow_seconds=follow_seconds,
+        force=force,
+    )
+
+
+def run_local_blueprint_folder(
+    folder: str,
+    *,
+    run_id: Optional[str] = None,
+    follow_seconds: Optional[float] = None,
+    force: bool = False,
+) -> None:
+    """Run a local Python source blueprint folder through the shared blueprint runner."""
+    blueprint_dir = Path(folder).expanduser()
+    manifest = _load_blueprint_manifest(blueprint_dir, str(blueprint_dir))
+    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    blueprint_id = str(metadata.get("blueprint_id") or manifest.get("graph_id") or blueprint_dir.name)
+    _run_resolved_blueprint(
+        blueprint_dir=blueprint_dir,
+        manifest=manifest,
+        display_name=blueprint_id,
+        blueprint_id=blueprint_id,
+        run_id=run_id,
+        revision=None,
+        source_label=str(blueprint_dir),
+        follow_seconds=follow_seconds,
+        force=force,
+    )
+
+
+@blueprint_app.command("run")
+def blueprint_run(
+    ctx: typer.Context,
+    target: Annotated[
+        Optional[str],
+        typer.Argument(
+            help="Catalog blueprint ID to run. Use --folder for local blueprint or bundle folders.",
+        ),
+    ] = None,
+    folder: Annotated[
+        Optional[str],
+        typer.Option(
+            "--folder",
+            help="Run a local blueprint or bundle folder. Local folders must use this option.",
+        ),
+    ] = None,
+    run_id: Annotated[
+        Optional[str],
+        typer.Option("--run-id", help="Use a specific shared blueprint run ID."),
+    ] = None,
+    blueprint_repo: Annotated[
+        Optional[str],
+        typer.Option(
+            "--blueprint-repo",
+            help="Use this blueprint repository URL/path instead of the default catalog.",
+        ),
+    ] = None,
+    update: Annotated[
+        bool,
+        typer.Option(
+            "--update",
+            help="Update the cached blueprint repository before running a catalog blueprint.",
+        ),
+    ] = False,
+    offline: Annotated[
+        bool,
+        typer.Option(
+            "--offline",
+            help="Use only local blueprint files; never clone, fetch, or pull.",
+        ),
+    ] = False,
+    revision: Annotated[
+        Optional[str],
+        typer.Option("--revision", help="Checkout a specific git revision before running."),
+    ] = None,
+    follow_seconds: Annotated[
+        Optional[float],
+        typer.Option(
+            "--follow-seconds",
+            help="Seconds to keep polling job events after the submit stream detaches. Defaults to MN_RUN_DETACH_LOG_SECONDS or 30.",
+        ),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Run even if blueprint input validation or runtime requirements fail.",
+        ),
+    ] = False,
+):
+    """Run a catalog blueprint, or a local folder with --folder."""
+    if folder and target:
+        console.print("[red]Error: pass either a blueprint ID or --folder, not both.[/red]")
+        raise typer.Exit(1)
+
+    if folder:
+        _run_local_folder(folder, run_id=run_id, follow_seconds=follow_seconds, force=force)
+        return
+
+    if not target:
+        console.print("[red]Error: mn blueprint run expects a blueprint ID or --folder <path>.[/red]")
+        console.print("Use [bold]mn blueprint run <blueprint-id>[/bold] for catalog blueprints.")
+        console.print("Use [bold]mn blueprint run --folder <path>[/bold] for local blueprint or bundle folders.")
+        raise typer.Exit(1)
+
+    target_path = Path(target).expanduser()
+    if target_path.exists():
+        console.print("[red]Error: local folders must be passed with --folder.[/red]")
+        console.print(f"Use [bold]mn blueprint run --folder {target_path}[/bold].")
+        raise typer.Exit(1)
+
+    run_catalog_blueprint(
+        target,
+        run_id=run_id,
+        blueprint_repo=blueprint_repo or _context_blueprint_repo(ctx),
+        update=update,
+        offline=offline,
+        revision=revision,
         follow_seconds=follow_seconds,
         force=force,
     )

@@ -37,7 +37,7 @@ def test_update_check_only_prints_available_updates(mocker):
     )
     mock_perform = mocker.patch("mn_cli.update_cmds.perform_update")
 
-    result = runner.invoke(app, ["update", "--check-only"])
+    result = runner.invoke(app, ["runtime", "update", "--check-only"])
 
     assert result.exit_code == 0
     assert "mirrorneuron-cli: 1.0.0 -> 1.1.0" in result.stdout
@@ -58,7 +58,7 @@ def test_update_requires_ack_by_default(mocker):
     )
     mock_perform = mocker.patch("mn_cli.update_cmds.perform_update")
 
-    result = runner.invoke(app, ["update"], input="n\n")
+    result = runner.invoke(app, ["runtime", "update"], input="n\n")
 
     assert result.exit_code == 0
     assert "Updating will stop all MirrorNeuron components" in result.stdout
@@ -72,7 +72,7 @@ def test_update_skips_release_flow_for_local_source_install(mocker, tmp_path):
     mocker.patch("mn_cli.update_cmds.INSTALL_METADATA_FILE", metadata_file)
     mock_get_updates = mocker.patch("mn_cli.update_cmds.get_available_updates")
 
-    result = runner.invoke(app, ["update"])
+    result = runner.invoke(app, ["runtime", "update"])
 
     assert result.exit_code == 0
     assert "Local source install detected" in result.stdout

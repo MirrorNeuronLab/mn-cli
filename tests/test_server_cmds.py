@@ -317,7 +317,7 @@ def test_start_network_seed_already_exposed_prints_existing_token(mocker):
     assert token == "seed-token"
     assert "already ready to join" in rendered
     assert "Token: seed-token" in rendered
-    assert "mn add-node 192.168.4.10 --token seed-token" in rendered
+    assert "mn node add 192.168.4.10 --token seed-token" in rendered
     mock_start_redis.assert_not_called()
     mock_start_core.assert_not_called()
 
@@ -339,7 +339,7 @@ def test_start_network_seed_running_local_runtime_prints_existing_token(mocker):
     assert token == "runtime-token"
     assert "already ready to join" in rendered
     assert "Token: runtime-token" in rendered
-    assert "mn add-node 192.168.4.20 --token runtime-token" in rendered
+    assert "mn node add 192.168.4.20 --token runtime-token" in rendered
     mock_start_redis.assert_not_called()
     mock_start_core.assert_not_called()
 

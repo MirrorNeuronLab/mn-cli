@@ -681,7 +681,7 @@ def _handshake_with_main_node(
         )
     except Exception as exc:
         console.print(f"[red]Error: Could not join MirrorNeuron node at {target}.[/red]")
-        console.print("Check the host, gRPC port, and token printed by 'mn start' on the main box.")
+        console.print("Check the host, gRPC port, and token printed by 'mn runtime start' on the main box.")
         console.print(f"[dim]{exc}[/dim]")
         raise typer.Exit(1) from exc
 
@@ -873,7 +873,7 @@ def _print_network_seed_ready(host: str, grpc_port: int, token: str, *, already_
     console.print(f"gRPC: {host}:{grpc_port}")
     console.print(f"Node: {node_name}")
     console.print(f"Token: {token}")
-    console.print(f"\nOn the main box, add this node with:\n  mn add-node {host} --token {token}")
+    console.print(f"\nOn the main box, add this node with:\n  mn node add {host} --token {token}")
 
 def _return_running_network_seed(
     host: Optional[str],
@@ -908,7 +908,7 @@ def _start_network_seed(
 
     host = (host or _detect_lan_ip()).strip() or "127.0.0.1"
     if force_new_token:
-        console.print("[yellow]--force-new-token is deprecated; run 'mn refresh-token' to rotate the join token.[/yellow]")
+        console.print("[yellow]--force-new-token is deprecated; run 'mn node refresh-token' to rotate the join token.[/yellow]")
     token = _resolve_network_token()
     node_name = _network_node_name(host)
     external_redis_url = os.getenv("MN_REDIS_URL", "").strip()
@@ -981,7 +981,7 @@ def _join_network(
         raise typer.Exit(1) from exc
     console.print(f"[green]Remote node added. Status: {status}[/green]")
     console.print(f"Remote Redis URL: {redis_url}")
-    console.print("Run 'mn nodes' or 'mn resource list' to inspect aggregate cluster resources.")
+    console.print("Run 'mn node list' or 'mn resource list' to inspect aggregate cluster resources.")
     return handshake
 
 def _stop_network_runtime() -> None:
@@ -1589,7 +1589,7 @@ def _start_server(
 ):
     if check_status(API_PID_FILE) == 0:
         console.print("[red]Error: MirrorNeuron API is already running.[/red]")
-        console.print("Use 'mn stop' to stop it first.")
+        console.print("Use 'mn runtime stop' to stop it first.")
         raise typer.Exit(1)
 
     compose_runtime = runtime_compose_available()
@@ -1598,7 +1598,7 @@ def _start_server(
             docker_status = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", "mirror-neuron-core"], capture_output=True, text=True)
             if docker_status.stdout.strip() == "true":
                 console.print("[red]Error: MirrorNeuron Core (Docker) is already running.[/red]")
-                console.print("Use 'mn stop' to stop it first.")
+                console.print("Use 'mn runtime stop' to stop it first.")
                 raise typer.Exit(1)
         except FileNotFoundError:
             console.print("[red]Error: Docker is not installed or not in PATH.[/red]")
@@ -1608,7 +1608,7 @@ def _start_server(
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     if ip and not token:
-        console.print("[red]Error: mn join requires --token from the main node.[/red]")
+        console.print("[red]Error: mn node join requires --token from the main node.[/red]")
         raise typer.Exit(1)
 
     network_token = token or _resolve_network_token()
@@ -1919,11 +1919,11 @@ def _start_server(
     console.print("\nNetwork token:")
     console.print(f"  {network_token}")
     console.print("Add another box with:")
-    console.print(f"  mn join {advertised_host} --token {network_token}")
+    console.print(f"  mn node join {advertised_host} --token {network_token}")
     console.print("Logs are available at:")
     console.print(f"  Core: {BEAM_LOG}")
     console.print(f"  API:  {API_LOG}")
     if WEB_UI_LOG.exists():
         console.print(f"  Web:  {WEB_UI_LOG}")
-    console.print("\nRun 'mn stop' to shut down the services.")
+    console.print("\nRun 'mn runtime stop' to shut down the services.")
     console.print("===========================================")

@@ -16,7 +16,7 @@ def test_backup_fails_when_job_is_not_paused(mocker, tmp_path):
     )
     mock_export = mocker.patch("mn_cli.libs.backup_cmds.client.export_job_backup")
 
-    result = runner.invoke(app, ["backup", "job-1", "--output", str(tmp_path)])
+    result = runner.invoke(app, ["job", "backup", "job-1", "--output", str(tmp_path)])
 
     assert result.exit_code == 1
     assert "must be paused before backup" in result.stdout
@@ -60,7 +60,7 @@ def test_backup_writes_zip_members_and_secret_warning(mocker, tmp_path):
         ),
     )
 
-    result = runner.invoke(app, ["backup", "job-1", "--output", str(tmp_path)])
+    result = runner.invoke(app, ["job", "backup", "job-1", "--output", str(tmp_path)])
 
     assert result.exit_code == 0
     assert "may contain secrets" in result.stdout
@@ -87,7 +87,7 @@ def test_restore_rejects_path_traversal_zip(mocker, tmp_path):
 
     mock_restore = mocker.patch("mn_cli.libs.backup_cmds.client.restore_job_backup")
 
-    result = runner.invoke(app, ["restore", "bp", "--input", str(archive)])
+    result = runner.invoke(app, ["job", "restore", "bp", "--input", str(archive)])
 
     assert result.exit_code == 1
     assert "escapes the backup root" in result.stdout
@@ -143,7 +143,7 @@ def test_restore_writes_new_run_mapping_and_prints_provenance(mocker, tmp_path, 
         ),
     )
 
-    result = runner.invoke(app, ["restore", "bp", "--input", str(archive)])
+    result = runner.invoke(app, ["job", "restore", "bp", "--input", str(archive)])
 
     assert result.exit_code == 0
     assert "new-job" in result.stdout

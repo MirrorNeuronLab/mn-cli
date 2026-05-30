@@ -1,5 +1,6 @@
 from importlib import metadata
 
+import pytest
 from typer.testing import CliRunner
 
 from mn_cli.banner import format_banner
@@ -38,3 +39,20 @@ def test_short_version_flag_prints_banner(mocker):
 
     assert result.exit_code == 0
     assert result.stdout == f"{format_banner('MirrorNeuron CLI')}\nversion 1.2.3\n"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["run", "bp-1"],
+        ["monitor", "job-1"],
+        ["status", "job-1"],
+        ["nodes"],
+        ["start"],
+        ["deploy", "bundle"],
+    ],
+)
+def test_removed_root_commands_fail(args):
+    result = runner.invoke(app, args)
+
+    assert result.exit_code != 0

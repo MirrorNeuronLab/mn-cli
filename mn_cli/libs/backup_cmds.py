@@ -85,7 +85,7 @@ def restore(
         ...,
         "--input",
         "-i",
-        help="Backup zip file created by mn backup.",
+        help="Backup zip file created by mn job backup.",
         exists=True,
         file_okay=True,
         dir_okay=False,
@@ -124,7 +124,7 @@ def restore(
         console.print(
             f"Original job: [bold]{result.get('source_job_id', 'unknown')}[/bold]"
         )
-        console.print(f"Resume when ready: [bold]mn resume {new_job_id}[/bold]")
+        console.print(f"Resume when ready: [bold]mn job resume {new_job_id}[/bold]")
     except BackupRestoreError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)

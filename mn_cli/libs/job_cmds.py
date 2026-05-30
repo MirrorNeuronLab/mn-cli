@@ -216,8 +216,8 @@ def unfinished():
                 f"{job.get('job_id', 'N/A')} recovery={recovery_label(job)} review={review}"
             )
         console.print(
-            "Use [bold]mn status <job_id>[/bold] to inspect and "
-            "[bold]mn resume <job_id>[/bold] to continue a paused run."
+            "Use [bold]mn job status <job_id>[/bold] to inspect and "
+            "[bold]mn job resume <job_id>[/bold] to continue a paused run."
         )
     except Exception as e:
         handle_cli_error(e, console, 'list_jobs')

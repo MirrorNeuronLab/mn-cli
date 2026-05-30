@@ -8,7 +8,7 @@ runner = CliRunner()
 
 def test_start_success(mocker):
     mock_start_server = mocker.patch('mn_cli.libs.sys_cmds._start_server')
-    result = runner.invoke(app, ["start"])
+    result = runner.invoke(app, ["runtime", "start"])
     assert result.exit_code == 0
     assert format_banner("MirrorNeuron Local Runtime") in result.stdout
     mock_start_server.assert_called_once_with()
@@ -18,7 +18,8 @@ def test_expose_node_success(mocker):
     result = runner.invoke(
         app,
         [
-            "expose-node",
+            "node",
+            "expose",
             "--host",
             "192.168.4.10",
             "--grpc-port",
@@ -44,7 +45,8 @@ def test_add_node_success(mocker):
     result = runner.invoke(
         app,
         [
-            "add-node",
+            "node",
+            "add",
             "192.168.4.10",
             "--token",
             "join-token",
@@ -61,7 +63,7 @@ def test_add_node_success(mocker):
 
 def test_join_success(mocker):
     mock_start_server = mocker.patch('mn_cli.libs.sys_cmds._start_server')
-    result = runner.invoke(app, ["join", "192.168.1.1", "--token", "join-token"])
+    result = runner.invoke(app, ["node", "join", "192.168.1.1", "--token", "join-token"])
     assert result.exit_code == 0
     mock_start_server.assert_called_once_with(
         "192.168.1.1",
@@ -75,7 +77,7 @@ def test_join_success(mocker):
 def test_leave_success(mocker):
     import mn_cli.shared
     mock_remove = mocker.patch.object(mn_cli.shared.client, 'remove_node', return_value="disconnected")
-    result = runner.invoke(app, ["leave", "mirror_neuron@1.2.3.4"])
+    result = runner.invoke(app, ["node", "leave", "mirror_neuron@1.2.3.4"])
     assert result.exit_code == 0
     assert "Successfully requested mirror_neuron@1.2.3.4 to leave" in result.stdout
     mock_remove.assert_called_once_with("mirror_neuron@1.2.3.4")
@@ -83,13 +85,13 @@ def test_leave_success(mocker):
 def test_leave_error(mocker):
     import mn_cli.shared
     mocker.patch.object(mn_cli.shared.client, 'remove_node', side_effect=Exception("Timeout"))
-    result = runner.invoke(app, ["leave", "mirror_neuron@1.2.3.4"])
+    result = runner.invoke(app, ["node", "leave", "mirror_neuron@1.2.3.4"])
     assert result.exit_code == 0
     assert "Error removing node: Timeout" in result.stdout
 
 def test_refresh_token_success(mocker):
     mock_refresh = mocker.patch('mn_cli.libs.sys_cmds._refresh_network_token', return_value="new-token")
-    result = runner.invoke(app, ["refresh-token"])
+    result = runner.invoke(app, ["node", "refresh-token"])
     assert result.exit_code == 0
     assert "network join token refreshed" in result.stdout
     assert "new-token" in result.stdout
@@ -110,7 +112,7 @@ def test_stop(mocker, tmp_path):
     (tmp_path / "beam.pid").write_text("67890")
     (tmp_path / "web-ui.pid").write_text("24680")
     
-    result = runner.invoke(app, ["stop"])
+    result = runner.invoke(app, ["runtime", "stop"])
     
     assert result.exit_code == 0
     assert "All services stopped." in result.stdout
@@ -133,7 +135,7 @@ def test_stop_uses_compose_runtime_when_available(mocker, tmp_path):
     mocker.patch('mn_cli.libs.sys_cmds.WEB_UI_PID_FILE', tmp_path / "web-ui.pid")
     (tmp_path / "api.pid").write_text("12345")
 
-    result = runner.invoke(app, ["stop"])
+    result = runner.invoke(app, ["runtime", "stop"])
 
     assert result.exit_code == 0
     mock_run.assert_any_call(["docker", "compose", "down"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
@@ -150,7 +152,7 @@ def test_stop_pid_file_invalid(mocker, tmp_path):
     
     (tmp_path / "api.pid").write_text("invalid")
     
-    result = runner.invoke(app, ["stop"])
+    result = runner.invoke(app, ["runtime", "stop"])
     
     assert result.exit_code == 0
     assert "All services stopped." in result.stdout
@@ -168,7 +170,7 @@ def test_stop_kill_oserror(mocker, tmp_path):
     
     (tmp_path / "api.pid").write_text("12345")
     
-    result = runner.invoke(app, ["stop"])
+    result = runner.invoke(app, ["runtime", "stop"])
     
     assert result.exit_code == 0
     assert "All services stopped." in result.stdout

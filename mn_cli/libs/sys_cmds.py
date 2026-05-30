@@ -31,7 +31,7 @@ def start():
 
 def join(
     ip: str,
-    token: str = typer.Option(..., "--token", help="Network join token printed by mn start."),
+    token: str = typer.Option(..., "--token", help="Network join token printed by mn runtime start."),
     host: Optional[str] = typer.Option(
         None,
         "--host",
@@ -85,7 +85,7 @@ def expose_node(
 
 def add_node(
     host: str,
-    token: str = typer.Option(..., "--token", help="Token printed by mn expose-node on the remote box."),
+    token: str = typer.Option(..., "--token", help="Token printed by mn node expose on the remote box."),
     grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Remote exposed node gRPC port."),
 ):
     """Add a remote exposed node to the local/main MirrorNeuron cluster"""

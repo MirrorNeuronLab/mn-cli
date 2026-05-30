@@ -30,7 +30,7 @@ def test_validate_success(tmp_path):
     }
     manifest_file.write_text(json.dumps(manifest_data))
     
-    result = runner.invoke(app, ["validate", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
     assert result.exit_code == 0
     assert "Job bundle at" in result.stdout
     assert "is valid" in result.stdout
@@ -58,14 +58,14 @@ def test_openshell_env_prefers_active_gateway_metadata(tmp_path, monkeypatch):
 
 def test_validate_not_directory(tmp_path):
     not_a_dir = tmp_path / "not_a_dir"
-    result = runner.invoke(app, ["validate", str(not_a_dir)])
+    result = runner.invoke(app, ["blueprint", "validate", str(not_a_dir)])
     assert result.exit_code == 1
     assert "is not a directory" in re.sub(r"\s+", " ", result.stdout)
 
 def test_validate_no_manifest(tmp_path):
     bundle_dir = tmp_path / "no_manifest"
     bundle_dir.mkdir()
-    result = runner.invoke(app, ["validate", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
     assert result.exit_code == 1
     assert "manifest.json not found in" in result.stdout
 
@@ -74,7 +74,7 @@ def test_validate_bad_json(tmp_path):
     bundle_dir.mkdir()
     manifest_file = bundle_dir / "manifest.json"
     manifest_file.write_text("{bad_json: 1}")
-    result = runner.invoke(app, ["validate", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
     assert result.exit_code == 1
     assert "is not valid JSON" in result.stdout
 
@@ -83,7 +83,7 @@ def test_validate_missing_keys(tmp_path):
     bundle_dir.mkdir()
     manifest_file = bundle_dir / "manifest.json"
     manifest_file.write_text('{"manifest_version": "1.0"}')
-    result = runner.invoke(app, ["validate", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
     assert result.exit_code == 1
     assert "missing required keys" in result.stdout
 
@@ -99,7 +99,7 @@ def test_validate_nodes_not_list(tmp_path):
         "nodes": "not_a_list"
     }
     manifest_file.write_text(json.dumps(manifest_data))
-    result = runner.invoke(app, ["validate", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
     assert result.exit_code == 1
     assert "'nodes' must be a list" in result.stdout
 
@@ -124,7 +124,7 @@ def test_validate_rejects_bad_resource_specs(tmp_path):
         ],
     }))
 
-    result = runner.invoke(app, ["validate", str(bundle_dir), "--output", "json"])
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--output", "json"])
 
     assert result.exit_code == 1
     report = json.loads(result.stdout)
@@ -157,7 +157,7 @@ def test_validate_accepts_host_local_python_environment(tmp_path):
         ],
     }))
 
-    result = runner.invoke(app, ["validate", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
 
     assert result.exit_code == 0
     assert "is valid" in result.stdout
@@ -185,7 +185,7 @@ def test_validate_rejects_invalid_python_environment(tmp_path):
         ],
     }))
 
-    result = runner.invoke(app, ["validate", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
 
     assert result.exit_code == 1
     normalized = re.sub(r"\s+", " ", result.stdout)
@@ -218,7 +218,7 @@ def test_validate_runs_manifest_input_validation(tmp_path):
         },
     }))
 
-    result = runner.invoke(app, ["validate", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
 
     assert result.exit_code == 1
     assert "Input validation failed" in result.stdout
@@ -265,7 +265,7 @@ def test_validate_runs_required_service_checks_before_input_validation(tmp_path)
         },
     }))
 
-    result = runner.invoke(app, ["validate", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
 
     assert result.exit_code == 1
     assert "Service validation failed" in result.stdout
@@ -298,7 +298,7 @@ def test_validate_outputs_json_report(tmp_path):
         },
     }))
 
-    result = runner.invoke(app, ["validate", str(bundle_dir), "--output", "json"])
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--output", "json"])
 
     assert result.exit_code == 1
     report = json.loads(result.stdout)
@@ -326,7 +326,7 @@ def test_run_success(mocker, tmp_path, monkeypatch):
     payloads_dir.mkdir()
     (payloads_dir / "test.txt").write_text("hello")
     
-    result = runner.invoke(app, ["run", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
     
     assert result.exit_code == 0
     assert "Job submitted successfully" in result.stdout
@@ -412,7 +412,7 @@ def test_run_shows_runtime_web_ui_url_in_submit_and_detach_panels(
         )
     )
 
-    result = runner.invoke(app, ["run", str(bundle_dir), "--follow-seconds", "0"])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--follow-seconds", "0"])
 
     assert result.exit_code == 0
     assert "Web UI" in result.stdout
@@ -448,7 +448,7 @@ def test_run_force_skips_input_validation(mocker, tmp_path, monkeypatch):
     }))
     (bundle_dir / "payloads").mkdir()
 
-    result = runner.invoke(app, ["run", str(bundle_dir), "--force"])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--force"])
 
     assert result.exit_code == 0
     assert "Validation skipped because --force was provided" in result.stdout
@@ -492,7 +492,7 @@ def test_run_submits_python_environment_requirements_payload(mocker, tmp_path, m
     payloads_dir.mkdir(parents=True)
     (payloads_dir / "requirements.txt").write_text("opencv-python-headless>=4.10,<5\n")
 
-    result = runner.invoke(app, ["run", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
 
     assert result.exit_code == 0
     payloads = mock_submit.call_args.args[1]
@@ -535,7 +535,7 @@ def test_run_prebuilds_custom_openshell_image_from_payload_directory(mocker, tmp
     sandbox_dir.mkdir(parents=True)
     (sandbox_dir / "Dockerfile").write_text("FROM base\n")
 
-    result = runner.invoke(app, ["run", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
 
     assert result.exit_code == 0
     assert "OpenShell sandbox image ready" in result.stdout
@@ -582,7 +582,7 @@ def test_run_prebuilds_legacy_openshell_from_directory(mocker, tmp_path, monkeyp
     sandbox_dir.mkdir(parents=True)
     (sandbox_dir / "Dockerfile").write_text("FROM base\n")
 
-    result = runner.invoke(app, ["run", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
 
     assert result.exit_code == 0
     manifest = json.loads(mock_submit.call_args.args[0])
@@ -616,7 +616,7 @@ def test_run_injects_blueprint_config_scenario_and_run_id(mocker, tmp_path):
     (config_dir / "overwrite.json").write_text(json.dumps({"video_source": {"uri": "overwrite"}}))
     (bundle_dir / "scenario.json").write_text(json.dumps({"blueprint_id": "bp-1", "metrics": [], "actions": []}))
 
-    result = runner.invoke(app, ["run", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
 
     assert result.exit_code == 0
     manifest = json.loads(mock_submit.call_args.args[0])
@@ -683,7 +683,7 @@ def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_pat
     web_dir.mkdir(parents=True)
     (web_dir / "index.html").write_text("<html></html>")
 
-    result = runner.invoke(app, ["run", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
 
     assert result.exit_code == 0
     assert "bp-1-auto-run" in result.stdout
@@ -1131,7 +1131,7 @@ def test_run_displays_live_job_type_and_follow_status(mocker, tmp_path):
         "nodes": [],
     }))
 
-    result = runner.invoke(app, ["run", str(bundle_dir), "--follow-seconds", "0"])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--follow-seconds", "0"])
 
     assert result.exit_code == 0
     assert "Live service" in result.stdout
@@ -1187,7 +1187,7 @@ def test_live_web_ui_run_starts_background_event_relay(mocker, tmp_path, monkeyp
         },
     }))
 
-    result = runner.invoke(app, ["run", str(bundle_dir), "--follow-seconds", "0"])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--follow-seconds", "0"])
 
     assert result.exit_code == 0
     assert "Live event relay" in result.stdout
@@ -1216,7 +1216,7 @@ def test_run_uses_detach_log_seconds_env(mocker, tmp_path, monkeypatch):
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text('{"nodes": []}')
 
-    result = runner.invoke(app, ["run", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
 
     assert result.exit_code == 0
     assert "4.5s event tail" in result.stdout
@@ -1237,7 +1237,7 @@ def test_run_follow_seconds_option_overrides_env(mocker, tmp_path, monkeypatch):
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text('{"nodes": []}')
 
-    result = runner.invoke(app, ["run", str(bundle_dir), "--follow-seconds", "1.25"])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--follow-seconds", "1.25"])
 
     assert result.exit_code == 0
     assert "1.25s event tail" in result.stdout
@@ -1303,7 +1303,7 @@ def test_run_error_submitting(mocker, tmp_path):
     manifest_file = bundle_dir / "manifest.json"
     manifest_file.write_text('{"nodes": []}')
     
-    result = runner.invoke(app, ["run", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
     
     assert result.exit_code == 1
     assert "Error running bundle: API failure" in result.stdout
@@ -1317,21 +1317,21 @@ def test_run_keyboard_interrupt(mocker, tmp_path):
     manifest_file = bundle_dir / "manifest.json"
     manifest_file.write_text('{"nodes": []}')
     
-    result = runner.invoke(app, ["run", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
     
     assert result.exit_code == 0
     assert "Detached from log stream" in result.stdout
 
 def test_run_not_dir(tmp_path):
     not_a_dir = tmp_path / "not_a_dir"
-    result = runner.invoke(app, ["run", str(not_a_dir)])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(not_a_dir)])
     assert result.exit_code == 1
     assert "is not a directory" in re.sub(r"\s+", " ", result.stdout)
 
 def test_run_no_manifest(tmp_path):
     bundle_dir = tmp_path / "no_manifest"
     bundle_dir.mkdir()
-    result = runner.invoke(app, ["run", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
     assert result.exit_code == 1
     assert "manifest.json not found" in result.stdout
 
@@ -1339,7 +1339,7 @@ def test_monitor_success(mocker):
     mocker.patch('mn_cli.libs.run_cmds.client.get_job', return_value=json.dumps({"summary": {"status": "completed", "live?": False}, "job": {"job_name": "test"}, "agents": [{"agent_id": "a1", "status": "running", "processed_messages": 10}]}))
     mocker.patch('sys.stdin.isatty', return_value=False)
     
-    result = runner.invoke(app, ["monitor", "job-123"])
+    result = runner.invoke(app, ["job", "monitor", "job-123"])
     
     assert result.exit_code == 0
     assert "Live Job Monitor" in result.stdout
@@ -1348,7 +1348,7 @@ def test_monitor_success(mocker):
 def test_monitor_error(mocker):
     mocker.patch('sys.stdin.isatty', return_value=False)
     mocker.patch('mn_cli.libs.run_cmds.client.get_job', side_effect=Exception("Network fail"))
-    result = runner.invoke(app, ["monitor", "job-123"])
+    result = runner.invoke(app, ["job", "monitor", "job-123"])
     assert result.exit_code == 0
     assert "Error fetching job: Network fail" in result.stdout
 def test_result_success(mocker, tmp_path):
@@ -1360,7 +1360,7 @@ def test_result_success(mocker, tmp_path):
         json.dumps({"type": "custom_event", "payload": "progressive"})
     ])
     
-    result = runner.invoke(app, ["result", "job-123"])
+    result = runner.invoke(app, ["job", "result", "job-123"])
     
     assert result.exit_code == 0
     assert "Final result saved to" in result.stdout
@@ -1373,7 +1373,7 @@ def test_result_not_completed(mocker, tmp_path):
     }))
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[])
     
-    result = runner.invoke(app, ["result", "job-999"])
+    result = runner.invoke(app, ["job", "result", "job-999"])
     
     assert result.exit_code == 0
     assert "No final result found" in result.stdout
@@ -1381,7 +1381,7 @@ def test_result_not_completed(mocker, tmp_path):
 def test_result_error(mocker):
     mocker.patch('mn_cli.libs.run_cmds.fetch_and_save_results', side_effect=Exception("DB Error"))
     
-    result = runner.invoke(app, ["result", "job-888"])
+    result = runner.invoke(app, ["job", "result", "job-888"])
     
     assert result.exit_code == 0
     assert "Error fetching results: DB Error" in result.stdout
@@ -1398,7 +1398,7 @@ def test_stream_bad_json(mocker, tmp_path):
     manifest_file = bundle_dir / "manifest.json"
     manifest_file.write_text('{"nodes": []}')
     
-    result = runner.invoke(app, ["run", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
     assert result.exit_code == 0
     assert "Job Status: Failed" in result.stdout
 
@@ -1411,7 +1411,7 @@ def test_validate_unexpected_error(mocker, tmp_path):
     # Mock open to raise Exception
     mocker.patch('builtins.open', side_effect=Exception("Read error"))
     
-    result = runner.invoke(app, ["validate", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
     assert result.exit_code == 1
     assert "Validation failed: Read error" in result.stdout
 
@@ -1432,7 +1432,7 @@ def test_stream_all_events(mocker, tmp_path):
     manifest_file = bundle_dir / "manifest.json"
     manifest_file.write_text('{"nodes": []}')
     
-    result = runner.invoke(app, ["run", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
     assert result.exit_code == 0
     assert "Job Status: Success" in result.stdout
     assert "result.txt" in result.stdout
@@ -1447,6 +1447,6 @@ def test_stream_keyboard_interrupt(mocker, tmp_path):
     manifest_file = bundle_dir / "manifest.json"
     manifest_file.write_text('{"nodes": []}')
     
-    result = runner.invoke(app, ["run", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
     assert result.exit_code == 0
     assert "Detached from log stream" in result.stdout

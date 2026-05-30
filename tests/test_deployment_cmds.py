@@ -22,6 +22,7 @@ def test_deploy_command_passes_policy_and_payloads(mocker, tmp_path):
     result = runner.invoke(
         app,
         [
+            "deployment",
             "deploy",
             str(bundle),
             "--key",

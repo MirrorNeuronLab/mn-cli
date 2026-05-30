@@ -158,7 +158,7 @@ def generate_detached_panel(
     table.add_row("Run Log", str(log_dir / "run.log"))
     if web_ui_url:
         table.add_row("Web UI", f"[bold green]{web_ui_url}[/bold green]")
-    table.add_row("Monitor", f"mn monitor {job_id}")
+    table.add_row("Monitor", f"mn job monitor {job_id}")
 
     message = Text()
     if status in {"completed", "failed", "cancelled"}:

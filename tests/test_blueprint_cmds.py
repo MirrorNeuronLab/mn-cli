@@ -413,7 +413,7 @@ def test_blueprint_run_blueprint_repo_uses_repo_specific_cache(mocker, tmp_path)
     mocker.patch('mn_cli.libs.blueprint_cmds._git_revision', return_value="abc123")
     mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
 
-    result = runner.invoke(app, ["blueprint", "--blueprint-repo", repo_url, "run", "bp-1"])
+    result = runner.invoke(app, ["blueprint", "run", "--blueprint-repo", repo_url, "bp-1"])
 
     assert result.exit_code == 0
     clone_args = mock_run.call_args_list[0].args[0]
@@ -447,7 +447,7 @@ def test_blueprint_run_blueprint_repo_missing_index_errors(mocker, tmp_path):
     mocker.patch('mn_cli.libs.blueprint_cmds.subprocess.run', side_effect=fake_run)
     mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
 
-    result = runner.invoke(app, ["blueprint", "--blueprint-repo", repo_url, "run", "bp-1"])
+    result = runner.invoke(app, ["blueprint", "run", "--blueprint-repo", repo_url, "bp-1"])
 
     assert result.exit_code == 1
     assert "index.json not found" in result.stdout
@@ -477,7 +477,7 @@ def test_blueprint_run_blueprint_repo_malformed_index_errors(mocker, tmp_path):
     mocker.patch('mn_cli.libs.blueprint_cmds.subprocess.run', side_effect=fake_run)
     mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
 
-    result = runner.invoke(app, ["blueprint", "--blueprint-repo", repo_url, "run", "bp-1"])
+    result = runner.invoke(app, ["blueprint", "run", "--blueprint-repo", repo_url, "bp-1"])
 
     assert result.exit_code == 1
     assert "index.json is not well formatted" in result.stdout
@@ -545,8 +545,8 @@ def test_blueprint_run_local_bundle_folder_is_rejected(mocker, tmp_path):
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir), "--run-id", "run-local"])
 
     assert result.exit_code == 1
-    assert "catalog blueprint names only" in result.stdout
-    assert f"mn run {bundle_dir}" in result.stdout
+    assert "local folders must be passed with --folder" in result.stdout
+    assert f"mn blueprint run --folder {bundle_dir}" in result.stdout
     mock_run_bundle.assert_not_called()
 
 
@@ -572,7 +572,7 @@ def test_blueprint_run_local_python_source_folder_is_rejected(mocker, tmp_path):
     result = runner.invoke(app, ["blueprint", "run", str(source_dir), "--run-id", "run-source"])
 
     assert result.exit_code == 1
-    assert "catalog blueprint names only" in result.stdout
+    assert "local folders must be passed with --folder" in result.stdout
     mock_generate_bundle.assert_not_called()
     mock_run_bundle.assert_not_called()
 
@@ -585,7 +585,7 @@ def test_blueprint_run_local_folder_missing_manifest_is_rejected(mocker, tmp_pat
     result = runner.invoke(app, ["blueprint", "run", str(source_dir)])
 
     assert result.exit_code == 1
-    assert "catalog blueprint names only" in result.stdout
+    assert "local folders must be passed with --folder" in result.stdout
 
 
 def test_blueprint_run_local_python_source_generation_failure_is_not_reached(mocker, tmp_path):
@@ -612,8 +612,55 @@ def test_blueprint_run_local_python_source_generation_failure_is_not_reached(moc
     result = runner.invoke(app, ["blueprint", "run", str(source_dir), "--run-id", "run-source"])
 
     assert result.exit_code == 1
-    assert "catalog blueprint names only" in result.stdout
+    assert "local folders must be passed with --folder" in result.stdout
     mock_run_bundle.assert_not_called()
+
+
+def test_run_folder_generates_local_python_source_bundle(mocker, tmp_path, monkeypatch):
+    source_dir = tmp_path / "source-blueprint"
+    generated_root = tmp_path / "generated"
+    monkeypatch.setenv("MN_GENERATED_BLUEPRINT_BUNDLES_DIR", str(generated_root))
+    source_dir.mkdir()
+    (source_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "graph_id": "source_blueprint_v1",
+                "metadata": {
+                    "blueprint_id": "source_blueprint",
+                    "python_source_mode": True,
+                },
+            }
+        )
+    )
+
+    def fake_generate_bundle(blueprint_dir, output_dir):
+        output_dir.mkdir(parents=True)
+        (output_dir / "manifest.json").write_text(
+            json.dumps({"metadata": {"blueprint_id": "source_blueprint"}})
+        )
+        (output_dir / "payloads").mkdir()
+        return output_dir
+
+    mock_generate_bundle = mocker.patch(
+        "mn_cli.libs.blueprint_cmds._generate_python_source_bundle",
+        side_effect=fake_generate_bundle,
+    )
+    mock_run_bundle = mocker.patch("mn_cli.libs.blueprint_cmds._run_bundle")
+
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(source_dir), "--run-id", "run-source"])
+
+    assert result.exit_code == 0
+    assert "Generating Python workflow bundle" in result.stdout
+    mock_generate_bundle.assert_called_once()
+    assert mock_generate_bundle.call_args.args[0] == source_dir
+    mock_run_bundle.assert_called_once()
+    assert mock_run_bundle.call_args.args[0] == str(generated_root / "run-source")
+
+
+def test_root_run_command_is_removed():
+    result = runner.invoke(app, ["run", "bp-1"])
+
+    assert result.exit_code != 0
 
 
 def test_blueprint_run_init_fail(mocker, tmp_path):

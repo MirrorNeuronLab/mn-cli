@@ -10,6 +10,9 @@ PACKAGE_NAME = "mirrorneuron-cli"
 FALLBACK_VERSION = "0.0.0"
 
 app = typer.Typer(help="MirrorNeuron CLI")
+job_app = typer.Typer(help="Job commands")
+node_app = typer.Typer(help="Node and cluster commands")
+runtime_app = typer.Typer(help="Local runtime commands")
 
 
 def get_version() -> str:
@@ -43,44 +46,50 @@ def main(
 ):
     update_cmds.maybe_prompt_for_update(ctx.invoked_subcommand)
 
-# Run commands
-app.command(name="validate")(run_cmds.validate)
-app.command(name="run")(run_cmds.run)
-app.command(name="deploy")(deployment_cmds.deploy)
-app.command(name="monitor")(run_cmds.monitor)
-app.command(name="result")(run_cmds.result)
+# Blueprint commands
+blueprint_app.command(name="validate")(run_cmds.validate)
 
 # Job commands
-app.command(name="submit")(job_cmds.submit)
-app.command(name="status")(job_cmds.status)
-app.command(name="list")(job_cmds.list_jobs)
-app.command(name="clear")(job_cmds.clear)
-app.command(name="cancel")(job_cmds.cancel)
-app.command(name="pause")(job_cmds.pause)
-app.command(name="resume")(job_cmds.resume)
-app.command(name="backup")(backup_cmds.backup)
-app.command(name="restore")(backup_cmds.restore)
-app.command(name="unfinished")(job_cmds.unfinished)
-app.command(name="nodes")(job_cmds.nodes)
-app.command(name="reconcile-node")(job_cmds.reconcile_node)
-app.command(name="drain-node")(job_cmds.drain_node)
-app.command(name="undrain-node")(job_cmds.undrain_node)
-app.command(name="maintenance-node")(job_cmds.maintenance_node)
-app.command(name="metrics")(job_cmds.metrics)
-app.command(name="dead-letters")(job_cmds.dead_letters)
+job_app.command(name="submit")(job_cmds.submit)
+job_app.command(name="status")(job_cmds.status)
+job_app.command(name="list")(job_cmds.list_jobs)
+job_app.command(name="clear")(job_cmds.clear)
+job_app.command(name="cancel")(job_cmds.cancel)
+job_app.command(name="pause")(job_cmds.pause)
+job_app.command(name="resume")(job_cmds.resume)
+job_app.command(name="backup")(backup_cmds.backup)
+job_app.command(name="restore")(backup_cmds.restore)
+job_app.command(name="unfinished")(job_cmds.unfinished)
+job_app.command(name="monitor")(run_cmds.monitor)
+job_app.command(name="result")(run_cmds.result)
+job_app.command(name="dead-letters")(job_cmds.dead_letters)
 
-# System commands
-app.command(name="start")(sys_cmds.start)
-app.command(name="stop")(sys_cmds.stop)
-app.command(name="join")(sys_cmds.join)
-app.command(name="expose-node")(sys_cmds.expose_node)
-app.command(name="add-node")(sys_cmds.add_node)
-app.command(name="leave")(sys_cmds.leave)
-app.command(name="refresh-token")(sys_cmds.refresh_token)
-app.command(name="update")(update_cmds.update)
+# Node commands
+node_app.command(name="list")(job_cmds.nodes)
+node_app.command(name="reconcile")(job_cmds.reconcile_node)
+node_app.command(name="drain")(job_cmds.drain_node)
+node_app.command(name="undrain")(job_cmds.undrain_node)
+node_app.command(name="maintenance")(job_cmds.maintenance_node)
+node_app.command(name="join")(sys_cmds.join)
+node_app.command(name="expose")(sys_cmds.expose_node)
+node_app.command(name="add")(sys_cmds.add_node)
+node_app.command(name="leave")(sys_cmds.leave)
+node_app.command(name="refresh-token")(sys_cmds.refresh_token)
+
+# Runtime commands
+runtime_app.command(name="start")(sys_cmds.start)
+runtime_app.command(name="stop")(sys_cmds.stop)
+runtime_app.command(name="update")(update_cmds.update)
+runtime_app.command(name="metrics")(job_cmds.metrics)
+
+# Deployment commands
+deployment_cmds.deployment_app.command(name="deploy")(deployment_cmds.deploy)
 
 # Sub-apps
 app.add_typer(blueprint_app, name="blueprint")
+app.add_typer(job_app, name="job")
+app.add_typer(node_app, name="node")
+app.add_typer(runtime_app, name="runtime")
 app.add_typer(resource_cmds.resource_app, name="resource")
 app.add_typer(service_cmds.service_app, name="service")
 app.add_typer(deployment_cmds.deployment_app, name="deployment")
