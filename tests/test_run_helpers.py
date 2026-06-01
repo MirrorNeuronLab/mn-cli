@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import uuid
 
 import pytest
@@ -9,6 +10,11 @@ from mn_cli.libs.run_manifest import (
     load_blueprint_config,
     prepare_manifest_for_submission,
     stage_local_input_payloads_for_manifest,
+)
+
+requires_blueprint_support = pytest.mark.skipif(
+    importlib.util.find_spec("mn_blueprint_support") is None,
+    reason="mn_blueprint_support is not installed",
 )
 
 
@@ -65,6 +71,7 @@ def test_prepare_manifest_for_submission_merges_runtime_env_and_metadata(tmp_pat
     assert prepared["metadata"]["mn_cli"]["blueprint_id"] == "bp"
 
 
+@requires_blueprint_support
 def test_stage_local_input_payloads_after_manifest_preparation(tmp_path):
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
@@ -120,6 +127,7 @@ def test_stage_local_input_payloads_after_manifest_preparation(tmp_path):
     assert summary["folders"][0]["file_count"] == 1
 
 
+@requires_blueprint_support
 def test_prepare_manifest_for_submission_renders_agent_templates(tmp_path, monkeypatch):
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()

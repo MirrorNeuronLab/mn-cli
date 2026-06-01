@@ -85,7 +85,7 @@ def prepare_manifest_for_submission(
         config = with_shared_run_store_config(config, str(run_id), runs_root)
     if config is not None:
         apply_manifest_config_bindings(prepared, config)
-    if enable_runtime_web_ui and run_id and config is not None:
+    if enable_runtime_web_ui and run_id and config is not None and blueprint_web_ui_enabled(config):
         inject_runtime_web_ui_service_for_submission(
             prepared,
             bundle_dir=bundle_dir,
@@ -115,6 +115,31 @@ def prepare_manifest_for_submission(
     if metadata:
         prepared.setdefault("metadata", {}).setdefault("mn_cli", {}).update(metadata)
     return prepared
+
+
+def blueprint_web_ui_enabled(config: dict[str, Any] | None) -> bool:
+    web_ui = config.get("web_ui") if isinstance(config, dict) else None
+    return isinstance(web_ui, dict) and web_ui.get("enabled") is True
+
+
+def manifest_local_inputs_enabled(manifest: dict[str, Any]) -> bool:
+    for node in manifest.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        environment = (node.get("config") or {}).get("environment") or {}
+        config_json = environment.get("MN_BLUEPRINT_CONFIG_JSON")
+        if not config_json:
+            continue
+        try:
+            config = json.loads(config_json)
+        except (TypeError, ValueError):
+            continue
+        local_inputs = config.get("local_inputs") if isinstance(config, dict) else None
+        if isinstance(local_inputs, dict) and (
+            local_inputs.get("folders") or local_inputs.get("files")
+        ):
+            return True
+    return False
 
 
 def inject_runtime_web_ui_service_for_submission(
@@ -164,6 +189,8 @@ def stage_local_input_payloads_for_manifest(
     try:
         from mn_blueprint_support import stage_local_input_payloads_for_manifest as stage_payloads
     except ImportError as exc:
+        if not manifest_local_inputs_enabled(manifest):
+            return {}
         raise RuntimeError("Local blueprint input staging requires mn_blueprint_support.") from exc
     return stage_payloads(manifest, payloads, bundle_dir=bundle_dir)
 

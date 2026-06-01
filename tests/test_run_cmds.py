@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import logging
 import os
 import re
@@ -17,6 +18,10 @@ from mn_cli.libs.ui import JobMonitorState, generate_live_layout
 from mn_cli.libs.run_manifest import prepare_manifest_for_submission
 
 runner = CliRunner()
+requires_blueprint_support = pytest.mark.skipif(
+    importlib.util.find_spec("mn_blueprint_support") is None,
+    reason="mn_blueprint_support is not installed",
+)
 
 
 def test_validate_success(tmp_path):
@@ -423,6 +428,7 @@ def test_run_success(mocker, tmp_path, monkeypatch):
     mock_stream.assert_called_once_with("job-123", follow=True, timeout=None, heartbeat_interval_ms=5000)
 
 
+@requires_blueprint_support
 def test_run_shows_runtime_web_ui_url_in_submit_and_detach_panels(
     mocker, tmp_path, monkeypatch
 ):
@@ -908,6 +914,7 @@ def test_write_local_web_ui_handle_skips_runtime_backed_shared_gradio_module(tmp
     assert not (tmp_path / "runs" / "bp-shared-gradio-run" / "ui.json").exists()
 
 
+@requires_blueprint_support
 def test_prepare_manifest_injects_runtime_web_ui_service_from_config(tmp_path, monkeypatch, mocker):
     first_port = 28800
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
