@@ -501,13 +501,12 @@ def validate(
                 console.print(f"[red]Error: manifest.json is not valid JSON. {e}[/red]")
                 raise typer.Exit(1)
 
-        required_keys = [
-            "manifest_version",
-            "graph_id",
-            "job_name",
-            "entrypoints",
-            "nodes",
-        ]
+        workflow_manifest = _is_workflow_manifest(manifest)
+        required_keys = (
+            ["manifest_version", "graph_id", "job_name", "flow", "runtime"]
+            if workflow_manifest
+            else ["manifest_version", "graph_id", "job_name", "entrypoints", "nodes"]
+        )
         missing = [k for k in required_keys if k not in manifest]
         if missing:
             console.print(
@@ -515,7 +514,15 @@ def validate(
             )
             raise typer.Exit(1)
 
-        if not isinstance(manifest.get("nodes"), type([])):
+        if workflow_manifest:
+            workflow_issues = _validate_workflow_manifest_issues(manifest)
+            if workflow_issues:
+                report = make_validation_report(workflow_issues)
+                _emit_validation_report(
+                    report, output_format, title="Workflow manifest validation failed"
+                )
+                raise typer.Exit(1)
+        elif not isinstance(manifest.get("nodes"), type([])):
             console.print("[red]Error: 'nodes' must be a list in manifest.json[/red]")
             raise typer.Exit(1)
 
@@ -568,7 +575,11 @@ def validate(
         console.print(f"[green]✓ Job bundle at '{bundle_path}' is valid.[/green]")
         console.print(f"  - Job Name: {manifest.get('job_name')}")
         console.print(f"  - Graph ID: {manifest.get('graph_id')}")
-        console.print(f"  - Nodes count: {len(manifest.get('nodes'))}")
+        if workflow_manifest:
+            steps = manifest.get("flow", {}).get("steps") if isinstance(manifest.get("flow"), dict) else []
+            console.print(f"  - Workflow steps: {len(steps if isinstance(steps, list) else [])}")
+        else:
+            console.print(f"  - Nodes count: {len(manifest.get('nodes'))}")
         console.print(
             f"  - Service checks: {len(service_result.get('results') or [])}"
         )
@@ -581,6 +592,182 @@ def validate(
     except Exception as e:
         handle_cli_error(e, console, "validate")
         raise typer.Exit(1)
+
+
+def _is_workflow_manifest(manifest: dict[str, Any]) -> bool:
+    return (
+        manifest.get("apiVersion") == "mn.workflow/v1"
+        or manifest.get("kind") == "Workflow"
+        or isinstance(manifest.get("flow"), dict)
+    )
+
+
+def _validate_workflow_manifest_issues(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    flow = manifest.get("flow")
+    runtime = manifest.get("runtime")
+    if not isinstance(flow, dict):
+        return [_workflow_validation_issue("flow", "flow must be an object")]
+    if not isinstance(runtime, dict):
+        issues.append(_workflow_validation_issue("runtime", "runtime must be an object"))
+
+    steps = flow.get("steps")
+    if not isinstance(steps, list) or not steps:
+        issues.append(_workflow_validation_issue("flow.steps", "flow.steps must be a non-empty list"))
+        steps = []
+
+    step_ids: set[str] = set()
+    for index, step in enumerate(steps):
+        if not isinstance(step, dict):
+            issues.append(_workflow_validation_issue(f"flow.steps[{index}]", "workflow step must be an object"))
+            continue
+        step_id = step.get("id")
+        if not isinstance(step_id, str) or not step_id.strip():
+            issues.append(_workflow_validation_issue(f"flow.steps[{index}].id", "workflow step id is required"))
+            continue
+        if step_id in step_ids:
+            issues.append(_workflow_validation_issue(f"flow.steps[{index}].id", f"duplicate workflow step id: {step_id}"))
+        step_ids.add(step_id)
+        control = step.get("control")
+        if isinstance(control, dict):
+            retry = control.get("retry")
+            if isinstance(retry, dict):
+                attempts = retry.get("max_attempts")
+                if attempts is not None and (not isinstance(attempts, int) or attempts < 1):
+                    issues.append(_workflow_validation_issue(f"flow.steps[{index}].control.retry.max_attempts", "retry max_attempts must be a positive integer"))
+            timeout = control.get("timeout_seconds")
+            if timeout is not None and (not isinstance(timeout, (int, float)) or timeout < 0):
+                issues.append(_workflow_validation_issue(f"flow.steps[{index}].control.timeout_seconds", "timeout_seconds must be zero or greater"))
+
+    graph = flow.get("graph")
+    if isinstance(graph, dict):
+        issues.extend(_validate_workflow_graph_issues(graph, step_ids))
+    elif graph is not None:
+        issues.append(_workflow_validation_issue("flow.graph", "flow.graph must be an object when present"))
+
+    bindings = runtime.get("bindings") if isinstance(runtime, dict) else None
+    if bindings is not None and not isinstance(bindings, dict):
+        issues.append(_workflow_validation_issue("runtime.bindings", "runtime.bindings must be an object"))
+    elif isinstance(bindings, dict):
+        for step_id in bindings:
+            if step_ids and step_id not in step_ids:
+                issues.append(_workflow_validation_issue(f"runtime.bindings.{step_id}", "runtime binding must reference a workflow step id"))
+
+    return issues
+
+
+def _validate_workflow_graph_issues(graph: dict[str, Any], step_ids: set[str]) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    schema = graph.get("schema")
+    if schema not in (None, "mn.workflow.problem_graph/v1"):
+        issues.append(_workflow_validation_issue("flow.graph.schema", "flow.graph.schema must be mn.workflow.problem_graph/v1"))
+    mode = graph.get("mode")
+    if mode not in (None, "linear", "static_dag"):
+        issues.append(_workflow_validation_issue("flow.graph.mode", "flow.graph.mode must be static_dag or linear"))
+
+    source = graph.get("source")
+    sink = graph.get("sink")
+    edges = graph.get("edges") or []
+    if not isinstance(edges, list):
+        return [_workflow_validation_issue("flow.graph.edges", "flow.graph.edges must be a list")]
+    if edges or mode == "static_dag":
+        if source not in step_ids:
+            issues.append(_workflow_validation_issue("flow.graph.source", "flow.graph.source must reference a workflow step id"))
+        if sink not in step_ids:
+            issues.append(_workflow_validation_issue("flow.graph.sink", "flow.graph.sink must reference a workflow step id"))
+
+    edge_ids: set[str] = set()
+    adjacency: dict[str, list[str]] = {step_id: [] for step_id in step_ids}
+    for index, edge in enumerate(edges):
+        if not isinstance(edge, dict):
+            issues.append(_workflow_validation_issue(f"flow.graph.edges[{index}]", "workflow edge must be an object"))
+            continue
+        edge_id = edge.get("id")
+        if edge_id is not None:
+            if not isinstance(edge_id, str) or not edge_id.strip():
+                issues.append(_workflow_validation_issue(f"flow.graph.edges[{index}].id", "workflow edge id must be a non-empty string"))
+            elif edge_id in edge_ids:
+                issues.append(_workflow_validation_issue(f"flow.graph.edges[{index}].id", f"duplicate workflow edge id: {edge_id}"))
+            else:
+                edge_ids.add(edge_id)
+        upstream = edge.get("from")
+        downstream = edge.get("to")
+        if upstream not in step_ids:
+            issues.append(_workflow_validation_issue(f"flow.graph.edges[{index}].from", "edge from must reference a workflow step id"))
+        if downstream not in step_ids:
+            issues.append(_workflow_validation_issue(f"flow.graph.edges[{index}].to", "edge to must reference a workflow step id"))
+        if upstream in step_ids and downstream in step_ids:
+            adjacency.setdefault(upstream, []).append(downstream)
+
+    if not issues:
+        cycle = _workflow_graph_cycle(adjacency)
+        if cycle:
+            issues.append(_workflow_validation_issue("flow.graph.edges", f"workflow graph must be acyclic: {' -> '.join(cycle)}"))
+        if isinstance(source, str) and isinstance(sink, str):
+            reachable = _workflow_reachable(adjacency, source)
+            missing = sorted(step_ids - reachable)
+            if missing:
+                issues.append(_workflow_validation_issue("flow.graph.source", f"workflow steps are unreachable from source: {', '.join(missing)}"))
+            if sink not in reachable:
+                issues.append(_workflow_validation_issue("flow.graph.sink", "workflow sink is not reachable from source"))
+
+    return issues
+
+
+def _workflow_reachable(adjacency: dict[str, list[str]], source: str) -> set[str]:
+    seen: set[str] = set()
+    stack = [source]
+    while stack:
+        node = stack.pop()
+        if node in seen:
+            continue
+        seen.add(node)
+        stack.extend(adjacency.get(node, []))
+    return seen
+
+
+def _workflow_graph_cycle(adjacency: dict[str, list[str]]) -> list[str]:
+    visiting: set[str] = set()
+    visited: set[str] = set()
+    path: list[str] = []
+
+    def visit(node: str) -> list[str]:
+        if node in visiting:
+            if node in path:
+                return path[path.index(node) :] + [node]
+            return [node, node]
+        if node in visited:
+            return []
+        visiting.add(node)
+        path.append(node)
+        for child in adjacency.get(node, []):
+            cycle = visit(child)
+            if cycle:
+                return cycle
+        path.pop()
+        visiting.remove(node)
+        visited.add(node)
+        return []
+
+    for node in adjacency:
+        cycle = visit(node)
+        if cycle:
+            return cycle
+    return []
+
+
+def _workflow_validation_issue(path: str, message: str) -> dict[str, Any]:
+    return {
+        "code": "workflow_manifest.validation_failed",
+        "message": message,
+        "help": "Fix this workflow manifest field and run validation again.",
+        "severity": "error",
+        "location": {
+            "source": "manifest",
+            "path": path,
+            "pointer": "/manifest/" + path.replace(".", "/"),
+        },
+    }
 
 
 def validate_python_environments(

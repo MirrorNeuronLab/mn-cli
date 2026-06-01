@@ -38,6 +38,87 @@ def test_validate_success(tmp_path):
     assert "is valid" in result.stdout
 
 
+def test_validate_accepts_workflow_manifest_without_legacy_nodes(tmp_path):
+    bundle_dir = tmp_path / "workflow_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "apiVersion": "mn.workflow/v1",
+        "kind": "Workflow",
+        "manifest_version": "1.0",
+        "graph_id": "tax_flow",
+        "job_name": "tax-flow",
+        "flow": {
+            "graph": {
+                "schema": "mn.workflow.problem_graph/v1",
+                "mode": "static_dag",
+                "source": "intake",
+                "sink": "report",
+                "edges": [
+                    {"id": "intake_to_income", "from": "intake", "to": "income", "required": True},
+                    {"id": "intake_to_property", "from": "intake", "to": "property", "required": False},
+                    {"id": "income_to_report", "from": "income", "to": "report", "required": True},
+                    {"id": "property_to_report", "from": "property", "to": "report", "required": False},
+                ],
+            },
+            "steps": [
+                {"id": "intake", "label": "Intake"},
+                {"id": "income", "label": "Income"},
+                {"id": "property", "label": "Property"},
+                {"id": "report", "label": "Report"},
+            ],
+        },
+        "runtime": {
+            "bindings": {
+                "income": {
+                    "type": "team",
+                    "workers": [
+                        {"id": "income_worker", "kind": "worker"},
+                        {"id": "income_validator", "kind": "validator", "depends_on": ["income_worker"]},
+                    ],
+                }
+            }
+        },
+    }))
+
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
+
+    assert result.exit_code == 0
+    assert "Workflow steps: 4" in result.stdout
+
+
+def test_validate_rejects_workflow_manifest_cycles(tmp_path):
+    bundle_dir = tmp_path / "workflow_cycle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "apiVersion": "mn.workflow/v1",
+        "kind": "Workflow",
+        "manifest_version": "1.0",
+        "graph_id": "cyclic_flow",
+        "job_name": "cyclic-flow",
+        "flow": {
+            "graph": {
+                "schema": "mn.workflow.problem_graph/v1",
+                "mode": "static_dag",
+                "source": "a",
+                "sink": "c",
+                "edges": [
+                    {"id": "a_to_b", "from": "a", "to": "b"},
+                    {"id": "b_to_c", "from": "b", "to": "c"},
+                    {"id": "c_to_b", "from": "c", "to": "b"},
+                ],
+            },
+            "steps": [{"id": "a"}, {"id": "b"}, {"id": "c"}],
+        },
+        "runtime": {"bindings": {}},
+    }))
+
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--output", "json"])
+
+    assert result.exit_code == 1
+    report = json.loads(result.stdout)
+    assert any("acyclic" in issue["message"] for issue in report["issues"])
+
+
 def test_openshell_env_prefers_active_gateway_metadata(tmp_path, monkeypatch):
     config_dir = tmp_path / "openshell-config"
     gateway_dir = config_dir / "gateways" / "openshell"

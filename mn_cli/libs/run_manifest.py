@@ -337,13 +337,17 @@ def _list_targets(items: list[Any], selector: str) -> list[Any]:
             item
             for item in items
             if isinstance(item, dict)
-            and str(item.get("node_id") or "").startswith(prefix)
+            and str(item.get("node_id") or item.get("id") or "").startswith(prefix)
         ]
     return [
         item
         for item in items
         if isinstance(item, dict)
-        and (item.get("node_id") == selector or item.get("edge_id") == selector)
+        and (
+            item.get("node_id") == selector
+            or item.get("id") == selector
+            or item.get("edge_id") == selector
+        )
     ]
 
 
