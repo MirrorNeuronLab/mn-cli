@@ -119,7 +119,13 @@ def prepare_manifest_for_submission(
 
 def blueprint_web_ui_enabled(config: dict[str, Any] | None) -> bool:
     web_ui = config.get("web_ui") if isinstance(config, dict) else None
-    return isinstance(web_ui, dict) and web_ui.get("enabled") is True
+    output = web_ui.get("output") if isinstance(web_ui, dict) else None
+    return (
+        isinstance(web_ui, dict)
+        and web_ui.get("enabled") is True
+        and isinstance(output, dict)
+        and output.get("adapter") == "gradio"
+    )
 
 
 def manifest_local_inputs_enabled(manifest: dict[str, Any]) -> bool:

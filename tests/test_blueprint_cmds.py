@@ -64,6 +64,7 @@ def test_blueprint_list_error(mocker, tmp_path):
     assert "Error reading blueprints index" in result.stdout
 
 
+@requires_blueprint_support
 def test_blueprint_observability_commands_read_shared_run_store(tmp_path):
     run_dir = tmp_path / "observe-run"
     run_dir.mkdir()
