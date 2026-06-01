@@ -1293,6 +1293,53 @@ def test_workflow_monitor_renders_service_idle_and_ready_counts():
     assert "Visual Detector" in rendered
 
 
+def test_workflow_monitor_renders_graph_layers_and_multiple_active_steps():
+    progress = {
+        "workflow_id": "tax_graph",
+        "workflow_kind": "batch",
+        "status": "running",
+        "elapsed_seconds": 42,
+        "agent_count": {"done": 1, "running": 2, "idle": 0, "ready": 3, "failed": 0, "total": 4},
+        "current_step_id": "income",
+        "current_step_ids": ["income", "property"],
+        "steps": [
+            {"id": "intake", "label": "Intake", "status": "done", "done_count": 1, "total_count": 1, "layer": 0, "children": ["income", "property"]},
+            {
+                "id": "income",
+                "label": "Income",
+                "status": "running",
+                "current": True,
+                "running_count": 1,
+                "total_count": 1,
+                "layer": 1,
+                "parents": ["intake"],
+                "agents": [{"id": "income_agent", "status": "running", "working_on": "Prepare income", "progress": 0.4}],
+            },
+            {
+                "id": "property",
+                "label": "Property",
+                "status": "running",
+                "current": True,
+                "running_count": 1,
+                "total_count": 1,
+                "layer": 1,
+                "parents": ["intake"],
+                "agents": [{"id": "property_agent", "status": "running", "working_on": "Prepare property", "progress": 0.3}],
+            },
+        ],
+        "messages": ["Running: graph branches active"],
+    }
+
+    console = Console(record=True, width=150)
+    console.print(generate_live_layout("job-graph", {"workflow_progress": progress}, JobMonitorState()))
+    rendered = console.export_text()
+
+    assert "L2 2 Income" in rendered
+    assert "L2 3 Property" in rendered
+    assert "income_agent" in rendered
+    assert "property_agent" in rendered
+
+
 def test_live_manifest_detection_accepts_scheduler_job_type():
     assert run_cmds._is_live_manifest(
         {"policies": {"scheduler": {"job_type": "service"}}}

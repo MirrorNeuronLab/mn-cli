@@ -99,10 +99,24 @@ def generate_live_layout(job_id: str, data: Dict[str, Any], state: Optional[JobM
 def _generate_workflow_progress_layout(job_id: str, progress: dict[str, Any], state: Optional[JobMonitorState] = None) -> Panel:
     state = state or JobMonitorState()
     steps = [step for step in progress.get("steps", []) if isinstance(step, dict)]
+    current_step_ids = [
+        str(step_id)
+        for step_id in progress.get("current_step_ids", [])
+        if step_id not in (None, "")
+    ]
     current_step = progress.get("current_step") if isinstance(progress.get("current_step"), dict) else None
     if current_step is None:
         current_step = next((step for step in steps if step.get("current")), steps[0] if steps else {})
-    agents = [agent for agent in current_step.get("agents", []) if isinstance(agent, dict)]
+    if current_step_ids:
+        active_steps = [step for step in steps if str(step.get("id")) in set(current_step_ids)]
+    else:
+        active_steps = [current_step] if current_step else []
+    agents = [
+        agent
+        for step in active_steps
+        for agent in (step.get("agents", []) if isinstance(step, dict) else [])
+        if isinstance(agent, dict)
+    ]
     state.clamp(len(agents))
 
     status = str(progress.get("status") or "unknown")
@@ -155,11 +169,14 @@ def _workflow_phase_table(steps: list[dict[str, Any]], *, workflow_kind: str = "
     table = Table(title="Steps", box=box.SIMPLE, show_header=False, expand=True)
     table.add_column("step")
     table.add_column("agents", justify="right", no_wrap=True)
+    has_graph_layers = any("layer" in step or step.get("parents") or step.get("children") for step in steps)
     for index, step in enumerate(steps, start=1):
         status = str(step.get("status") or "unknown")
         current = bool(step.get("current"))
         icon = _status_icon("running" if current and status not in {"done", "completed"} else status)
-        label = f"{icon} {index} {step.get('label') or step.get('id') or 'Step'}"
+        layer = int(step.get("layer") or 0)
+        branch_prefix = f"L{layer + 1} " if has_graph_layers else ""
+        label = f"{icon} {branch_prefix}{index} {step.get('label') or step.get('id') or 'Step'}"
         ready_count = int(step.get("ready_count") or step.get("done_count") or 0)
         done_count = int(step.get("done_count") or 0)
         count_value = ready_count if workflow_kind == "service" else done_count
@@ -311,7 +328,7 @@ def _agent_progress(agent: dict[str, Any]) -> float:
         except (TypeError, ValueError):
             pass
     status = str(agent.get("status") or "").lower()
-    if status in {"completed", "done", "finished", "succeeded", "failed", "cancelled"}:
+    if status in {"completed", "done", "finished", "succeeded", "failed", "cancelled", "partial", "skipped"}:
         return 1.0
     if status in {"running", "busy", "active", "processing"}:
         return 0.5
@@ -337,13 +354,15 @@ def _int_value(mapping: dict[str, Any], *keys: str) -> int:
 
 
 def _is_terminal_status(status: Any) -> bool:
-    return str(status or "").lower() in {"completed", "done", "finished", "succeeded", "failed", "cancelled"}
+    return str(status or "").lower() in {"completed", "done", "finished", "succeeded", "failed", "cancelled", "partial", "skipped"}
 
 
 def _group_status(agents: list[dict[str, Any]]) -> str:
     statuses = {str(agent.get("status") or "unknown").lower() for agent in agents}
     if statuses <= {"completed", "done", "finished", "succeeded"}:
         return "completed"
+    if statuses & {"partial", "skipped"}:
+        return "partial"
     if statuses & {"failed", "cancelled"}:
         return "failed"
     if statuses & {"running", "busy", "active", "processing"}:
@@ -359,6 +378,8 @@ def _status_color(status: Any) -> str:
     normalized = str(status or "").lower()
     if normalized in {"completed", "done", "finished", "succeeded", "running", "active"}:
         return "green"
+    if normalized in {"partial", "skipped"}:
+        return "yellow"
     if normalized in {"failed", "cancelled", "error"}:
         return "red"
     if normalized in {"idle", "ready"}:
@@ -372,6 +393,10 @@ def _status_icon(status: Any) -> str:
     normalized = str(status or "").lower()
     if normalized in {"completed", "done", "finished", "succeeded"}:
         return "v"
+    if normalized == "partial":
+        return "~"
+    if normalized == "skipped":
+        return "-"
     if normalized in {"failed", "cancelled", "error"}:
         return "x"
     if normalized in {"running", "busy", "active", "processing"}:
