@@ -1072,6 +1072,7 @@ def test_run_starts_pre_launch_hook_before_submit(mocker, tmp_path, monkeypatch)
     assert submitted_env["RTSP_PORT"] == "8561"
     process_info = json.loads((tmp_path / "runs" / env["MN_RUN_ID"] / "pre_launch_process.json").read_text())
     assert process_info["pid"] == 4242
+    assert process_info["process_group_id"] == 4242
     assert process_info["script"] == str(script_path.resolve())
 
 

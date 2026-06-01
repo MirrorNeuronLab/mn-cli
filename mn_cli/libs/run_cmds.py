@@ -1901,6 +1901,7 @@ def _start_pre_launch_hook(
 
     process_info = {
         "pid": process.pid,
+        "process_group_id": process.pid,
         "command": command,
         "script": str(script_path),
         "log": str(log_path),
