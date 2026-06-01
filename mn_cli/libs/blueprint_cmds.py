@@ -68,13 +68,9 @@ def _inject_local_blueprint_support_path() -> None:
         or os.getenv("OTTERDESK_MIRROR_NEURON_WORKSPACE")
         or Path(__file__).resolve().parents[3]
     ).expanduser()
-    for candidate in (
-        repo_root / "mn-skills" / "blueprint_support_skill" / "src",
-        repo_root / "mn-skills" / "blueprint-support-skill" / "src",
-    ):
-        if candidate.is_dir() and str(candidate) not in sys.path:
-            sys.path.insert(0, str(candidate))
-            return
+    candidate = repo_root / "mn-skills" / "blueprint_support_skill" / "src"
+    if candidate.is_dir() and str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
 
 
 @blueprint_app.callback()

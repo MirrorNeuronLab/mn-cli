@@ -16,8 +16,6 @@ def _ensure_blueprint_support_path() -> None:
         or Path(__file__).resolve().parents[3]
     ).expanduser()
     support_src = repo_root / "mn-skills" / "blueprint_support_skill" / "src"
-    if not support_src.is_dir():
-        support_src = repo_root / "mn-skills" / "blueprint-support-skill" / "src"
     if support_src.is_dir() and str(support_src) not in sys.path:
         sys.path.insert(0, str(support_src))
 

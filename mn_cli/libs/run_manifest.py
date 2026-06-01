@@ -12,13 +12,9 @@ def _inject_local_blueprint_support_path() -> None:
     import sys
 
     repo_root = workspace_root()
-    for candidate in (
-        repo_root / "mn-skills" / "blueprint_support_skill" / "src",
-        repo_root / "mn-skills" / "blueprint-support-skill" / "src",
-    ):
-        if candidate.is_dir() and str(candidate) not in sys.path:
-            sys.path.insert(0, str(candidate))
-            return
+    candidate = repo_root / "mn-skills" / "blueprint_support_skill" / "src"
+    if candidate.is_dir() and str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
 
 
 def workspace_root() -> Path:
@@ -54,7 +50,7 @@ def runtime_path_environment() -> dict[str, str]:
     }
     python_paths = [
         skills_root / "blueprint_support_skill" / "src",
-        skills_root / "tax_pdf_ocr_skill" / "src",
+        skills_root / "llm_ocr_skill" / "src",
         skills_root / "pdf_extract_skill" / "src",
     ]
     existing_pythonpath = os.getenv("PYTHONPATH")

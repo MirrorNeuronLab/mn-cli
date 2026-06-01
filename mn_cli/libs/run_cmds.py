@@ -2469,8 +2469,6 @@ def _inject_local_blueprint_support_pythonpath(env: dict[str, str]) -> None:
     ).expanduser()
     support_src = repo_root / "mn-skills" / "blueprint_support_skill" / "src"
     if not support_src.is_dir():
-        support_src = repo_root / "mn-skills" / "blueprint-support-skill" / "src"
-    if not support_src.is_dir():
         return
     current = env.get("PYTHONPATH")
     paths = [str(support_src)]
