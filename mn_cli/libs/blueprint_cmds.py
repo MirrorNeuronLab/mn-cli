@@ -155,6 +155,8 @@ def _run_resolved_blueprint(
     source_label: str,
     follow_seconds: Optional[float],
     force: bool,
+    detached: bool = False,
+    web_ui: bool = False,
 ) -> None:
     shared_run_id = run_id or _make_blueprint_run_id(blueprint_id)
     console.print(f"[green]Blueprint '{display_name}' validated. Running...[/green]")
@@ -179,6 +181,8 @@ def _run_resolved_blueprint(
         },
         config_overrides=config_overrides,
         force=force,
+        detached=detached,
+        web_ui=web_ui,
     )
 
 
@@ -419,6 +423,8 @@ def run_catalog_blueprint(
     revision: Optional[str] = None,
     follow_seconds: Optional[float] = None,
     force: bool = False,
+    detached: bool = False,
+    web_ui: bool = False,
 ) -> None:
     """Run a catalog blueprint by name through the shared blueprint runner."""
     _reject_local_blueprint_path(blueprint_name)
@@ -463,6 +469,8 @@ def run_catalog_blueprint(
         source_label=str(storage_dir),
         follow_seconds=follow_seconds,
         force=force,
+        detached=detached,
+        web_ui=web_ui,
     )
 
 
@@ -472,6 +480,8 @@ def run_local_blueprint_folder(
     run_id: Optional[str] = None,
     follow_seconds: Optional[float] = None,
     force: bool = False,
+    detached: bool = False,
+    web_ui: bool = False,
 ) -> None:
     """Run a local Python source blueprint folder through the shared blueprint runner."""
     blueprint_dir = Path(folder).expanduser()
@@ -488,6 +498,8 @@ def run_local_blueprint_folder(
         source_label=str(blueprint_dir),
         follow_seconds=follow_seconds,
         force=force,
+        detached=detached,
+        web_ui=web_ui,
     )
 
 
@@ -550,6 +562,21 @@ def blueprint_run(
             help="Run even if blueprint input validation or runtime requirements fail.",
         ),
     ] = False,
+    detached: Annotated[
+        bool,
+        typer.Option(
+            "-d",
+            "--detached",
+            help="Start the blueprint run without the live workflow UI.",
+        ),
+    ] = False,
+    web_ui: Annotated[
+        bool,
+        typer.Option(
+            "--web-ui",
+            help="Start or register the blueprint Web UI for this run.",
+        ),
+    ] = False,
 ):
     """Run a catalog blueprint, or a local folder with --folder."""
     if folder and target:
@@ -557,7 +584,14 @@ def blueprint_run(
         raise typer.Exit(1)
 
     if folder:
-        _run_local_folder(folder, run_id=run_id, follow_seconds=follow_seconds, force=force)
+        _run_local_folder(
+            folder,
+            run_id=run_id,
+            follow_seconds=follow_seconds,
+            force=force,
+            detached=detached,
+            web_ui=web_ui,
+        )
         return
 
     if not target:
@@ -581,6 +615,8 @@ def blueprint_run(
         revision=revision,
         follow_seconds=follow_seconds,
         force=force,
+        detached=detached,
+        web_ui=web_ui,
     )
 
 

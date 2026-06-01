@@ -1,66 +1,417 @@
+import json
+import time
+
+from rich import box
 from rich.console import Group
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 from typing import Dict, Any, Optional
 
-def generate_live_layout(job_id: str, data: Dict[str, Any]) -> Group:
+
+class JobMonitorState:
+    def __init__(self) -> None:
+        self.selected_index = 0
+        self.detail_mode = False
+
+    def handle_key(self, key: str, agent_count: int) -> bool:
+        if key in {"q", "Q", "\x03", "\x04"}:
+            return False
+        if key in {"j", "J", "\t", "\x1b[B"}:
+            self.selected_index = min(self.selected_index + 1, max(agent_count - 1, 0))
+            return True
+        if key in {"k", "K", "\x1b[A"}:
+            self.selected_index = max(self.selected_index - 1, 0)
+            return True
+        if key in {"d", "D", "\r", "\n"}:
+            self.detail_mode = True
+            return True
+        if key in {"o", "O", "\x1b"}:
+            self.detail_mode = False
+            return True
+        if key.isdigit() and key != "0":
+            self.selected_index = min(int(key) - 1, max(agent_count - 1, 0))
+            return True
+        return True
+
+    def clamp(self, agent_count: int) -> None:
+        self.selected_index = min(self.selected_index, max(agent_count - 1, 0))
+
+
+def generate_live_layout(job_id: str, data: Dict[str, Any], state: Optional[JobMonitorState] = None) -> Panel:
+    workflow_progress = data.get("workflow_progress")
+    if isinstance(workflow_progress, dict) and workflow_progress.get("steps"):
+        return _generate_workflow_progress_layout(job_id, workflow_progress, state=state)
+
     summary = data.get("summary", {})
     job = data.get("job", {})
-    agents = data.get("agents", [])
-    
-    status = summary.get("status", "unknown")
-    color = "cyan"
-    if status == "completed":
-        color = "green"
-    elif status in ["failed", "cancelled"]:
-        color = "red"
-        
-    last_event = summary.get("last_event", "N/A")
-    
-    # Top panel: Job info (Executors removed)
-    spinner_str = "[cyan]⠋[/cyan]"
-    try:
-        import time
-        frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-        idx = int(time.time() * 12.5) % len(frames)
-        spinner_str = f"[cyan]{frames[idx]}[/cyan]"
-    except Exception:
-        pass
+    agents = _sorted_agents(data.get("agents", []))
+    state = state or JobMonitorState()
+    state.clamp(len(agents))
 
-    info_text = (
-        f"[bold]Job ID:[/bold] {job_id}\n"
-        f"[bold]Name:[/bold] {job.get('job_name', 'N/A')} | [bold]Graph:[/bold] {job.get('graph_id', 'N/A')}\n"
-        f"[bold]Status:[/bold] [{color}]{status}[/{color}] | [bold]Live:[/bold] {summary.get('live?', False)}\n"
-        f"[bold]Nodes:[/bold] {len(summary.get('nodes', []))}\n"
-        f"[bold]Last Event:[/bold] {last_event} {spinner_str if status not in ['completed', 'failed', 'cancelled'] else ''}\n\n"
-        f"[dim]Press 'q' or Ctrl-C to exit[/dim]"
+    status = str(summary.get("status") or job.get("status") or "unknown")
+    color = _status_color(status)
+    selected_agent = agents[state.selected_index] if agents else None
+    total_agents = len(agents)
+    completed_agents = sum(1 for agent in agents if _is_terminal_status(agent.get("status")))
+    elapsed_label = _elapsed_label(summary, job)
+    spinner = _spinner(status)
+
+    header = Table.grid(expand=True)
+    header.add_column(ratio=2)
+    header.add_column(justify="right")
+    title = Text(str(job.get("job_name") or job.get("name") or job_id), style="bold bright_blue")
+    meta = Text(
+        f"{completed_agents}/{total_agents} agents  |  {elapsed_label}  |  {status}",
+        style=f"bold {color}",
     )
-    info_panel = Panel(info_text, title="Live Job Monitor", border_style=color)
-    
-    # Agents Table
-    agent_table = Table(title="Agents (Top 20 by Processed Messages)", expand=True)
-    agent_table.add_column("Agent ID")
-    agent_table.add_column("Type")
-    agent_table.add_column("Status")
-    agent_table.add_column("Processed", justify="right")
-    agent_table.add_column("Mailbox", justify="right")
-    
-    sorted_agents = sorted(agents, key=lambda x: x.get("processed_messages", 0), reverse=True)[:20]
-    
-    for ag in sorted_agents:
-        ag_status = ag.get("status", "unknown")
-        st_color = "green" if ag_status in ["running", "completed"] else "yellow" if ag_status in ["ready", "busy", "queued"] else "red"
-        
-        agent_table.add_row(
-            ag.get("agent_id", "N/A"),
-            ag.get("agent_type", "N/A"),
-            f"[{st_color}]{ag_status}[/{st_color}]",
-            str(ag.get("processed_messages", 0)),
-            str(ag.get("mailbox_depth", 0))
+    header.add_row(title, meta)
+
+    subtitle = Text(
+        f"Job {job_id}  |  Graph {job.get('graph_id', 'N/A')}  |  Live {summary.get('live?', False)}  {spinner}",
+        style="dim",
+    )
+
+    body = Table.grid(expand=True)
+    body.add_column(ratio=1)
+    body.add_column(ratio=3)
+    body.add_row(
+        _job_phase_table(summary, job, agents),
+        _agent_detail_panel(selected_agent) if state.detail_mode else _agent_table(agents, state.selected_index),
+    )
+
+    footer = Text(
+        "keys: j/k or arrows select agent, Enter/d details, 1-9 jump, o overview, q or Ctrl+D/Ctrl+C detach",
+        style="dim",
+    )
+    last_event = summary.get("last_event")
+    if last_event:
+        footer.append(f"\nlatest event: {last_event}", style="dim")
+
+    return Panel(
+        Group(header, subtitle, body, footer),
+        title=f"Live Job Monitor  {job_id}",
+        border_style=color,
+        box=box.ROUNDED,
+    )
+
+
+def _generate_workflow_progress_layout(job_id: str, progress: dict[str, Any], state: Optional[JobMonitorState] = None) -> Panel:
+    state = state or JobMonitorState()
+    steps = [step for step in progress.get("steps", []) if isinstance(step, dict)]
+    current_step = progress.get("current_step") if isinstance(progress.get("current_step"), dict) else None
+    if current_step is None:
+        current_step = next((step for step in steps if step.get("current")), steps[0] if steps else {})
+    agents = [agent for agent in current_step.get("agents", []) if isinstance(agent, dict)]
+    state.clamp(len(agents))
+
+    status = str(progress.get("status") or "unknown")
+    color = _status_color(status)
+    workflow_kind = str(progress.get("workflow_kind") or "batch").lower()
+    agent_count = progress.get("agent_count") if isinstance(progress.get("agent_count"), dict) else {}
+    done_agents = int(agent_count.get("done") or 0)
+    ready_agents = int(agent_count.get("ready") or done_agents)
+    total_agents = int(agent_count.get("total") or len(agents))
+    shown_agents = ready_agents if workflow_kind == "service" else done_agents
+    elapsed_label = _format_elapsed(progress.get("elapsed_seconds"))
+
+    header = Table.grid(expand=True)
+    header.add_column(ratio=2)
+    header.add_column(justify="right")
+    header.add_row(
+        Text(str(progress.get("workflow_id") or progress.get("name") or job_id), style="bold bright_blue"),
+        Text(f"{shown_agents}/{total_agents} agents  |  {elapsed_label}  |  {status}", style=f"bold {color}"),
+    )
+
+    subtitle = Text(str(progress.get("description") or f"Job {job_id}"), style="dim")
+
+    body = Table.grid(expand=True)
+    body.add_column(ratio=1)
+    body.add_column(ratio=3)
+    body.add_row(
+        _workflow_phase_table(steps, workflow_kind=workflow_kind),
+        _agent_detail_panel(agents[state.selected_index] if agents and state.detail_mode else None)
+        if state.detail_mode
+        else _agent_table(agents, state.selected_index),
+    )
+
+    footer = Text(
+        "keys: j/k or arrows select agent, Enter/d details, 1-9 jump, o overview, q or Ctrl+D/Ctrl+C detach",
+        style="dim",
+    )
+    messages = [str(message) for message in progress.get("messages", []) if message]
+    if messages:
+        footer.append(f"\nlatest event: {messages[-1]}", style="dim")
+
+    return Panel(
+        Group(header, subtitle, body, footer),
+        title=f"Workflow Job Monitor  {job_id}",
+        border_style=color,
+        box=box.ROUNDED,
+    )
+
+
+def _workflow_phase_table(steps: list[dict[str, Any]], *, workflow_kind: str = "batch") -> Table:
+    table = Table(title="Steps", box=box.SIMPLE, show_header=False, expand=True)
+    table.add_column("step")
+    table.add_column("agents", justify="right", no_wrap=True)
+    for index, step in enumerate(steps, start=1):
+        status = str(step.get("status") or "unknown")
+        current = bool(step.get("current"))
+        icon = _status_icon("running" if current and status not in {"done", "completed"} else status)
+        label = f"{icon} {index} {step.get('label') or step.get('id') or 'Step'}"
+        ready_count = int(step.get("ready_count") or step.get("done_count") or 0)
+        done_count = int(step.get("done_count") or 0)
+        count_value = ready_count if workflow_kind == "service" else done_count
+        count = f"{count_value}/{int(step.get('total_count') or 0)}"
+        table.add_row(label, count, style="bright_blue" if current else _status_color(status))
+    if not steps:
+        table.add_row(". 1 Runtime", "0/0", style="cyan")
+    return table
+
+
+def _sorted_agents(raw_agents: Any) -> list[dict[str, Any]]:
+    agents = [agent for agent in raw_agents if isinstance(agent, dict)] if isinstance(raw_agents, list) else []
+    return sorted(
+        agents,
+        key=lambda agent: (
+            -_int_value(agent, "processed_messages", "messages_processed", "processed"),
+            -_int_value(agent, "mailbox_depth", "queue_depth", "mailbox"),
+            str(agent.get("agent_id") or agent.get("id") or agent.get("node_id") or ""),
+        ),
+    )
+
+
+def _job_phase_table(summary: dict[str, Any], job: dict[str, Any], agents: list[dict[str, Any]]) -> Table:
+    table = Table(title="Phases", box=box.SIMPLE, show_header=False, expand=True)
+    table.add_column("phase")
+    table.add_column("agents", justify="right", no_wrap=True)
+    nodes = summary.get("nodes") or job.get("nodes") or []
+    rows: list[tuple[str, str, str]] = []
+
+    if isinstance(nodes, list) and nodes:
+        for index, node in enumerate(nodes, start=1):
+            if isinstance(node, dict):
+                node_id = str(node.get("node_id") or node.get("id") or node.get("name") or f"node_{index}")
+                status = str(node.get("status") or "unknown")
+            else:
+                node_id = str(node)
+                status = "unknown"
+            matching = [agent for agent in agents if str(agent.get("node_id") or agent.get("node") or agent.get("agent_id") or "").startswith(node_id)]
+            total = len(matching)
+            done = sum(1 for agent in matching if _is_terminal_status(agent.get("status")))
+            rows.append((f"{_status_icon(status)} {index} {node_id}", f"{done}/{total}" if total else "-", status))
+    elif agents:
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for agent in agents:
+            groups.setdefault(str(agent.get("agent_type") or agent.get("type") or "worker"), []).append(agent)
+        for index, (label, group) in enumerate(sorted(groups.items()), start=1):
+            done = sum(1 for agent in group if _is_terminal_status(agent.get("status")))
+            status = _group_status(group)
+            rows.append((f"{_status_icon(status)} {index} {label}", f"{done}/{len(group)}", status))
+    else:
+        rows.append((". 1 Runtime", "0/0", "unknown"))
+
+    for label, count, status in rows:
+        table.add_row(label, count, style=_status_color(status) if status else None)
+    return table
+
+
+def _agent_table(agents: list[dict[str, Any]], selected_index: int) -> Table:
+    table = Table(title=f"Agents  |  {len(agents)} workers", box=box.SIMPLE, expand=True)
+    table.add_column("#", justify="right", no_wrap=True)
+    table.add_column("agent", no_wrap=True)
+    table.add_column("status", no_wrap=True)
+    table.add_column("working on")
+    table.add_column("progress", justify="right", no_wrap=True)
+    table.add_column("mail", justify="right", no_wrap=True)
+
+    if not agents:
+        table.add_row("-", "none", "unknown", "No agents reported by the runtime yet.", "-", "-")
+        return table
+
+    start = 0 if selected_index < 20 else selected_index - 19
+    for index, agent in enumerate(agents[start : start + 20], start=start):
+        status = str(agent.get("status") or "unknown")
+        marker = ">" if index == selected_index else " "
+        table.add_row(
+            f"{marker}{index + 1}",
+            _agent_id(agent),
+            status,
+            _working_on(agent),
+            _progress_text(agent),
+            str(_int_value(agent, "mailbox_depth", "queue_depth", "mailbox")),
+            style="reverse" if index == selected_index else _status_color(status),
         )
-        
-    return Group(info_panel, agent_table)
+    return table
+
+
+def _agent_detail_panel(agent: dict[str, Any] | None) -> Panel:
+    if not agent:
+        return Panel("No agent selected.", title="Agent Detail", border_style="yellow")
+
+    table = Table.grid(padding=(0, 1))
+    table.add_column(style="bold")
+    table.add_column()
+    rows = [
+        ("Agent", _agent_id(agent)),
+        ("Type", str(agent.get("agent_type") or agent.get("type") or "worker")),
+        ("Status", str(agent.get("status") or "unknown")),
+        ("Node", str(agent.get("node_id") or agent.get("node") or "-")),
+        ("Working On", _working_on(agent)),
+        ("Progress", _progress_text(agent)),
+        ("Processed", str(_int_value(agent, "processed_messages", "messages_processed", "processed"))),
+        ("Mailbox", str(_int_value(agent, "mailbox_depth", "queue_depth", "mailbox"))),
+        ("Parent Job", str(agent.get("parent_job_id") or agent.get("job_id") or "-")),
+        ("Started", str(agent.get("started_at") or agent.get("created_at") or "-")),
+        ("Updated", str(agent.get("updated_at") or agent.get("last_seen_at") or "-")),
+    ]
+    error = agent.get("error") or agent.get("last_error")
+    if error:
+        rows.append(("Error", _fit_text(str(error), 120)))
+    resources = agent.get("resources") or agent.get("resource_usage") or agent.get("stats")
+    if isinstance(resources, dict):
+        rows.append(("Resources", _fit_text(json.dumps(resources, sort_keys=True), 120)))
+    for label, value in rows:
+        table.add_row(label, _fit_text(value, 160))
+    return Panel(table, title=f"Agent Detail  {_agent_id(agent)}", border_style=_status_color(str(agent.get("status") or "")), box=box.ROUNDED)
+
+
+def _agent_id(agent: dict[str, Any]) -> str:
+    return str(agent.get("agent_id") or agent.get("id") or agent.get("node_id") or "agent")
+
+
+def _working_on(agent: dict[str, Any]) -> str:
+    for key in ("working_on", "current_task", "task", "role", "status_detail", "last_event", "last_message"):
+        value = agent.get(key)
+        if isinstance(value, str) and value.strip():
+            return _fit_text(value.strip(), 90)
+    current_message = agent.get("current_message")
+    if isinstance(current_message, dict):
+        message_type = current_message.get("type") or current_message.get("message_type")
+        content = current_message.get("content") or current_message.get("body")
+        if message_type or content:
+            return _fit_text(f"{message_type or 'message'}: {content or ''}", 90)
+    return str(agent.get("agent_type") or agent.get("type") or "worker")
+
+
+def _progress_text(agent: dict[str, Any]) -> str:
+    progress = _agent_progress(agent)
+    return f"{_bar(progress)} {progress * 100:>3.0f}%"
+
+
+def _agent_progress(agent: dict[str, Any]) -> float:
+    raw = agent.get("progress")
+    if raw is not None:
+        try:
+            value = float(raw)
+            if value > 1:
+                value /= 100
+            return max(0.0, min(1.0, value))
+        except (TypeError, ValueError):
+            pass
+    status = str(agent.get("status") or "").lower()
+    if status in {"completed", "done", "finished", "succeeded", "failed", "cancelled"}:
+        return 1.0
+    if status in {"running", "busy", "active", "processing"}:
+        return 0.5
+    if status == "idle":
+        return 0.1
+    if status in {"ready", "queued", "pending", "scheduled"}:
+        return 0.1
+    return 0.0
+
+
+def _bar(progress: float, width: int = 10) -> str:
+    filled = int(max(0.0, min(1.0, progress)) * width)
+    return "[" + "#" * filled + "." * (width - filled) + "]"
+
+
+def _int_value(mapping: dict[str, Any], *keys: str) -> int:
+    for key in keys:
+        try:
+            return int(mapping.get(key) or 0)
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _is_terminal_status(status: Any) -> bool:
+    return str(status or "").lower() in {"completed", "done", "finished", "succeeded", "failed", "cancelled"}
+
+
+def _group_status(agents: list[dict[str, Any]]) -> str:
+    statuses = {str(agent.get("status") or "unknown").lower() for agent in agents}
+    if statuses <= {"completed", "done", "finished", "succeeded"}:
+        return "completed"
+    if statuses & {"failed", "cancelled"}:
+        return "failed"
+    if statuses & {"running", "busy", "active", "processing"}:
+        return "running"
+    if statuses & {"idle"}:
+        return "idle"
+    if statuses & {"ready", "queued", "pending", "scheduled"}:
+        return "pending"
+    return "unknown"
+
+
+def _status_color(status: Any) -> str:
+    normalized = str(status or "").lower()
+    if normalized in {"completed", "done", "finished", "succeeded", "running", "active"}:
+        return "green"
+    if normalized in {"failed", "cancelled", "error"}:
+        return "red"
+    if normalized in {"idle", "ready"}:
+        return "cyan"
+    if normalized in {"ready", "busy", "queued", "pending", "scheduled", "preparing"}:
+        return "yellow"
+    return "cyan"
+
+
+def _status_icon(status: Any) -> str:
+    normalized = str(status or "").lower()
+    if normalized in {"completed", "done", "finished", "succeeded"}:
+        return "v"
+    if normalized in {"failed", "cancelled", "error"}:
+        return "x"
+    if normalized in {"running", "busy", "active", "processing"}:
+        return ">"
+    if normalized == "idle":
+        return "."
+    return "."
+
+
+def _elapsed_label(summary: dict[str, Any], job: dict[str, Any]) -> str:
+    raw = summary.get("elapsed_seconds") or job.get("elapsed_seconds") or job.get("duration_seconds")
+    try:
+        elapsed = float(raw)
+        return f"{elapsed:.0f}s" if elapsed < 60 else f"{elapsed / 60:.1f}m"
+    except (TypeError, ValueError):
+        return "--"
+
+
+def _format_elapsed(raw: Any) -> str:
+    try:
+        elapsed = float(raw)
+    except (TypeError, ValueError):
+        return "--"
+    if elapsed < 60:
+        return f"{elapsed:.0f}s"
+    return f"{elapsed / 60:.1f}m"
+
+
+def _spinner(status: Any) -> str:
+    if str(status or "").lower() in {"completed", "failed", "cancelled"}:
+        return ""
+    frames = ["|", "/", "-", "\\"]
+    return frames[int(time.time() * 8) % len(frames)]
+
+
+def _fit_text(value: Any, max_length: int) -> str:
+    text = str(value)
+    if len(text) <= max_length:
+        return text
+    return text[: max(0, max_length - 1)] + "..."
 
 def generate_summary_panel(job_id: str, status: str, log_dir) -> Panel:
     status_text = "Unknown"
@@ -106,6 +457,7 @@ def generate_run_submitted_panel(
     blueprint_run_id: Optional[str] = None,
     blueprint_revision: Optional[str] = None,
     web_ui_url: Optional[str] = None,
+    detached: bool = False,
 ) -> Panel:
     table = Table.grid(padding=(0, 1))
     table.add_column(style="bold")
@@ -122,7 +474,7 @@ def generate_run_submitted_panel(
     table.add_row("Payloads", str(payload_count))
     table.add_row("Logs", str(log_dir / "events.log"))
     table.add_row("Snapshot", str(log_dir / "job_snapshot.json"))
-    table.add_row("Follow", f"{follow_seconds:g}s event tail, then detach")
+    table.add_row("Follow", "Detached immediately" if detached else f"{follow_seconds:g}s event tail, then detach")
 
     return Panel(
         table,

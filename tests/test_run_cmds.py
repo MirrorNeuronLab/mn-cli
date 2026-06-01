@@ -9,9 +9,11 @@ from pathlib import Path
 import pytest
 from logging.handlers import RotatingFileHandler
 from typer.testing import CliRunner
+from rich.console import Console
 from mn_cli.main import app
 from mn_cli.libs import run_cmds
 from mn_cli.libs import run_manifest as run_manifest_lib
+from mn_cli.libs.ui import JobMonitorState, generate_live_layout
 from mn_cli.libs.run_manifest import prepare_manifest_for_submission
 
 runner = CliRunner()
@@ -326,7 +328,7 @@ def test_run_success(mocker, tmp_path, monkeypatch):
     payloads_dir.mkdir()
     (payloads_dir / "test.txt").write_text("hello")
     
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--web-ui"])
     
     assert result.exit_code == 0
     assert "Job submitted successfully" in result.stdout
@@ -337,7 +339,7 @@ def test_run_success(mocker, tmp_path, monkeypatch):
     mapping = json.loads((tmp_path / "runs" / "run-bundle-auto" / "job.json").read_text())
     assert mapping["job_id"] == "job-123"
     mock_submit.assert_called_once()
-    mock_stream.assert_called_once_with("job-123")
+    mock_stream.assert_called_once_with("job-123", follow=True, timeout=None, heartbeat_interval_ms=5000)
 
 
 def test_run_shows_runtime_web_ui_url_in_submit_and_detach_panels(
@@ -412,7 +414,7 @@ def test_run_shows_runtime_web_ui_url_in_submit_and_detach_panels(
         )
     )
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--follow-seconds", "0"])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--follow-seconds", "0", "--web-ui"])
 
     assert result.exit_code == 0
     assert "Web UI" in result.stdout
@@ -422,6 +424,45 @@ def test_run_shows_runtime_web_ui_url_in_submit_and_detach_panels(
         manifest["metadata"]["blueprint_web_ui_service"]["url"]
         == f"http://localhost:{web_ui_port}"
     )
+
+
+def test_run_does_not_auto_start_runtime_web_ui(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    mock_submit = mocker.patch(
+        'mn_cli.libs.run_cmds.client.submit_job',
+        return_value="job-no-web-ui",
+    )
+    mocker.patch(
+        'mn_cli.libs.run_cmds.client.stream_events',
+        return_value=[json.dumps({"type": "job_completed"})],
+    )
+
+    bundle_dir = tmp_path / "no_auto_web_ui_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "manifest_version": "1.0",
+        "type": "service",
+        "graph_id": "bp_no_auto_web_ui",
+        "entrypoints": [],
+        "nodes": [],
+    }))
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(json.dumps({
+        "identity": {"blueprint_id": "bp_no_auto_web_ui", "name": "No Auto Web UI"},
+        "web_ui": {
+            "enabled": True,
+            "output": {"adapter": "gradio", "title": "No Auto Web UI"},
+        },
+    }))
+
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+
+    assert result.exit_code == 0
+    assert "Web UI" not in result.stdout
+    manifest = json.loads(mock_submit.call_args.args[0])
+    assert "blueprint_web_ui_service" not in manifest.get("metadata", {})
+    assert not any(node.get("node_id") == "web_ui_dashboard" for node in manifest.get("nodes", []))
 
 
 def test_run_force_skips_input_validation(mocker, tmp_path, monkeypatch):
@@ -492,7 +533,7 @@ def test_run_submits_python_environment_requirements_payload(mocker, tmp_path, m
     payloads_dir.mkdir(parents=True)
     (payloads_dir / "requirements.txt").write_text("opencv-python-headless>=4.10,<5\n")
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--web-ui"])
 
     assert result.exit_code == 0
     payloads = mock_submit.call_args.args[1]
@@ -683,7 +724,7 @@ def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_pat
     web_dir.mkdir(parents=True)
     (web_dir / "index.html").write_text("<html></html>")
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--web-ui"])
 
     assert result.exit_code == 0
     assert "bp-1-auto-run" in result.stdout
@@ -1131,13 +1172,125 @@ def test_run_displays_live_job_type_and_follow_status(mocker, tmp_path):
         "nodes": [],
     }))
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--follow-seconds", "0"])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--follow-seconds", "0", "--web-ui"])
 
     assert result.exit_code == 0
     assert "Live service" in result.stdout
     assert "Starting: agents scheduled" in result.stdout
     assert "Following: status running" in result.stdout
     assert "75%" not in result.stdout
+
+
+def test_run_displays_workflow_steps_and_agents(mocker, tmp_path):
+    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-workflow")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_pending"}),
+        json.dumps({"type": "job_scheduled"}),
+        json.dumps({"type": "workflow_step_started", "payload": {"step": "research"}}),
+        json.dumps({"type": "workflow_worker_started", "payload": {"step": "research", "worker": "research:docs"}}),
+        json.dumps({"type": "workflow_worker_completed", "payload": {"step": "research", "worker": "research:docs", "tokens": 1200, "tools": 3}}),
+        json.dumps({"type": "research_done", "payload": {"step": "research"}}),
+        json.dumps({"type": "job_completed"}),
+    ])
+
+    bundle_dir = tmp_path / "workflow_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "id": "workflow-blueprint",
+        "name": "Workflow Blueprint",
+        "description": "Two workers inside one workflow step.",
+        "flow": {
+            "entrypoint": "research",
+            "steps": [
+                {
+                    "id": "research",
+                    "label": "Research",
+                    "goal": "Collect evidence",
+                    "run": "research_team",
+                    "emits": "research_done",
+                    "on": {"research_done": "completed"},
+                }
+            ],
+        },
+        "runtime": {
+            "bindings": {
+                "research_team": {
+                    "type": "team",
+                    "workers": [
+                        {
+                            "id": "research:docs",
+                            "role": "Analyze docs",
+                            "model": "Opus 4.8",
+                            "tokens": 1200,
+                            "tools": 3,
+                        },
+                        {
+                            "id": "research:risks",
+                            "role": "Summarize risks",
+                            "model": "Opus 4.8",
+                            "tokens": 900,
+                            "tools": 2,
+                        },
+                    ],
+                }
+            }
+        },
+        "nodes": [],
+    }))
+
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+
+    assert result.exit_code == 0
+    assert "Phases" in result.stdout
+    assert "Research" in result.stdout
+    assert "research:docs" in result.stdout
+    assert "Analyze docs" in result.stdout
+    assert "2/2 agents" in result.stdout
+
+
+def test_workflow_monitor_renders_service_idle_and_ready_counts():
+    progress = {
+        "workflow_id": "video_watch_assistant_v1",
+        "workflow_kind": "service",
+        "status": "running",
+        "elapsed_seconds": 342,
+        "agent_count": {"done": 1, "running": 0, "idle": 1, "ready": 2, "failed": 0, "total": 2},
+        "current_step_id": "visual_detector",
+        "current_step": {
+            "id": "visual_detector",
+            "label": "Visual Detector",
+            "status": "idle",
+            "current": True,
+            "done_count": 0,
+            "running_count": 0,
+            "idle_count": 1,
+            "ready_count": 1,
+            "total_count": 1,
+            "agents": [
+                {
+                    "id": "visual_detector",
+                    "status": "idle",
+                    "working_on": "Review visual detection",
+                    "progress": 0.2,
+                    "mailbox_depth": 0,
+                }
+            ],
+        },
+        "steps": [
+            {"id": "ingress", "label": "Ingress", "status": "done", "done_count": 1, "ready_count": 1, "total_count": 1},
+            {"id": "visual_detector", "label": "Visual Detector", "status": "idle", "current": True, "idle_count": 1, "ready_count": 1, "total_count": 1},
+        ],
+        "messages": ["Observing: latest event video_watch_frame_observed"],
+    }
+
+    console = Console(record=True, width=140)
+    console.print(generate_live_layout("job-service", {"workflow_progress": progress}, JobMonitorState()))
+    rendered = console.export_text()
+
+    assert "2/2 agents" in rendered
+    assert "idle" in rendered
+    assert "Review visual detection" in rendered
+    assert "Visual Detector" in rendered
 
 
 def test_live_manifest_detection_accepts_scheduler_job_type():
@@ -1187,7 +1340,7 @@ def test_live_web_ui_run_starts_background_event_relay(mocker, tmp_path, monkeyp
         },
     }))
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--follow-seconds", "0"])
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--follow-seconds", "0", "--web-ui"])
 
     assert result.exit_code == 0
     assert "Live event relay" in result.stdout
@@ -1242,6 +1395,38 @@ def test_run_follow_seconds_option_overrides_env(mocker, tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert "1.25s event tail" in result.stdout
     assert mock_follow.call_args.args[2] == 1.25
+
+
+@pytest.mark.parametrize("flag", ["-d", "--detached"])
+def test_run_detached_starts_without_live_workflow_ui(flag, mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value=f"detached-{flag.strip('-')}")
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-detached")
+    mock_stream = mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_completed"}),
+    ])
+
+    bundle_dir = tmp_path / f"run_bundle_{flag.strip('-')}"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "id": "detached-workflow",
+        "flow": {
+            "entrypoint": "step_one",
+            "steps": [{"id": "step_one", "label": "Step One", "run": "step_one"}],
+        },
+        "runtime": {"bindings": {"step_one": {"worker": {"id": "worker-one"}}}},
+        "nodes": [],
+    }))
+
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), flag])
+
+    assert result.exit_code == 0
+    assert "Detached immediately" in result.stdout
+    assert "Run Detached" in result.stdout
+    assert "Submitted" in result.stdout
+    mock_submit.assert_called_once()
+    mock_stream.assert_not_called()
+
 
 def test_job_log_writer_uses_run_logging_env(monkeypatch):
     job_id = f"env-vars-{uuid.uuid4().hex}"
@@ -1320,7 +1505,7 @@ def test_run_keyboard_interrupt(mocker, tmp_path):
     result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
     
     assert result.exit_code == 0
-    assert "Detached from log stream" in result.stdout
+    assert "Detached from workflow UI. Job is still running." in result.stdout
 
 def test_run_not_dir(tmp_path):
     not_a_dir = tmp_path / "not_a_dir"
@@ -1342,8 +1527,48 @@ def test_monitor_success(mocker):
     result = runner.invoke(app, ["job", "monitor", "job-123"])
     
     assert result.exit_code == 0
-    assert "Live Job Monitor" in result.stdout
+    assert "Workflow Job Monitor" in result.stdout
+    assert "keys: j/k or arrows select agent" in result.stdout
     assert "Job Execution Summary" in result.stdout
+
+def test_job_monitor_keyboard_state_and_agent_detail():
+    state = JobMonitorState()
+    assert state.handle_key("j", 2) is True
+    assert state.selected_index == 1
+    assert state.handle_key("d", 2) is True
+    assert state.detail_mode is True
+
+    console = Console(record=True, width=160, force_terminal=False)
+    console.print(
+        generate_live_layout(
+            "job-123",
+            {
+                "summary": {"status": "running", "live?": True, "nodes": ["worker"]},
+                "job": {"job_name": "test", "graph_id": "graph"},
+                "agents": [
+                    {"agent_id": "a1", "agent_type": "router", "status": "running", "processed_messages": 20},
+                    {
+                        "agent_id": "a2",
+                        "agent_type": "executor",
+                        "status": "busy",
+                        "current_task": "Inspect document batch",
+                        "processed_messages": 10,
+                        "mailbox_depth": 3,
+                    },
+                ],
+            },
+            state=state,
+        )
+    )
+    output = console.export_text()
+    assert "Agent Detail" in output
+    assert "a2" in output
+    assert "Inspect document batch" in output
+
+    assert state.handle_key("o", 2) is True
+    assert state.detail_mode is False
+    assert state.handle_key("\x04", 2) is False
+    assert state.handle_key("q", 2) is False
 
 def test_monitor_error(mocker):
     mocker.patch('sys.stdin.isatty', return_value=False)
@@ -1449,4 +1674,31 @@ def test_stream_keyboard_interrupt(mocker, tmp_path):
     
     result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
     assert result.exit_code == 0
-    assert "Detached from log stream" in result.stdout
+    assert "Detached from workflow UI. Job is still running." in result.stdout
+
+
+def test_post_submit_keyboard_interrupt_detaches_without_stopping_job(mocker, tmp_path):
+    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-started")
+    mocker.patch(
+        'mn_cli.libs.run_cmds._stream_and_format_events',
+        side_effect=KeyboardInterrupt,
+    )
+    mocker.patch(
+        'mn_cli.libs.run_cmds.client.get_job',
+        return_value=json.dumps({
+            "summary": {"status": "running"},
+            "job": {"status": "running"},
+            "recent_events": [],
+        }),
+    )
+
+    bundle_dir = tmp_path / "started_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({"nodes": []}))
+
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+
+    assert result.exit_code == 0
+    assert "Detached from workflow UI. Job is still running." in result.stdout
+    assert "Run Detached" in result.stdout
+    assert "Running" in result.stdout

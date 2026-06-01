@@ -12,12 +12,15 @@ import urllib.parse
 from pathlib import Path
 from typing import Annotated, Any, Optional
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.live import Live
 from mn_cli.libs.ui import (
+    JobMonitorState,
     generate_detached_panel,
     generate_live_layout,
     generate_run_submitted_panel,
     generate_summary_panel,
 )
+from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress
 from mn_cli.libs.run_logs import (
     JobLogWriter,
     STANDARD_EVENTS,
@@ -50,6 +53,7 @@ from mn_sdk import (
     validate_requirements_spec_issues,
     validate_resource_spec_issues,
     validate_service_spec_issues,
+    workflow_progress_snapshot,
 )
 
 FINAL_STATUSES = {"completed", "failed", "cancelled"}
@@ -58,6 +62,7 @@ PRE_LAUNCH_SCRIPT = Path("scripts/pre-launch.sh")
 POST_LAUNCH_SCRIPT = Path("scripts/post-launch.sh")
 DEFAULT_BLUEPRINT_WEB_UI_PORT_START = 61000
 DEFAULT_BLUEPRINT_WEB_UI_PORT_END = 61049
+DETACHED_AFTER_INTERRUPT_MESSAGE = "Detached from workflow UI. Job is still running."
 _HELPER_COMPAT = (
     _add_mn_llm_aliases,
     _blueprint_runtime_environment,
@@ -94,7 +99,7 @@ def fetch_and_save_results(job_id: str, data: dict = None):
 
     try:
         full_events = []
-        for ev_str in client.stream_events(job_id):
+        for ev_str in client.stream_events(job_id, follow=False):
             try:
                 full_events.append(json.loads(ev_str))
             except Exception:
@@ -122,7 +127,16 @@ def _stream_and_format_events(
     log_writer: Optional[JobLogWriter] = None,
     follow_seconds: Optional[float] = None,
     web_ui_url: Optional[str] = None,
+    manifest: Optional[dict[str, Any]] = None,
 ) -> str:
+    if manifest is not None:
+        return _stream_and_format_workflow_events(
+            job_id,
+            manifest,
+            log_writer=log_writer,
+            follow_seconds=follow_seconds,
+            web_ui_url=web_ui_url,
+        )
     log_writer = log_writer or JobLogWriter(job_id)
     if web_ui_url:
         log_writer.remember_web_ui_url(web_ui_url)
@@ -145,11 +159,13 @@ def _stream_and_format_events(
         ) as progress:
             job_task = progress.add_task("[cyan]Submitting job bundle...", total=None)
 
-            for event_json in client.stream_events(job_id):
-                log_writer.write_event_json(event_json)
+            for event_json in client.stream_events(job_id, follow=True, timeout=None, heartbeat_interval_ms=5000):
                 try:
                     event = json.loads(event_json)
                     event_type = event.get("type")
+                    if event_type == "stream_heartbeat":
+                        continue
+                    log_writer.write_event_json(event_json)
 
                     _write_result_stream_event(log_dir, event)
                     web_ui_url = log_writer.record_web_ui_url(event)
@@ -247,8 +263,8 @@ def _stream_and_format_events(
             )
             status_text = status
 
-    except KeyboardInterrupt:
-        console.print("[yellow]Detached from log stream.[/yellow]")
+    except (KeyboardInterrupt, EOFError):
+        console.print(f"[yellow]{DETACHED_AFTER_INTERRUPT_MESSAGE}[/yellow]")
         status, _data = _follow_job_events(job_id, log_writer, 0)
         console.print(
             generate_detached_panel(
@@ -266,6 +282,134 @@ def _stream_and_format_events(
     if status_text == "Failed":
         return "failed"
     return str(status_text).lower()
+
+
+def _stream_and_format_workflow_events(
+    job_id: str,
+    manifest: dict[str, Any],
+    *,
+    log_writer: Optional[JobLogWriter] = None,
+    follow_seconds: Optional[float] = None,
+    web_ui_url: Optional[str] = None,
+) -> str:
+    log_writer = log_writer or JobLogWriter(job_id)
+    if web_ui_url:
+        log_writer.remember_web_ui_url(web_ui_url)
+    log_dir = log_writer.log_dir
+    follow_seconds = (
+        float(os.getenv("MN_RUN_DETACH_LOG_SECONDS", "30"))
+        if follow_seconds is None
+        else follow_seconds
+    )
+    view = BlueprintWorkflowProgress(manifest, job_id=job_id)
+    status_text = "running"
+    live: Live | None = None
+
+    try:
+        if _interactive_live_output():
+            live = Live(
+                view.render(),
+                console=console,
+                refresh_per_second=6,
+                transient=True,
+                screen=True,
+            )
+            live.start()
+        try:
+            for event_json in client.stream_events(job_id, follow=True, timeout=None, heartbeat_interval_ms=5000):
+                try:
+                    event = json.loads(event_json)
+                    if event.get("type") == "stream_heartbeat":
+                        continue
+                    log_writer.write_event_json(event_json)
+                    _write_result_stream_event(log_dir, event)
+                    web_ui_url = log_writer.record_web_ui_url(event)
+                    if web_ui_url:
+                        view._remember(f"Blueprint Web UI: {web_ui_url}")
+                    view.update(event)
+                    if live is not None:
+                        live.update(view.render())
+
+                    event_type = event.get("type")
+                    if event_type == "job_completed":
+                        result = event.get("result")
+                        if result is not None:
+                            with open(log_dir / "result.txt", "w") as f_res:
+                                json.dump(result, f_res, indent=2)
+                        status_text = "completed"
+                        break
+                    if event_type == "job_failed":
+                        status_text = "failed"
+                        break
+                    if event_type == "job_cancelled":
+                        status_text = "cancelled"
+                        break
+                except Exception:
+                    log_writer.run_logger.exception("Failed to process streamed event")
+
+            if status_text not in FINAL_STATUSES:
+                status_text = _follow_workflow_job_events(
+                    job_id,
+                    log_writer,
+                    follow_seconds,
+                    view,
+                    live,
+                )
+        finally:
+            if live is not None:
+                live.stop()
+    except (KeyboardInterrupt, EOFError):
+        console.print(f"[yellow]{DETACHED_AFTER_INTERRUPT_MESSAGE}[/yellow]")
+        status_text, _data = _follow_job_events(job_id, log_writer, 0)
+
+    if live is None:
+        console.print(view.render())
+
+    if status_text in FINAL_STATUSES:
+        console.print(
+            generate_summary_panel(
+                job_id=job_id,
+                status=status_text,
+                log_dir=log_dir,
+            )
+        )
+    else:
+        console.print(
+            generate_detached_panel(
+                job_id,
+                log_dir,
+                status_text,
+                log_writer.event_count,
+                web_ui_url=log_writer.web_ui_url,
+            )
+        )
+    return status_text
+
+
+def _follow_workflow_job_events(
+    job_id: str,
+    log_writer: JobLogWriter,
+    follow_seconds: float,
+    view: BlueprintWorkflowProgress,
+    live: Live | None,
+) -> str:
+    started = time.monotonic()
+    last_status, data = _follow_job_events(job_id, log_writer, follow_seconds)
+    if isinstance(data, dict):
+        for event in reversed(data.get("recent_events", [])):
+            if isinstance(event, dict):
+                view.update(event)
+    remaining = max(follow_seconds - (time.monotonic() - started), 0)
+    view.update_follow_status(last_status, log_writer.event_count, remaining)
+    if live is not None:
+        live.update(view.render())
+    return last_status
+
+
+def _interactive_live_output() -> bool:
+    if os.getenv("MN_RUN_DISABLE_LIVE_SCREEN", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return False
+    return bool(getattr(console, "is_terminal", False) and sys.stdout.isatty())
 
 
 def _follow_job_events(
@@ -713,6 +857,21 @@ def run(
             help="Run even if blueprint input validation or runtime requirements fail.",
         ),
     ] = False,
+    detached: Annotated[
+        bool,
+        typer.Option(
+            "-d",
+            "--detached",
+            help="Start the blueprint run without the live workflow UI.",
+        ),
+    ] = False,
+    web_ui: Annotated[
+        bool,
+        typer.Option(
+            "--web-ui",
+            help="Start or register the blueprint Web UI for this run.",
+        ),
+    ] = False,
 ):
     """Run a catalog blueprint, or a local folder with --folder."""
     if folder and target:
@@ -720,7 +879,14 @@ def run(
         raise typer.Exit(1)
 
     if folder:
-        _run_local_folder(folder, run_id=run_id, follow_seconds=follow_seconds, force=force)
+        _run_local_folder(
+            folder,
+            run_id=run_id,
+            follow_seconds=follow_seconds,
+            force=force,
+            detached=detached,
+            web_ui=web_ui,
+        )
         return
 
     if not target:
@@ -746,6 +912,8 @@ def run(
         revision=revision,
         follow_seconds=follow_seconds,
         force=force,
+        detached=detached,
+        web_ui=web_ui,
     )
 
 
@@ -755,6 +923,8 @@ def _run_local_folder(
     run_id: Optional[str],
     follow_seconds: Optional[float],
     force: bool,
+    detached: bool = False,
+    web_ui: bool = False,
 ) -> None:
     bundle_dir = Path(folder).expanduser()
     manifest = _load_manifest_for_local_run(bundle_dir)
@@ -766,6 +936,8 @@ def _run_local_folder(
             run_id=run_id,
             follow_seconds=follow_seconds,
             force=force,
+            detached=detached,
+            web_ui=web_ui,
         )
         return
 
@@ -777,6 +949,8 @@ def _run_local_folder(
         env_overrides=env_overrides,
         submission_metadata=submission_metadata,
         force=force,
+        detached=detached,
+        web_ui=web_ui,
     )
 
 
@@ -804,15 +978,26 @@ def run_bundle(
     submission_metadata: Optional[dict[str, Any]] = None,
     config_overrides: Optional[dict[str, Any]] = None,
     force: bool = False,
+    detached: bool = False,
+    web_ui: bool = False,
 ):
     """Run a bundle after applying optional runtime metadata and environment."""
     pre_launch_process: subprocess.Popen[Any] | None = None
     pre_launch_run_dir: Path | None = None
+    submitted_job_id: str | None = None
+    submitted_log_writer: JobLogWriter | None = None
+    submitted_bundle_dir: Path | None = None
+    submitted_manifest: dict[str, Any] | None = None
+    submitted_run_dir: Path | None = None
+    submitted_web_ui_url: str | None = None
+    submitted_config_overrides: dict[str, Any] | None = None
     try:
         env_overrides = dict(env_overrides or {})
         config_overrides = dict(config_overrides or {})
+        submitted_config_overrides = config_overrides
         submission_metadata = dict(submission_metadata or {})
         bundle_dir = Path(bundle_path)
+        submitted_bundle_dir = bundle_dir
         if not bundle_dir.is_dir():
             console.print(
                 f"[red]Error: '{bundle_path}' is not a directory. Expected a bundle folder.[/red]"
@@ -902,6 +1087,7 @@ def run_bundle(
             env_overrides=env_overrides,
             submission_metadata=submission_metadata,
             config_overrides=config_overrides,
+            enable_runtime_web_ui=web_ui,
         )
         if force:
             _mark_manifest_force(manifest_dict)
@@ -915,28 +1101,35 @@ def run_bundle(
                     rel_path = filepath.relative_to(payloads_dir).as_posix()
                     with open(filepath, "rb") as f:
                         payloads[rel_path] = f.read()
-        payloads.update(runtime_web_ui_support_payloads_for_manifest(manifest_dict))
+        if web_ui:
+            payloads.update(runtime_web_ui_support_payloads_for_manifest(manifest_dict))
         stage_local_input_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
         manifest = json.dumps(manifest_dict)
+        submitted_manifest = manifest_dict
 
         blueprint_run_dir = (
             _blueprint_run_dir(blueprint_run_id, env_overrides)
             if blueprint_run_id
             else None
         )
+        submitted_run_dir = blueprint_run_dir
         job_id = client.submit_job(manifest, payloads, force=force)
+        submitted_job_id = job_id
         log_writer = JobLogWriter(job_id, run_dir=blueprint_run_dir)
+        submitted_log_writer = log_writer
         if blueprint_run_id:
             _write_blueprint_job_mapping(
                 blueprint_run_id, job_id, submission_metadata, env_overrides
             )
-            _write_local_web_ui_handle(
-                bundle_dir,
-                blueprint_run_id,
-                env_overrides=env_overrides,
-                config_overrides=config_overrides,
-            )
-        web_ui_url = _console_web_ui_url(manifest_dict, blueprint_run_dir)
+            if web_ui:
+                _write_local_web_ui_handle(
+                    bundle_dir,
+                    blueprint_run_id,
+                    env_overrides=env_overrides,
+                    config_overrides=config_overrides,
+                )
+        web_ui_url = _console_web_ui_url(manifest_dict, blueprint_run_dir) if web_ui else None
+        submitted_web_ui_url = web_ui_url
         resolved_follow_seconds = (
             float(os.getenv("MN_RUN_DETACH_LOG_SECONDS", "30"))
             if follow_seconds is None
@@ -954,23 +1147,47 @@ def run_bundle(
                 blueprint_run_id=blueprint_run_id,
                 blueprint_revision=submission_metadata.get("blueprint_revision"),
                 web_ui_url=web_ui_url,
+                detached=detached,
             )
         )
+        if detached:
+            if web_ui and blueprint_run_dir is not None:
+                _start_background_event_relay_if_needed(
+                    bundle_dir,
+                    manifest_dict,
+                    job_id,
+                    blueprint_run_dir,
+                    "submitted",
+                    config_overrides=config_overrides,
+                )
+            console.print(
+                generate_detached_panel(
+                    job_id,
+                    log_writer.log_dir,
+                    "submitted",
+                    log_writer.event_count,
+                    web_ui_url=log_writer.web_ui_url or web_ui_url,
+                )
+            )
+            return
+
         final_status = _stream_and_format_events(
             job_id,
             log_writer,
             resolved_follow_seconds,
             web_ui_url=web_ui_url,
+            manifest=manifest_dict,
         )
         if blueprint_run_dir is not None:
-            _start_background_event_relay_if_needed(
-                bundle_dir,
-                manifest_dict,
-                job_id,
-                blueprint_run_dir,
-                final_status,
-                config_overrides=config_overrides,
-            )
+            if web_ui:
+                _start_background_event_relay_if_needed(
+                    bundle_dir,
+                    manifest_dict,
+                    job_id,
+                    blueprint_run_dir,
+                    final_status,
+                    config_overrides=config_overrides,
+                )
             if final_status in FINAL_STATUSES:
                 cleanup_blueprint_host_hooks(
                     blueprint_run_dir,
@@ -992,6 +1209,52 @@ def run_bundle(
                 reason="launch_failed",
             )
         raise
+    except (KeyboardInterrupt, EOFError):
+        if submitted_job_id:
+            log_writer = submitted_log_writer or JobLogWriter(
+                submitted_job_id, run_dir=submitted_run_dir
+            )
+            status = "running"
+            try:
+                status, _data = _follow_job_events(submitted_job_id, log_writer, 0)
+                if status == "unknown":
+                    status = "running"
+            except Exception:
+                log_writer.run_logger.exception("Failed to poll detached job status")
+            console.print(f"[yellow]{DETACHED_AFTER_INTERRUPT_MESSAGE}[/yellow]")
+            if (
+                submitted_run_dir is not None
+                and submitted_bundle_dir is not None
+                and submitted_manifest is not None
+            ):
+                if web_ui:
+                    _start_background_event_relay_if_needed(
+                        submitted_bundle_dir,
+                        submitted_manifest,
+                        submitted_job_id,
+                        submitted_run_dir,
+                        status,
+                        config_overrides=submitted_config_overrides,
+                    )
+            console.print(
+                generate_detached_panel(
+                    submitted_job_id,
+                    log_writer.log_dir,
+                    status,
+                    log_writer.event_count,
+                    web_ui_url=log_writer.web_ui_url or submitted_web_ui_url,
+                )
+            )
+            return
+        _terminate_pre_launch_process(pre_launch_process, reason="launch_interrupted")
+        if pre_launch_run_dir is not None:
+            cleanup_blueprint_host_hooks(
+                pre_launch_run_dir,
+                dry_run=False,
+                summary={"process_removed": [], "process_skipped": [], "errors": []},
+                reason="launch_interrupted",
+            )
+        raise typer.Exit(130)
     except Exception as e:
         _terminate_pre_launch_process(pre_launch_process, reason="launch_failed")
         if pre_launch_run_dir is not None:
@@ -2255,6 +2518,86 @@ def _web_ui_video_source(config: dict[str, Any], bundle_dir: Path) -> str:
     return video_source
 
 
+def _workflow_progress_for_monitor(job_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
+    manifest = _manifest_from_job_data(data)
+    events: list[dict[str, Any]] = []
+    try:
+        for event_json in client.stream_events(job_id, follow=False):
+            try:
+                event = json.loads(event_json)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict):
+                events.append(event)
+    except Exception:
+        logger.exception("Failed to load workflow events for monitor")
+    try:
+        return workflow_progress_snapshot(
+            manifest,
+            events,
+            job=data.get("job") if isinstance(data.get("job"), dict) else {},
+            summary=data.get("summary") if isinstance(data.get("summary"), dict) else {},
+            job_id=job_id,
+        )
+    except Exception:
+        logger.exception("Failed to build workflow progress for monitor")
+        return None
+
+
+def _manifest_from_job_data(data: dict[str, Any]) -> dict[str, Any]:
+    job = data.get("job") if isinstance(data.get("job"), dict) else {}
+    summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+    for candidate in (data.get("manifest"), job.get("manifest"), summary.get("manifest")):
+        if isinstance(candidate, dict) and candidate:
+            return candidate
+    manifest_ref = job.get("manifest_ref") if isinstance(job.get("manifest_ref"), dict) else summary.get("manifest_ref")
+    if isinstance(manifest_ref, dict):
+        for raw_path in (
+            manifest_ref.get("manifest_path"),
+            Path(str(manifest_ref.get("job_path") or "")) / "manifest.json" if manifest_ref.get("job_path") else None,
+        ):
+            if not raw_path:
+                continue
+            try:
+                path = Path(str(raw_path)).expanduser()
+                if path.is_file():
+                    loaded = json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        return loaded
+            except (OSError, json.JSONDecodeError):
+                continue
+    topology = job.get("runtime_topology") if isinstance(job.get("runtime_topology"), dict) else {}
+    topology_nodes = topology.get("nodes") if isinstance(topology.get("nodes"), list) else []
+    agents = topology_nodes or (data.get("agents") if isinstance(data.get("agents"), list) else [])
+    nodes = []
+    for index, agent in enumerate(agents):
+        if not isinstance(agent, dict):
+            continue
+        agent_id = str(agent.get("agent_id") or agent.get("id") or agent.get("node_id") or f"agent_{index + 1}")
+        nodes.append(
+            {
+                "node_id": agent_id,
+                "agent_type": str(agent.get("agent_type") or agent.get("type") or "worker"),
+                "role": str(agent.get("role") or agent.get("current_task") or agent.get("agent_type") or "worker"),
+                "type": str(agent.get("node_type") or agent.get("type") or ""),
+                "live": agent.get("live?", agent.get("live", False)),
+                "config": {"llm_config": str(agent.get("model") or agent.get("llm_config") or "runtime")},
+            }
+        )
+    job_type = str(job.get("job_type") or job.get("type") or summary.get("job_type") or summary.get("type") or "")
+    policies = {"stream_mode": "live"} if job_type.lower() == "service" else {}
+    return {
+        "id": str(job.get("graph_id") or summary.get("graph_id") or job.get("job_id") or "job"),
+        "name": str(job.get("job_name") or summary.get("job_name") or job.get("job_id") or "Job"),
+        "description": str(summary.get("description") or job.get("description") or ""),
+        "graph_id": str(job.get("graph_id") or summary.get("graph_id") or ""),
+        "type": job_type,
+        "job_type": job_type,
+        "policies": policies,
+        "nodes": nodes,
+    }
+
+
 def _live_monitor(job_id: str):
     import sys
     import select
@@ -2272,8 +2615,9 @@ def _live_monitor(job_id: str):
         tty.setcbreak(fd)
 
     class MonitorView:
-        def __init__(self):
+        def __init__(self, state: JobMonitorState):
             self.data = None
+            self.state = state
 
         def __rich__(self):
             if not self.data:
@@ -2284,17 +2628,26 @@ def _live_monitor(job_id: str):
                 from rich.panel import Panel
 
                 return Panel(f"Error fetching job: {self.data['error']}", style="red")
-            return generate_live_layout(job_id, self.data)
+            return generate_live_layout(job_id, self.data, state=self.state)
 
     final_status = "unknown"
-    view = MonitorView()
+    data = None
+    monitor_state = JobMonitorState()
+    view = MonitorView(monitor_state)
 
     try:
-        with Live(view, refresh_per_second=12, console=console):
+        with Live(
+            view,
+            refresh_per_second=12,
+            console=console,
+            screen=bool(is_tty and getattr(console, "is_terminal", False)),
+            transient=bool(is_tty and getattr(console, "is_terminal", False)),
+        ):
             while True:
                 try:
                     job_json = client.get_job(job_id)
                     data = json.loads(job_json)
+                    data["workflow_progress"] = _workflow_progress_for_monitor(job_id, data)
                 except Exception as e:
                     data = {"error": str(e)}
 
@@ -2309,8 +2662,9 @@ def _live_monitor(job_id: str):
                 if is_tty:
                     i, o, e = select.select([sys.stdin], [], [], 0.5)
                     if i:
-                        key = sys.stdin.read(1)
-                        if key.lower() == "q" or key == "\x03":  # \x03 is Ctrl-C
+                        key = _read_monitor_key(sys.stdin, select)
+                        agent_count = len(data.get("agents", [])) if isinstance(data.get("agents"), list) else 0
+                        if not monitor_state.handle_key(key, agent_count):
                             break
                 else:
                     time.sleep(0.5)
@@ -2333,6 +2687,19 @@ def _live_monitor(job_id: str):
     else:
         console.print(f"\n[yellow]Exited live monitor for {job_id}[/yellow]")
         fetch_and_save_results(job_id, data)
+
+
+def _read_monitor_key(stream, select_module) -> str:
+    key = stream.read(1)
+    if key != "\x1b":
+        return key
+    parts = [key]
+    while True:
+        ready, _, _ = select_module.select([stream], [], [], 0.01)
+        if not ready:
+            break
+        parts.append(stream.read(1))
+    return "".join(parts)
 
 
 def monitor(job_id: str):

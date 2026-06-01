@@ -73,6 +73,7 @@ def prepare_manifest_for_submission(
     env_overrides: Optional[dict[str, str]] = None,
     submission_metadata: Optional[dict[str, Any]] = None,
     config_overrides: Optional[dict[str, Any]] = None,
+    enable_runtime_web_ui: bool = True,
 ) -> dict[str, Any]:
     prepared = json.loads(json.dumps(manifest_dict))
     render_agent_templates_for_submission(prepared)
@@ -88,7 +89,7 @@ def prepare_manifest_for_submission(
         config = with_shared_run_store_config(config, str(run_id), runs_root)
     if config is not None:
         apply_manifest_config_bindings(prepared, config)
-    if run_id and config is not None:
+    if enable_runtime_web_ui and run_id and config is not None:
         inject_runtime_web_ui_service_for_submission(
             prepared,
             bundle_dir=bundle_dir,

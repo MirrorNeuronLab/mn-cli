@@ -188,6 +188,27 @@ def test_blueprint_run_init_success(mocker, tmp_path):
     assert mock_run_bundle.call_args.kwargs["env_overrides"]["MN_RUN_ID"].startswith("bp-1-")
     assert mock_run_bundle.call_args.kwargs["submission_metadata"]["blueprint_revision"] == "abc123"
 
+
+def test_blueprint_run_detached_catalog_name_passes_through(mocker, tmp_path):
+    storage_dir = tmp_path / "blueprints"
+    storage_dir.mkdir()
+    mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', return_value=str(storage_dir))
+    mock_run = mocker.patch('mn_cli.libs.blueprint_cmds.subprocess.run')
+    mock_run.return_value.returncode = 0
+    mocker.patch('mn_cli.libs.blueprint_cmds._git_revision', return_value="abc123")
+    (storage_dir / "index.json").write_text(json.dumps([{"id": "bp-1", "path": "bp-1-dir"}]))
+    bp_dir = storage_dir / "bp-1-dir"
+    bp_dir.mkdir()
+    (bp_dir / "manifest.json").write_text("{}")
+    mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
+
+    result = runner.invoke(app, ["blueprint", "run", "bp-1", "--detached"])
+
+    assert result.exit_code == 0
+    mock_run_bundle.assert_called_once()
+    assert mock_run_bundle.call_args.kwargs["detached"] is True
+
+
 def test_blueprint_run_update_success(mocker, tmp_path):
     storage_dir = tmp_path / "blueprints"
     storage_dir.mkdir()
