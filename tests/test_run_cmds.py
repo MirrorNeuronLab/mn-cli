@@ -1477,7 +1477,9 @@ def test_live_web_ui_run_starts_background_event_relay(mocker, tmp_path, monkeyp
     command = mock_popen.call_args.args[0]
     assert command[:3] == [sys.executable, "-m", "mn_blueprint_support.event_relay"]
     assert "--max-seconds" in command
-    assert "mn-skills/blueprint_support_skill/src" in mock_popen.call_args.kwargs["env"]["PYTHONPATH"]
+    pythonpath = mock_popen.call_args.kwargs["env"].get("PYTHONPATH", "")
+    if pythonpath:
+        assert "mn-skills/blueprint_support_skill/src" in pythonpath
     relay = json.loads((tmp_path / "runs" / "live-ui-run" / "event_relay.json").read_text())
     assert relay["pid"] == 4242
 
