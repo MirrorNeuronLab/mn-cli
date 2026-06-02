@@ -1277,7 +1277,7 @@ def test_run_displays_workflow_steps_and_agents(mocker, tmp_path):
         json.dumps({"type": "job_scheduled"}),
         json.dumps({"type": "workflow_step_started", "payload": {"step": "research"}}),
         json.dumps({"type": "workflow_worker_started", "payload": {"step": "research", "worker": "research:docs"}}),
-        json.dumps({"type": "workflow_worker_completed", "payload": {"step": "research", "worker": "research:docs", "tokens": 1200, "tools": 3}}),
+        json.dumps({"type": "workflow_step_attempt_completed", "payload": {"step": "research", "worker": "research:docs", "tokens": 1200, "tools": 3}}),
         json.dumps({"type": "research_done", "payload": {"step": "research"}}),
         json.dumps({"type": "job_completed"}),
     ])

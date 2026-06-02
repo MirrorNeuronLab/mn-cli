@@ -1,8 +1,10 @@
 import json
 import pytest
 import subprocess
+import sys
 from io import StringIO
 from pathlib import Path
+from unittest.mock import call
 from rich.console import Console
 import mn_cli.server_cmds as server_cmds
 from mn_cli.server_cmds import (
@@ -47,9 +49,11 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.BEAM_PID_FILE', pid_dir / "beam.pid")
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', pid_dir / "api.pid")
     mocker.patch('mn_cli.server_cmds.WEB_UI_PID_FILE', pid_dir / "web-ui.pid")
+    mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_PID_FILE', pid_dir / "web-ui-watchdog.pid")
     mocker.patch('mn_cli.server_cmds.BEAM_LOG', log_dir / "beam.log")
     mocker.patch('mn_cli.server_cmds.API_LOG', log_dir / "api.log")
     mocker.patch('mn_cli.server_cmds.WEB_UI_LOG', log_dir / "web-ui.log")
+    mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_LOG', log_dir / "web-ui-watchdog.log")
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path / "mn_venv")
     mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_FILE', state_dir / "docker-compose.yml")
     mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', state_dir / "docker-compose.env")
@@ -1147,6 +1151,11 @@ def test_find_web_ui_dir_installed(tmp_path, mocker):
 
     assert find_web_ui_dir() == installed
 
+def test_web_ui_http_url_uses_connectable_loopback_for_wildcard_hosts():
+    assert server_cmds._web_ui_http_url("0.0.0.0", "55173") == "http://127.0.0.1:55173/"
+    assert server_cmds._web_ui_http_url("::", "55173") == "http://127.0.0.1:55173/"
+    assert server_cmds._web_ui_http_url("::1", "55173") == "http://[::1]:55173/"
+
 def test_start_web_ui_if_installed(mocker, tmp_path):
     web_ui_dir = tmp_path / "web-ui"
     web_ui_dir.mkdir()
@@ -1155,18 +1164,59 @@ def test_start_web_ui_if_installed(mocker, tmp_path):
 
     mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', (web_ui_dir,))
     mocker.patch('mn_cli.server_cmds.WEB_UI_PID_FILE', tmp_path / "web-ui.pid")
+    mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_PID_FILE', tmp_path / "web-ui-watchdog.pid")
     mocker.patch('mn_cli.server_cmds.WEB_UI_LOG', tmp_path / "web-ui.log")
+    mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_LOG', tmp_path / "web-ui-watchdog.log")
+    mocker.patch('mn_cli.server_cmds.shutil.which', return_value="/usr/bin/npm")
+    mock_wait = mocker.patch('mn_cli.server_cmds._wait_for_web_ui', return_value=True)
 
     mock_popen = mocker.patch('mn_cli.server_cmds.subprocess.Popen')
     mock_popen.return_value.pid = 5173
 
     _start_web_ui_if_installed()
 
-    assert (tmp_path / "web-ui.pid").read_text() == "5173"
+    assert (tmp_path / "web-ui-watchdog.pid").read_text() == "5173"
     mock_popen.assert_called_once()
-    assert mock_popen.call_args.args[0][:3] == ["npm", "run", "dev"]
-    assert mock_popen.call_args.args[0][-3:] == ["localhost", "--port", "55173"]
-    assert mock_popen.call_args.kwargs["cwd"] == web_ui_dir
+    command = mock_popen.call_args.args[0]
+    assert command[0] == sys.executable
+    assert command[1] == "-c"
+    watchdog_config = json.loads(command[3])
+    assert watchdog_config["command"][:3] == ["npm", "run", "dev"]
+    assert watchdog_config["command"][-3:] == ["localhost", "--port", "55173"]
+    assert watchdog_config["cwd"] == str(web_ui_dir)
+    assert mock_popen.call_args.kwargs["stdin"] == subprocess.DEVNULL
+    mock_wait.assert_called_once_with("localhost", "55173", timeout_seconds=10.0)
+
+def test_start_web_ui_restarts_unresponsive_watchdog(mocker, tmp_path):
+    web_ui_dir = tmp_path / "web-ui"
+    web_ui_dir.mkdir()
+    (web_ui_dir / "package.json").write_text("{}")
+    (web_ui_dir / "node_modules").mkdir()
+    watchdog_pid_file = tmp_path / "web-ui-watchdog.pid"
+    child_pid_file = tmp_path / "web-ui.pid"
+    watchdog_pid_file.write_text("9001")
+    child_pid_file.write_text("9002")
+
+    mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', (web_ui_dir,))
+    mocker.patch('mn_cli.server_cmds.WEB_UI_PID_FILE', child_pid_file)
+    mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_PID_FILE', watchdog_pid_file)
+    mocker.patch('mn_cli.server_cmds.WEB_UI_LOG', tmp_path / "web-ui.log")
+    mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_LOG', tmp_path / "web-ui-watchdog.log")
+    mocker.patch('mn_cli.server_cmds.shutil.which', return_value="/usr/bin/npm")
+    mocker.patch('mn_cli.server_cmds.os.kill')
+    mock_kill_tree = mocker.patch('mn_cli.server_cmds.kill_tree')
+    mock_wait = mocker.patch('mn_cli.server_cmds._wait_for_web_ui', side_effect=[False, True])
+    mock_popen = mocker.patch('mn_cli.server_cmds.subprocess.Popen')
+    mock_popen.return_value.pid = 5173
+
+    assert _start_web_ui_if_installed() is True
+
+    mock_kill_tree.assert_called_once_with(9001)
+    assert watchdog_pid_file.read_text() == "5173"
+    assert mock_wait.call_args_list == [
+        call("localhost", "55173", timeout_seconds=5.0),
+        call("localhost", "55173", timeout_seconds=10.0),
+    ]
 
 def test_start_web_ui_missing_noop(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', (tmp_path / "web-ui",))
@@ -1185,10 +1235,12 @@ def test_start_web_ui_missing_npm_skips(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', (web_ui_dir,))
     mocker.patch('mn_cli.server_cmds.WEB_UI_PID_FILE', tmp_path / "web-ui.pid")
     mocker.patch('mn_cli.server_cmds.WEB_UI_LOG', tmp_path / "web-ui.log")
-    mocker.patch('mn_cli.server_cmds.subprocess.Popen', side_effect=FileNotFoundError)
+    mocker.patch('mn_cli.server_cmds.shutil.which', return_value=None)
+    mock_popen = mocker.patch('mn_cli.server_cmds.subprocess.Popen')
 
     assert _start_web_ui_if_installed() is False
     assert not (tmp_path / "web-ui.pid").exists()
+    mock_popen.assert_not_called()
 
 def test_print_service_endpoints(mocker, monkeypatch):
     output = StringIO()

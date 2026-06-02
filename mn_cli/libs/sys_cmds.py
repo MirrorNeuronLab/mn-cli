@@ -18,6 +18,7 @@ from mn_cli.server_cmds import (
     BEAM_PID_FILE,
     API_PID_FILE,
     WEB_UI_PID_FILE,
+    WEB_UI_WATCHDOG_PID_FILE,
     DEFAULT_GRPC_PORT,
     DEFAULT_DIST_PORT,
     runtime_compose_available,
@@ -109,6 +110,7 @@ def stop():
         subprocess.run(["docker", "rm", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
     for pid_file, name in [
+        (WEB_UI_WATCHDOG_PID_FILE, "Web UI watchdog"),
         (WEB_UI_PID_FILE, "Web UI"),
         (API_PID_FILE, "REST API"),
         (BEAM_PID_FILE, "Legacy Core Service"),

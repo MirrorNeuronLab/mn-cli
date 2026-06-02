@@ -3,9 +3,12 @@ import json
 import hashlib
 import signal
 import secrets
+import shutil
 import socket
 import subprocess
+import sys
 import time
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -30,9 +33,11 @@ LOG_DIR = DIR / "logs"
 BEAM_PID_FILE = PID_DIR / "beam.pid"
 API_PID_FILE = PID_DIR / "api.pid"
 WEB_UI_PID_FILE = PID_DIR / "web-ui.pid"
+WEB_UI_WATCHDOG_PID_FILE = PID_DIR / "web-ui-watchdog.pid"
 BEAM_LOG = LOG_DIR / "beam.log"
 API_LOG = LOG_DIR / "api.log"
 WEB_UI_LOG = LOG_DIR / "web-ui.log"
+WEB_UI_WATCHDOG_LOG = LOG_DIR / "web-ui-watchdog.log"
 VENV_DIR = Path.home() / ".local" / "share" / "mn_venv"
 RUNTIME_COMPOSE_FILE = DIR / "docker-compose.yml"
 RUNTIME_COMPOSE_ENV = DIR / "docker-compose.env"
@@ -47,6 +52,7 @@ DEFAULT_API_PORT = "54001"
 DEFAULT_EPMD_PORT = "54369"
 DEFAULT_DIST_PORT = "54370"
 DEFAULT_WEB_UI_PORT = "55173"
+DEFAULT_WEB_UI_RESTART_DELAY_SECONDS = "2"
 DEFAULT_OPENSHELL_GATEWAY_PORT = "58080"
 DEFAULT_BLUEPRINT_REPO = "https://github.com/MirrorNeuronLab/mn-blueprints.git"
 DEFAULT_BLUEPRINT_WEB_UI_BIND_HOST = "0.0.0.0"
@@ -1399,6 +1405,138 @@ def find_web_ui_dir() -> Optional[Path]:
             return web_ui_dir
     return None
 
+def _web_ui_watchdog_script() -> str:
+    return r"""
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+config = json.loads(sys.argv[1])
+command = config["command"]
+cwd = config["cwd"]
+pid_file = Path(config["pid_file"])
+log_file = Path(config["log_file"])
+restart_delay = float(config.get("restart_delay", 2))
+stopping = False
+child = None
+
+def log(message):
+    timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    with log_file.open("a", encoding="utf-8") as handle:
+        handle.write(f"[watchdog {timestamp}] {message}\n")
+
+def request_stop(_signum, _frame):
+    global stopping
+    stopping = True
+    if child is not None and child.poll() is None:
+        try:
+            child.terminate()
+        except OSError:
+            pass
+
+signal.signal(signal.SIGTERM, request_stop)
+signal.signal(signal.SIGINT, request_stop)
+
+pid_file.parent.mkdir(parents=True, exist_ok=True)
+log_file.parent.mkdir(parents=True, exist_ok=True)
+
+try:
+    while not stopping:
+        with log_file.open("a", encoding="utf-8", buffering=1) as output:
+            child = subprocess.Popen(
+                command,
+                cwd=cwd,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                env=os.environ.copy(),
+                start_new_session=True,
+            )
+            pid_file.write_text(str(child.pid), encoding="utf-8")
+            log(f"started web ui child pid={child.pid}")
+            while not stopping:
+                exit_code = child.poll()
+                if exit_code is not None:
+                    break
+                time.sleep(1)
+
+        if stopping:
+            break
+
+        log(f"web ui child exited code={exit_code}; restarting in {restart_delay:g}s")
+        time.sleep(restart_delay)
+finally:
+    if child is not None and child.poll() is None:
+        try:
+            child.terminate()
+            child.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                child.kill()
+            except OSError:
+                pass
+        except OSError:
+            pass
+    try:
+        pid_file.unlink()
+    except OSError:
+        pass
+    log("watchdog stopped")
+"""
+
+def _web_ui_command(web_ui_host: str, web_ui_port: str) -> list[str]:
+    return ["npm", "run", "dev", "--", "--host", web_ui_host, "--port", web_ui_port]
+
+def _start_web_ui_watchdog(web_ui_dir: Path, env: dict[str, str], web_ui_host: str, web_ui_port: str) -> subprocess.Popen:
+    config = {
+        "command": _web_ui_command(web_ui_host, web_ui_port),
+        "cwd": str(web_ui_dir),
+        "pid_file": str(WEB_UI_PID_FILE),
+        "log_file": str(WEB_UI_LOG),
+        "restart_delay": env.get("MN_WEB_UI_RESTART_DELAY_SECONDS", DEFAULT_WEB_UI_RESTART_DELAY_SECONDS),
+    }
+    with open(WEB_UI_WATCHDOG_LOG, "w") as out:
+        return subprocess.Popen(
+            [sys.executable, "-c", _web_ui_watchdog_script(), json.dumps(config)],
+            stdout=out,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            env=env,
+            start_new_session=True,
+        )
+
+def _web_ui_http_url(web_ui_host: str, web_ui_port: str) -> str:
+    display_host = _native_endpoint_host(web_ui_host)
+    if ":" in display_host and not display_host.startswith("["):
+        display_host = f"[{display_host}]"
+    return f"http://{display_host}:{_valid_port_text(str(web_ui_port), DEFAULT_WEB_UI_PORT)}/"
+
+def _wait_for_web_ui(web_ui_host: str, web_ui_port: str, *, timeout_seconds: float = 10.0) -> bool:
+    url = _web_ui_http_url(web_ui_host, web_ui_port)
+    deadline = time.monotonic() + max(timeout_seconds, 0.0)
+    last_error: Optional[Exception] = None
+
+    while True:
+        try:
+            with urllib.request.urlopen(url, timeout=0.75) as response:
+                status = getattr(response, "status", None)
+                if status is None:
+                    status = response.getcode()
+                if int(status) < 500:
+                    return True
+        except Exception as exc:
+            last_error = exc
+
+        if time.monotonic() >= deadline:
+            if last_error is not None:
+                logger.warning("Web UI did not respond at %s: %s", url, last_error)
+            return False
+        time.sleep(0.25)
+
 def _host_port_from_target(target: str, default_host: str, default_port: str) -> tuple[str, str]:
     if "://" in target:
         parsed = urlparse(target)
@@ -1544,38 +1682,67 @@ def _start_web_ui_if_installed(runtime_env: Optional[dict[str, str]] = None) -> 
     if not web_ui_dir:
         return False
 
-    status = check_status(WEB_UI_PID_FILE)
-    if status == 0:
-        console.print("[yellow]=> Web UI is already running, skipping.[/yellow]")
-        return True
-    if status == 1:
-        WEB_UI_PID_FILE.unlink(missing_ok=True)
-
     env = os.environ.copy()
     if runtime_env:
         env.update(runtime_env)
     web_ui_host = env.get("MN_WEB_UI_HOST") or _web_ui_host()
-    env.setdefault("MN_WEB_UI_HOST", web_ui_host)
+    env["MN_WEB_UI_HOST"] = web_ui_host
     env.setdefault("MN_API_HOST", _api_host())
     env.setdefault("MN_API_PORT", os.getenv("MN_API_PORT", DEFAULT_API_PORT))
-    web_ui_port = env.get("MN_WEB_UI_PORT") or os.getenv("MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT)
+    web_ui_port = _valid_port_text(
+        str(env.get("MN_WEB_UI_PORT") or os.getenv("MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT)),
+        DEFAULT_WEB_UI_PORT,
+    )
     env["MN_WEB_UI_PORT"] = web_ui_port
-    console.print(f"=> Starting mn-web-ui (Vite on {web_ui_host}:{web_ui_port})...")
-    with open(WEB_UI_LOG, "w") as out:
+
+    watchdog_status = check_status(WEB_UI_WATCHDOG_PID_FILE)
+    if watchdog_status == 0:
+        if _wait_for_web_ui(web_ui_host, web_ui_port, timeout_seconds=5.0):
+            console.print("[yellow]=> Web UI watchdog is already running, skipping.[/yellow]")
+            return True
         try:
-            p_web = subprocess.Popen(
-                ["npm", "run", "dev", "--", "--host", web_ui_host, "--port", web_ui_port],
-                cwd=web_ui_dir,
-                stdout=out,
-                stderr=subprocess.STDOUT,
-                env=env,
-                start_new_session=True
-            )
-        except FileNotFoundError:
-            console.print("[yellow]=> Warning: npm not found, skipping Web UI.[/yellow]")
-            return False
-    WEB_UI_PID_FILE.write_text(str(p_web.pid))
-    console.print(f"   [green][Started][/green] Web UI (PID: {p_web.pid})")
+            watchdog_pid = int(WEB_UI_WATCHDOG_PID_FILE.read_text().strip())
+            console.print("[yellow]=> Web UI watchdog is running, but the page is not responding; restarting it.[/yellow]")
+            kill_tree(watchdog_pid)
+            time.sleep(1)
+        except (ValueError, OSError):
+            pass
+        WEB_UI_WATCHDOG_PID_FILE.unlink(missing_ok=True)
+        WEB_UI_PID_FILE.unlink(missing_ok=True)
+    if watchdog_status == 1:
+        WEB_UI_WATCHDOG_PID_FILE.unlink(missing_ok=True)
+
+    child_status = check_status(WEB_UI_PID_FILE)
+    if child_status == 0:
+        try:
+            pid = int(WEB_UI_PID_FILE.read_text().strip())
+            console.print(f"=> Restarting existing Web UI (PID: {pid}) under watchdog...")
+            kill_tree(pid)
+            time.sleep(1)
+        except (ValueError, OSError):
+            pass
+        WEB_UI_PID_FILE.unlink(missing_ok=True)
+    elif child_status == 1:
+        WEB_UI_PID_FILE.unlink(missing_ok=True)
+
+    if shutil.which("npm", path=env.get("PATH")) is None:
+        console.print("[yellow]=> Warning: npm not found, skipping Web UI.[/yellow]")
+        return False
+
+    console.print(f"=> Starting mn-web-ui watchdog (Vite on {web_ui_host}:{web_ui_port})...")
+    try:
+        p_web_watchdog = _start_web_ui_watchdog(web_ui_dir, env, web_ui_host, web_ui_port)
+    except FileNotFoundError:
+        console.print("[yellow]=> Warning: Python runtime not found, skipping Web UI.[/yellow]")
+        return False
+    WEB_UI_WATCHDOG_PID_FILE.write_text(str(p_web_watchdog.pid))
+    if _wait_for_web_ui(web_ui_host, web_ui_port, timeout_seconds=10.0):
+        console.print(f"   [green][Started][/green] Web UI watchdog (PID: {p_web_watchdog.pid})")
+    else:
+        console.print(
+            f"   [yellow][Started][/yellow] Web UI watchdog (PID: {p_web_watchdog.pid}); "
+            f"waiting for {_web_ui_http_url(web_ui_host, web_ui_port)} to respond."
+        )
     return True
 
 def _start_server(
