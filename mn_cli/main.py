@@ -79,6 +79,7 @@ node_app.command(name="refresh-token")(sys_cmds.refresh_token)
 # Runtime commands
 runtime_app.command(name="start")(sys_cmds.start)
 runtime_app.command(name="stop")(sys_cmds.stop)
+runtime_app.command(name="health")(sys_cmds.health)
 runtime_app.command(name="update")(update_cmds.update)
 runtime_app.command(name="metrics")(job_cmds.metrics)
 

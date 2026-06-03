@@ -19,6 +19,7 @@ def list_resources():
         if isinstance(enriched, dict):
             enriched = dict(enriched)
             enriched["native_ports"] = native_ports_payload()
+            enriched["runtime_health_command"] = "mn runtime health"
         console.print_json(data=enriched)
     except Exception as e:
         handle_cli_error(e, console, "resource list")

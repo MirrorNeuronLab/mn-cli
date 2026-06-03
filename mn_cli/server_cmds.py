@@ -3,7 +3,6 @@ import json
 import hashlib
 import signal
 import secrets
-import shutil
 import socket
 import subprocess
 import sys
@@ -1401,8 +1400,14 @@ def kill_tree(parent_pid: int):
 
 def find_web_ui_dir() -> Optional[Path]:
     for web_ui_dir in WEB_UI_DIRS:
-        if (web_ui_dir / "package.json").exists() and (web_ui_dir / "node_modules").exists():
+        if _web_ui_dist_dir(web_ui_dir) is not None:
             return web_ui_dir
+    return None
+
+def _web_ui_dist_dir(web_ui_dir: Path) -> Optional[Path]:
+    for candidate in (web_ui_dir / "dist", web_ui_dir):
+        if (candidate / "index.html").exists():
+            return candidate
     return None
 
 def _web_ui_watchdog_script() -> str:
@@ -1489,7 +1494,10 @@ finally:
 """
 
 def _web_ui_command(web_ui_host: str, web_ui_port: str) -> list[str]:
-    return ["npm", "run", "dev", "--", "--host", web_ui_host, "--port", web_ui_port]
+    web_ui_server = VENV_DIR / "bin" / "mn-web-ui-server"
+    if web_ui_server.exists():
+        return [str(web_ui_server)]
+    return [sys.executable, "-m", "mn_api.web_ui_server"]
 
 def _start_web_ui_watchdog(web_ui_dir: Path, env: dict[str, str], web_ui_host: str, web_ui_port: str) -> subprocess.Popen:
     config = {
@@ -1509,14 +1517,15 @@ def _start_web_ui_watchdog(web_ui_dir: Path, env: dict[str, str], web_ui_host: s
             start_new_session=True,
         )
 
-def _web_ui_http_url(web_ui_host: str, web_ui_port: str) -> str:
+def _web_ui_http_url(web_ui_host: str, web_ui_port: str, path: str = "/") -> str:
     display_host = _native_endpoint_host(web_ui_host)
     if ":" in display_host and not display_host.startswith("["):
         display_host = f"[{display_host}]"
-    return f"http://{display_host}:{_valid_port_text(str(web_ui_port), DEFAULT_WEB_UI_PORT)}/"
+    normalized_path = path if path.startswith("/") else f"/{path}"
+    return f"http://{display_host}:{_valid_port_text(str(web_ui_port), DEFAULT_WEB_UI_PORT)}{normalized_path}"
 
 def _wait_for_web_ui(web_ui_host: str, web_ui_port: str, *, timeout_seconds: float = 10.0) -> bool:
-    url = _web_ui_http_url(web_ui_host, web_ui_port)
+    url = _web_ui_http_url(web_ui_host, web_ui_port, "/health")
     deadline = time.monotonic() + max(timeout_seconds, 0.0)
     last_error: Optional[Exception] = None
 
@@ -1527,7 +1536,16 @@ def _wait_for_web_ui(web_ui_host: str, web_ui_port: str, *, timeout_seconds: flo
                 if status is None:
                     status = response.getcode()
                 if int(status) < 500:
-                    return True
+                    try:
+                        payload = json.loads(response.read(4096).decode("utf-8"))
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        payload = {}
+                    if (
+                        isinstance(payload, dict)
+                        and str(payload.get("status") or "").lower() == "ok"
+                        and payload.get("component") == "web-ui"
+                    ):
+                        return True
         except Exception as exc:
             last_error = exc
 
@@ -1681,6 +1699,9 @@ def _start_web_ui_if_installed(runtime_env: Optional[dict[str, str]] = None) -> 
     web_ui_dir = find_web_ui_dir()
     if not web_ui_dir:
         return False
+    web_ui_dist_dir = _web_ui_dist_dir(web_ui_dir)
+    if web_ui_dist_dir is None:
+        return False
 
     env = os.environ.copy()
     if runtime_env:
@@ -1694,6 +1715,7 @@ def _start_web_ui_if_installed(runtime_env: Optional[dict[str, str]] = None) -> 
         DEFAULT_WEB_UI_PORT,
     )
     env["MN_WEB_UI_PORT"] = web_ui_port
+    env["MN_WEB_UI_DIST_DIR"] = str(web_ui_dist_dir)
 
     watchdog_status = check_status(WEB_UI_WATCHDOG_PID_FILE)
     if watchdog_status == 0:
@@ -1725,11 +1747,7 @@ def _start_web_ui_if_installed(runtime_env: Optional[dict[str, str]] = None) -> 
     elif child_status == 1:
         WEB_UI_PID_FILE.unlink(missing_ok=True)
 
-    if shutil.which("npm", path=env.get("PATH")) is None:
-        console.print("[yellow]=> Warning: npm not found, skipping Web UI.[/yellow]")
-        return False
-
-    console.print(f"=> Starting mn-web-ui watchdog (Vite on {web_ui_host}:{web_ui_port})...")
+    console.print(f"=> Starting mn-web-ui watchdog (static server on {web_ui_host}:{web_ui_port})...")
     try:
         p_web_watchdog = _start_web_ui_watchdog(web_ui_dir, env, web_ui_host, web_ui_port)
     except FileNotFoundError:
@@ -1738,12 +1756,13 @@ def _start_web_ui_if_installed(runtime_env: Optional[dict[str, str]] = None) -> 
     WEB_UI_WATCHDOG_PID_FILE.write_text(str(p_web_watchdog.pid))
     if _wait_for_web_ui(web_ui_host, web_ui_port, timeout_seconds=10.0):
         console.print(f"   [green][Started][/green] Web UI watchdog (PID: {p_web_watchdog.pid})")
+        return True
     else:
         console.print(
             f"   [yellow][Started][/yellow] Web UI watchdog (PID: {p_web_watchdog.pid}); "
             f"waiting for {_web_ui_http_url(web_ui_host, web_ui_port)} to respond."
         )
-    return True
+    return False
 
 def _start_server(
     ip: str = None,
@@ -1755,9 +1774,24 @@ def _start_server(
     redis_port: Optional[int] = None,
 ):
     if check_status(API_PID_FILE) == 0:
-        console.print("[red]Error: MirrorNeuron API is already running.[/red]")
-        console.print("Use 'mn runtime stop' to stop it first.")
-        raise typer.Exit(1)
+        if ip:
+            console.print("[red]Error: MirrorNeuron API is already running.[/red]")
+            console.print("Use 'mn runtime stop' to stop it first.")
+            raise typer.Exit(1)
+        console.print("[yellow]=> MirrorNeuron API is already running; checking runtime Web UI...[/yellow]")
+        env = _runtime_base_env(runtime_compose_available())
+        if runtime_compose_available():
+            env = _ensure_compose_native_port_settings(env)
+        env.setdefault("MN_API_HOST", _api_host())
+        env.setdefault("MN_API_PORT", DEFAULT_API_PORT)
+        env.setdefault("MN_WEB_UI_HOST", _web_ui_host())
+        env.setdefault("MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT)
+        web_ui_available = _start_web_ui_if_installed(env)
+        endpoint_snapshot = _write_runtime_endpoints_file(env, web_ui_available=web_ui_available)
+        console.print(f"   Runtime endpoints: {RUNTIME_ENDPOINTS_FILE}")
+        logger.info("Refreshed MirrorNeuron runtime endpoints: %s", endpoint_snapshot.get("api", {}))
+        _print_service_endpoints(None, web_ui_available)
+        return
 
     compose_runtime = runtime_compose_available()
     if not compose_runtime:

@@ -130,6 +130,15 @@ def stop():
             pid_file.unlink()
     console.print("=> [green]All services stopped.[/green]")
 
+def health(
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
+    timeout: float = typer.Option(3.0, "--timeout", min=0.1, help="Per-component timeout in seconds."),
+):
+    """Report Core gRPC, REST API, and Web UI health"""
+    from mn_cli.libs.runtime_health import health as runtime_health
+
+    runtime_health(json_output=json_output, timeout=timeout)
+
 def leave(node_name: str):
     """Remove a node from the cluster by its node name (e.g. mirror_neuron@192.168.4.173)"""
     from mn_cli.shared import client, console
