@@ -977,7 +977,7 @@ def test_prepare_manifest_injects_runtime_web_ui_service_from_config(tmp_path, m
     assert env["MN_BLUEPRINT_WEB_UI_HOST"] == "0.0.0.0"
     assert env["MN_BLUEPRINT_WEB_UI_PORT"] == str(first_port)
     assert env["MN_BLUEPRINT_WEB_UI_BASE_URL"] == f"http://localhost:{first_port}"
-    assert ".mn_runtime_web_ui/src" in env["PYTHONPATH"].split(os.pathsep)
+    assert "mn_runtime_web_ui/src" in env["PYTHONPATH"].split(os.pathsep)
     assert node["config"]["workdir"] == "/sandbox/job/payloads"
     assert node["config"]["python_environment"]["packages"] == ["gradio>=4.0"]
     assert node["constraints"] == [
