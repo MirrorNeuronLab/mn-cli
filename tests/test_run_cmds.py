@@ -936,6 +936,13 @@ def test_prepare_manifest_injects_runtime_web_ui_service_from_config(tmp_path, m
                     "output": {
                         "adapter": "gradio",
                         "title": "Range Dashboard",
+                        "constraints": [
+                            {
+                                "attribute": "node.name",
+                                "operator": "==",
+                                "value": "mirror_neuron@127.0.0.1",
+                            }
+                        ],
                     },
                 },
             }
@@ -973,6 +980,13 @@ def test_prepare_manifest_injects_runtime_web_ui_service_from_config(tmp_path, m
     assert ".mn_runtime_web_ui/src" in env["PYTHONPATH"].split(os.pathsep)
     assert node["config"]["workdir"] == "/sandbox/job/payloads"
     assert node["config"]["python_environment"]["packages"] == ["gradio>=4.0"]
+    assert node["constraints"] == [
+        {
+            "attribute": "node.name",
+            "operator": "==",
+            "value": "mirror_neuron@127.0.0.1",
+        }
+    ]
     assert node["services"][0]["name"] == "blueprint-web-ui"
     assert node["resources"]["ports"][0]["port"] == first_port
 
