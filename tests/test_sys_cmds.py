@@ -106,8 +106,13 @@ def test_stop(mocker, tmp_path):
     # Mock PID files
     mocker.patch('mn_cli.libs.sys_cmds.API_PID_FILE', tmp_path / "api.pid")
     mocker.patch('mn_cli.libs.sys_cmds.BEAM_PID_FILE', tmp_path / "beam.pid")
-    mocker.patch('mn_cli.libs.sys_cmds.WEB_UI_PID_FILE', tmp_path / "web-ui.pid")
-    mocker.patch('mn_cli.libs.sys_cmds.WEB_UI_WATCHDOG_PID_FILE', tmp_path / "web-ui-watchdog.pid")
+    mocker.patch(
+        'mn_cli.libs.sys_cmds.web_ui_pid_files',
+        return_value=(
+            (tmp_path / "web-ui-watchdog.pid", "Web UI watchdog"),
+            (tmp_path / "web-ui.pid", "Web UI"),
+        ),
+    )
     
     (tmp_path / "api.pid").write_text("12345")
     (tmp_path / "beam.pid").write_text("67890")
@@ -125,6 +130,38 @@ def test_stop(mocker, tmp_path):
     assert not (tmp_path / "web-ui.pid").exists()
     assert not (tmp_path / "web-ui-watchdog.pid").exists()
 
+def test_stop_cleans_web_ui_pid_files_from_default_runtime_home(mocker, tmp_path):
+    mocker.patch('mn_cli.libs.sys_cmds._stop_network_runtime')
+    mocker.patch('mn_cli.libs.sys_cmds.subprocess.run')
+    mock_kill_tree = mocker.patch('mn_cli.libs.sys_cmds.kill_tree')
+    mocker.patch('mn_cli.libs.sys_cmds.os.kill')
+
+    active_dir = tmp_path / "active"
+    default_dir = tmp_path / "default"
+    active_dir.mkdir()
+    default_dir.mkdir()
+    mocker.patch('mn_cli.libs.sys_cmds.API_PID_FILE', tmp_path / "api.pid")
+    mocker.patch('mn_cli.libs.sys_cmds.BEAM_PID_FILE', tmp_path / "beam.pid")
+    mocker.patch(
+        'mn_cli.libs.sys_cmds.web_ui_pid_files',
+        return_value=(
+            (active_dir / "web-ui-watchdog.pid", "Web UI watchdog"),
+            (active_dir / "web-ui.pid", "Web UI"),
+            (default_dir / "web-ui-watchdog.pid", "Web UI watchdog"),
+            (default_dir / "web-ui.pid", "Web UI"),
+        ),
+    )
+
+    (default_dir / "web-ui-watchdog.pid").write_text("24681")
+    (default_dir / "web-ui.pid").write_text("24680")
+
+    result = runner.invoke(app, ["runtime", "stop"])
+
+    assert result.exit_code == 0
+    assert mock_kill_tree.call_count == 2
+    assert not (default_dir / "web-ui-watchdog.pid").exists()
+    assert not (default_dir / "web-ui.pid").exists()
+
 def test_stop_uses_compose_runtime_when_available(mocker, tmp_path):
     mocker.patch('mn_cli.libs.sys_cmds._stop_network_runtime')
     mock_run = mocker.patch('mn_cli.libs.sys_cmds.subprocess.run')
@@ -135,8 +172,13 @@ def test_stop_uses_compose_runtime_when_available(mocker, tmp_path):
 
     mocker.patch('mn_cli.libs.sys_cmds.API_PID_FILE', tmp_path / "api.pid")
     mocker.patch('mn_cli.libs.sys_cmds.BEAM_PID_FILE', tmp_path / "beam.pid")
-    mocker.patch('mn_cli.libs.sys_cmds.WEB_UI_PID_FILE', tmp_path / "web-ui.pid")
-    mocker.patch('mn_cli.libs.sys_cmds.WEB_UI_WATCHDOG_PID_FILE', tmp_path / "web-ui-watchdog.pid")
+    mocker.patch(
+        'mn_cli.libs.sys_cmds.web_ui_pid_files',
+        return_value=(
+            (tmp_path / "web-ui-watchdog.pid", "Web UI watchdog"),
+            (tmp_path / "web-ui.pid", "Web UI"),
+        ),
+    )
     (tmp_path / "api.pid").write_text("12345")
 
     result = runner.invoke(app, ["runtime", "stop"])
@@ -152,8 +194,13 @@ def test_stop_pid_file_invalid(mocker, tmp_path):
     
     mocker.patch('mn_cli.libs.sys_cmds.API_PID_FILE', tmp_path / "api.pid")
     mocker.patch('mn_cli.libs.sys_cmds.BEAM_PID_FILE', tmp_path / "beam.pid")
-    mocker.patch('mn_cli.libs.sys_cmds.WEB_UI_PID_FILE', tmp_path / "web-ui.pid")
-    mocker.patch('mn_cli.libs.sys_cmds.WEB_UI_WATCHDOG_PID_FILE', tmp_path / "web-ui-watchdog.pid")
+    mocker.patch(
+        'mn_cli.libs.sys_cmds.web_ui_pid_files',
+        return_value=(
+            (tmp_path / "web-ui-watchdog.pid", "Web UI watchdog"),
+            (tmp_path / "web-ui.pid", "Web UI"),
+        ),
+    )
     
     (tmp_path / "api.pid").write_text("invalid")
     
@@ -171,8 +218,13 @@ def test_stop_kill_oserror(mocker, tmp_path):
     
     mocker.patch('mn_cli.libs.sys_cmds.API_PID_FILE', tmp_path / "api.pid")
     mocker.patch('mn_cli.libs.sys_cmds.BEAM_PID_FILE', tmp_path / "beam.pid")
-    mocker.patch('mn_cli.libs.sys_cmds.WEB_UI_PID_FILE', tmp_path / "web-ui.pid")
-    mocker.patch('mn_cli.libs.sys_cmds.WEB_UI_WATCHDOG_PID_FILE', tmp_path / "web-ui-watchdog.pid")
+    mocker.patch(
+        'mn_cli.libs.sys_cmds.web_ui_pid_files',
+        return_value=(
+            (tmp_path / "web-ui-watchdog.pid", "Web UI watchdog"),
+            (tmp_path / "web-ui.pid", "Web UI"),
+        ),
+    )
     
     (tmp_path / "api.pid").write_text("12345")
     

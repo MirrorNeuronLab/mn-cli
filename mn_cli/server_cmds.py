@@ -27,6 +27,7 @@ def _mn_home() -> Path:
 
 
 DIR = _mn_home()
+DEFAULT_DIR = Path.home() / ".mn"
 PID_DIR = DIR / "pids"
 LOG_DIR = DIR / "logs"
 BEAM_PID_FILE = PID_DIR / "beam.pid"
@@ -41,10 +42,38 @@ VENV_DIR = Path.home() / ".local" / "share" / "mn_venv"
 RUNTIME_COMPOSE_FILE = DIR / "docker-compose.yml"
 RUNTIME_COMPOSE_ENV = DIR / "docker-compose.env"
 RUNTIME_ENDPOINTS_FILE = DIR / "runtime-endpoints.json"
-WEB_UI_DIRS = (
-    DIR / "webui",
-    DIR / "web-ui-source",
-)
+def _unique_paths(paths: list[Path]) -> tuple[Path, ...]:
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return tuple(unique)
+
+
+def _source_checkout_web_ui_dir() -> Optional[Path]:
+    checkout_dir = Path(__file__).resolve().parents[2]
+    web_ui_dir = checkout_dir / "mn-web-ui"
+    return web_ui_dir if web_ui_dir.exists() else None
+
+
+def _web_ui_dirs() -> tuple[Path, ...]:
+    paths = [
+        DIR / "webui",
+        DIR / "web-ui-source",
+        DEFAULT_DIR / "webui",
+        DEFAULT_DIR / "web-ui-source",
+    ]
+    source_web_ui_dir = _source_checkout_web_ui_dir()
+    if source_web_ui_dir is not None:
+        paths.append(source_web_ui_dir)
+    return _unique_paths(paths)
+
+
+WEB_UI_DIRS = _web_ui_dirs()
 DEFAULT_HOST = "localhost"
 DEFAULT_GRPC_PORT = "55051"
 DEFAULT_API_PORT = "54001"
@@ -1376,6 +1405,23 @@ def runtime_compose_cmd(*args: str) -> list[str]:
         *args,
     ]
 
+def web_ui_pid_files() -> tuple[tuple[Path, str], ...]:
+    paths = [
+        (WEB_UI_WATCHDOG_PID_FILE, "Web UI watchdog"),
+        (WEB_UI_PID_FILE, "Web UI"),
+        (DEFAULT_DIR / "pids" / "web-ui-watchdog.pid", "Web UI watchdog"),
+        (DEFAULT_DIR / "pids" / "web-ui.pid", "Web UI"),
+    ]
+    unique: list[tuple[Path, str]] = []
+    seen: set[str] = set()
+    for pid_file, name in paths:
+        key = str(pid_file)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append((pid_file, name))
+    return tuple(unique)
+
 def kill_tree(parent_pid: int):
     try:
         os.kill(parent_pid, 0)
@@ -1718,6 +1764,14 @@ def _start_web_ui_if_installed(runtime_env: Optional[dict[str, str]] = None) -> 
     env["MN_WEB_UI_DIST_DIR"] = str(web_ui_dist_dir)
 
     watchdog_status = check_status(WEB_UI_WATCHDOG_PID_FILE)
+    child_status = check_status(WEB_UI_PID_FILE)
+    if (
+        watchdog_status == 2
+        and child_status == 2
+        and _wait_for_web_ui(web_ui_host, web_ui_port, timeout_seconds=1.0)
+    ):
+        console.print("[yellow]=> Web UI is already responding, advertising existing instance.[/yellow]")
+        return True
     if watchdog_status == 0:
         if _wait_for_web_ui(web_ui_host, web_ui_port, timeout_seconds=5.0):
             console.print("[yellow]=> Web UI watchdog is already running, skipping.[/yellow]")
@@ -1734,7 +1788,6 @@ def _start_web_ui_if_installed(runtime_env: Optional[dict[str, str]] = None) -> 
     if watchdog_status == 1:
         WEB_UI_WATCHDOG_PID_FILE.unlink(missing_ok=True)
 
-    child_status = check_status(WEB_UI_PID_FILE)
     if child_status == 0:
         try:
             pid = int(WEB_UI_PID_FILE.read_text().strip())
@@ -1756,13 +1809,12 @@ def _start_web_ui_if_installed(runtime_env: Optional[dict[str, str]] = None) -> 
     WEB_UI_WATCHDOG_PID_FILE.write_text(str(p_web_watchdog.pid))
     if _wait_for_web_ui(web_ui_host, web_ui_port, timeout_seconds=10.0):
         console.print(f"   [green][Started][/green] Web UI watchdog (PID: {p_web_watchdog.pid})")
-        return True
     else:
         console.print(
             f"   [yellow][Started][/yellow] Web UI watchdog (PID: {p_web_watchdog.pid}); "
             f"waiting for {_web_ui_http_url(web_ui_host, web_ui_port)} to respond."
         )
-    return False
+    return True
 
 def _start_server(
     ip: str = None,

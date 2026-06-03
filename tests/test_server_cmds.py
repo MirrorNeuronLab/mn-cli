@@ -1151,10 +1151,35 @@ def test_start_server_passes_slack_env_to_docker(mocker, tmp_path, monkeypatch):
     ]
 
 def test_default_web_ui_dirs_use_nested_install_path():
-    assert ORIGINAL_WEB_UI_DIRS == (
-        Path.home() / ".mn" / "webui",
-        Path.home() / ".mn" / "web-ui-source",
+    assert ORIGINAL_WEB_UI_DIRS[0].name == "webui"
+    assert ORIGINAL_WEB_UI_DIRS[1] == ORIGINAL_WEB_UI_DIRS[0].parent / "web-ui-source"
+    assert Path.home() / ".mn" / "webui" in ORIGINAL_WEB_UI_DIRS
+    assert Path.home() / ".mn" / "web-ui-source" in ORIGINAL_WEB_UI_DIRS
+
+def test_web_ui_dirs_include_default_install_when_runtime_home_is_custom(mocker, tmp_path):
+    custom_home = tmp_path / "custom-home"
+    default_home = tmp_path / "default-home"
+
+    mocker.patch("mn_cli.server_cmds.DIR", custom_home)
+    mocker.patch("mn_cli.server_cmds.DEFAULT_DIR", default_home)
+    mocker.patch("mn_cli.server_cmds._source_checkout_web_ui_dir", return_value=None)
+
+    assert server_cmds._web_ui_dirs() == (
+        custom_home / "webui",
+        custom_home / "web-ui-source",
+        default_home / "webui",
+        default_home / "web-ui-source",
     )
+
+def test_find_web_ui_dir_uses_default_install_when_runtime_home_has_no_webui(tmp_path, mocker):
+    runtime_web_ui = tmp_path / "runtime-home" / "webui"
+    default_web_ui = tmp_path / "default-home" / "webui"
+    (default_web_ui / "dist").mkdir(parents=True)
+    (default_web_ui / "dist" / "index.html").write_text("<div id=\"root\"></div>")
+
+    mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', (runtime_web_ui, default_web_ui))
+
+    assert find_web_ui_dir() == default_web_ui
 
 def test_find_web_ui_dir_installed(tmp_path, mocker):
     missing = tmp_path / "missing"
@@ -1188,7 +1213,7 @@ def test_start_web_ui_if_installed(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_PID_FILE', tmp_path / "web-ui-watchdog.pid")
     mocker.patch('mn_cli.server_cmds.WEB_UI_LOG', tmp_path / "web-ui.log")
     mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_LOG', tmp_path / "web-ui-watchdog.log")
-    mock_wait = mocker.patch('mn_cli.server_cmds._wait_for_web_ui', return_value=True)
+    mock_wait = mocker.patch('mn_cli.server_cmds._wait_for_web_ui', side_effect=[False, True])
 
     mock_popen = mocker.patch('mn_cli.server_cmds.subprocess.Popen')
     mock_popen.return_value.pid = 5173
@@ -1205,7 +1230,43 @@ def test_start_web_ui_if_installed(mocker, tmp_path):
     assert watchdog_config["cwd"] == str(web_ui_dir)
     assert mock_popen.call_args.kwargs["stdin"] == subprocess.DEVNULL
     assert mock_popen.call_args.kwargs["env"]["MN_WEB_UI_DIST_DIR"] == str(web_ui_dir / "dist")
-    mock_wait.assert_called_once_with("localhost", "55173", timeout_seconds=10.0)
+    assert mock_wait.call_args_list == [
+        call("localhost", "55173", timeout_seconds=1.0),
+        call("localhost", "55173", timeout_seconds=10.0),
+    ]
+
+def test_start_web_ui_reports_available_when_watchdog_starts_before_health(mocker, tmp_path):
+    web_ui_dir = tmp_path / "web-ui"
+    (web_ui_dir / "dist").mkdir(parents=True)
+    (web_ui_dir / "dist" / "index.html").write_text("<div id=\"root\"></div>")
+
+    mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', (web_ui_dir,))
+    mocker.patch('mn_cli.server_cmds.WEB_UI_PID_FILE', tmp_path / "web-ui.pid")
+    mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_PID_FILE', tmp_path / "web-ui-watchdog.pid")
+    mocker.patch('mn_cli.server_cmds.WEB_UI_LOG', tmp_path / "web-ui.log")
+    mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_LOG', tmp_path / "web-ui-watchdog.log")
+    mocker.patch('mn_cli.server_cmds._wait_for_web_ui', return_value=False)
+
+    mock_popen = mocker.patch('mn_cli.server_cmds.subprocess.Popen')
+    mock_popen.return_value.pid = 5173
+
+    assert _start_web_ui_if_installed() is True
+    assert (tmp_path / "web-ui-watchdog.pid").read_text() == "5173"
+
+def test_start_web_ui_advertises_existing_healthy_instance_without_pid_files(mocker, tmp_path):
+    web_ui_dir = tmp_path / "web-ui"
+    (web_ui_dir / "dist").mkdir(parents=True)
+    (web_ui_dir / "dist" / "index.html").write_text("<div id=\"root\"></div>")
+
+    mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', (web_ui_dir,))
+    mocker.patch('mn_cli.server_cmds.WEB_UI_PID_FILE', tmp_path / "web-ui.pid")
+    mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_PID_FILE', tmp_path / "web-ui-watchdog.pid")
+    mocker.patch('mn_cli.server_cmds._wait_for_web_ui', return_value=True)
+
+    mock_popen = mocker.patch('mn_cli.server_cmds.subprocess.Popen')
+
+    assert _start_web_ui_if_installed() is True
+    mock_popen.assert_not_called()
 
 def test_start_web_ui_restarts_unresponsive_watchdog(mocker, tmp_path):
     web_ui_dir = tmp_path / "web-ui"
