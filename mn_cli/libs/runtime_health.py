@@ -14,8 +14,11 @@ from mn_cli.shared import client, console
 from mn_cli.server_cmds import (
     RUNTIME_ENDPOINTS_FILE,
     _ensure_compose_native_port_settings,
+    _start_api_if_installed,
+    _start_web_ui_if_installed,
     _runtime_base_env,
     _runtime_endpoint_snapshot,
+    _write_runtime_endpoints_file,
     find_web_ui_dir,
     runtime_compose_available,
 )
@@ -24,9 +27,12 @@ from mn_cli.server_cmds import (
 def health(
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
     timeout: float = typer.Option(3.0, "--timeout", min=0.1, help="Per-component timeout in seconds."),
+    repair: bool = typer.Option(False, "--repair", help="Restart unhealthy API/Web UI sidecars when possible."),
 ) -> None:
     """Report Core gRPC, REST API, and Web UI health."""
     report = collect_runtime_health(timeout)
+    if repair and _repair_runtime_sidecars(report):
+        report = collect_runtime_health(timeout)
     if json_output:
         console.print_json(data=report)
     else:
@@ -126,6 +132,37 @@ def overall_status(components: list[dict[str, Any]]) -> str:
     if "warning" in statuses:
         return "warning"
     return "passing"
+
+
+def _repair_runtime_sidecars(report: dict[str, Any]) -> bool:
+    components = {
+        str(component.get("name")): component
+        for component in report.get("components", [])
+        if isinstance(component, dict)
+    }
+    needs_api = components.get("api", {}).get("status") == "critical"
+    needs_web_ui = components.get("web_ui", {}).get("status") == "critical"
+    if not needs_api and not needs_web_ui:
+        return False
+
+    env = _runtime_base_env(runtime_compose_available())
+    if runtime_compose_available():
+        env = _ensure_compose_native_port_settings(env)
+    env.setdefault("MN_API_HOST", "localhost")
+    env.setdefault("MN_API_PORT", "54001")
+    env.setdefault("MN_WEB_UI_HOST", "localhost")
+    env.setdefault("MN_WEB_UI_PORT", "55173")
+
+    changed = False
+    if needs_api:
+        console.print("[yellow]=> Repair: restarting REST API sidecar...[/yellow]")
+        changed = _start_api_if_installed(env) or changed
+    if needs_web_ui:
+        console.print("[yellow]=> Repair: restarting Web UI sidecar...[/yellow]")
+        changed = _start_web_ui_if_installed(env) or changed
+    if changed:
+        _write_runtime_endpoints_file(env, web_ui_available=find_web_ui_dir() is not None)
+    return changed
 
 
 def _targets(snapshot: dict[str, Any], persisted: dict[str, Any]) -> dict[str, str]:

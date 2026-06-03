@@ -119,6 +119,38 @@ def test_runtime_health_command_json_exits_nonzero_for_critical(mocker):
     assert json.loads(result.stdout)["overall"] == "critical"
 
 
+def test_runtime_health_repair_rechecks_after_restart(mocker):
+    reports = [
+        {
+            "overall": "critical",
+            "checked_at": "2026-06-03T00:00:00Z",
+            "components": [
+                {"name": "core_grpc", "status": "passing", "target": "localhost:55051", "duration_ms": 1},
+                {"name": "api", "status": "critical", "target": "http://localhost:54001/api/v1/health", "duration_ms": 1},
+                {"name": "web_ui", "status": "critical", "target": "http://localhost:55173/health", "duration_ms": 1},
+            ],
+        },
+        {
+            "overall": "passing",
+            "checked_at": "2026-06-03T00:00:01Z",
+            "components": [
+                {"name": "core_grpc", "status": "passing", "target": "localhost:55051", "duration_ms": 1},
+                {"name": "api", "status": "passing", "target": "http://localhost:54001/api/v1/health", "duration_ms": 1},
+                {"name": "web_ui", "status": "passing", "target": "http://localhost:55173/health", "duration_ms": 1},
+            ],
+        },
+    ]
+    mock_collect = mocker.patch("mn_cli.libs.runtime_health.collect_runtime_health", side_effect=reports)
+    mock_repair = mocker.patch("mn_cli.libs.runtime_health._repair_runtime_sidecars", return_value=True)
+
+    result = runner.invoke(app, ["runtime", "health", "--json", "--repair"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["overall"] == "passing"
+    assert mock_collect.call_count == 2
+    mock_repair.assert_called_once_with(reports[0])
+
+
 def _patch_targets(mocker, tmp_path: Path, *, web_ui_installed: bool) -> Path:
     endpoints = tmp_path / "runtime-endpoints.json"
     mocker.patch("mn_cli.libs.runtime_health.RUNTIME_ENDPOINTS_FILE", endpoints)

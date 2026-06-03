@@ -32,10 +32,12 @@ PID_DIR = DIR / "pids"
 LOG_DIR = DIR / "logs"
 BEAM_PID_FILE = PID_DIR / "beam.pid"
 API_PID_FILE = PID_DIR / "api.pid"
+API_WATCHDOG_PID_FILE = PID_DIR / "api-watchdog.pid"
 WEB_UI_PID_FILE = PID_DIR / "web-ui.pid"
 WEB_UI_WATCHDOG_PID_FILE = PID_DIR / "web-ui-watchdog.pid"
 BEAM_LOG = LOG_DIR / "beam.log"
 API_LOG = LOG_DIR / "api.log"
+API_WATCHDOG_LOG = LOG_DIR / "api-watchdog.log"
 WEB_UI_LOG = LOG_DIR / "web-ui.log"
 WEB_UI_WATCHDOG_LOG = LOG_DIR / "web-ui-watchdog.log"
 VENV_DIR = Path.home() / ".local" / "share" / "mn_venv"
@@ -1422,6 +1424,23 @@ def web_ui_pid_files() -> tuple[tuple[Path, str], ...]:
         unique.append((pid_file, name))
     return tuple(unique)
 
+def api_pid_files() -> tuple[tuple[Path, str], ...]:
+    paths = [
+        (API_WATCHDOG_PID_FILE, "REST API watchdog"),
+        (API_PID_FILE, "REST API"),
+        (DEFAULT_DIR / "pids" / "api-watchdog.pid", "REST API watchdog"),
+        (DEFAULT_DIR / "pids" / "api.pid", "REST API"),
+    ]
+    unique: list[tuple[Path, str]] = []
+    seen: set[str] = set()
+    for pid_file, name in paths:
+        key = str(pid_file)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append((pid_file, name))
+    return tuple(unique)
+
 def kill_tree(parent_pid: int):
     try:
         os.kill(parent_pid, 0)
@@ -1538,6 +1557,130 @@ finally:
         pass
     log("watchdog stopped")
 """
+
+def _api_command() -> Optional[list[str]]:
+    api_bin = VENV_DIR / "bin" / "mn-api"
+    if api_bin.exists():
+        return [str(api_bin)]
+    return None
+
+def _api_http_url(api_host: str, api_port: str, path: str = "/api/v1/health") -> str:
+    display_host = _native_endpoint_host(api_host)
+    if ":" in display_host and not display_host.startswith("["):
+        display_host = f"[{display_host}]"
+    normalized_path = path if path.startswith("/") else f"/{path}"
+    return f"http://{display_host}:{_valid_port_text(str(api_port), DEFAULT_API_PORT)}{normalized_path}"
+
+def _wait_for_api(api_host: str, api_port: str, *, timeout_seconds: float = 10.0) -> bool:
+    url = _api_http_url(api_host, api_port, "/api/v1/health")
+    deadline = time.monotonic() + max(timeout_seconds, 0.0)
+    last_error: Optional[Exception] = None
+
+    while True:
+        try:
+            with urllib.request.urlopen(url, timeout=0.75) as response:
+                status = getattr(response, "status", None)
+                if status is None:
+                    status = response.getcode()
+                if int(status) < 500:
+                    try:
+                        payload = json.loads(response.read(4096).decode("utf-8"))
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        payload = {}
+                    if not isinstance(payload, dict) or str(payload.get("status") or "").lower() in {"", "ok"}:
+                        return True
+        except Exception as exc:
+            last_error = exc
+
+        if time.monotonic() >= deadline:
+            if last_error is not None:
+                logger.warning("REST API did not respond at %s: %s", url, last_error)
+            return False
+        time.sleep(0.25)
+
+def _start_api_watchdog(env: dict[str, str]) -> subprocess.Popen:
+    command = _api_command()
+    if command is None:
+        raise FileNotFoundError("mn-api")
+    API_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    API_LOG.parent.mkdir(parents=True, exist_ok=True)
+    API_WATCHDOG_LOG.parent.mkdir(parents=True, exist_ok=True)
+    config = {
+        "command": command,
+        "cwd": str(Path.cwd()),
+        "pid_file": str(API_PID_FILE),
+        "log_file": str(API_LOG),
+        "restart_delay": env.get("MN_API_RESTART_DELAY_SECONDS", DEFAULT_WEB_UI_RESTART_DELAY_SECONDS),
+    }
+    with open(API_WATCHDOG_LOG, "w") as out:
+        return subprocess.Popen(
+            [sys.executable, "-c", _web_ui_watchdog_script(), json.dumps(config)],
+            stdout=out,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            env=env,
+            start_new_session=True,
+        )
+
+def _start_api_if_installed(runtime_env: Optional[dict[str, str]] = None) -> bool:
+    if _api_command() is None:
+        console.print("[yellow]=> Warning: mn-api not found, skipping.[/yellow]")
+        return False
+
+    env = os.environ.copy()
+    if runtime_env:
+        env.update(runtime_env)
+    api_host = env.get("MN_API_HOST") or _api_host()
+    api_port = _valid_port_text(str(env.get("MN_API_PORT") or DEFAULT_API_PORT), DEFAULT_API_PORT)
+    env["MN_API_HOST"] = api_host
+    env["MN_API_PORT"] = api_port
+
+    watchdog_status = check_status(API_WATCHDOG_PID_FILE)
+    child_status = check_status(API_PID_FILE)
+    if watchdog_status == 0:
+        if _wait_for_api(api_host, api_port, timeout_seconds=5.0):
+            console.print("[yellow]=> REST API watchdog is already running, skipping.[/yellow]")
+            return True
+        try:
+            watchdog_pid = int(API_WATCHDOG_PID_FILE.read_text().strip())
+            console.print("[yellow]=> REST API watchdog is running, but the API is not responding; restarting it.[/yellow]")
+            kill_tree(watchdog_pid)
+            time.sleep(1)
+        except (ValueError, OSError):
+            pass
+        API_WATCHDOG_PID_FILE.unlink(missing_ok=True)
+        API_PID_FILE.unlink(missing_ok=True)
+    elif watchdog_status == 1:
+        API_WATCHDOG_PID_FILE.unlink(missing_ok=True)
+
+    if child_status == 0:
+        try:
+            pid = int(API_PID_FILE.read_text().strip())
+            console.print(f"=> Restarting existing REST API (PID: {pid}) under watchdog...")
+            kill_tree(pid)
+            time.sleep(1)
+        except (ValueError, OSError):
+            pass
+        API_PID_FILE.unlink(missing_ok=True)
+    elif child_status == 1:
+        API_PID_FILE.unlink(missing_ok=True)
+
+    console.print(f"=> Starting mn-api watchdog (REST on port {api_port})...")
+    try:
+        p_api_watchdog = _start_api_watchdog(env)
+    except FileNotFoundError:
+        console.print("[yellow]=> Warning: mn-api not found, skipping.[/yellow]")
+        return False
+    API_WATCHDOG_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    API_WATCHDOG_PID_FILE.write_text(str(p_api_watchdog.pid))
+    if _wait_for_api(api_host, api_port, timeout_seconds=10.0):
+        console.print(f"   [green][Started][/green] REST API watchdog (PID: {p_api_watchdog.pid})")
+    else:
+        console.print(
+            f"   [yellow][Started][/yellow] REST API watchdog (PID: {p_api_watchdog.pid}); "
+            f"waiting for {_api_http_url(api_host, api_port)} to respond."
+        )
+    return True
 
 def _web_ui_command(web_ui_host: str, web_ui_port: str) -> list[str]:
     web_ui_server = VENV_DIR / "bin" / "mn-web-ui-server"
@@ -1830,7 +1973,7 @@ def _start_server(
             console.print("[red]Error: MirrorNeuron API is already running.[/red]")
             console.print("Use 'mn runtime stop' to stop it first.")
             raise typer.Exit(1)
-        console.print("[yellow]=> MirrorNeuron API is already running; checking runtime Web UI...[/yellow]")
+        console.print("[yellow]=> MirrorNeuron API is already running; checking runtime sidecars...[/yellow]")
         env = _runtime_base_env(runtime_compose_available())
         if runtime_compose_available():
             env = _ensure_compose_native_port_settings(env)
@@ -1838,6 +1981,7 @@ def _start_server(
         env.setdefault("MN_API_PORT", DEFAULT_API_PORT)
         env.setdefault("MN_WEB_UI_HOST", _web_ui_host())
         env.setdefault("MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT)
+        _start_api_if_installed(env)
         web_ui_available = _start_web_ui_if_installed(env)
         endpoint_snapshot = _write_runtime_endpoints_file(env, web_ui_available=web_ui_available)
         console.print(f"   Runtime endpoints: {RUNTIME_ENDPOINTS_FILE}")
@@ -2139,23 +2283,7 @@ def _start_server(
     console.print("=> Waiting for Elixir to boot...")
     time.sleep(3)
 
-    api_started = False
-    api_bin = VENV_DIR / "bin" / "mn-api"
-    if api_bin.exists():
-        console.print(f"=> Starting mn-api (REST on port {env.get('MN_API_PORT', DEFAULT_API_PORT)})...")
-        with open(API_LOG, "w") as out:
-            p_api = subprocess.Popen(
-                [str(api_bin)],
-                stdout=out,
-                stderr=subprocess.STDOUT,
-                env=env,
-                start_new_session=True
-            )
-        API_PID_FILE.write_text(str(p_api.pid))
-        api_started = True
-        console.print(f"   [green][Started][/green] REST API (PID: {p_api.pid})")
-    else:
-        console.print("[yellow]=> Warning: mn-api not found, skipping.[/yellow]")
+    api_started = _start_api_if_installed(env)
 
     web_ui_available = _start_web_ui_if_installed(env)
     if api_started:

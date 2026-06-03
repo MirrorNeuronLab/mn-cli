@@ -16,11 +16,11 @@ from mn_cli.server_cmds import (
     _stop_network_runtime,
     kill_tree,
     BEAM_PID_FILE,
-    API_PID_FILE,
     DEFAULT_GRPC_PORT,
     DEFAULT_DIST_PORT,
     runtime_compose_available,
     runtime_compose_cmd,
+    api_pid_files,
     web_ui_pid_files,
 )
 
@@ -110,7 +110,7 @@ def stop():
 
     for pid_file, name in [
         *web_ui_pid_files(),
-        (API_PID_FILE, "REST API"),
+        *api_pid_files(),
         (BEAM_PID_FILE, "Legacy Core Service"),
     ]:
         if pid_file.exists():
@@ -131,11 +131,12 @@ def stop():
 def health(
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
     timeout: float = typer.Option(3.0, "--timeout", min=0.1, help="Per-component timeout in seconds."),
+    repair: bool = typer.Option(False, "--repair", help="Restart unhealthy API/Web UI sidecars when possible."),
 ):
     """Report Core gRPC, REST API, and Web UI health"""
     from mn_cli.libs.runtime_health import health as runtime_health
 
-    runtime_health(json_output=json_output, timeout=timeout)
+    runtime_health(json_output=json_output, timeout=timeout, repair=repair)
 
 def leave(node_name: str):
     """Remove a node from the cluster by its node name (e.g. mirror_neuron@192.168.4.173)"""

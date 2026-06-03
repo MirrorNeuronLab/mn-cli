@@ -21,6 +21,7 @@ from mn_cli.server_cmds import (
     _join_network,
     _avoid_local_compose_port_conflicts,
     find_web_ui_dir,
+    _start_api_if_installed,
     _start_web_ui_if_installed,
     _compose_runtime_env,
     _print_service_endpoints,
@@ -48,10 +49,12 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.LOG_DIR', log_dir)
     mocker.patch('mn_cli.server_cmds.BEAM_PID_FILE', pid_dir / "beam.pid")
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', pid_dir / "api.pid")
+    mocker.patch('mn_cli.server_cmds.API_WATCHDOG_PID_FILE', pid_dir / "api-watchdog.pid")
     mocker.patch('mn_cli.server_cmds.WEB_UI_PID_FILE', pid_dir / "web-ui.pid")
     mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_PID_FILE', pid_dir / "web-ui-watchdog.pid")
     mocker.patch('mn_cli.server_cmds.BEAM_LOG', log_dir / "beam.log")
     mocker.patch('mn_cli.server_cmds.API_LOG', log_dir / "api.log")
+    mocker.patch('mn_cli.server_cmds.API_WATCHDOG_LOG', log_dir / "api-watchdog.log")
     mocker.patch('mn_cli.server_cmds.WEB_UI_LOG', log_dir / "web-ui.log")
     mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_LOG', log_dir / "web-ui-watchdog.log")
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path / "mn_venv")
@@ -721,12 +724,15 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_FILE', compose_file)
     mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
+    mocker.patch('mn_cli.server_cmds.API_WATCHDOG_PID_FILE', tmp_path / "api-watchdog.pid")
     mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', ())
     mocker.patch('mn_cli.server_cmds.time.sleep')
     mocker.patch('mn_cli.server_cmds.PID_DIR', tmp_path / ".pids")
     mocker.patch('mn_cli.server_cmds.LOG_DIR', tmp_path / ".logs")
     mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
+    mocker.patch('mn_cli.server_cmds.API_WATCHDOG_LOG', tmp_path / "api-watchdog.log")
+    mocker.patch('mn_cli.server_cmds._wait_for_api', return_value=True)
     mocker.patch(
         'mn_cli.server_cmds._handshake_with_main_node',
         return_value={
@@ -1014,6 +1020,7 @@ def test_runtime_endpoint_snapshot_uses_advertised_grpc_host_for_cluster_binds()
 
 def test_start_server_success(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
+    mocker.patch('mn_cli.server_cmds.API_WATCHDOG_PID_FILE', tmp_path / "api-watchdog.pid")
     mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', ())
     redis_password = _derive_network_secret("join-token", "redis")
     monkeypatch.setenv("MN_API_PORT", "54111")
@@ -1032,6 +1039,8 @@ def test_start_server_success(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.LOG_DIR', tmp_path / ".logs")
     mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
+    mocker.patch('mn_cli.server_cmds.API_WATCHDOG_LOG', tmp_path / "api-watchdog.log")
+    mocker.patch('mn_cli.server_cmds._wait_for_api', return_value=True)
     mocker.patch(
         'mn_cli.server_cmds._handshake_with_main_node',
         return_value={
@@ -1057,8 +1066,8 @@ def test_start_server_success(mocker, tmp_path, monkeypatch):
     
     _start_server(ip="127.0.0.1", token="join-token")
     
-    assert (tmp_path / "api.pid").exists()
-    assert (tmp_path / "api.pid").read_text() == "9999"
+    assert (tmp_path / "api-watchdog.pid").exists()
+    assert (tmp_path / "api-watchdog.pid").read_text() == "9999"
     api_env = mock_popen.call_args.kwargs["env"]
     assert api_env["MN_BLUEPRINT_REPO"] == "/opt/mn/blueprints"
     assert api_env["MN_DEV_LOCAL_BLUEPRINT_REPO"] == "/work/mn/otterdesk-blueprints"
@@ -1202,6 +1211,36 @@ def test_web_ui_http_url_uses_connectable_loopback_for_wildcard_hosts():
     assert server_cmds._web_ui_http_url("0.0.0.0", "55173") == "http://127.0.0.1:55173/"
     assert server_cmds._web_ui_http_url("::", "55173") == "http://127.0.0.1:55173/"
     assert server_cmds._web_ui_http_url("::1", "55173") == "http://[::1]:55173/"
+
+def test_start_api_if_installed(mocker, tmp_path):
+    api_bin = tmp_path / "mn_venv" / "bin" / "mn-api"
+    api_bin.parent.mkdir(parents=True)
+    api_bin.write_text("#!/bin/sh\n")
+
+    mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path / "mn_venv")
+    mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
+    mocker.patch('mn_cli.server_cmds.API_WATCHDOG_PID_FILE', tmp_path / "api-watchdog.pid")
+    mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
+    mocker.patch('mn_cli.server_cmds.API_WATCHDOG_LOG', tmp_path / "api-watchdog.log")
+    mock_wait = mocker.patch('mn_cli.server_cmds._wait_for_api', side_effect=[False, True])
+
+    mock_popen = mocker.patch('mn_cli.server_cmds.subprocess.Popen')
+    mock_popen.return_value.pid = 54001
+
+    assert _start_api_if_installed({"MN_API_HOST": "localhost", "MN_API_PORT": "54001"}) is True
+
+    assert (tmp_path / "api-watchdog.pid").read_text() == "54001"
+    mock_popen.assert_called_once()
+    command = mock_popen.call_args.args[0]
+    assert command[0] == sys.executable
+    assert command[1] == "-c"
+    watchdog_config = json.loads(command[3])
+    assert watchdog_config["command"] == [str(api_bin)]
+    assert watchdog_config["pid_file"] == str(tmp_path / "api.pid")
+    assert mock_popen.call_args.kwargs["stdin"] == subprocess.DEVNULL
+    assert mock_wait.call_args_list == [
+        call("localhost", "54001", timeout_seconds=10.0),
+    ]
 
 def test_start_web_ui_if_installed(mocker, tmp_path):
     web_ui_dir = tmp_path / "web-ui"
