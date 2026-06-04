@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
+from mn_sdk import DOCKER_MODEL_RUNNER_CONTAINER_API_BASE, resolve_llm_environment
+
 DEFAULT_RUNS_ROOT = "~/.mn/runs"
 
 
@@ -261,6 +263,9 @@ def blueprint_runtime_environment(
         )
         if projected_config is not None:
             env.update(config_to_environment(projected_config))
+        docker_model_env = resolve_llm_environment(config)
+        if docker_model_env:
+            env.update(docker_model_env)
 
     scenario_path = bundle_dir / "scenario.json"
     if scenario_path.exists():
@@ -291,6 +296,7 @@ def apply_manifest_config_bindings(
 
 def config_to_environment(config: dict[str, Any]) -> dict[str, str]:
     env: dict[str, str] = {}
+    docker_model_env = resolve_llm_environment(config)
     for path, names in (
         ("video_source.uri", ("VIDEO_SOURCE_URI",)),
         ("video_source.transport", ("VIDEO_SOURCE_TRANSPORT",)),
@@ -305,6 +311,18 @@ def config_to_environment(config: dict[str, Any]) -> dict[str, str]:
             ("VL_MODEL_TIMEOUT_SECONDS", "OLLAMA_TIMEOUT_SECONDS"),
         ),
         ("vl_model.temperature", ("VL_MODEL_TEMPERATURE", "OLLAMA_TEMPERATURE")),
+    ):
+        value = config_path_get(config, path)
+        if value is None:
+            continue
+        for name in names:
+            env[name] = str(value)
+
+    if docker_model_env:
+        env.update(docker_model_env)
+        return env
+
+    for path, names in (
         ("llm.api_base", ("MN_LLM_API_BASE", "LITELLM_API_BASE")),
         ("llm.model", ("MN_LLM_MODEL", "LITELLM_MODEL")),
         ("llm.timeout_seconds", ("MN_LLM_TIMEOUT_SECONDS", "LITELLM_TIMEOUT_SECONDS")),
@@ -442,6 +460,7 @@ def inject_node_environment(manifest: dict[str, Any], env: dict[str, str]) -> No
                 str(environment["PYTHONPATH"]),
                 str(node_env["PYTHONPATH"]),
             )
+        adjust_llm_environment_for_node(node_env, node)
         environment.update(node_env)
         add_mn_llm_aliases(environment)
 
@@ -468,6 +487,17 @@ def add_mn_llm_aliases(environment: dict[str, Any]) -> None:
     ):
         if primary not in environment and legacy in environment:
             environment[primary] = environment[legacy]
+
+
+def adjust_llm_environment_for_node(environment: dict[str, Any], node: dict[str, Any]) -> None:
+    if environment.get("MN_LLM_PROVIDER") != "docker_model_runner":
+        return
+    config = node.get("config") if isinstance(node.get("config"), dict) else {}
+    if config.get("runner_module") == "MirrorNeuron.Runner.HostLocal":
+        return
+    api_base = str(environment.get("MN_LLM_API_BASE") or "")
+    if "localhost:12434" in api_base or "127.0.0.1:12434" in api_base:
+        environment["MN_LLM_API_BASE"] = DOCKER_MODEL_RUNNER_CONTAINER_API_BASE
 
 
 def normalize_host_local_uploads(manifest: dict[str, Any]) -> None:

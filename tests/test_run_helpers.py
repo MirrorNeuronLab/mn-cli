@@ -71,6 +71,63 @@ def test_prepare_manifest_for_submission_merges_runtime_env_and_metadata(tmp_pat
     assert prepared["metadata"]["mn_cli"]["blueprint_id"] == "bp"
 
 
+def test_prepare_manifest_injects_docker_model_runner_llm_env_by_node_runtime(tmp_path):
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps(
+            {
+                "llm": {
+                    "enabled": True,
+                    "default_config": "primary",
+                    "configs": {
+                        "primary": {
+                            "provider": "docker_model_runner",
+                            "mode": "openai_compatible",
+                            "runtime_model": "gemma4:e2b",
+                            "model": "gemma4:e2b",
+                            "api_base": "auto",
+                            "backend": "llama.cpp",
+                            "context_size": 4096,
+                            "timeout_seconds": 60,
+                            "max_tokens": 800,
+                        }
+                    },
+                }
+            }
+        )
+    )
+    manifest = {
+        "nodes": [
+            {
+                "node_id": "host_worker",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.HostLocal",
+                    "environment": {},
+                },
+            },
+            {
+                "node_id": "sandbox_worker",
+                "config": {"environment": {}},
+            },
+        ]
+    }
+
+    prepared = prepare_manifest_for_submission(bundle_dir, manifest)
+
+    host_env = prepared["nodes"][0]["config"]["environment"]
+    sandbox_env = prepared["nodes"][1]["config"]["environment"]
+    assert host_env["MN_LLM_PROVIDER"] == "docker_model_runner"
+    assert host_env["MN_LLM_MODEL"] == "ai/gemma4:E2B"
+    assert host_env["MN_LLM_RUNTIME_MODEL"] == "ai/gemma4:E2B"
+    assert host_env["MN_LLM_API_BASE"] == "http://localhost:12434/engines/v1"
+    assert sandbox_env["MN_LLM_API_BASE"] == "http://model-runner.docker.internal/engines/v1"
+    assert host_env["MN_LLM_CONTEXT_SIZE"] == "4096"
+    assert host_env["MN_LLM_MAX_TOKENS"] == "800"
+
+
 @requires_blueprint_support
 def test_stage_local_input_payloads_after_manifest_preparation(tmp_path):
     bundle_dir = tmp_path / "bundle"

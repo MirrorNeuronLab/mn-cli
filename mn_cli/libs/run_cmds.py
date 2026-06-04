@@ -48,6 +48,7 @@ from mn_cli.error_handler import handle_cli_error
 from mn_sdk import (
     make_validation_report,
     run_input_validation,
+    run_model_validation,
     run_service_validation,
     validate_input_validation_spec_issues,
     validate_requirements_spec_issues,
@@ -564,6 +565,10 @@ def validate(
             bundle_dir, manifest, output_format=output_format
         )
 
+        model_result = _validate_manifest_models_or_exit(
+            bundle_dir, manifest, output_format=output_format
+        )
+
         validation_result = _validate_manifest_inputs_or_exit(
             bundle_dir, manifest, output_format=output_format
         )
@@ -582,6 +587,9 @@ def validate(
             console.print(f"  - Nodes count: {len(manifest.get('nodes'))}")
         console.print(
             f"  - Service checks: {len(service_result.get('results') or [])}"
+        )
+        console.print(
+            f"  - Model checks: {len(model_result.get('results') or [])}"
         )
         console.print(
             f"  - Input validation rules: {len(validation_result.get('results') or [])}"
@@ -901,6 +909,35 @@ def _validate_manifest_services_or_exit(
     raise typer.Exit(1)
 
 
+def _validate_manifest_models_or_exit(
+    bundle_dir: Path,
+    manifest: dict[str, Any],
+    *,
+    env_overrides: Optional[dict[str, str]] = None,
+    config_overrides: Optional[dict[str, Any]] = None,
+    output_format: str = "table",
+) -> dict[str, Any]:
+    config = load_blueprint_config(bundle_dir, config_overrides=config_overrides)
+    env = _blueprint_runtime_environment(
+        bundle_dir,
+        config=config,
+        config_overrides=config_overrides,
+    )
+    env.update(
+        {
+            key: str(value)
+            for key, value in (env_overrides or {}).items()
+            if value is not None
+        }
+    )
+    result = run_model_validation(bundle_dir, manifest, config=config, env=env)
+    if result.get("ok"):
+        return result
+
+    _emit_validation_report(result, output_format, title="Model validation failed")
+    raise typer.Exit(1)
+
+
 def _mark_manifest_force(manifest: dict[str, Any]) -> None:
     metadata = manifest.setdefault("metadata", {})
     if not isinstance(metadata, dict):
@@ -912,7 +949,7 @@ def _mark_manifest_force(manifest: dict[str, Any]) -> None:
         metadata["mn_validation"] = validation
     validation["force"] = True
     validation["status"] = "skipped"
-    validation["skipped_checks"] = ["services", "input_validation", "requirements"]
+    validation["skipped_checks"] = ["services", "models", "input_validation", "requirements"]
 
 
 def _normalize_validation_output(output: str) -> str:
@@ -1258,6 +1295,12 @@ def run_bundle(
                 env_overrides=env_overrides,
                 config_overrides=config_overrides,
             )
+            _validate_manifest_models_or_exit(
+                bundle_dir,
+                manifest_dict,
+                env_overrides=env_overrides,
+                config_overrides=config_overrides,
+            )
             _validate_manifest_inputs_or_exit(
                 bundle_dir,
                 manifest_dict,
@@ -1266,7 +1309,7 @@ def run_bundle(
             )
         else:
             console.print(
-                "[yellow]Validation skipped because --force was provided; service checks, input checks, and runtime requirements will be bypassed for this run.[/yellow]"
+                "[yellow]Validation skipped because --force was provided; service checks, model checks, input checks, and runtime requirements will be bypassed for this run.[/yellow]"
             )
         manifest_dict = prepare_manifest_for_submission(
             bundle_dir,

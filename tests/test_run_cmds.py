@@ -585,6 +585,7 @@ def test_run_force_skips_input_validation(mocker, tmp_path, monkeypatch):
     assert manifest["metadata"]["mn_validation"]["status"] == "skipped"
     assert manifest["metadata"]["mn_validation"]["skipped_checks"] == [
         "services",
+        "models",
         "input_validation",
         "requirements",
     ]

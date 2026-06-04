@@ -50,6 +50,21 @@ from mn_cli.libs.blueprint_resources import (
 from mn_cli.shared import console, logger
 from mn_cli.libs.run_cmds import _run_local_folder, run_bundle as _run_bundle
 from mn_cli.libs.run_manifest import load_blueprint_config as _load_blueprint_config
+from mn_cli.libs.model_cmds import (
+    install_model_entry as _install_model_entry,
+    model_installed as _model_installed,
+    remove_model_ref as _remove_model_ref,
+)
+from mn_sdk import (
+    docker_model_name as _docker_model_name,
+    load_model_catalog as _load_model_catalog,
+    load_model_ownership as _load_model_ownership,
+    record_model_owner as _record_model_owner,
+    remove_model_owner as _remove_model_owner,
+    remove_model_record as _remove_model_record,
+    required_blueprint_models as _required_blueprint_models,
+    resolve_model_entry as _resolve_model_entry,
+)
 
 blueprint_app = typer.Typer(help="Manage and run MirrorNeuron blueprints")
 human_app = typer.Typer(
@@ -155,12 +170,28 @@ def _run_resolved_blueprint(
     web_ui: bool = False,
 ) -> None:
     shared_run_id = run_id or _make_blueprint_run_id(blueprint_id)
+    _print_blueprint_run_phase(1, 4, "Prepare blueprint bundle")
+    bundle_path = _prepare_blueprint_bundle_for_run(blueprint_dir, manifest, shared_run_id)
+    _print_blueprint_run_phase(2, 4, "Review launch config")
+    config_overrides = _collect_init_config_review_overrides(bundle_path, manifest)
+    config = _load_blueprint_config(bundle_path, config_overrides=config_overrides)
+    _print_blueprint_run_phase(3, 4, "Ensure runtime models")
+    model_summary = _install_blueprint_model_dependencies(
+        blueprint_id=blueprint_id,
+        blueprint_revision=revision,
+        bundle_root=bundle_path,
+        manifest=manifest,
+        config=config or {},
+        install_source=source_label,
+        force=force,
+    )
+    if model_summary.get("models"):
+        _print_model_install_summary(model_summary)
+    _print_blueprint_run_phase(4, 4, "Submit runtime job")
     console.print(f"[green]Blueprint '{display_name}' validated. Running...[/green]")
     console.print(f"Blueprint run_id: [bold green]{shared_run_id}[/bold green]")
     if revision:
         console.print(f"Blueprint revision: {revision}")
-    bundle_path = _prepare_blueprint_bundle_for_run(blueprint_dir, manifest, shared_run_id)
-    config_overrides = _collect_init_config_review_overrides(bundle_path, manifest)
     _run_bundle(
         str(bundle_path),
         follow_seconds=follow_seconds,
@@ -180,6 +211,10 @@ def _run_resolved_blueprint(
         detached=detached,
         web_ui=web_ui,
     )
+
+
+def _print_blueprint_run_phase(step: int, total: int, label: str) -> None:
+    console.print(f"[bold]Step {step}/{total}[/bold] {label}")
 
 
 def _reject_local_blueprint_path(target: str) -> None:
@@ -619,10 +654,22 @@ def blueprint_run(
 @blueprint_app.command("install")
 def blueprint_install(
     ctx: typer.Context,
+    blueprint_id: Optional[str] = typer.Argument(None, help="Blueprint ID to install. Omit to install the blueprint library."),
     source: Optional[str] = typer.Option(None, "--source", help="Blueprint repository URL or local path."),
-    force: bool = typer.Option(False, "--force", help="Replace the existing cached repository."),
+    revision: Optional[str] = typer.Option(None, "--revision", help="Git revision to use when installing a blueprint by ID."),
+    force: bool = typer.Option(False, "--force", help="Replace cached library storage, or force model install compatibility for a blueprint."),
 ):
-    """Install the blueprint library into ~/.mn/blueprints."""
+    """Install the blueprint library or one blueprint plus its required runtime models."""
+    if blueprint_id:
+        _install_catalog_blueprint_with_models(
+            ctx,
+            blueprint_id=blueprint_id,
+            source=source,
+            revision=revision,
+            force=force,
+        )
+        return
+
     blueprint_repo = _context_blueprint_repo(ctx)
     repo_source = source or blueprint_repo or DEFAULT_BLUEPRINT_REPO
     storage_dir = (
@@ -644,6 +691,362 @@ def blueprint_install(
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
     console.print(f"[green]Installed blueprints at {storage_dir}.[/green]")
+
+
+def _install_catalog_blueprint_with_models(
+    ctx: typer.Context,
+    *,
+    blueprint_id: str,
+    source: Optional[str],
+    revision: Optional[str],
+    force: bool,
+) -> None:
+    blueprint_repo = _context_blueprint_repo(ctx)
+    storage_dir = Path(
+        _ensure_blueprint_source(
+            source=source,
+            blueprint_repo=blueprint_repo,
+            update=False,
+            offline=False,
+            revision=revision,
+        )
+    )
+    entry = _blueprint_entry_from_storage(storage_dir, blueprint_id)
+    bundle_root = _blueprint_bundle_root_from_entry(storage_dir, entry)
+    manifest = _read_json_object(bundle_root / "manifest.json")
+    config = _load_blueprint_config(bundle_root)
+    install_source = source or blueprint_repo or DEFAULT_BLUEPRINT_REPO
+    model_summary = _install_blueprint_model_dependencies(
+        blueprint_id=blueprint_id,
+        blueprint_revision=revision or _git_revision(storage_dir),
+        bundle_root=bundle_root,
+        manifest=manifest,
+        config=config,
+        install_source=install_source,
+        force=force,
+    )
+    _record_blueprint_install(
+        blueprint_id=blueprint_id,
+        storage_dir=storage_dir,
+        bundle_root=bundle_root,
+        entry=entry,
+        manifest=manifest,
+        revision=revision or _git_revision(storage_dir),
+        install_source=install_source,
+        model_summary=model_summary,
+    )
+    console.print(f"[green]Installed blueprint {blueprint_id}.[/green]")
+    _print_model_install_summary(model_summary)
+
+
+def _install_blueprint_model_dependencies(
+    *,
+    blueprint_id: str,
+    blueprint_revision: str | None,
+    bundle_root: Path,
+    manifest: dict[str, Any],
+    config: dict[str, Any],
+    install_source: str,
+    force: bool,
+) -> dict[str, Any]:
+    catalog = _load_model_catalog()
+    requirements = _required_blueprint_models(manifest, config, catalog=catalog)
+    ledger = _load_model_ownership()
+    results: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for requirement in requirements:
+        model_ref = str(requirement.get("model") or "")
+        try:
+            entry = _resolve_model_entry(model_ref, catalog=catalog)
+        except KeyError as exc:
+            message = f"{requirement.get('path')}: unknown runtime model {model_ref!r}"
+            results.append({"model": model_ref, "status": "failed", "error": message})
+            errors.append(message)
+            continue
+
+        docker_model = _docker_model_name(entry)
+        provider = str(entry.get("provider") or "docker_model_runner")
+        backend = str(requirement.get("backend") or entry.get("backend") or "auto")
+        base_result = {
+            "id": entry.get("id"),
+            "model": docker_model,
+            "provider": provider,
+            "backend": backend,
+            "path": requirement.get("path"),
+        }
+        if provider != "docker_model_runner":
+            _record_model_owner(
+                entry,
+                blueprint_id=blueprint_id,
+                blueprint_revision=blueprint_revision,
+                install_source=install_source,
+                backend=backend,
+            )
+            results.append({**base_result, "status": "service_required"})
+            continue
+
+        preexisting_record = ledger.get("models", {}).get(docker_model)
+        try:
+            installed = _model_installed(docker_model)
+        except Exception:
+            installed = False
+        try:
+            if installed:
+                _record_model_owner(
+                    entry,
+                    blueprint_id=blueprint_id,
+                    blueprint_revision=blueprint_revision,
+                    install_source=install_source,
+                    backend=backend,
+                    preexisting_manual=not isinstance(preexisting_record, dict),
+                )
+                results.append({**base_result, "status": "already_installed"})
+                continue
+            install_result = _install_model_entry(entry, backend=backend, context_size=requirement.get("context_size"), force=force)
+            compatibility = install_result.get("compatibility") or {}
+            _record_model_owner(
+                entry,
+                blueprint_id=blueprint_id,
+                blueprint_revision=blueprint_revision,
+                install_source=install_source,
+                backend=str(compatibility.get("backend") or backend),
+            )
+            results.append({**base_result, "status": "installed", "compatibility": compatibility})
+        except Exception as exc:
+            message = str(exc)
+            results.append({**base_result, "status": "failed", "error": message})
+            errors.append(message)
+    summary = {
+        "blueprint_id": blueprint_id,
+        "bundle_root": str(bundle_root),
+        "models": results,
+        "errors": errors,
+        "ok": not errors,
+    }
+    if errors:
+        _print_model_install_summary(summary)
+        raise typer.Exit(1)
+    return summary
+
+
+def _print_model_install_summary(summary: dict[str, Any]) -> None:
+    models = summary.get("models") or []
+    if not models:
+        console.print("[green]No runtime model dependencies declared.[/green]")
+        return
+    table = Table(title="Blueprint model dependencies", show_header=True, header_style="bold")
+    table.add_column("Model")
+    table.add_column("Provider")
+    table.add_column("Status")
+    for item in models:
+        table.add_row(
+            str(item.get("id") or item.get("model") or ""),
+            str(item.get("provider") or ""),
+            str(item.get("status") or ""),
+        )
+    console.print(table)
+    for error in summary.get("errors") or []:
+        console.print(f"[red]Model install failed: {error}[/red]")
+
+
+def _uninstall_catalog_blueprint(
+    ctx: typer.Context,
+    *,
+    blueprint_id: str,
+    source: Optional[str],
+    keep_resources: bool,
+    keep_models: bool,
+    remove_models: bool,
+    dry_run: bool,
+) -> None:
+    storage_dir = _resolve_blueprint_storage_for_cleanup(ctx, source)
+    entry: dict[str, Any] | None = None
+    bundle_root: Path | None = None
+    if storage_dir.exists():
+        try:
+            entry = _blueprint_entry_from_storage(storage_dir, blueprint_id)
+            bundle_root = _blueprint_bundle_root_from_entry(storage_dir, entry)
+        except typer.Exit:
+            entry = None
+    archive_path = _archive_blueprint_install(
+        blueprint_id=blueprint_id,
+        storage_dir=storage_dir,
+        bundle_root=bundle_root,
+        entry=entry,
+        dry_run=dry_run,
+    )
+    action = "Would archive" if dry_run else "Archived"
+    console.print(f"[green]{action} blueprint install metadata at {archive_path}.[/green]")
+
+    if not keep_resources:
+        summary = _cleanup_blueprint_resources(
+            blueprint_ids={blueprint_id},
+            active_blueprint_ids=set(),
+            include_dead=True,
+            include_docker=True,
+            include_files=True,
+            dry_run=dry_run,
+        )
+        _print_cleanup_summary(summary)
+
+    orphaned = _orphaned_models_after_owner_removal(blueprint_id, dry_run=dry_run)
+    if keep_models:
+        if orphaned:
+            console.print(f"[yellow]Kept {len(orphaned)} orphaned model(s).[/yellow]")
+        return
+    _remove_or_prompt_for_orphaned_models(orphaned, remove_models=remove_models, dry_run=dry_run)
+
+
+def _blueprint_entry_from_storage(storage_dir: Path, blueprint_id: str) -> dict[str, Any]:
+    try:
+        entries = _load_blueprint_index(storage_dir / "index.json", require_paths=True)
+    except BlueprintIndexError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
+    for entry in entries:
+        if entry.get("id") == blueprint_id:
+            return entry
+    console.print(f"[red]Blueprint {blueprint_id!r} was not found in {storage_dir}.[/red]")
+    raise typer.Exit(1)
+
+
+def _blueprint_bundle_root_from_entry(storage_dir: Path, entry: dict[str, Any]) -> Path:
+    path = Path(str(entry.get("path") or entry.get("id") or ""))
+    bundle_root = path if path.is_absolute() else storage_dir / path
+    if not bundle_root.is_dir():
+        console.print(f"[red]Blueprint bundle not found at {bundle_root}.[/red]")
+        raise typer.Exit(1)
+    return bundle_root
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        console.print(f"[red]Could not read {path}: {exc}[/red]")
+        raise typer.Exit(1)
+    if not isinstance(data, dict):
+        console.print(f"[red]{path} must contain a JSON object.[/red]")
+        raise typer.Exit(1)
+    return data
+
+
+def _blueprint_installs_dir() -> Path:
+    return Path(os.path.expanduser(os.getenv("MN_BLUEPRINT_INSTALLS_DIR", "~/.mn/blueprint_installs")))
+
+
+def _record_blueprint_install(
+    *,
+    blueprint_id: str,
+    storage_dir: Path,
+    bundle_root: Path,
+    entry: dict[str, Any],
+    manifest: dict[str, Any],
+    revision: str | None,
+    install_source: str,
+    model_summary: dict[str, Any],
+) -> Path:
+    install_dir = _blueprint_installs_dir()
+    install_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": "mn.blueprint.install.v1",
+        "blueprint_id": blueprint_id,
+        "name": entry.get("name") or manifest.get("job_name") or blueprint_id,
+        "path": entry.get("path"),
+        "storage_dir": str(storage_dir),
+        "bundle_root": str(bundle_root),
+        "revision": revision or "",
+        "install_source": install_source,
+        "installed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "models": model_summary.get("models") or [],
+    }
+    target = install_dir / f"{blueprint_id}.json"
+    target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return target
+
+
+def _archive_blueprint_install(
+    *,
+    blueprint_id: str,
+    storage_dir: Path,
+    bundle_root: Path | None,
+    entry: dict[str, Any] | None,
+    dry_run: bool,
+) -> Path:
+    install_dir = _blueprint_installs_dir()
+    record_path = install_dir / f"{blueprint_id}.json"
+    if record_path.is_file():
+        payload = _read_json_object(record_path)
+    else:
+        payload = {
+            "schema_version": "mn.blueprint.install.v1",
+            "blueprint_id": blueprint_id,
+            "path": (entry or {}).get("path"),
+            "storage_dir": str(storage_dir),
+            "bundle_root": str(bundle_root) if bundle_root else "",
+        }
+    payload["archived_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    archive_dir = install_dir / "archive"
+    archive_path = archive_dir / f"{blueprint_id}-{int(time.time())}.json"
+    if dry_run:
+        return archive_path
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    archive_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    record_path.unlink(missing_ok=True)
+    return archive_path
+
+
+def _orphaned_models_after_owner_removal(blueprint_id: str, *, dry_run: bool) -> list[dict[str, Any]]:
+    if not dry_run:
+        return _remove_model_owner(blueprint_id)
+    ledger = _load_model_ownership()
+    orphaned: list[dict[str, Any]] = []
+    for record in ledger.get("models", {}).values():
+        if not isinstance(record, dict):
+            continue
+        owners = dict(record.get("owners") or {})
+        owners.pop(blueprint_id, None)
+        if not owners and not record.get("manual") and str(record.get("provider") or "docker_model_runner") == "docker_model_runner":
+            projected = dict(record)
+            projected["owners"] = {}
+            orphaned.append(projected)
+    return orphaned
+
+
+def _remove_or_prompt_for_orphaned_models(
+    orphaned: list[dict[str, Any]],
+    *,
+    remove_models: bool,
+    dry_run: bool,
+) -> None:
+    if not orphaned:
+        return
+    removed = 0
+    kept = 0
+    for record in orphaned:
+        model = str(record.get("docker_model") or record.get("model") or "")
+        if not model:
+            continue
+        should_remove = remove_models
+        if not remove_models and not dry_run:
+            should_remove = typer.confirm(
+                f"Remove orphaned model {model}? It will need to be installed again next time.",
+                default=False,
+            )
+        if should_remove:
+            if dry_run:
+                console.print(f"Would remove orphaned model {model}.")
+            else:
+                _remove_model_ref(model, force=True)
+                _remove_model_record(model)
+            removed += 1
+        else:
+            kept += 1
+    if removed:
+        verb = "Would remove" if dry_run else "Removed"
+        console.print(f"[green]{verb} {removed} orphaned model(s).[/green]")
+    if kept:
+        console.print(f"[yellow]Kept {kept} orphaned model(s).[/yellow]")
 
 
 @blueprint_app.command("update")
@@ -721,11 +1124,29 @@ def blueprint_cleanup(
 @blueprint_app.command("uninstall")
 def blueprint_uninstall(
     ctx: typer.Context,
+    blueprint_id: Optional[str] = typer.Argument(None, help="Blueprint ID to uninstall. Omit to remove cached blueprint storage."),
     source: Optional[str] = typer.Option(None, "--source", help="Cached blueprint storage path to remove."),
     keep_resources: bool = typer.Option(False, "--keep-resources", help="Remove blueprint files but keep cached runtime resources."),
+    keep_models: bool = typer.Option(False, "--keep-models", help="Keep orphaned models after removing this blueprint."),
+    remove_models: bool = typer.Option(False, "--remove-models", help="Remove orphaned models without prompting."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be removed without deleting anything."),
 ):
     """Remove cached blueprint storage and its owned runtime resources."""
+    if keep_models and remove_models:
+        console.print("[red]Use only one of --keep-models or --remove-models.[/red]")
+        raise typer.Exit(1)
+    if blueprint_id:
+        _uninstall_catalog_blueprint(
+            ctx,
+            blueprint_id=blueprint_id,
+            source=source,
+            keep_resources=keep_resources,
+            keep_models=keep_models,
+            remove_models=remove_models,
+            dry_run=dry_run,
+        )
+        return
+
     storage_dir = _resolve_blueprint_storage_for_cleanup(ctx, source)
     blueprint_ids = _blueprint_ids_from_storage(storage_dir)
     if not storage_dir.exists():

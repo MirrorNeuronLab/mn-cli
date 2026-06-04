@@ -3,7 +3,7 @@ from importlib import metadata
 import typer
 from mn_cli import update_cmds
 from mn_cli.banner import MN_ASCII_ART, format_banner
-from mn_cli.libs import backup_cmds, deployment_cmds, job_cmds, resource_cmds, run_cmds, schedule_cmds, service_cmds, sys_cmds
+from mn_cli.libs import backup_cmds, deployment_cmds, job_cmds, model_cmds, resource_cmds, run_cmds, schedule_cmds, service_cmds, sys_cmds
 from mn_cli.libs.blueprint_cmds import blueprint_app
 
 PACKAGE_NAME = "mirrorneuron-cli"
@@ -93,6 +93,7 @@ app.add_typer(node_app, name="node")
 app.add_typer(runtime_app, name="runtime")
 app.add_typer(resource_cmds.resource_app, name="resource")
 app.add_typer(service_cmds.service_app, name="service")
+app.add_typer(model_cmds.model_app, name="model")
 app.add_typer(deployment_cmds.deployment_app, name="deployment")
 app.add_typer(schedule_cmds.schedule_app, name="schedule")
 app.add_typer(schedule_cmds.trigger_app, name="trigger")
