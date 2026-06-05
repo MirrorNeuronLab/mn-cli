@@ -39,6 +39,7 @@ ORIGINAL_WEB_UI_DIRS = server_cmds.WEB_UI_DIRS
 def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_COOKIE", raising=False)
     monkeypatch.delenv("MN_GRPC_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN", raising=False)
     monkeypatch.delenv("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN", raising=False)
     monkeypatch.delenv("MN_NODE_GPU", raising=False)
     monkeypatch.delenv("MN_NODE_GPU_COUNT", raising=False)
@@ -221,9 +222,85 @@ def test_resolve_grpc_admin_token_generates_persistent_token(tmp_path, mocker):
     assert _resolve_grpc_admin_token() == token
 
 def test_resolve_grpc_admin_token_prefers_env(monkeypatch):
-    monkeypatch.setenv("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN", "admin-token")
+    monkeypatch.setenv("MN_GRPC_ADMIN_TOKEN", "admin-token")
 
     assert _resolve_grpc_admin_token() == "admin-token"
+
+def test_resolve_grpc_admin_token_accepts_legacy_env(monkeypatch):
+    monkeypatch.setenv("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN", "legacy-admin-token")
+
+    assert _resolve_grpc_admin_token() == "legacy-admin-token"
+
+def test_start_server_persists_env_grpc_tokens_for_later_cli_process(mocker, monkeypatch):
+    monkeypatch.setenv("MN_GRPC_AUTH_TOKEN", "runtime-auth-token")
+    monkeypatch.setenv("MN_GRPC_ADMIN_TOKEN", "runtime-admin-token")
+
+    commands = []
+
+    def mock_run(cmd, **kwargs):
+        commands.append(cmd)
+        m = mocker.Mock()
+        m.returncode = 0
+        m.stdout = "false\n"
+        return m
+
+    mocker.patch('mn_cli.server_cmds.subprocess.run', side_effect=mock_run)
+    mocker.patch('mn_cli.server_cmds.time.sleep')
+    mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=0)
+    mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="127.0.0.1")
+
+    _start_server()
+
+    assert ["docker", "run", "-d", "--name", "mirror-neuron-core"] == next(
+        cmd[:5] for cmd in commands if cmd[:3] == ["docker", "run", "-d"]
+    )
+    assert (server_cmds.DIR / "grpc_auth.token").read_text().strip() == "runtime-auth-token"
+    assert (server_cmds.DIR / "grpc_admin.token").read_text().strip() == "runtime-admin-token"
+    assert (server_cmds.DIR / "grpc_auth.token").stat().st_mode & 0o777 == 0o600
+    assert (server_cmds.DIR / "grpc_admin.token").stat().st_mode & 0o777 == 0o600
+
+def test_start_server_refreshes_token_files_from_compose_runtime_env(mocker, tmp_path):
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_env = tmp_path / "docker-compose.env"
+    compose_file.write_text("services: {}\n")
+    compose_env.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_DOCKER_NETWORK_MODE=disabled\n"
+        "MN_GRPC_AUTH_TOKEN=compose-auth-token\n"
+        "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN=compose-admin-token\n"
+    )
+    server_cmds.DIR.mkdir(parents=True, exist_ok=True)
+    (server_cmds.DIR / "grpc_auth.token").write_text("stale-auth-token\n")
+    (server_cmds.DIR / "grpc_admin.token").write_text("stale-admin-token\n")
+
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_FILE', compose_file)
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
+    mocker.patch('mn_cli.server_cmds.subprocess.run', return_value=mocker.Mock(returncode=0, stdout="false\n"))
+    mocker.patch('mn_cli.server_cmds.time.sleep')
+    mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=0)
+    mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.99")
+
+    _start_server()
+
+    assert (server_cmds.DIR / "grpc_auth.token").read_text().strip() == "compose-auth-token"
+    assert (server_cmds.DIR / "grpc_admin.token").read_text().strip() == "compose-admin-token"
+    assert "MN_GRPC_AUTH_TOKEN=compose-auth-token" in compose_env.read_text()
+    assert "MN_GRPC_ADMIN_TOKEN=compose-admin-token" in compose_env.read_text()
+
+def test_runtime_grpc_tokens_from_running_container_reads_normal_and_admin_tokens(mocker):
+    values = {
+        ("mirror-neuron-core", "MN_GRPC_AUTH_TOKEN"): "container-auth-token",
+        ("mirror-neuron-core", "MN_GRPC_ADMIN_TOKEN"): "container-admin-token",
+    }
+    mocker.patch(
+        'mn_cli.server_cmds._docker_container_env_value',
+        side_effect=lambda container, key: values.get((container, key)),
+    )
+
+    assert server_cmds._runtime_grpc_tokens_from_running_container() == {
+        "MN_GRPC_AUTH_TOKEN": "container-auth-token",
+        "MN_GRPC_ADMIN_TOKEN": "container-admin-token",
+    }
 
 def test_resolve_network_token_generates_and_reuses_persistent_token(tmp_path, mocker):
     token_dir = tmp_path / "state"
@@ -619,12 +696,22 @@ def test_start_server_already_running(mocker, tmp_path):
     (tmp_path / "api.pid").write_text("1234")
     mocker.patch('mn_cli.server_cmds.os.kill') # check_status returns 0
 
+    mock_container_tokens = mocker.patch(
+        'mn_cli.server_cmds._runtime_grpc_tokens_from_running_container',
+        return_value={
+            "MN_GRPC_AUTH_TOKEN": "running-auth-token",
+            "MN_GRPC_ADMIN_TOKEN": "running-admin-token",
+        },
+    )
     mock_start_web = mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed', return_value=True)
     mock_write_endpoints = mocker.patch('mn_cli.server_cmds._write_runtime_endpoints_file', return_value={"api": {}})
     mock_print_endpoints = mocker.patch('mn_cli.server_cmds._print_service_endpoints')
 
     _start_server()
 
+    mock_container_tokens.assert_called_once()
+    assert (server_cmds.DIR / "grpc_auth.token").read_text().strip() == "running-auth-token"
+    assert (server_cmds.DIR / "grpc_admin.token").read_text().strip() == "running-admin-token"
     mock_start_web.assert_called_once()
     mock_write_endpoints.assert_called_once()
     mock_print_endpoints.assert_called_once_with(None, True)
@@ -926,7 +1013,7 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
     assert "MN_NODE_NAME=mirror_neuron@mn-abc12345" in compose_env_text
     assert "MN_CLUSTER_NODES=mirror_neuron@mn-abc12345" in compose_env_text
     assert "MN_GRPC_AUTH_TOKEN=" in compose_env_text
-    assert "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN=" in compose_env_text
+    assert "MN_GRPC_ADMIN_TOKEN=" in compose_env_text
     assert "MN_COOKIE=" in compose_env_text
     assert "MN_HOST_ARTIFACTS_DIR=" in compose_env_text
     assert "MN_RUNS_ROOT=" in compose_env_text
@@ -1395,11 +1482,11 @@ def test_start_server_passes_slack_env_to_docker(mocker, tmp_path, monkeypatch):
     docker_run = next(cmd for cmd in commands if cmd[:3] == ["docker", "run", "-d"])
     cookie_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_COOKIE="))
     auth_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_GRPC_AUTH_TOKEN="))
-    admin_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN="))
+    admin_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_GRPC_ADMIN_TOKEN="))
     runs_root_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_RUNS_ROOT="))
     assert cookie_env != "MN_COOKIE=mirrorneuron"
     assert auth_env != "MN_GRPC_AUTH_TOKEN="
-    assert admin_env != "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN="
+    assert admin_env != "MN_GRPC_ADMIN_TOKEN="
     assert runs_root_env == "MN_RUNS_ROOT=/root/.mn/runs"
     assert ["-v", f"{server_cmds.DIR}:/root/.mn"] == docker_run[
         docker_run.index(f"{server_cmds.DIR}:/root/.mn") - 1 : docker_run.index(f"{server_cmds.DIR}:/root/.mn") + 1

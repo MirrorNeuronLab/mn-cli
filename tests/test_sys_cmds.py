@@ -138,9 +138,11 @@ def test_leave_success(mocker):
 def test_leave_error(mocker):
     import mn_cli.shared
     mocker.patch.object(mn_cli.shared.client, 'remove_node', side_effect=Exception("Timeout"))
+    mock_detach = mocker.patch("mn_cli.libs.sys_cmds._detach_local_docker_node_if_matches")
     result = runner.invoke(app, ["node", "leave", "mirror_neuron@1.2.3.4"])
     assert result.exit_code == 0
     assert "Error removing node: Timeout" in result.stdout
+    mock_detach.assert_not_called()
 
 def test_refresh_token_success(mocker):
     mock_refresh = mocker.patch('mn_cli.libs.sys_cmds._refresh_network_token', return_value="new-token")

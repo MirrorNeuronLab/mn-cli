@@ -85,10 +85,12 @@ def _grpc_auth_token(runtime_env: dict[str, str] | None = None) -> str:
 
 
 def _grpc_admin_token(runtime_env: dict[str, str] | None = None) -> str:
-    token = os.getenv("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN")
+    token = os.getenv("MN_GRPC_ADMIN_TOKEN") or os.getenv("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN")
     if token:
         return token
-    token = (runtime_env or {}).get("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN", "")
+    token = (runtime_env or {}).get("MN_GRPC_ADMIN_TOKEN", "") or (runtime_env or {}).get(
+        "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN", ""
+    )
     if token:
         return token
 

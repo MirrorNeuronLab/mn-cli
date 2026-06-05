@@ -2,8 +2,11 @@ import pytest
 import importlib.util
 import json
 from pathlib import Path
+import typer
 from typer.testing import CliRunner
 from mn_cli.main import app
+from mn_cli.libs import blueprint_cmds
+from mn_sdk import load_model_ownership
 
 runner = CliRunner()
 requires_blueprint_support = pytest.mark.skipif(
@@ -36,6 +39,149 @@ def _write_generated_bundle(path: Path, blueprint_id: str) -> None:
 
 def _write_bundle_cache(path: Path, blueprint_id: str) -> None:
     _write_generated_bundle(path, blueprint_id)
+
+
+def _runtime_model_manifest(
+    model: str,
+    *,
+    provider: str = "docker_model_runner",
+    backend: str = "llama.cpp",
+) -> dict:
+    return {
+        "runtime": {
+            "models": {
+                "primary": {
+                    "model": model,
+                    "provider": provider,
+                    "backend": backend,
+                }
+            }
+        }
+    }
+
+
+def _single_model_catalog(
+    model_id: str,
+    docker_model: str,
+    *,
+    provider: str = "docker_model_runner",
+    backend: str = "llama.cpp",
+) -> dict:
+    return {
+        model_id: {
+            "id": model_id,
+            "model": docker_model,
+            "provider": provider,
+            "backend": backend,
+        }
+    }
+
+
+def test_blueprint_model_dependency_records_already_installed_manual_owner(
+    mocker,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
+    model_id = "custom-runtime:default"
+    docker_model = "custom/runtime:latest"
+    mocker.patch(
+        "mn_cli.libs.blueprint_cmds._load_model_catalog",
+        return_value=_single_model_catalog(model_id, docker_model),
+    )
+    mocker.patch("mn_cli.libs.blueprint_cmds._model_installed", return_value=True)
+    install_model = mocker.patch("mn_cli.libs.blueprint_cmds._install_model_entry")
+
+    summary = blueprint_cmds._install_blueprint_model_dependencies(
+        blueprint_id="bp-owned",
+        blueprint_revision="rev-1",
+        bundle_root=tmp_path / "bundle",
+        manifest=_runtime_model_manifest(model_id),
+        config={},
+        install_source="test-source",
+        force=False,
+    )
+
+    install_model.assert_not_called()
+    assert summary["ok"] is True
+    assert summary["models"][0]["status"] == "already_installed"
+    record = load_model_ownership()["models"][docker_model]
+    assert record["manual"] is True
+    assert record["owners"]["bp-owned"]["blueprint_revision"] == "rev-1"
+
+
+def test_blueprint_model_dependency_install_failure_does_not_record_owner(
+    mocker,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
+    model_id = "custom-runtime:default"
+    docker_model = "custom/runtime:latest"
+    mocker.patch(
+        "mn_cli.libs.blueprint_cmds._load_model_catalog",
+        return_value=_single_model_catalog(model_id, docker_model),
+    )
+    mocker.patch("mn_cli.libs.blueprint_cmds._model_installed", return_value=False)
+    mocker.patch(
+        "mn_cli.libs.blueprint_cmds._install_model_entry",
+        side_effect=RuntimeError("pull failed"),
+    )
+
+    with pytest.raises(typer.Exit) as raised:
+        blueprint_cmds._install_blueprint_model_dependencies(
+            blueprint_id="bp-owned",
+            blueprint_revision="rev-1",
+            bundle_root=tmp_path / "bundle",
+            manifest=_runtime_model_manifest(model_id),
+            config={},
+            install_source="test-source",
+            force=False,
+        )
+
+    assert raised.value.exit_code == 1
+    assert load_model_ownership()["models"] == {}
+
+
+def test_blueprint_model_dependency_service_model_records_owner_without_docker_install(
+    mocker,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
+    model_id = "voice-asr:default"
+    docker_model = "service/voice-asr:latest"
+    mocker.patch(
+        "mn_cli.libs.blueprint_cmds._load_model_catalog",
+        return_value=_single_model_catalog(
+            model_id,
+            docker_model,
+            provider="nvidia_service",
+            backend="vllm",
+        ),
+    )
+    model_installed = mocker.patch("mn_cli.libs.blueprint_cmds._model_installed")
+    install_model = mocker.patch("mn_cli.libs.blueprint_cmds._install_model_entry")
+
+    summary = blueprint_cmds._install_blueprint_model_dependencies(
+        blueprint_id="bp-service",
+        blueprint_revision="rev-2",
+        bundle_root=tmp_path / "bundle",
+        manifest=_runtime_model_manifest(model_id, provider="nvidia_service", backend="vllm"),
+        config={},
+        install_source="test-source",
+        force=False,
+    )
+
+    model_installed.assert_not_called()
+    install_model.assert_not_called()
+    assert summary["ok"] is True
+    assert summary["models"][0]["status"] == "service_required"
+    record = load_model_ownership()["models"][docker_model]
+    assert record["provider"] == "nvidia_service"
+    assert record["backend"] == "vllm"
+    assert record["manual"] is False
+    assert record["owners"]["bp-service"]["blueprint_revision"] == "rev-2"
 
 
 def test_blueprint_list_not_initialized(mocker, tmp_path):
