@@ -283,7 +283,7 @@ def _compose_runtime_env(env: dict[str, str], ip: Optional[str]) -> dict[str, st
         local_host = str(compose_env.get("MN_NETWORK_ADVERTISE_HOST") or "").strip() or _detect_lan_ip()
         docker_mode_value = str(compose_env.get("MN_DOCKER_NETWORK_MODE") or "").strip().lower()
         node_alias = str(compose_env.get("MN_NODE_ALIAS") or "").strip()
-        docker_identity = docker_mode_value not in {"", "disabled", "disable", "none", "off", "host", "ip"} and node_alias
+        docker_identity = _docker_network_uses_internal_identity(docker_mode_value) and node_alias
         local_node_name = _docker_node_name(node_alias) if docker_identity else _network_node_name(local_host)
         existing_cluster_nodes = str(compose_env.get("MN_CLUSTER_NODES") or "").strip()
         seed_node_name = (
@@ -709,6 +709,9 @@ def _docker_network_mode(mode: Optional[str] = None, *, default: str = "bridge")
         return "disabled"
     console.print("[red]Error: Docker network mode must be bridge, overlay, or disabled.[/red]")
     raise typer.Exit(1)
+
+def _docker_network_uses_internal_identity(mode: str) -> bool:
+    return mode in {"bridge", "overlay"}
 
 def _inspect_docker_network(name: str) -> Optional[dict[str, object]]:
     try:
@@ -1140,9 +1143,10 @@ def _start_network_seed(
     env = _runtime_base_env(runtime_compose_available())
     requested_mode = _docker_network_mode(docker_network_mode, default="disabled")
     container_network_mode = "bridge" if requested_mode == "disabled" else requested_mode
+    use_internal_identity = _docker_network_uses_internal_identity(requested_mode)
     network_name = _docker_network_name(docker_network_name)
     node_alias = _resolve_node_alias(env)
-    node_name = _docker_node_name(node_alias) if requested_mode != "disabled" else _network_node_name(host)
+    node_name = _docker_node_name(node_alias) if use_internal_identity else _network_node_name(host)
     redis_alias = _docker_redis_alias(node_alias)
     if force_new_token:
         console.print("[yellow]--force-new-token is deprecated; run 'mn node refresh-token' to rotate the join token.[/yellow]")
@@ -1155,7 +1159,9 @@ def _start_network_seed(
         host,
         str(selected_redis_port or REDIS_CONTAINER_PORT),
     ) if external_redis_url else (
-        (redis_alias, str(REDIS_CONTAINER_PORT)) if requested_mode != "disabled" else (host, str(selected_redis_port))
+        (redis_alias, str(REDIS_CONTAINER_PORT))
+        if use_internal_identity
+        else (host, str(selected_redis_port))
     )
     try:
         redis_public_port = int(redis_public_port_value)
@@ -1224,7 +1230,8 @@ def _join_network(
     local_node_name = _network_node_name(local_host)
     if requested_mode != "disabled":
         _ensure_network_docker_network(requested_mode, network_name)
-        local_node_name = _docker_node_name(_resolve_node_alias(env))
+        if _docker_network_uses_internal_identity(requested_mode):
+            local_node_name = _docker_node_name(_resolve_node_alias(env))
     handshake = Client(target=target, auth_token="", timeout=10).network_handshake(
         token,
         node_name=local_node_name,
@@ -2276,6 +2283,7 @@ def _start_server(
         default="disabled" if (ip or not compose_runtime or persisted_join_profile_before_network) else "bridge",
     )
     network_name = _docker_network_name(docker_network_name)
+    use_internal_identity = _docker_network_uses_internal_identity(requested_docker_mode)
     node_alias = _resolve_node_alias(env) if requested_docker_mode != "disabled" else ""
     if requested_docker_mode != "disabled":
         _ensure_docker_network(requested_docker_mode, network_name)
@@ -2285,7 +2293,7 @@ def _start_server(
     advertised_host = _advertised_network_host(host)
     local_node_name = (
         _docker_node_name(node_alias)
-        if requested_docker_mode != "disabled"
+        if use_internal_identity
         else _network_node_name(advertised_host)
     )
     join_handshake = (
@@ -2313,12 +2321,12 @@ def _start_server(
                 advertised_host=advertised_host,
                 network_redis_host=(
                     _docker_redis_alias(node_alias)
-                    if requested_docker_mode != "disabled" and node_alias
+                    if use_internal_identity and node_alias
                     else None
                 ),
                 network_redis_port=(
                     REDIS_CONTAINER_PORT
-                    if requested_docker_mode != "disabled" and node_alias
+                    if use_internal_identity and node_alias
                     else None
                 ),
             )
@@ -2345,7 +2353,7 @@ def _start_server(
         )
     else:
         seed_node_name = local_node_name
-        if requested_docker_mode != "disabled" and node_alias:
+        if use_internal_identity and node_alias:
             seed_redis_host = _docker_redis_alias(node_alias)
             seed_redis_port = REDIS_CONTAINER_PORT
         else:

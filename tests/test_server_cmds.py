@@ -518,6 +518,53 @@ def test_add_node_overlay_uses_local_alias_in_handshake(mocker, tmp_path, monkey
 
     mock_add_node.assert_called_once_with("mirror_neuron@mn-seed", token="join-token")
 
+def test_add_node_bridge_uses_docker_alias_in_handshake(mocker, monkeypatch):
+    import mn_sdk
+    import mn_cli.shared
+
+    monkeypatch.setenv("MN_NODE_ALIAS", "mn-main")
+    redis_password = _derive_network_secret("join-token", "redis")
+    mock_run = mocker.patch(
+        "mn_cli.server_cmds.subprocess.run",
+        return_value=mocker.Mock(
+            returncode=0,
+            stdout=json.dumps([{"Driver": "bridge", "Attachable": False}]),
+        ),
+    )
+
+    class StubClient:
+        def __init__(self, target, auth_token, timeout):
+            assert target == "192.168.4.10:50055"
+
+        def network_handshake(self, token, node_name="", node_info=None):
+            assert token == "join-token"
+            assert node_name == "mirror_neuron@mn-main"
+            assert node_info["node_name"] == "mirror_neuron@mn-main"
+            return {
+                "node_name": "mirror_neuron@mn-seed",
+                "redis_host": "mn-seed-redis",
+                "redis_port": 6379,
+                "redis_url": f"redis://:{redis_password}@mn-seed-redis:6379/0",
+            }
+
+    mocker.patch.object(mn_sdk, "Client", StubClient)
+    mock_add_node = mocker.patch.object(mn_cli.shared.client, "add_node", return_value="connected")
+
+    _join_network(
+        "192.168.4.10",
+        "join-token",
+        grpc_port=50055,
+        docker_network_mode="bridge",
+        docker_network_name="mirror-neuron-runtime",
+    )
+
+    mock_run.assert_any_call(
+        ["docker", "network", "inspect", "mirror-neuron-runtime"],
+        capture_output=True,
+        text=True,
+    )
+    mock_add_node.assert_called_once_with("mirror_neuron@mn-seed", token="join-token")
+
 def test_add_node_rejects_missing_remote_redis_details(mocker, tmp_path):
     import mn_sdk
 
