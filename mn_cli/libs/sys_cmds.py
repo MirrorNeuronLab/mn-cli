@@ -12,9 +12,11 @@ from mn_cli.server_cmds import (
     _start_server,
     _start_network_seed,
     _join_network,
+    _detach_local_docker_node_if_matches,
     _refresh_network_token,
     _stop_network_runtime,
     kill_tree,
+    API_PID_FILE,
     BEAM_PID_FILE,
     DEFAULT_GRPC_PORT,
     DEFAULT_DIST_PORT,
@@ -44,6 +46,16 @@ def join(
         "--redis-port",
         help="Override the Redis port returned by the main node handshake.",
     ),
+    docker_network_mode: Optional[str] = typer.Option(
+        None,
+        "--network",
+        help="Docker network mode for the joined node: overlay, bridge, or disabled.",
+    ),
+    docker_network_name: Optional[str] = typer.Option(
+        None,
+        "--docker-network",
+        help="Docker network name to use for bridge/overlay mode.",
+    ),
 ):
     """Join a MirrorNeuron cluster using the main node host and token"""
     _start_server(
@@ -53,6 +65,8 @@ def join(
         grpc_port=grpc_port,
         dist_port=dist_port,
         redis_port=redis_port,
+        docker_network_mode=docker_network_mode,
+        docker_network_name=docker_network_name,
     )
 
 def expose_node(
@@ -73,6 +87,16 @@ def expose_node(
         "--force-new-token",
         help="Replace the persisted node exposure token.",
     ),
+    docker_network_mode: Optional[str] = typer.Option(
+        None,
+        "--network",
+        help="Docker network mode for the exposed node: overlay, bridge, or disabled.",
+    ),
+    docker_network_name: Optional[str] = typer.Option(
+        None,
+        "--docker-network",
+        help="Docker network name to use for bridge/overlay mode.",
+    ),
 ):
     """Expose this box as a core-only node that a main node can add"""
     _start_network_seed(
@@ -81,18 +105,32 @@ def expose_node(
         dist_port=dist_port,
         redis_port=redis_port,
         force_new_token=force_new_token,
+        docker_network_mode=docker_network_mode,
+        docker_network_name=docker_network_name,
     )
 
 def add_node(
     host: str,
     token: str = typer.Option(..., "--token", help="Token printed by mn node expose on the remote box."),
     grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Remote exposed node gRPC port."),
+    docker_network_mode: Optional[str] = typer.Option(
+        None,
+        "--network",
+        help="Docker network mode for the local add handshake: overlay, bridge, or disabled.",
+    ),
+    docker_network_name: Optional[str] = typer.Option(
+        None,
+        "--docker-network",
+        help="Docker network name to validate for bridge/overlay mode.",
+    ),
 ):
     """Add a remote exposed node to the local/main MirrorNeuron cluster"""
     _join_network(
         seed_host=host,
         token=token,
         grpc_port=grpc_port,
+        docker_network_mode=docker_network_mode,
+        docker_network_name=docker_network_name,
     )
 
 def stop():
@@ -143,6 +181,7 @@ def leave(node_name: str):
     from mn_cli.shared import client, console
     try:
         status = client.remove_node(node_name)
+        _detach_local_docker_node_if_matches(node_name)
         console.print(f"[green]Successfully requested {node_name} to leave. Status: {status}[/green]")
     except Exception as e:
         handle_cli_error(e, console, 'leave')

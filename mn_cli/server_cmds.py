@@ -103,7 +103,8 @@ REDIS_DYNAMIC_PORT_START = 56379
 REDIS_DYNAMIC_PORT_END = 56478
 NETWORK_TOKEN_FILE = DIR / "network.token"
 NETWORK_REDIS_ENV_FILE = DIR / "network-redis.env"
-NETWORK_DOCKER_NETWORK = "mirror-neuron-network"
+DEFAULT_DOCKER_NETWORK_NAME = "mirror-neuron-runtime"
+NETWORK_DOCKER_NETWORK = DEFAULT_DOCKER_NETWORK_NAME
 LOCAL_CORE_CONTAINER = "mirror-neuron-core"
 NETWORK_CORE_CONTAINER = "mirror-neuron-network-core"
 NETWORK_REDIS_CONTAINER = "mirror-neuron-network-redis"
@@ -280,12 +281,24 @@ def _compose_runtime_env(env: dict[str, str], ip: Optional[str]) -> dict[str, st
         if not str(compose_env.get("MN_DIST_PORT") or "").strip():
             compose_env["MN_DIST_PORT"] = DEFAULT_DIST_PORT
         local_host = str(compose_env.get("MN_NETWORK_ADVERTISE_HOST") or "").strip() or _detect_lan_ip()
-        local_node_name = _network_node_name(local_host)
-        seed_node_name = _network_node_name(ip)
+        docker_mode_value = str(compose_env.get("MN_DOCKER_NETWORK_MODE") or "").strip().lower()
+        node_alias = str(compose_env.get("MN_NODE_ALIAS") or "").strip()
+        docker_identity = docker_mode_value not in {"", "disabled", "disable", "none", "off", "host", "ip"} and node_alias
+        local_node_name = _docker_node_name(node_alias) if docker_identity else _network_node_name(local_host)
+        existing_cluster_nodes = str(compose_env.get("MN_CLUSTER_NODES") or "").strip()
+        seed_node_name = (
+            existing_cluster_nodes
+            if docker_identity and not _cluster_nodes_unset(existing_cluster_nodes)
+            else _network_node_name(ip)
+        )
         if _generated_node_setting_should_update("MN_NODE_NAME", compose_env.get("MN_NODE_NAME"), local_node_name):
             compose_env["MN_NODE_NAME"] = local_node_name
         if (
-            _generated_cluster_setting_should_update(compose_env.get("MN_CLUSTER_NODES"), seed_node_name)
+            (
+                not docker_identity
+                and _generated_cluster_setting_should_update(compose_env.get("MN_CLUSTER_NODES"), seed_node_name)
+            )
+            or (docker_identity and _cluster_nodes_unset(compose_env.get("MN_CLUSTER_NODES")))
             or compose_env.get("MN_CLUSTER_NODES") == ip
         ):
             compose_env["MN_CLUSTER_NODES"] = seed_node_name
@@ -616,6 +629,157 @@ def _derive_network_secret(token: str, label: str) -> str:
 def _network_node_name(host: str) -> str:
     return f"mirror_neuron@{host}"
 
+def _node_alias_file() -> Path:
+    return DIR / "node.alias"
+
+def _valid_node_alias(value: str) -> bool:
+    if not value or len(value) > 63:
+        return False
+    if not value[0].isalnum() or not value[-1].isalnum():
+        return False
+    return all(ch.isalnum() or ch == "-" for ch in value)
+
+def _normalize_node_alias(value: object) -> str:
+    return str(value or "").strip().lower()
+
+def _write_node_alias(alias: str) -> None:
+    DIR.mkdir(parents=True, exist_ok=True)
+    alias_file = _node_alias_file()
+    fd = os.open(alias_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(f"{alias}\n")
+    try:
+        alias_file.chmod(0o600)
+    except OSError:
+        logger.debug("Failed to chmod node alias file %s", alias_file, exc_info=True)
+
+def _configured_node_alias(env: Optional[dict[str, str]] = None) -> str:
+    values = env or {}
+    for value in (
+        os.getenv("MN_NODE_ALIAS", "").strip(),
+        str(values.get("MN_NODE_ALIAS") or "").strip(),
+        _read_env_file(RUNTIME_COMPOSE_ENV).get("MN_NODE_ALIAS", "").strip(),
+    ):
+        alias = _normalize_node_alias(value)
+        if alias:
+            return alias
+
+    try:
+        return _normalize_node_alias(_node_alias_file().read_text(encoding="utf-8"))
+    except OSError:
+        return ""
+
+def _resolve_node_alias(env: Optional[dict[str, str]] = None) -> str:
+    alias = _configured_node_alias(env)
+    if alias:
+        if not _valid_node_alias(alias):
+            console.print(
+                "[red]Error: MN_NODE_ALIAS must be 1-63 lowercase letters, numbers, or hyphens, "
+                "and must start and end with a letter or number.[/red]"
+            )
+            raise typer.Exit(1)
+        _write_node_alias(alias)
+        return alias
+
+    generated = f"mn-{secrets.token_hex(4)}"
+    _write_node_alias(generated)
+    return generated
+
+def _docker_node_name(alias: str) -> str:
+    return _network_node_name(alias)
+
+def _docker_redis_alias(alias: str) -> str:
+    return f"{alias}-redis"
+
+def _docker_network_name(name: Optional[str] = None) -> str:
+    return (
+        name
+        or os.getenv("MN_DOCKER_NETWORK_NAME", "").strip()
+        or _read_env_file(RUNTIME_COMPOSE_ENV).get("MN_DOCKER_NETWORK_NAME", "").strip()
+        or DEFAULT_DOCKER_NETWORK_NAME
+    )
+
+def _docker_network_mode(mode: Optional[str] = None, *, default: str = "bridge") -> str:
+    raw = (mode or os.getenv("MN_DOCKER_NETWORK_MODE", "").strip() or default).strip().lower()
+    if raw in {"", "bridge"}:
+        return "bridge"
+    if raw == "overlay":
+        return "overlay"
+    if raw in {"disabled", "disable", "none", "off", "host", "ip"}:
+        return "disabled"
+    console.print("[red]Error: Docker network mode must be bridge, overlay, or disabled.[/red]")
+    raise typer.Exit(1)
+
+def _inspect_docker_network(name: str) -> Optional[dict[str, object]]:
+    try:
+        result = subprocess.run(
+            ["docker", "network", "inspect", name],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        console.print("[red]Error: Docker is not installed or not in PATH.[/red]")
+        raise typer.Exit(1)
+    if result.returncode != 0:
+        return None
+    try:
+        inspected = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        console.print(f"[red]Error: Could not parse Docker network inspect output for {name}.[/red]")
+        raise typer.Exit(1)
+    if isinstance(inspected, list) and inspected and isinstance(inspected[0], dict):
+        return inspected[0]
+    console.print(f"[red]Error: Docker network inspect returned unexpected data for {name}.[/red]")
+    raise typer.Exit(1)
+
+def _ensure_docker_network(mode: str, name: str) -> None:
+    if mode == "disabled":
+        return
+
+    inspected = _inspect_docker_network(name)
+    if mode == "bridge":
+        if inspected is None:
+            subprocess.run(
+                ["docker", "network", "create", "--driver", "bridge", name],
+                check=True,
+                stdout=subprocess.DEVNULL,
+            )
+            return
+        if str(inspected.get("Driver") or "") != "bridge":
+            console.print(f"[red]Error: Docker network {name} exists but is not a bridge network.[/red]")
+            raise typer.Exit(1)
+        return
+
+    if inspected is None:
+        console.print(f"[red]Error: Docker overlay network {name} does not exist.[/red]")
+        console.print("Create it first with:")
+        console.print(f"  docker network create --driver overlay --attachable {name}")
+        raise typer.Exit(1)
+    if str(inspected.get("Driver") or "") != "overlay":
+        console.print(f"[red]Error: Docker network {name} exists but is not an overlay network.[/red]")
+        raise typer.Exit(1)
+    if inspected.get("Attachable") is not True:
+        console.print(f"[red]Error: Docker overlay network {name} is not attachable.[/red]")
+        console.print("Create an attachable overlay network with:")
+        console.print(f"  docker network create --driver overlay --attachable {name}")
+        raise typer.Exit(1)
+
+def _docker_network_env(mode: str, name: str, alias: str) -> dict[str, str]:
+    driver = "overlay" if mode == "overlay" else "bridge"
+    return {
+        "MN_DOCKER_NETWORK_MODE": mode,
+        "MN_DOCKER_NETWORK_NAME": name,
+        "MN_DOCKER_NETWORK_DRIVER": driver,
+        "MN_DOCKER_NETWORK_ATTACHABLE": "true" if mode == "overlay" else "false",
+        "MN_DOCKER_NETWORK_EXTERNAL": "true",
+        "MN_NODE_ALIAS": alias,
+    }
+
+def _docker_network_run_args(mode: str, name: str, alias: str) -> list[str]:
+    if mode == "disabled":
+        return []
+    return ["--network", name, "--network-alias", alias]
+
 def _network_node_host(node_name: object) -> str:
     normalized = str(node_name or "").strip()
     if "@" not in normalized:
@@ -683,7 +847,7 @@ def _redis_url_with_public_endpoint(redis_url: str, host: str, port: int) -> str
         userinfo = f"{parsed.netloc.rsplit('@', 1)[0]}@"
     return f"{scheme}://{userinfo}{host}:{port}{path}"
 
-def _handshake_node_info(local_host: str) -> dict[str, object]:
+def _handshake_node_info(local_host: str, node_name: Optional[str] = None) -> dict[str, object]:
     hostname = ""
     try:
         hostname = socket.gethostname().strip()
@@ -691,7 +855,7 @@ def _handshake_node_info(local_host: str) -> dict[str, object]:
         pass
 
     return {
-        "node_name": _network_node_name(local_host),
+        "node_name": node_name or _network_node_name(local_host),
         "display_name": _node_display_name(),
         "hostname": hostname,
         "gpu_count": _detect_host_gpu_count(),
@@ -703,16 +867,21 @@ def _handshake_with_main_node(
     grpc_port: int,
     *,
     local_host: Optional[str] = None,
+    local_node_name: Optional[str] = None,
 ) -> dict:
     from mn_sdk import Client
 
     target = f"{seed_host}:{grpc_port}"
-    local_node_name = _network_node_name(local_host) if local_host else ""
-    local_node_info = _handshake_node_info(local_host) if local_host else None
+    advertised_node_name = local_node_name or (_network_node_name(local_host) if local_host else "")
+    local_node_info = (
+        _handshake_node_info(local_host, node_name=advertised_node_name)
+        if local_host
+        else None
+    )
     try:
         handshake = Client(target=target, auth_token="", timeout=10).network_handshake(
             token,
-            node_name=local_node_name,
+            node_name=advertised_node_name,
             node_info=local_node_info,
         )
     except Exception as exc:
@@ -755,14 +924,8 @@ def _docker_container_env_value(name: str, key: str) -> Optional[str]:
             return line[len(prefix) :].strip() or None
     return None
 
-def _ensure_network_docker_network() -> None:
-    result = subprocess.run(
-        ["docker", "network", "inspect", NETWORK_DOCKER_NETWORK],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    if result.returncode != 0:
-        subprocess.run(["docker", "network", "create", NETWORK_DOCKER_NETWORK], check=True, stdout=subprocess.DEVNULL)
+def _ensure_network_docker_network(mode: str = "bridge", name: Optional[str] = None) -> None:
+    _ensure_docker_network(mode, name or NETWORK_DOCKER_NETWORK)
 
 def _network_redis_url(token: str, redis_host: str, redis_port: int) -> str:
     password = _derive_network_secret(token, "redis")
@@ -772,6 +935,9 @@ def _network_core_env(
     *,
     token: str,
     host: str,
+    docker_network_mode: str,
+    docker_network_name: str,
+    node_alias: str,
     node_name: str,
     cluster_nodes: str,
     grpc_port: int,
@@ -788,6 +954,9 @@ def _network_core_env(
             "MN_NETWORK_ADVERTISE_HOST": host,
             "MN_NETWORK_REDIS_HOST": redis_public_host,
             "MN_NETWORK_REDIS_PORT": str(redis_public_port),
+            "MN_NODE_ALIAS": node_alias,
+            "MN_DOCKER_NETWORK_MODE": docker_network_mode,
+            "MN_DOCKER_NETWORK_NAME": docker_network_name,
             "MN_CORE_HOST": "0.0.0.0",
             "MN_GRPC_PORT": str(grpc_port),
             "MN_NODE_NAME": node_name,
@@ -812,7 +981,15 @@ def _docker_env_args(env: dict[str, str]) -> list[str]:
             args.extend(["-e", f"{key}={env[key]}"])
     return args
 
-def _start_network_redis(host: str, redis_port: int, token: str) -> None:
+def _start_network_redis(
+    host: str,
+    redis_port: int,
+    token: str,
+    *,
+    docker_network_mode: str,
+    docker_network_name: str,
+    redis_alias: str,
+) -> None:
     subprocess.run(["docker", "rm", "-f", NETWORK_REDIS_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
     publish_host = _network_publish_host(host)
     password = _derive_network_secret(token, "redis")
@@ -824,8 +1001,7 @@ def _start_network_redis(host: str, redis_port: int, token: str) -> None:
         "-d",
         "--name",
         NETWORK_REDIS_CONTAINER,
-        "--network",
-        NETWORK_DOCKER_NETWORK,
+        *_docker_network_run_args(docker_network_mode, docker_network_name, redis_alias),
         "-p",
         f"{publish_host}:{redis_port}:6379",
         "-v",
@@ -841,7 +1017,16 @@ def _start_network_redis(host: str, redis_port: int, token: str) -> None:
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
 
-def _start_network_core(env: dict[str, str], host: str, grpc_port: int, dist_port: int) -> None:
+def _start_network_core(
+    env: dict[str, str],
+    host: str,
+    grpc_port: int,
+    dist_port: int,
+    *,
+    docker_network_mode: str,
+    docker_network_name: str,
+    node_alias: str,
+) -> None:
     subprocess.run(["docker", "rm", "-f", NETWORK_CORE_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
     publish_host = _network_publish_host(host)
     cmd = [
@@ -850,8 +1035,7 @@ def _start_network_core(env: dict[str, str], host: str, grpc_port: int, dist_por
         "-d",
         "--name",
         NETWORK_CORE_CONTAINER,
-        "--network",
-        NETWORK_DOCKER_NETWORK,
+        *_docker_network_run_args(docker_network_mode, docker_network_name, node_alias),
         "-p",
         f"{publish_host}:{grpc_port}:{grpc_port}",
         "-p",
@@ -899,8 +1083,15 @@ def _running_network_host(host: Optional[str], container_names: tuple[str, ...] 
 
     return _advertised_network_host(host)
 
-def _print_network_seed_ready(host: str, grpc_port: int, token: str, *, already_running: bool = False) -> None:
-    node_name = _network_node_name(host)
+def _print_network_seed_ready(
+    host: str,
+    grpc_port: int,
+    token: str,
+    *,
+    node_name: Optional[str] = None,
+    already_running: bool = False,
+) -> None:
+    node_name = node_name or _network_node_name(host)
     if already_running:
         console.print("\n[green]MirrorNeuron node is already ready to join.[/green]")
     else:
@@ -923,7 +1114,8 @@ def _return_running_network_seed(
         raise typer.Exit(1)
 
     advertised_host = _running_network_host(host, container_names)
-    _print_network_seed_ready(advertised_host, grpc_port, token, already_running=True)
+    node_name = _docker_container_env_value(container_names[0], "MN_NODE_NAME") if container_names else None
+    _print_network_seed_ready(advertised_host, grpc_port, token, node_name=node_name, already_running=True)
     return token
 
 def _start_network_seed(
@@ -932,6 +1124,8 @@ def _start_network_seed(
     dist_port: int = int(DEFAULT_DIST_PORT),
     redis_port: Optional[int] = None,
     force_new_token: bool = False,
+    docker_network_mode: Optional[str] = None,
+    docker_network_name: Optional[str] = None,
 ) -> str:
     if check_status(API_PID_FILE) == 0:
         return _return_running_network_seed(host, grpc_port, (LOCAL_CORE_CONTAINER,))
@@ -943,31 +1137,49 @@ def _start_network_seed(
         return _return_running_network_seed(host, grpc_port, (LOCAL_CORE_CONTAINER,))
 
     host = (host or _detect_lan_ip()).strip() or "127.0.0.1"
+    env = _runtime_base_env(runtime_compose_available())
+    requested_mode = _docker_network_mode(docker_network_mode, default="disabled")
+    container_network_mode = "bridge" if requested_mode == "disabled" else requested_mode
+    network_name = _docker_network_name(docker_network_name)
+    node_alias = _resolve_node_alias(env)
+    node_name = _docker_node_name(node_alias) if requested_mode != "disabled" else _network_node_name(host)
+    redis_alias = _docker_redis_alias(node_alias)
     if force_new_token:
         console.print("[yellow]--force-new-token is deprecated; run 'mn node refresh-token' to rotate the join token.[/yellow]")
     token = _resolve_network_token()
-    node_name = _network_node_name(host)
     external_redis_url = os.getenv("MN_REDIS_URL", "").strip()
     selected_redis_port = _resolve_network_seed_redis_port(host, redis_port) if not external_redis_url else None
-    redis_url = external_redis_url or _network_redis_url(token, NETWORK_REDIS_CONTAINER, 6379)
+    redis_url = external_redis_url or _network_redis_url(token, redis_alias, 6379)
     redis_public_host, redis_public_port_value = _host_port_from_target(
         external_redis_url,
         host,
         str(selected_redis_port or REDIS_CONTAINER_PORT),
-    ) if external_redis_url else (host, str(selected_redis_port))
+    ) if external_redis_url else (
+        (redis_alias, str(REDIS_CONTAINER_PORT)) if requested_mode != "disabled" else (host, str(selected_redis_port))
+    )
     try:
         redis_public_port = int(redis_public_port_value)
     except ValueError:
         redis_public_port = selected_redis_port or REDIS_CONTAINER_PORT
 
-    _ensure_network_docker_network()
+    _ensure_network_docker_network(container_network_mode, network_name)
     if not external_redis_url:
         console.print("=> Starting network Redis...")
-        _start_network_redis(host, redis_public_port, token)
+        _start_network_redis(
+            host,
+            selected_redis_port or redis_public_port,
+            token,
+            docker_network_mode=container_network_mode,
+            docker_network_name=network_name,
+            redis_alias=redis_alias,
+        )
 
     env = _network_core_env(
         token=token,
         host=host,
+        docker_network_mode=requested_mode,
+        docker_network_name=network_name,
+        node_alias=node_alias,
         node_name=node_name,
         cluster_nodes=node_name,
         grpc_port=grpc_port,
@@ -978,9 +1190,17 @@ def _start_network_seed(
     )
 
     console.print("=> Starting MirrorNeuron core-only exposed node...")
-    _start_network_core(env, host, grpc_port, dist_port)
+    _start_network_core(
+        env,
+        host,
+        grpc_port,
+        dist_port,
+        docker_network_mode=container_network_mode,
+        docker_network_name=network_name,
+        node_alias=node_alias,
+    )
 
-    _print_network_seed_ready(host, grpc_port, token)
+    _print_network_seed_ready(host, grpc_port, token, node_name=node_name)
     return token
 
 def _join_network(
@@ -990,16 +1210,25 @@ def _join_network(
     grpc_port: int = int(DEFAULT_GRPC_PORT),
     dist_port: int = int(DEFAULT_DIST_PORT),
     redis_port: Optional[int] = None,
+    docker_network_mode: Optional[str] = None,
+    docker_network_name: Optional[str] = None,
 ) -> dict:
     from mn_sdk import Client
     from mn_cli.shared import client as local_client
 
     target = f"{seed_host}:{grpc_port}"
     local_host = (host or _detect_lan_ip()).strip()
+    requested_mode = _docker_network_mode(docker_network_mode, default="disabled")
+    network_name = _docker_network_name(docker_network_name)
+    env = _runtime_base_env(runtime_compose_available())
+    local_node_name = _network_node_name(local_host)
+    if requested_mode != "disabled":
+        _ensure_network_docker_network(requested_mode, network_name)
+        local_node_name = _docker_node_name(_resolve_node_alias(env))
     handshake = Client(target=target, auth_token="", timeout=10).network_handshake(
         token,
-        node_name=_network_node_name(local_host),
-        node_info=_handshake_node_info(local_host),
+        node_name=local_node_name,
+        node_info=_handshake_node_info(local_host, node_name=local_node_name),
     )
     remote_node = handshake.get("node_name") or _network_node_name(seed_host)
     redis_host, redis_port, redis_url = _validate_remote_redis_details(handshake, seed_host, token)
@@ -1023,7 +1252,25 @@ def _join_network(
 def _stop_network_runtime() -> None:
     for container in [NETWORK_CORE_CONTAINER, NETWORK_REDIS_CONTAINER]:
         subprocess.run(["docker", "rm", "-f", container], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-    subprocess.run(["docker", "network", "rm", NETWORK_DOCKER_NETWORK], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+
+def _detach_local_docker_node_if_matches(node_name: str) -> bool:
+    alias = _configured_node_alias(_runtime_base_env(runtime_compose_available()))
+    if not alias or node_name != _docker_node_name(alias):
+        return False
+
+    if runtime_compose_available():
+        subprocess.run(
+            runtime_compose_cmd("stop", "mirror-neuron-core"),
+            stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+        )
+        return True
+
+    stopped = False
+    for container in (LOCAL_CORE_CONTAINER, NETWORK_CORE_CONTAINER):
+        subprocess.run(["docker", "rm", "-f", container], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        stopped = True
+    return stopped
 
 def check_status(pid_file: Path) -> int:
     if pid_file.exists():
@@ -1318,6 +1565,8 @@ def _ensure_compose_redis_publish_settings(
     *,
     token: str,
     advertised_host: str,
+    network_redis_host: Optional[str] = None,
+    network_redis_port: Optional[int] = None,
 ) -> tuple[dict[str, str], int]:
     adjusted = dict(env)
     explicit_bind_host = os.getenv("MN_REDIS_BIND_HOST", "").strip()
@@ -1344,8 +1593,12 @@ def _ensure_compose_redis_publish_settings(
     adjusted["MN_REDIS_URL"] = f"redis://:{redis_password}@redis:{REDIS_CONTAINER_PORT}/0"
     adjusted["MN_CONTEXT_REDIS_URL"] = f"redis://:{redis_password}@redis:{REDIS_CONTAINER_PORT}/1"
     adjusted.setdefault("MN_NETWORK_JOIN_TOKEN", token)
-    adjusted["MN_NETWORK_REDIS_HOST"] = os.getenv("MN_NETWORK_REDIS_HOST", "").strip() or advertised_host
-    adjusted["MN_NETWORK_REDIS_PORT"] = str(redis_port)
+    adjusted["MN_NETWORK_REDIS_HOST"] = (
+        os.getenv("MN_NETWORK_REDIS_HOST", "").strip()
+        or network_redis_host
+        or advertised_host
+    )
+    adjusted["MN_NETWORK_REDIS_PORT"] = str(network_redis_port or redis_port)
 
     _write_env_file_values(
         RUNTIME_COMPOSE_ENV,
@@ -1967,6 +2220,8 @@ def _start_server(
     grpc_port: int = int(DEFAULT_GRPC_PORT),
     dist_port: int = int(DEFAULT_DIST_PORT),
     redis_port: Optional[int] = None,
+    docker_network_mode: Optional[str] = None,
+    docker_network_name: Optional[str] = None,
 ):
     if check_status(API_PID_FILE) == 0:
         if ip:
@@ -2011,16 +2266,41 @@ def _start_server(
     network_token = token or _resolve_network_token()
     if token:
         _write_network_token(network_token)
+    env = _runtime_base_env(compose_runtime)
+    persisted_join_profile_before_network = bool(compose_runtime and not ip and _persisted_join_profile(env))
+    mode_override = docker_network_mode or os.getenv("MN_DOCKER_NETWORK_MODE", "").strip()
+    if not mode_override and not ip and not persisted_join_profile_before_network:
+        mode_override = str(env.get("MN_DOCKER_NETWORK_MODE") or "").strip()
+    requested_docker_mode = _docker_network_mode(
+        mode_override or None,
+        default="disabled" if (ip or not compose_runtime or persisted_join_profile_before_network) else "bridge",
+    )
+    network_name = _docker_network_name(docker_network_name)
+    node_alias = _resolve_node_alias(env) if requested_docker_mode != "disabled" else ""
+    if requested_docker_mode != "disabled":
+        _ensure_docker_network(requested_docker_mode, network_name)
+        env.update(_docker_network_env(requested_docker_mode, network_name, node_alias))
+    else:
+        env["MN_DOCKER_NETWORK_MODE"] = "disabled"
     advertised_host = _advertised_network_host(host)
-    local_node_name = _network_node_name(advertised_host)
+    local_node_name = (
+        _docker_node_name(node_alias)
+        if requested_docker_mode != "disabled"
+        else _network_node_name(advertised_host)
+    )
     join_handshake = (
-        _handshake_with_main_node(ip, network_token, grpc_port, local_host=advertised_host)
+        _handshake_with_main_node(
+            ip,
+            network_token,
+            grpc_port,
+            local_host=advertised_host,
+            local_node_name=local_node_name,
+        )
         if ip
         else None
     )
     if join_handshake:
         _validate_remote_redis_details(join_handshake, ip, network_token)
-    env = _runtime_base_env(compose_runtime)
     reconnecting_joined_node = bool(compose_runtime and not ip and _persisted_join_profile(env))
     local_redis_port: Optional[int] = None
     if compose_runtime:
@@ -2031,6 +2311,16 @@ def _start_server(
                 env,
                 token=network_token,
                 advertised_host=advertised_host,
+                network_redis_host=(
+                    _docker_redis_alias(node_alias)
+                    if requested_docker_mode != "disabled" and node_alias
+                    else None
+                ),
+                network_redis_port=(
+                    REDIS_CONTAINER_PORT
+                    if requested_docker_mode != "disabled" and node_alias
+                    else None
+                ),
             )
     else:
         env.update(_runtime_blueprint_env_updates(env))
@@ -2055,8 +2345,14 @@ def _start_server(
         )
     else:
         seed_node_name = local_node_name
-        seed_redis_host = advertised_host
-        seed_redis_port = redis_port or (local_redis_port or _parse_port(os.getenv("MN_REDIS_PORT"), REDIS_CONTAINER_PORT))
+        if requested_docker_mode != "disabled" and node_alias:
+            seed_redis_host = _docker_redis_alias(node_alias)
+            seed_redis_port = REDIS_CONTAINER_PORT
+        else:
+            seed_redis_host = advertised_host
+            seed_redis_port = redis_port or (
+                local_redis_port or _parse_port(os.getenv("MN_REDIS_PORT"), REDIS_CONTAINER_PORT)
+            )
 
     console.print("===========================================")
     if ip:
@@ -2085,6 +2381,8 @@ def _start_server(
     env["MN_NETWORK_ADVERTISE_HOST"] = advertised_host
     env["MN_NETWORK_REDIS_HOST"] = seed_redis_host
     env["MN_NETWORK_REDIS_PORT"] = str(seed_redis_port)
+    if requested_docker_mode != "disabled" and node_alias:
+        env.update(_docker_network_env(requested_docker_mode, network_name, node_alias))
     if _generated_node_setting_should_update("MN_NODE_NAME", env.get("MN_NODE_NAME"), local_node_name):
         env["MN_NODE_NAME"] = local_node_name
     if not str(env.get("MN_NODE_ROLE") or "").strip():
@@ -2127,6 +2425,11 @@ def _start_server(
                     "MN_CONTEXT_REDIS_URL": env["MN_CONTEXT_REDIS_URL"],
                     "MN_NETWORK_REDIS_HOST": seed_redis_host,
                     "MN_NETWORK_REDIS_PORT": str(seed_redis_port),
+                    **(
+                        _docker_network_env(requested_docker_mode, network_name, node_alias)
+                        if requested_docker_mode != "disabled" and node_alias
+                        else {}
+                    ),
                     "MN_COOKIE": env["MN_COOKIE"],
                 },
             )
@@ -2155,6 +2458,11 @@ def _start_server(
                 "MN_DIST_PORT": env["MN_DIST_PORT"],
                 "MN_NODE_DISPLAY_NAME": env["MN_NODE_DISPLAY_NAME"],
                 "MN_NODE_GPU_COUNT": env["MN_NODE_GPU_COUNT"],
+                **(
+                    _docker_network_env(requested_docker_mode, network_name, node_alias)
+                    if requested_docker_mode != "disabled" and node_alias
+                    else {}
+                ),
             },
         )
 
@@ -2200,6 +2508,12 @@ def _start_server(
         cmd.extend(["-e", f"MN_NETWORK_REDIS_HOST={env['MN_NETWORK_REDIS_HOST']}"])
         cmd.extend(["-e", f"MN_NETWORK_REDIS_PORT={env['MN_NETWORK_REDIS_PORT']}"])
         cmd.extend(["-e", f"MN_CLUSTER_NODES={env['MN_CLUSTER_NODES']}"])
+        if env.get("MN_NODE_ALIAS"):
+            cmd.extend(["-e", f"MN_NODE_ALIAS={env['MN_NODE_ALIAS']}"])
+        if env.get("MN_DOCKER_NETWORK_MODE"):
+            cmd.extend(["-e", f"MN_DOCKER_NETWORK_MODE={env['MN_DOCKER_NETWORK_MODE']}"])
+        if env.get("MN_DOCKER_NETWORK_NAME"):
+            cmd.extend(["-e", f"MN_DOCKER_NETWORK_NAME={env['MN_DOCKER_NETWORK_NAME']}"])
         cmd.extend(["-e", f"MN_NODE_ROLE={env['MN_NODE_ROLE']}"])
         cmd.extend(["-e", f"MN_NODE_DISPLAY_NAME={env['MN_NODE_DISPLAY_NAME']}"])
         cmd.extend(["-e", f"MN_NODE_GPU_COUNT={env['MN_NODE_GPU_COUNT']}"])
@@ -2213,6 +2527,8 @@ def _start_server(
         dist_publish_host = _docker_publish_host(env["MN_DIST_HOST"])
 
         system_name = os.uname().sysname
+        if requested_docker_mode != "disabled" and node_alias:
+            cmd.extend(_docker_network_run_args(requested_docker_mode, network_name, node_alias))
 
         if system_name == "Darwin":
             cmd.extend(
@@ -2227,7 +2543,8 @@ def _start_server(
             cmd.extend(["-e", f"MN_REDIS_URL={env.get('MN_REDIS_URL', 'redis://host.docker.internal:6379/0')}"])
             cmd.extend(["-e", "MN_EXECUTOR_MAX_CONCURRENCY=50"])
         else:
-            cmd.extend(["--network", "host"])
+            if requested_docker_mode == "disabled":
+                cmd.extend(["--network", "host"])
             cmd.extend(["-e", "MN_EXECUTOR_MAX_CONCURRENCY=50"])
             if env.get("MN_REDIS_URL"):
                 cmd.extend(["-e", f"MN_REDIS_URL={env['MN_REDIS_URL']}"])

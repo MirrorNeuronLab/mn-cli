@@ -29,6 +29,10 @@ def test_expose_node_success(mocker):
             "--redis-port",
             "6380",
             "--force-new-token",
+            "--network",
+            "overlay",
+            "--docker-network",
+            "mn-overlay",
         ],
     )
     assert result.exit_code == 0
@@ -38,6 +42,8 @@ def test_expose_node_success(mocker):
         dist_port=4500,
         redis_port=6380,
         force_new_token=True,
+        docker_network_mode="overlay",
+        docker_network_name="mn-overlay",
     )
 
 def test_add_node_success(mocker):
@@ -52,6 +58,10 @@ def test_add_node_success(mocker):
             "join-token",
             "--grpc-port",
             "50055",
+            "--network",
+            "overlay",
+            "--docker-network",
+            "mn-overlay",
         ],
     )
     assert result.exit_code == 0
@@ -59,11 +69,26 @@ def test_add_node_success(mocker):
         seed_host="192.168.4.10",
         token="join-token",
         grpc_port=50055,
+        docker_network_mode="overlay",
+        docker_network_name="mn-overlay",
     )
 
 def test_join_success(mocker):
     mock_start_server = mocker.patch('mn_cli.libs.sys_cmds._start_server')
-    result = runner.invoke(app, ["node", "join", "192.168.1.1", "--token", "join-token"])
+    result = runner.invoke(
+        app,
+        [
+            "node",
+            "join",
+            "192.168.1.1",
+            "--token",
+            "join-token",
+            "--network",
+            "overlay",
+            "--docker-network",
+            "mn-overlay",
+        ],
+    )
     assert result.exit_code == 0
     mock_start_server.assert_called_once_with(
         "192.168.1.1",
@@ -72,15 +97,19 @@ def test_join_success(mocker):
         grpc_port=55051,
         dist_port=54370,
         redis_port=None,
+        docker_network_mode="overlay",
+        docker_network_name="mn-overlay",
     )
 
 def test_leave_success(mocker):
     import mn_cli.shared
     mock_remove = mocker.patch.object(mn_cli.shared.client, 'remove_node', return_value="disconnected")
+    mock_detach = mocker.patch("mn_cli.libs.sys_cmds._detach_local_docker_node_if_matches")
     result = runner.invoke(app, ["node", "leave", "mirror_neuron@1.2.3.4"])
     assert result.exit_code == 0
     assert "Successfully requested mirror_neuron@1.2.3.4 to leave" in result.stdout
     mock_remove.assert_called_once_with("mirror_neuron@1.2.3.4")
+    mock_detach.assert_called_once_with("mirror_neuron@1.2.3.4")
 
 def test_leave_error(mocker):
     import mn_cli.shared
@@ -112,6 +141,10 @@ def test_stop(mocker, tmp_path):
             (tmp_path / "web-ui-watchdog.pid", "Web UI watchdog"),
             (tmp_path / "web-ui.pid", "Web UI"),
         ),
+    )
+    mocker.patch(
+        'mn_cli.libs.sys_cmds.api_pid_files',
+        return_value=((tmp_path / "api.pid", "REST API"),),
     )
     
     (tmp_path / "api.pid").write_text("12345")
@@ -151,6 +184,10 @@ def test_stop_cleans_web_ui_pid_files_from_default_runtime_home(mocker, tmp_path
             (default_dir / "web-ui.pid", "Web UI"),
         ),
     )
+    mocker.patch(
+        'mn_cli.libs.sys_cmds.api_pid_files',
+        return_value=((tmp_path / "api.pid", "REST API"),),
+    )
 
     (default_dir / "web-ui-watchdog.pid").write_text("24681")
     (default_dir / "web-ui.pid").write_text("24680")
@@ -179,6 +216,10 @@ def test_stop_uses_compose_runtime_when_available(mocker, tmp_path):
             (tmp_path / "web-ui.pid", "Web UI"),
         ),
     )
+    mocker.patch(
+        'mn_cli.libs.sys_cmds.api_pid_files',
+        return_value=((tmp_path / "api.pid", "REST API"),),
+    )
     (tmp_path / "api.pid").write_text("12345")
 
     result = runner.invoke(app, ["runtime", "stop"])
@@ -201,7 +242,11 @@ def test_stop_pid_file_invalid(mocker, tmp_path):
             (tmp_path / "web-ui.pid", "Web UI"),
         ),
     )
-    
+    mocker.patch(
+        'mn_cli.libs.sys_cmds.api_pid_files',
+        return_value=((tmp_path / "api.pid", "REST API"),),
+    )
+
     (tmp_path / "api.pid").write_text("invalid")
     
     result = runner.invoke(app, ["runtime", "stop"])

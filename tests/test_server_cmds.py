@@ -20,6 +20,9 @@ from mn_cli.server_cmds import (
     _start_network_seed,
     _join_network,
     _avoid_local_compose_port_conflicts,
+    _detach_local_docker_node_if_matches,
+    _ensure_docker_network,
+    _resolve_node_alias,
     find_web_ui_dir,
     _start_api_if_installed,
     _start_web_ui_if_installed,
@@ -40,6 +43,9 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_NODE_GPU", raising=False)
     monkeypatch.delenv("MN_NODE_GPU_COUNT", raising=False)
     monkeypatch.delenv("MN_NODE_DISPLAY_NAME", raising=False)
+    monkeypatch.delenv("MN_NODE_ALIAS", raising=False)
+    monkeypatch.delenv("MN_DOCKER_NETWORK_MODE", raising=False)
+    monkeypatch.delenv("MN_DOCKER_NETWORK_NAME", raising=False)
     monkeypatch.delenv("MN_NETWORK_JOIN_TOKEN", raising=False)
     state_dir = tmp_path / ".mirror_neuron"
     log_dir = state_dir / ".logs"
@@ -259,8 +265,72 @@ def test_refresh_network_token_rotates_only_when_requested(mocker):
     assert server_cmds.NETWORK_TOKEN_FILE.read_text().strip() == "new-token"
     assert "MN_NETWORK_JOIN_TOKEN=new-token" in server_cmds.RUNTIME_COMPOSE_ENV.read_text()
 
+def test_resolve_node_alias_generates_and_reuses_stable_alias(mocker):
+    mocker.patch("mn_cli.server_cmds.secrets.token_hex", return_value="a1b2c3d4")
+
+    alias = _resolve_node_alias()
+
+    assert alias == "mn-a1b2c3d4"
+    assert (server_cmds.DIR / "node.alias").read_text().strip() == "mn-a1b2c3d4"
+    assert _resolve_node_alias() == "mn-a1b2c3d4"
+
+def test_resolve_node_alias_prefers_env_and_persists(monkeypatch):
+    monkeypatch.setenv("MN_NODE_ALIAS", "MN-Laptop-01")
+
+    assert _resolve_node_alias() == "mn-laptop-01"
+    assert (server_cmds.DIR / "node.alias").read_text().strip() == "mn-laptop-01"
+
+def test_ensure_docker_network_creates_missing_bridge(mocker):
+    calls = []
+
+    def mock_run(cmd, **kwargs):
+        calls.append(cmd)
+        m = mocker.Mock()
+        m.returncode = 1 if cmd[:3] == ["docker", "network", "inspect"] else 0
+        m.stdout = ""
+        return m
+
+    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
+
+    _ensure_docker_network("bridge", "mirror-neuron-runtime")
+
+    assert ["docker", "network", "create", "--driver", "bridge", "mirror-neuron-runtime"] in calls
+
+def test_ensure_docker_network_validates_overlay_attachable(mocker):
+    output = json.dumps([{"Driver": "overlay", "Attachable": True}])
+    mocker.patch(
+        "mn_cli.server_cmds.subprocess.run",
+        return_value=mocker.Mock(returncode=0, stdout=output),
+    )
+
+    _ensure_docker_network("overlay", "mn-overlay")
+
+def test_ensure_docker_network_rejects_missing_overlay(mocker):
+    mocker.patch(
+        "mn_cli.server_cmds.subprocess.run",
+        return_value=mocker.Mock(returncode=1, stdout=""),
+    )
+
+    with pytest.raises(typer.Exit) as exc:
+        _ensure_docker_network("overlay", "mn-overlay")
+
+    assert exc.value.exit_code == 1
+
+def test_ensure_docker_network_rejects_non_attachable_overlay(mocker):
+    output = json.dumps([{"Driver": "overlay", "Attachable": False}])
+    mocker.patch(
+        "mn_cli.server_cmds.subprocess.run",
+        return_value=mocker.Mock(returncode=0, stdout=output),
+    )
+
+    with pytest.raises(typer.Exit) as exc:
+        _ensure_docker_network("overlay", "mn-overlay")
+
+    assert exc.value.exit_code == 1
+
 def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_REDIS_URL", raising=False)
+    monkeypatch.setenv("MN_NODE_ALIAS", "mn-seed")
     token_file = tmp_path / "network.token"
     mocker.patch('mn_cli.server_cmds.DIR', tmp_path)
     mocker.patch('mn_cli.server_cmds.NETWORK_TOKEN_FILE', token_file)
@@ -273,8 +343,12 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     def mock_run(cmd, **kwargs):
         commands.append(cmd)
         m = mocker.Mock()
-        m.returncode = 1 if cmd[:3] == ["docker", "network", "inspect"] else 0
-        m.stdout = "false\n"
+        m.returncode = 0
+        m.stdout = (
+            json.dumps([{"Driver": "overlay", "Attachable": True}])
+            if cmd[:3] == ["docker", "network", "inspect"]
+            else "false\n"
+        )
         return m
 
     mocker.patch('mn_cli.server_cmds.subprocess.run', side_effect=mock_run)
@@ -284,6 +358,7 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
         grpc_port=50055,
         dist_port=4500,
         redis_port=6380,
+        docker_network_mode="overlay",
     ) == "seed-token"
 
     assert token_file.read_text().strip() == "seed-token"
@@ -294,12 +369,23 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     assert "-p" in core_run
     assert f"MN_COOKIE={_derive_network_secret('seed-token', 'cookie')}" in core_run
     assert "MN_NETWORK_ONLY=true" in core_run
-    assert "MN_NODE_NAME=mirror_neuron@192.168.4.10" in core_run
-    assert "MN_CLUSTER_NODES=mirror_neuron@192.168.4.10" in core_run
+    assert "MN_NODE_ALIAS=mn-seed" in core_run
+    assert "MN_DOCKER_NETWORK_MODE=overlay" in core_run
+    assert "MN_DOCKER_NETWORK_NAME=mirror-neuron-runtime" in core_run
+    assert "MN_NODE_NAME=mirror_neuron@mn-seed" in core_run
+    assert "MN_CLUSTER_NODES=mirror_neuron@mn-seed" in core_run
+    assert "--network" in core_run
+    assert "mirror-neuron-runtime" in core_run
+    assert "--network-alias" in core_run
+    assert "mn-seed" in core_run
     assert (
         f"MN_REDIS_URL=redis://:{_derive_network_secret('seed-token', 'redis')}"
-        "@mirror-neuron-network-redis:6379/0"
+        "@mn-seed-redis:6379/0"
     ) in core_run
+    assert "MN_NETWORK_REDIS_HOST=mn-seed-redis" in core_run
+    redis_run = next(cmd for cmd in commands if len(cmd) > 4 and cmd[:4] == ["docker", "run", "-d", "--name"] and cmd[4] == "mirror-neuron-network-redis")
+    assert "--network-alias" in redis_run
+    assert "mn-seed-redis" in redis_run
 
 def test_start_network_seed_already_exposed_prints_existing_token(mocker):
     output = StringIO()
@@ -389,6 +475,48 @@ def test_add_node_uses_handshake_and_local_core(mocker, tmp_path):
 
     mock_run.assert_not_called()
     mock_add_node.assert_called_once_with("mirror_neuron@192.168.4.10", token="join-token")
+
+def test_add_node_overlay_uses_local_alias_in_handshake(mocker, tmp_path, monkeypatch):
+    import mn_sdk
+    import mn_cli.shared
+
+    monkeypatch.setenv("MN_NODE_ALIAS", "mn-main")
+    redis_password = _derive_network_secret("join-token", "redis")
+    mocker.patch(
+        "mn_cli.server_cmds.subprocess.run",
+        return_value=mocker.Mock(
+            returncode=0,
+            stdout=json.dumps([{"Driver": "overlay", "Attachable": True}]),
+        ),
+    )
+
+    class StubClient:
+        def __init__(self, target, auth_token, timeout):
+            assert target == "192.168.4.10:50055"
+
+        def network_handshake(self, token, node_name="", node_info=None):
+            assert token == "join-token"
+            assert node_name == "mirror_neuron@mn-main"
+            assert node_info["node_name"] == "mirror_neuron@mn-main"
+            return {
+                "node_name": "mirror_neuron@mn-seed",
+                "redis_host": "mn-seed-redis",
+                "redis_port": 6379,
+                "redis_url": f"redis://:{redis_password}@mn-seed-redis:6379/0",
+            }
+
+    mocker.patch.object(mn_sdk, "Client", StubClient)
+    mock_add_node = mocker.patch.object(mn_cli.shared.client, "add_node", return_value="connected")
+
+    _join_network(
+        "192.168.4.10",
+        "join-token",
+        grpc_port=50055,
+        docker_network_mode="overlay",
+        docker_network_name="mn-overlay",
+    )
+
+    mock_add_node.assert_called_once_with("mirror_neuron@mn-seed", token="join-token")
 
 def test_add_node_rejects_missing_remote_redis_details(mocker, tmp_path):
     import mn_sdk
@@ -744,13 +872,19 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
     )
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path)
     mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.99")
+    mocker.patch("mn_cli.server_cmds.secrets.token_hex", return_value="abc12345")
 
     calls = []
 
     def mock_run(cmd, **kwargs):
         calls.append((cmd, kwargs))
         m = mocker.Mock()
-        m.stdout = "false\n"
+        if cmd[:3] == ["docker", "network", "inspect"]:
+            m.returncode = 1
+            m.stdout = ""
+        else:
+            m.returncode = 0
+            m.stdout = "false\n"
         return m
 
     mocker.patch('mn_cli.server_cmds.subprocess.run', side_effect=mock_run)
@@ -760,17 +894,25 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
 
     commands = [call[0] for call in calls]
     assert runtime_compose_cmd("up", "-d") in commands
-    assert all(cmd[:2] != ["docker", "inspect"] for cmd in commands)
+    assert ["docker", "network", "create", "--driver", "bridge", "mirror-neuron-runtime"] in commands
     assert all(cmd[:3] != ["docker", "run", "-d"] for cmd in commands)
     compose_call = next(item for item in calls if item[0] == runtime_compose_cmd("up", "-d"))
     env = compose_call[1]["env"]
-    assert env["MN_NODE_NAME"] == "mirror_neuron@192.168.4.99"
-    assert env["MN_CLUSTER_NODES"] == "mirror_neuron@192.168.4.99"
+    assert env["MN_NODE_ALIAS"] == "mn-abc12345"
+    assert env["MN_DOCKER_NETWORK_MODE"] == "bridge"
+    assert env["MN_DOCKER_NETWORK_NAME"] == "mirror-neuron-runtime"
+    assert env["MN_NODE_NAME"] == "mirror_neuron@mn-abc12345"
+    assert env["MN_CLUSTER_NODES"] == "mirror_neuron@mn-abc12345"
+    assert env["MN_NETWORK_REDIS_HOST"] == "mn-abc12345-redis"
+    assert env["MN_NETWORK_REDIS_PORT"] == "6379"
     assert env["MN_COOKIE"] == _derive_network_secret(env["MN_NETWORK_JOIN_TOKEN"], "cookie")
     compose_env_text = compose_env.read_text()
     assert "MN_NETWORK_ADVERTISE_HOST=192.168.4.99" in compose_env_text
-    assert "MN_NODE_NAME=mirror_neuron@192.168.4.99" in compose_env_text
-    assert "MN_CLUSTER_NODES=mirror_neuron@192.168.4.99" in compose_env_text
+    assert "MN_NODE_ALIAS=mn-abc12345" in compose_env_text
+    assert "MN_DOCKER_NETWORK_MODE=bridge" in compose_env_text
+    assert "MN_DOCKER_NETWORK_NAME=mirror-neuron-runtime" in compose_env_text
+    assert "MN_NODE_NAME=mirror_neuron@mn-abc12345" in compose_env_text
+    assert "MN_CLUSTER_NODES=mirror_neuron@mn-abc12345" in compose_env_text
     assert "MN_GRPC_AUTH_TOKEN=" in compose_env_text
     assert "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN=" in compose_env_text
     assert "MN_COOKIE=" in compose_env_text
@@ -927,6 +1069,25 @@ def test_compose_runtime_env_replaces_stale_generated_names_after_ip_change(mock
     assert resolved["MN_NODE_NAME"] == "mirror_neuron@192.168.4.35"
     assert resolved["MN_NODE_ROLE"] == "runtime"
     assert resolved["MN_CLUSTER_NODES"] == "mirror_neuron@192.168.4.173"
+    assert resolved["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 4500 inet_dist_listen_max 4500"
+
+def test_compose_runtime_env_preserves_docker_alias_identity(mocker):
+    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.35")
+    env = {
+        "MN_DOCKER_NETWORK_MODE": "overlay",
+        "MN_NODE_ALIAS": "mn-local",
+        "MN_NETWORK_ADVERTISE_HOST": "192.168.4.35",
+        "MN_NODE_NAME": "mirror_neuron@192.168.4.20",
+        "MN_NODE_ROLE": "",
+        "MN_CLUSTER_NODES": "mirror_neuron@mn-seed",
+        "MN_DIST_PORT": "4500",
+    }
+
+    resolved = _compose_runtime_env(env, ip="192.168.4.173")
+
+    assert resolved["MN_NODE_NAME"] == "mirror_neuron@mn-local"
+    assert resolved["MN_NODE_ROLE"] == "runtime"
+    assert resolved["MN_CLUSTER_NODES"] == "mirror_neuron@mn-seed"
     assert resolved["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 4500 inet_dist_listen_max 4500"
 
 def test_compose_port_conflict_resolution_reserves_selected_ports(mocker):
@@ -1158,6 +1319,31 @@ def test_start_server_passes_slack_env_to_docker(mocker, tmp_path, monkeypatch):
     assert ["-e", "SLACK_DEFAULT_CHANNEL"] == docker_run[
         docker_run.index("SLACK_DEFAULT_CHANNEL") - 1 : docker_run.index("SLACK_DEFAULT_CHANNEL") + 1
     ]
+
+def test_detach_local_docker_node_stops_compose_core_for_local_alias(mocker, tmp_path):
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_env = tmp_path / "docker-compose.env"
+    compose_file.write_text("services: {}\n")
+    compose_env.write_text("MN_NODE_ALIAS=mn-local\n")
+    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_FILE", compose_file)
+    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+    mock_run = mocker.patch("mn_cli.server_cmds.subprocess.run")
+
+    assert _detach_local_docker_node_if_matches("mirror_neuron@mn-local") is True
+
+    mock_run.assert_called_once_with(
+        runtime_compose_cmd("stop", "mirror-neuron-core"),
+        stderr=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+    )
+
+def test_detach_local_docker_node_ignores_remote_alias(mocker, tmp_path):
+    (server_cmds.DIR / "node.alias").parent.mkdir(parents=True, exist_ok=True)
+    (server_cmds.DIR / "node.alias").write_text("mn-local\n")
+    mock_run = mocker.patch("mn_cli.server_cmds.subprocess.run")
+
+    assert _detach_local_docker_node_if_matches("mirror_neuron@mn-remote") is False
+    mock_run.assert_not_called()
 
 def test_default_web_ui_dirs_use_nested_install_path():
     assert ORIGINAL_WEB_UI_DIRS[0].name == "webui"
