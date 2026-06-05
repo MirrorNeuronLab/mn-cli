@@ -2,13 +2,19 @@ import json
 import subprocess
 import urllib.error
 
+import pytest
 from typer.testing import CliRunner
 
 from mn_cli.main import app
-from mn_sdk import HostHardwareProfile
+from mn_sdk import HostHardwareProfile, load_model_ownership
 
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def isolate_model_ownership(monkeypatch, tmp_path):
+    monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
 
 
 def _completed(command, returncode=0, stdout="", stderr=""):
@@ -177,6 +183,34 @@ def test_model_install_blocks_incompatible_hardware_before_pull(mocker):
 
     assert result.exit_code == 1
     assert ["docker", "model", "pull", "ai/gemma4:E2B"] not in calls
+
+
+def test_model_install_failure_does_not_record_manual_ownership(mocker, tmp_path, monkeypatch):
+    ledger_path = tmp_path / "ownership.json"
+    monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(ledger_path))
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["docker", "model", "--help"]:
+            return _completed(command)
+        if command[:4] == ["docker", "model", "status", "--json"]:
+            return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
+        if command[:3] == ["docker", "model", "pull"]:
+            return _completed(command, returncode=1, stderr="pull failed")
+        return _completed(command)
+
+    mocker.patch("subprocess.run", side_effect=fake_run)
+    mocker.patch(
+        "mn_sdk.model_runtime.detect_host_hardware",
+        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+    )
+
+    result = runner.invoke(app, ["model", "install", "gemma4:e2b"])
+
+    assert result.exit_code == 1
+    assert ["docker", "model", "pull", "ai/gemma4:E2B"] in calls
+    assert load_model_ownership()["models"] == {}
 
 
 def test_model_remove_uses_resolved_docker_model_with_force(mocker):
