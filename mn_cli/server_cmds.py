@@ -2458,6 +2458,8 @@ def _start_server(
                 "MN_DIST_PORT": env["MN_DIST_PORT"],
                 "MN_NODE_DISPLAY_NAME": env["MN_NODE_DISPLAY_NAME"],
                 "MN_NODE_GPU_COUNT": env["MN_NODE_GPU_COUNT"],
+                "MN_NODE_MODELS": env.get("MN_NODE_MODELS", ""),
+                "MN_NODE_RUNTIME_MODELS": env.get("MN_NODE_RUNTIME_MODELS", ""),
                 **(
                     _docker_network_env(requested_docker_mode, network_name, node_alias)
                     if requested_docker_mode != "disabled" and node_alias

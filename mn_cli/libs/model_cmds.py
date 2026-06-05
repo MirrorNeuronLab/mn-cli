@@ -232,7 +232,7 @@ def install_model_entry(
         _docker(["model", "pull", target], timeout=900)
         run_command = ["model", "run", "--detach"]
         resolved_context = context_size or entry.get("context_size")
-        if resolved_context:
+        if resolved_context and _docker_model_run_supports_context_size():
             run_command.extend(["--context-size", str(resolved_context)])
         run_command.append(target)
         _docker(run_command, timeout=300)
@@ -358,6 +358,11 @@ def _ensure_docker_model_cli() -> None:
 def _docker_model_cli_available() -> bool:
     result = _docker(["model", "--help"], check=False, timeout=15)
     return result.returncode == 0
+
+
+def _docker_model_run_supports_context_size() -> bool:
+    result = _docker(["model", "run", "--help"], check=False, timeout=15)
+    return result.returncode == 0 and "--context-size" in (result.stdout or result.stderr or "")
 
 
 def _ensure_runner(backend: str, accelerator: str) -> None:

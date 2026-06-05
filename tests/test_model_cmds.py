@@ -65,6 +65,8 @@ def test_model_install_pulls_and_runs_compatible_model(mocker):
         calls.append(command)
         if command[:4] == ["docker", "model", "status", "--json"]:
             return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
+        if command[:4] == ["docker", "model", "run", "--help"]:
+            return _completed(command, stdout="Options:\n      --context-size int\n")
         return _completed(command)
 
     mocker.patch("subprocess.run", side_effect=fake_run)
@@ -78,6 +80,30 @@ def test_model_install_pulls_and_runs_compatible_model(mocker):
     assert result.exit_code == 0
     assert ["docker", "model", "pull", "ai/gemma4:E2B"] in calls
     assert ["docker", "model", "run", "--detach", "--context-size", "8192", "ai/gemma4:E2B"] in calls
+
+
+def test_model_install_skips_context_size_when_docker_cli_does_not_support_it(mocker):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:4] == ["docker", "model", "status", "--json"]:
+            return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
+        if command[:4] == ["docker", "model", "run", "--help"]:
+            return _completed(command, stdout="Options:\n  -d, --detach\n")
+        return _completed(command)
+
+    mocker.patch("subprocess.run", side_effect=fake_run)
+    mocker.patch(
+        "mn_sdk.model_runtime.detect_host_hardware",
+        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+    )
+
+    result = runner.invoke(app, ["model", "install", "gemma4:e2b", "--context-size", "8192"])
+
+    assert result.exit_code == 0
+    assert ["docker", "model", "run", "--detach", "ai/gemma4:E2B"] in calls
+    assert ["docker", "model", "run", "--detach", "--context-size", "8192", "ai/gemma4:E2B"] not in calls
 
 
 def test_model_install_falls_back_to_dmr_rest_when_cli_plugin_missing(mocker):
