@@ -133,7 +133,6 @@ def test_stop(mocker, tmp_path):
     mocker.patch('mn_cli.libs.sys_cmds.os.kill')
     
     # Mock PID files
-    mocker.patch('mn_cli.libs.sys_cmds.API_PID_FILE', tmp_path / "api.pid")
     mocker.patch('mn_cli.libs.sys_cmds.BEAM_PID_FILE', tmp_path / "beam.pid")
     mocker.patch(
         'mn_cli.libs.sys_cmds.web_ui_pid_files',
@@ -173,7 +172,6 @@ def test_stop_cleans_web_ui_pid_files_from_default_runtime_home(mocker, tmp_path
     default_dir = tmp_path / "default"
     active_dir.mkdir()
     default_dir.mkdir()
-    mocker.patch('mn_cli.libs.sys_cmds.API_PID_FILE', tmp_path / "api.pid")
     mocker.patch('mn_cli.libs.sys_cmds.BEAM_PID_FILE', tmp_path / "beam.pid")
     mocker.patch(
         'mn_cli.libs.sys_cmds.web_ui_pid_files',
@@ -207,7 +205,6 @@ def test_stop_uses_compose_runtime_when_available(mocker, tmp_path):
     mock_kill_tree = mocker.patch('mn_cli.libs.sys_cmds.kill_tree')
     mocker.patch('mn_cli.libs.sys_cmds.os.kill')
 
-    mocker.patch('mn_cli.libs.sys_cmds.API_PID_FILE', tmp_path / "api.pid")
     mocker.patch('mn_cli.libs.sys_cmds.BEAM_PID_FILE', tmp_path / "beam.pid")
     mocker.patch(
         'mn_cli.libs.sys_cmds.web_ui_pid_files',
@@ -233,7 +230,6 @@ def test_stop_pid_file_invalid(mocker, tmp_path):
     mocker.patch('mn_cli.libs.sys_cmds.subprocess.run')
     mock_kill_tree = mocker.patch('mn_cli.libs.sys_cmds.kill_tree')
     
-    mocker.patch('mn_cli.libs.sys_cmds.API_PID_FILE', tmp_path / "api.pid")
     mocker.patch('mn_cli.libs.sys_cmds.BEAM_PID_FILE', tmp_path / "beam.pid")
     mocker.patch(
         'mn_cli.libs.sys_cmds.web_ui_pid_files',
@@ -261,7 +257,6 @@ def test_stop_kill_oserror(mocker, tmp_path):
     mock_kill_tree = mocker.patch('mn_cli.libs.sys_cmds.kill_tree')
     mocker.patch('mn_cli.libs.sys_cmds.os.kill', side_effect=OSError("Process not found"))
     
-    mocker.patch('mn_cli.libs.sys_cmds.API_PID_FILE', tmp_path / "api.pid")
     mocker.patch('mn_cli.libs.sys_cmds.BEAM_PID_FILE', tmp_path / "beam.pid")
     mocker.patch(
         'mn_cli.libs.sys_cmds.web_ui_pid_files',
@@ -269,6 +264,10 @@ def test_stop_kill_oserror(mocker, tmp_path):
             (tmp_path / "web-ui-watchdog.pid", "Web UI watchdog"),
             (tmp_path / "web-ui.pid", "Web UI"),
         ),
+    )
+    mocker.patch(
+        'mn_cli.libs.sys_cmds.api_pid_files',
+        return_value=((tmp_path / "api.pid", "REST API"),),
     )
     
     (tmp_path / "api.pid").write_text("12345")
