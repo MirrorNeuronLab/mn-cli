@@ -373,16 +373,6 @@ def _published_container_port(container_name: str, target_port: int) -> Optional
 def _port_available_or_owned(host: str, port: int, owner_container: str, target_port: int) -> bool:
     return _host_port_available(host, port) or _container_publishes_port(owner_container, target_port, port)
 
-def _find_available_port(host: str, preferred: int, fallback_start: int, reserved: Optional[set[int]] = None) -> int:
-    reserved = reserved or set()
-    if preferred not in reserved and _host_port_available(host, preferred):
-        return preferred
-
-    for candidate in range(fallback_start, fallback_start + 100):
-        if candidate not in reserved and _host_port_available(host, candidate):
-            return candidate
-    return preferred
-
 def _find_available_published_port(host: str, preferred: int, owner_container: str, target_port: int) -> int:
     if _port_available_or_owned(host, preferred, owner_container, target_port):
         return preferred

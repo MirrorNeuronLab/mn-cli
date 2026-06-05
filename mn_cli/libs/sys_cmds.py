@@ -16,7 +16,6 @@ from mn_cli.server_cmds import (
     _refresh_network_token,
     _stop_network_runtime,
     kill_tree,
-    API_PID_FILE,
     BEAM_PID_FILE,
     DEFAULT_GRPC_PORT,
     DEFAULT_DIST_PORT,

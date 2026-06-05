@@ -52,6 +52,7 @@ class JobLogWriter:
             self.log_dir / "run.log",
             maxBytes=int(os.getenv("MN_RUN_LOG_MAX_BYTES", str(2 * 1024 * 1024))),
             backupCount=int(os.getenv("MN_RUN_LOG_BACKUP_COUNT", "5")),
+            encoding="utf-8",
         )
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
         run_logger.addHandler(handler)
@@ -72,11 +73,11 @@ class JobLogWriter:
 
         self.seen.add(key)
         self._rotate_if_needed()
-        with open(self.events_file, "a") as f:
+        with open(self.events_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(event, sort_keys=True) + "\n")
         if self.run_events_file is not None:
             self.run_events_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.run_events_file, "a") as f:
+            with open(self.run_events_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event, sort_keys=True) + "\n")
         self.event_count += 1
 
@@ -111,7 +112,7 @@ class JobLogWriter:
         return True
 
     def write_snapshot(self, data: dict):
-        with open(self.snapshot_file, "w") as f:
+        with open(self.snapshot_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, sort_keys=True)
 
     def _rotate_if_needed(self):
@@ -190,7 +191,7 @@ def write_result_stream_event(log_dir: Path, event: dict):
         return
     payload = event.get("payload", event)
     materialize_sent_email_copy(log_dir, payload)
-    with open(log_dir / "result_stream.txt", "a") as f_stream:
+    with open(log_dir / "result_stream.txt", "a", encoding="utf-8") as f_stream:
         f_stream.write(json.dumps(payload, sort_keys=True) + "\n")
 
 
