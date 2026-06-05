@@ -88,6 +88,61 @@ def test_model_install_pulls_and_runs_compatible_model(mocker):
     assert ["docker", "model", "run", "--detach", "--context-size", "8192", "ai/gemma4:E2B"] in calls
 
 
+def test_model_install_persists_manual_ownership_record(mocker):
+    def fake_run(command, **kwargs):
+        if command[:4] == ["docker", "model", "status", "--json"]:
+            return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
+        if command[:4] == ["docker", "model", "run", "--help"]:
+            return _completed(command, stdout="Options:\n      --context-size int\n")
+        return _completed(command)
+
+    mocker.patch("subprocess.run", side_effect=fake_run)
+    mocker.patch(
+        "mn_sdk.model_runtime.detect_host_hardware",
+        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+    )
+
+    result = runner.invoke(app, ["model", "install", "gemma4:e2b"])
+
+    assert result.exit_code == 0
+    record = load_model_ownership()["models"]["ai/gemma4:E2B"]
+    assert record["model_id"] == "gemma4:e2b"
+    assert record["docker_model"] == "ai/gemma4:E2B"
+    assert record["backend"] == "llama.cpp"
+    assert record["manual"] is True
+    assert record["owners"] == {}
+
+
+def test_model_install_state_can_be_listed_after_install(mocker):
+    def fake_run(command, **kwargs):
+        if command[:4] == ["docker", "model", "status", "--json"]:
+            return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
+        if command[:4] == ["docker", "model", "run", "--help"]:
+            return _completed(command, stdout="Options:\n      --context-size int\n")
+        if command[:4] == ["docker", "model", "list", "--format"]:
+            return _completed(command, stdout=json.dumps([{"name": "ai/gemma4:E2B"}]))
+        return _completed(command)
+
+    mocker.patch("subprocess.run", side_effect=fake_run)
+    mocker.patch(
+        "mn_sdk.model_runtime.detect_host_hardware",
+        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+    )
+
+    install_result = runner.invoke(app, ["model", "install", "gemma4:e2b"])
+    list_result = runner.invoke(app, ["model", "list", "--installed", "--json"])
+
+    assert install_result.exit_code == 0
+    assert list_result.exit_code == 0
+    model = json.loads(list_result.stdout)["models"][0]
+    assert model["id"] == "gemma4:e2b"
+    assert model["docker_model"] == "ai/gemma4:E2B"
+    assert model["installed"] is True
+    assert model["manual"] is True
+    assert model["owner_count"] == 0
+    assert model["orphaned"] is False
+
+
 def test_model_install_skips_context_size_when_docker_cli_does_not_support_it(mocker):
     calls = []
 
@@ -210,6 +265,37 @@ def test_model_install_failure_does_not_record_manual_ownership(mocker, tmp_path
 
     assert result.exit_code == 1
     assert ["docker", "model", "pull", "ai/gemma4:E2B"] in calls
+    assert load_model_ownership()["models"] == {}
+
+
+def test_model_install_rest_failure_does_not_record_manual_ownership(
+    mocker, tmp_path, monkeypatch
+):
+    ledger_path = tmp_path / "ownership.json"
+    monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(ledger_path))
+    requests = []
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["docker", "model", "--help"]:
+            return _completed(command, returncode=1, stderr="unknown command")
+        return _completed(command)
+
+    def fake_urlopen(request, timeout=0):
+        requests.append((request.full_url, request.get_method(), request.data))
+        raise urllib.error.URLError("runner down")
+
+    mocker.patch("subprocess.run", side_effect=fake_run)
+    mocker.patch("urllib.request.urlopen", side_effect=fake_urlopen)
+    mocker.patch(
+        "mn_sdk.model_runtime.detect_host_hardware",
+        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+    )
+
+    result = runner.invoke(app, ["model", "install", "gemma4:e2b"])
+
+    assert result.exit_code == 1
+    assert "Docker Model Runner API is not reachable" in result.stdout
+    assert any(url.endswith("/models/create") and method == "POST" for url, method, _data in requests)
     assert load_model_ownership()["models"] == {}
 
 

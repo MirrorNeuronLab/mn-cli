@@ -387,8 +387,21 @@ def test_drain_node_can_include_system_jobs(mocker):
     )
 
 
+def test_drain_node_invalid_deadline_reports_error_without_backend_call(mocker):
+    mock_drain = mocker.patch("mn_cli.libs.job_cmds.client.drain_node")
+
+    invalid = runner.invoke(app, ["node", "drain", "node@lab", "--deadline", "not-a-duration"])
+    negative = runner.invoke(app, ["node", "drain", "node@lab", "--deadline", "-1s"])
+
+    assert invalid.exit_code == 0
+    assert "Error draining node: deadline must be a duration like 30m, 10s, 1h, or 5000ms" in invalid.stdout
+    assert negative.exit_code == 0
+    assert "Error draining node: deadline must be non-negative" in negative.stdout
+    mock_drain.assert_not_called()
+
+
 def test_drain_node_wait_polls_status(mocker):
-    mocker.patch(
+    mock_drain = mocker.patch(
         "mn_cli.libs.job_cmds.client.drain_node",
         return_value=json.dumps({"node": "node@lab", "status": "draining"}),
     )
@@ -408,7 +421,46 @@ def test_drain_node_wait_polls_status(mocker):
     result = runner.invoke(app, ["node", "drain", "node@lab", "--wait"])
     assert result.exit_code == 0
     assert '"status": "complete"' in result.stdout
+    mock_drain.assert_called_once_with(
+        "node@lab",
+        reason="",
+        deadline_ms=1_800_000,
+        dry_run=False,
+        ignore_system_jobs=True,
+        wait=True,
+    )
     mock_status.assert_called_once_with("node@lab")
+
+
+def test_drain_node_wait_stops_on_paused_for_review(mocker):
+    mock_drain = mocker.patch(
+        "mn_cli.libs.job_cmds.client.drain_node",
+        return_value=json.dumps(
+            {
+                "node": "node@lab",
+                "status": "paused_for_review",
+                "reason": "manual recovery required",
+            }
+        ),
+    )
+    mock_status = mocker.patch("mn_cli.libs.job_cmds.client.get_node_drain_status")
+    mock_sleep = mocker.patch("time.sleep")
+
+    result = runner.invoke(app, ["node", "drain", "node@lab", "--wait"])
+
+    assert result.exit_code == 0
+    assert '"status": "paused_for_review"' in result.stdout
+    assert '"manual recovery required"' in result.stdout
+    mock_drain.assert_called_once_with(
+        "node@lab",
+        reason="",
+        deadline_ms=1_800_000,
+        dry_run=False,
+        ignore_system_jobs=True,
+        wait=True,
+    )
+    mock_status.assert_not_called()
+    mock_sleep.assert_not_called()
 
 
 def test_undrain_node_success(mocker):
@@ -422,6 +474,17 @@ def test_undrain_node_success(mocker):
     mock_undrain.assert_called_once_with("node@lab", reason="", mark_eligible=True)
 
 
+def test_undrain_node_defaults_to_not_mark_eligible(mocker):
+    mock_undrain = mocker.patch(
+        "mn_cli.libs.job_cmds.client.cancel_node_drain",
+        return_value=json.dumps({"node": "node@lab", "status": "maintenance"}),
+    )
+    result = runner.invoke(app, ["node", "undrain", "node@lab"])
+    assert result.exit_code == 0
+    assert '"status": "maintenance"' in result.stdout
+    mock_undrain.assert_called_once_with("node@lab", reason="", mark_eligible=False)
+
+
 def test_maintenance_node_success(mocker):
     mock_maintenance = mocker.patch(
         "mn_cli.libs.job_cmds.client.set_node_maintenance",
@@ -433,6 +496,19 @@ def test_maintenance_node_success(mocker):
     assert result.exit_code == 0
     assert '"status": "maintenance"' in result.stdout
     mock_maintenance.assert_called_once_with("node@lab", True, reason="patch")
+
+
+def test_maintenance_node_can_disable(mocker):
+    mock_maintenance = mocker.patch(
+        "mn_cli.libs.job_cmds.client.set_node_maintenance",
+        return_value=json.dumps({"node": "node@lab", "status": "healthy"}),
+    )
+    result = runner.invoke(
+        app, ["node", "maintenance", "node@lab", "--disable", "--reason", "done"]
+    )
+    assert result.exit_code == 0
+    assert '"status": "healthy"' in result.stdout
+    mock_maintenance.assert_called_once_with("node@lab", False, reason="done")
 
 
 def test_metrics_success(mocker):

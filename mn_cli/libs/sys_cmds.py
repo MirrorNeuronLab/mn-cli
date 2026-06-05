@@ -39,11 +39,17 @@ def join(
         help="Advertised host or IP for this joining node.",
     ),
     grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Main node gRPC port."),
-    dist_port: int = typer.Option(int(DEFAULT_DIST_PORT), "--dist-port", help="Local Erlang distribution port."),
+    dist_port: int = typer.Option(
+        int(DEFAULT_DIST_PORT),
+        "--dist-port",
+        help="Legacy IP-mode Erlang distribution port.",
+        hidden=True,
+    ),
     redis_port: Optional[int] = typer.Option(
         None,
         "--redis-port",
-        help="Override the Redis port returned by the main node handshake.",
+        help="Legacy IP-mode Redis port override.",
+        hidden=True,
     ),
     docker_network_mode: Optional[str] = typer.Option(
         None,
@@ -75,11 +81,17 @@ def expose_node(
         help="Advertised host or IP that the main MirrorNeuron node can reach.",
     ),
     grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Core gRPC port."),
-    dist_port: int = typer.Option(int(DEFAULT_DIST_PORT), "--dist-port", help="Erlang distribution port."),
+    dist_port: int = typer.Option(
+        int(DEFAULT_DIST_PORT),
+        "--dist-port",
+        help="Legacy IP-mode Erlang distribution port.",
+        hidden=True,
+    ),
     redis_port: Optional[int] = typer.Option(
         None,
         "--redis-port",
-        help="Explicit Redis port for this exposed node; defaults to a persisted dynamic port.",
+        help="Legacy IP-mode Redis port override.",
+        hidden=True,
     ),
     force_new_token: bool = typer.Option(
         False,

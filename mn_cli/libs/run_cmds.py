@@ -220,6 +220,10 @@ def _stream_and_format_events(
                         progress.update(job_task, description="[red]Job failed.")
                         status_text = "Failed"
                         break
+                    elif event_type == "job_cancelled":
+                        progress.update(job_task, description="[red]Job cancelled.")
+                        status_text = "Cancelled"
+                        break
                     else:
                         progress.update(
                             job_task,
@@ -228,10 +232,15 @@ def _stream_and_format_events(
                 except Exception:
                     log_writer.run_logger.exception("Failed to process streamed event")
 
-        if status_text in ["Success", "Failed"]:
+        terminal_status = {
+            "Success": "completed",
+            "Failed": "failed",
+            "Cancelled": "cancelled",
+        }.get(status_text)
+        if terminal_status:
             panel = generate_summary_panel(
                 job_id=job_id,
-                status="completed" if status_text == "Success" else "failed",
+                status=terminal_status,
                 log_dir=log_dir,
             )
             console.print(panel)
@@ -282,6 +291,8 @@ def _stream_and_format_events(
         return "completed"
     if status_text == "Failed":
         return "failed"
+    if status_text == "Cancelled":
+        return "cancelled"
     return str(status_text).lower()
 
 

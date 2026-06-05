@@ -440,62 +440,7 @@ def _redis_url_with_database(redis_url: str, database: str) -> str:
     return f"{scheme}://{netloc}/{database}"
 
 def _avoid_local_compose_port_conflicts(env: dict[str, str]) -> dict[str, str]:
-    adjusted = dict(env)
-    cluster_advertised = _network_publish_host(str(adjusted.get("MN_NETWORK_ADVERTISE_HOST") or "")) == "0.0.0.0"
-    checks = (
-        ("MN_EPMD_BIND_HOST", "MN_EPMD_PORT", int(DEFAULT_EPMD_PORT), int(DEFAULT_EPMD_PORT) + 100, "Erlang EPMD"),
-        ("MN_DIST_BIND_HOST", "MN_DIST_PORT", int(DEFAULT_DIST_PORT), int(DEFAULT_DIST_PORT) + 100, "Erlang distribution"),
-    )
-
-    reserved_ports: set[int] = set()
-    for host_key, port_key, default_port, fallback_start, label in checks:
-        host = adjusted.get(host_key) or "127.0.0.1"
-        port = _parse_port(adjusted.get(port_key), default_port)
-        if cluster_advertised and port_key == "MN_EPMD_PORT":
-            reserved_ports.add(port)
-            continue
-        owner_container = "mirror-neuron-core"
-        if (
-            port not in reserved_ports
-            and (
-                _host_port_available(host, port)
-                or (
-                    runtime_compose_available()
-                    and _container_publishes_port(owner_container, port, port)
-                )
-            )
-        ):
-            available_port = port
-        else:
-            available_port = port
-            for candidate in range(fallback_start, fallback_start + 100):
-                if candidate in reserved_ports:
-                    continue
-                if _host_port_available(host, candidate) or (
-                    runtime_compose_available()
-                    and _container_publishes_port(owner_container, candidate, candidate)
-                ):
-                    available_port = candidate
-                    break
-        reserved_ports.add(available_port)
-        if available_port != port:
-            adjusted[port_key] = str(available_port)
-            console.print(
-                f"[yellow]=> {label} port {port} is already in use; using {available_port} for this local runtime.[/yellow]"
-            )
-            if port_key == "MN_DIST_PORT":
-                adjusted["ERL_AFLAGS"] = (
-                    f"-kernel inet_dist_listen_min {available_port} inet_dist_listen_max {available_port}"
-                )
-    if runtime_compose_available():
-        updates = {
-            key: adjusted[key]
-            for key in ("MN_EPMD_PORT", "MN_DIST_PORT", "ERL_AFLAGS")
-            if key in adjusted
-        }
-        _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
-
-    return adjusted
+    return dict(env)
 
 def _resolve_mn_cookie() -> str:
     env_cookie = os.getenv("MN_COOKIE", "").strip()
@@ -976,12 +921,13 @@ def _docker_env_args(env: dict[str, str]) -> list[str]:
 
 def _start_network_redis(
     host: str,
-    redis_port: int,
+    redis_port: Optional[int],
     token: str,
     *,
     docker_network_mode: str,
     docker_network_name: str,
     redis_alias: str,
+    publish_host_port: bool = False,
 ) -> None:
     subprocess.run(["docker", "rm", "-f", NETWORK_REDIS_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
     publish_host = _network_publish_host(host)
@@ -995,8 +941,6 @@ def _start_network_redis(
         "--name",
         NETWORK_REDIS_CONTAINER,
         *_docker_network_run_args(docker_network_mode, docker_network_name, redis_alias),
-        "-p",
-        f"{publish_host}:{redis_port}:6379",
         "-v",
         f"{data_dir}:/data",
         "redis:7",
@@ -1008,6 +952,9 @@ def _start_network_redis(
         "--masterauth",
         password,
     ]
+    if publish_host_port:
+        volume_index = cmd.index("-v")
+        cmd[volume_index:volume_index] = ["-p", f"{publish_host}:{redis_port or REDIS_CONTAINER_PORT}:6379"]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
 
 def _start_network_core(
@@ -1019,9 +966,21 @@ def _start_network_core(
     docker_network_mode: str,
     docker_network_name: str,
     node_alias: str,
+    publish_cluster_ports: bool = False,
 ) -> None:
     subprocess.run(["docker", "rm", "-f", NETWORK_CORE_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
     publish_host = _network_publish_host(host)
+    env_args = _docker_env_args(env)
+    port_args = ["-p", f"{publish_host}:{grpc_port}:{grpc_port}"]
+    if publish_cluster_ports:
+        port_args.extend(
+            [
+                "-p",
+                f"{publish_host}:4369:4369",
+                "-p",
+                f"{publish_host}:{dist_port}:{dist_port}",
+            ]
+        )
     cmd = [
         "docker",
         "run",
@@ -1029,13 +988,8 @@ def _start_network_core(
         "--name",
         NETWORK_CORE_CONTAINER,
         *_docker_network_run_args(docker_network_mode, docker_network_name, node_alias),
-        "-p",
-        f"{publish_host}:{grpc_port}:{grpc_port}",
-        "-p",
-        f"{publish_host}:4369:4369",
-        "-p",
-        f"{publish_host}:{dist_port}:{dist_port}",
-        *_docker_env_args(env),
+        *port_args,
+        *env_args,
         "mirror-neuron-core:latest",
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
@@ -1082,6 +1036,8 @@ def _print_network_seed_ready(
     token: str,
     *,
     node_name: Optional[str] = None,
+    docker_network_mode: Optional[str] = None,
+    docker_network_name: Optional[str] = None,
     already_running: bool = False,
 ) -> None:
     node_name = node_name or _network_node_name(host)
@@ -1093,7 +1049,10 @@ def _print_network_seed_ready(
     console.print(f"gRPC: {host}:{grpc_port}")
     console.print(f"Node: {node_name}")
     console.print(f"Token: {token}")
-    console.print(f"\nOn the main box, add this node with:\n  mn node add {host} --token {token}")
+    network_args = ""
+    if docker_network_mode and _docker_network_uses_internal_identity(docker_network_mode):
+        network_args = f" --network {docker_network_mode} --docker-network {docker_network_name or DEFAULT_DOCKER_NETWORK_NAME}"
+    console.print(f"\nOn the main box, add this node with:\n  mn node add {host} --token {token}{network_args}")
 
 def _return_running_network_seed(
     host: Optional[str],
@@ -1108,7 +1067,17 @@ def _return_running_network_seed(
 
     advertised_host = _running_network_host(host, container_names)
     node_name = _docker_container_env_value(container_names[0], "MN_NODE_NAME") if container_names else None
-    _print_network_seed_ready(advertised_host, grpc_port, token, node_name=node_name, already_running=True)
+    docker_mode = _docker_container_env_value(container_names[0], "MN_DOCKER_NETWORK_MODE") if container_names else None
+    docker_network = _docker_container_env_value(container_names[0], "MN_DOCKER_NETWORK_NAME") if container_names else None
+    _print_network_seed_ready(
+        advertised_host,
+        grpc_port,
+        token,
+        node_name=node_name,
+        docker_network_mode=docker_mode,
+        docker_network_name=docker_network,
+        already_running=True,
+    )
     return token
 
 def _start_network_seed(
@@ -1142,7 +1111,11 @@ def _start_network_seed(
         console.print("[yellow]--force-new-token is deprecated; run 'mn node refresh-token' to rotate the join token.[/yellow]")
     token = _resolve_network_token()
     external_redis_url = os.getenv("MN_REDIS_URL", "").strip()
-    selected_redis_port = _resolve_network_seed_redis_port(host, redis_port) if not external_redis_url else None
+    selected_redis_port = (
+        _resolve_network_seed_redis_port(host, redis_port)
+        if not external_redis_url and not use_internal_identity
+        else None
+    )
     redis_url = external_redis_url or _network_redis_url(token, redis_alias, 6379)
     redis_public_host, redis_public_port_value = _host_port_from_target(
         external_redis_url,
@@ -1163,11 +1136,12 @@ def _start_network_seed(
         console.print("=> Starting network Redis...")
         _start_network_redis(
             host,
-            selected_redis_port or redis_public_port,
+            selected_redis_port,
             token,
             docker_network_mode=container_network_mode,
             docker_network_name=network_name,
             redis_alias=redis_alias,
+            publish_host_port=not use_internal_identity,
         )
 
     env = _network_core_env(
@@ -1194,9 +1168,17 @@ def _start_network_seed(
         docker_network_mode=container_network_mode,
         docker_network_name=network_name,
         node_alias=node_alias,
+        publish_cluster_ports=not use_internal_identity,
     )
 
-    _print_network_seed_ready(host, grpc_port, token, node_name=node_name)
+    _print_network_seed_ready(
+        host,
+        grpc_port,
+        token,
+        node_name=node_name,
+        docker_network_mode=requested_mode,
+        docker_network_name=network_name,
+    )
     return token
 
 def _join_network(
@@ -1231,7 +1213,10 @@ def _join_network(
     redis_host, redis_port, redis_url = _validate_remote_redis_details(handshake, seed_host, token)
 
     console.print(f"=> Adding MirrorNeuron network node {remote_node} from {target}...")
-    console.print(f"=> Remote Redis advertised at {redis_host}:{redis_port}.")
+    if _docker_network_uses_internal_identity(requested_mode):
+        console.print("=> Received Docker-internal cluster wiring from the remote node.")
+    else:
+        console.print(f"=> Remote Redis advertised at {redis_host}:{redis_port}.")
     try:
         status = local_client.add_node(remote_node, token=token)
     except TypeError:
@@ -1242,7 +1227,8 @@ def _join_network(
         console.print(f"[dim]{exc}[/dim]")
         raise typer.Exit(1) from exc
     console.print(f"[green]Remote node added. Status: {status}[/green]")
-    console.print(f"Remote Redis URL: {redis_url}")
+    if not _docker_network_uses_internal_identity(requested_mode):
+        console.print(f"Remote Redis URL: {redis_url}")
     console.print("Run 'mn node list' or 'mn resource list' to inspect aggregate cluster resources.")
     return handshake
 
@@ -1469,10 +1455,6 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
         _env_or_default(adjusted, "MN_API_PORT", DEFAULT_API_PORT, LEGACY_API_PORT),
         DEFAULT_API_PORT,
     )
-    epmd_port = _valid_port_text(
-        _env_or_default(adjusted, "MN_EPMD_PORT", DEFAULT_EPMD_PORT, LEGACY_EPMD_PORT),
-        DEFAULT_EPMD_PORT,
-    )
     dist_port = _valid_port_text(
         _env_or_default(adjusted, "MN_DIST_PORT", DEFAULT_DIST_PORT, LEGACY_DIST_PORT),
         DEFAULT_DIST_PORT,
@@ -1511,9 +1493,6 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
         "MN_CORE_GRPC_TARGET": core_grpc_target,
         "MN_API_HOST": adjusted.get("MN_API_HOST") or DEFAULT_HOST,
         "MN_API_PORT": api_port,
-        "MN_EPMD_BIND_HOST": adjusted.get("MN_EPMD_BIND_HOST") or "127.0.0.1",
-        "MN_EPMD_PORT": epmd_port,
-        "MN_DIST_BIND_HOST": adjusted.get("MN_DIST_BIND_HOST") or "127.0.0.1",
         "MN_DIST_PORT": dist_port,
         "MN_WEB_UI_HOST": adjusted.get("MN_WEB_UI_HOST") or DEFAULT_HOST,
         "MN_WEB_UI_PORT": web_ui_port,
@@ -1535,74 +1514,41 @@ def _ensure_compose_cluster_bind_settings(env: dict[str, str], advertised_host: 
     updates: dict[str, str] = {}
     loopback_hosts = {"", "127.0.0.1", "localhost", "::1"}
 
-    for key in ("MN_GRPC_BIND_HOST", "MN_EPMD_BIND_HOST", "MN_DIST_BIND_HOST"):
-        current = str(adjusted.get(key) or "").strip()
-        if os.getenv(key, "").strip():
-            continue
+    current = str(adjusted.get("MN_GRPC_BIND_HOST") or "").strip()
+    if not os.getenv("MN_GRPC_BIND_HOST", "").strip():
         if publish_host == "0.0.0.0" and current in loopback_hosts:
-            updates[key] = publish_host
+            updates["MN_GRPC_BIND_HOST"] = publish_host
         elif not current:
-            updates[key] = publish_host
-
-    current_epmd_address = str(adjusted.get("ERL_EPMD_ADDRESS") or "").strip()
-    if (
-        publish_host == "0.0.0.0"
-        and not os.getenv("ERL_EPMD_ADDRESS", "").strip()
-        and current_epmd_address in loopback_hosts
-    ):
-        updates["ERL_EPMD_ADDRESS"] = publish_host
+            updates["MN_GRPC_BIND_HOST"] = publish_host
 
     if updates:
         adjusted.update(updates)
         _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
     return adjusted
 
-def _ensure_compose_redis_publish_settings(
+def _ensure_compose_internal_redis_settings(
     env: dict[str, str],
     *,
     token: str,
-    advertised_host: str,
     network_redis_host: Optional[str] = None,
     network_redis_port: Optional[int] = None,
-) -> tuple[dict[str, str], int]:
+) -> dict[str, str]:
     adjusted = dict(env)
-    explicit_bind_host = os.getenv("MN_REDIS_BIND_HOST", "").strip()
-    bind_host = str(adjusted.get("MN_REDIS_BIND_HOST") or "").strip()
-    publish_host = _network_publish_host(advertised_host)
-    if explicit_bind_host:
-        bind_host = explicit_bind_host
-    elif publish_host == "0.0.0.0" and bind_host in {"", "127.0.0.1", "localhost", "::1"}:
-        bind_host = publish_host
-    elif not bind_host:
-        bind_host = "0.0.0.0"
-    explicit_port = bool(os.getenv("MN_REDIS_PORT", "").strip())
-    redis_port = _resolve_published_redis_port(
-        bind_host=bind_host,
-        configured_port=adjusted.get("MN_REDIS_PORT"),
-        explicit=explicit_port,
-        owner_container="mirror-neuron-redis",
-    )
     redis_password = _derive_network_secret(token, "redis")
+    redis_host = os.getenv("MN_NETWORK_REDIS_HOST", "").strip() or network_redis_host or "redis"
+    redis_port = network_redis_port or REDIS_CONTAINER_PORT
 
-    adjusted["MN_REDIS_BIND_HOST"] = bind_host
-    adjusted["MN_REDIS_PORT"] = str(redis_port)
     adjusted["MN_REDIS_PASSWORD"] = redis_password
     adjusted["MN_REDIS_URL"] = f"redis://:{redis_password}@redis:{REDIS_CONTAINER_PORT}/0"
     adjusted["MN_CONTEXT_REDIS_URL"] = f"redis://:{redis_password}@redis:{REDIS_CONTAINER_PORT}/1"
     adjusted.setdefault("MN_NETWORK_JOIN_TOKEN", token)
-    adjusted["MN_NETWORK_REDIS_HOST"] = (
-        os.getenv("MN_NETWORK_REDIS_HOST", "").strip()
-        or network_redis_host
-        or advertised_host
-    )
-    adjusted["MN_NETWORK_REDIS_PORT"] = str(network_redis_port or redis_port)
+    adjusted["MN_NETWORK_REDIS_HOST"] = redis_host
+    adjusted["MN_NETWORK_REDIS_PORT"] = str(redis_port)
 
     _write_env_file_values(
         RUNTIME_COMPOSE_ENV,
         {
             "MN_NETWORK_JOIN_TOKEN": token,
-            "MN_REDIS_BIND_HOST": bind_host,
-            "MN_REDIS_PORT": str(redis_port),
             "MN_REDIS_PASSWORD": redis_password,
             "MN_REDIS_URL": adjusted["MN_REDIS_URL"],
             "MN_CONTEXT_REDIS_URL": adjusted["MN_CONTEXT_REDIS_URL"],
@@ -1610,7 +1556,7 @@ def _ensure_compose_redis_publish_settings(
             "MN_NETWORK_REDIS_PORT": adjusted["MN_NETWORK_REDIS_PORT"],
         },
     )
-    return adjusted, redis_port
+    return adjusted
 
 def _resolve_network_seed_redis_port(host: str, requested_port: Optional[int]) -> int:
     persisted = _read_env_file(NETWORK_REDIS_ENV_FILE).get("MN_REDIS_PORT")
@@ -2027,21 +1973,7 @@ def _native_service_endpoints(ip: Optional[str] = None, web_ui_available: bool =
         grpc_port = runtime_env.get("MN_GRPC_PORT", DEFAULT_GRPC_PORT)
         api_host = _native_endpoint_host(runtime_env.get("MN_API_HOST") or _api_host())
         api_port = runtime_env.get("MN_API_PORT", DEFAULT_API_PORT)
-        redis_host = _cluster_endpoint_host(
-            runtime_env,
-            runtime_env.get("MN_NETWORK_REDIS_HOST")
-            or runtime_env.get("MN_REDIS_BIND_HOST", "0.0.0.0")
-        )
-        redis_port = runtime_env.get("MN_NETWORK_REDIS_PORT") or runtime_env.get(
-            "MN_REDIS_PORT", str(REDIS_CONTAINER_PORT)
-        )
-        epmd_host = _cluster_endpoint_host(runtime_env, runtime_env.get("MN_EPMD_BIND_HOST", "127.0.0.1"))
-        epmd_port = runtime_env.get("MN_EPMD_PORT", DEFAULT_EPMD_PORT)
-        dist_host = _cluster_endpoint_host(runtime_env, runtime_env.get("MN_DIST_BIND_HOST", "127.0.0.1"))
-        dist_port = runtime_env.get("MN_DIST_PORT", DEFAULT_DIST_PORT)
-        openshell_host = _native_endpoint_host(runtime_env.get("OPENSHELL_GATEWAY_BIND_HOST", "127.0.0.1"))
-        openshell_port = runtime_env.get("OPENSHELL_GATEWAY_PORT", DEFAULT_OPENSHELL_GATEWAY_PORT)
-        openshell_endpoint = _openshell_gateway_endpoint(runtime_env)
+        include_internal_cluster_ports = False
     else:
         core_host = runtime_env.get("MN_CORE_HOST") or _core_host()
         grpc_host, grpc_port = _host_port_from_target(
@@ -2055,15 +1987,14 @@ def _native_service_endpoints(ip: Optional[str] = None, web_ui_available: bool =
         grpc_host = _cluster_endpoint_host(runtime_env, grpc_host)
         api_host = runtime_env.get("MN_API_HOST") or _api_host()
         api_port = runtime_env.get("MN_API_PORT", DEFAULT_API_PORT)
+        docker_mode = _docker_network_mode(runtime_env.get("MN_DOCKER_NETWORK_MODE"), default="disabled")
+        include_internal_cluster_ports = not _docker_network_uses_internal_identity(docker_mode)
         redis_host, redis_port = _redis_host_port(ip)
         redis_host = _cluster_endpoint_host(runtime_env, redis_host)
         epmd_host = _cluster_endpoint_host(runtime_env, runtime_env.get("MN_EPMD_HOST") or _epmd_host())
         epmd_port = runtime_env.get("MN_EPMD_PORT", DEFAULT_EPMD_PORT)
         dist_host = _cluster_endpoint_host(runtime_env, runtime_env.get("MN_DIST_HOST") or _dist_host())
         dist_port = runtime_env.get("MN_DIST_PORT", DEFAULT_DIST_PORT)
-        openshell_host = ""
-        openshell_port = ""
-        openshell_endpoint = ""
 
     rows.extend(
         [
@@ -2074,35 +2005,30 @@ def _native_service_endpoints(ip: Optional[str] = None, web_ui_available: bool =
                 "port": str(api_port),
                 "target": f"http://{api_host}:{api_port}/api/v1",
             },
-            {
-                "service": "Redis",
-                "host": redis_host,
-                "port": str(redis_port),
-                "target": f"redis://{redis_host}:{redis_port}/0"
-                + (" (auth required)" if runtime_compose_available() else ""),
-            },
-            {
-                "service": "Erlang EPMD",
-                "host": epmd_host,
-                "port": str(epmd_port),
-                "target": f"{epmd_host}:{epmd_port}",
-            },
-            {
-                "service": "Erlang dist",
-                "host": dist_host,
-                "port": str(dist_port),
-                "target": f"{dist_host}:{dist_port}",
-            },
         ]
     )
-    if runtime_compose_available():
-        rows.append(
-            {
-                "service": "OpenShell",
-                "host": openshell_host,
-                "port": str(openshell_port),
-                "target": openshell_endpoint,
-            }
+    if include_internal_cluster_ports:
+        rows.extend(
+            [
+                {
+                    "service": "Redis",
+                    "host": redis_host,
+                    "port": str(redis_port),
+                    "target": f"redis://{redis_host}:{redis_port}/0",
+                },
+                {
+                    "service": "Erlang EPMD",
+                    "host": epmd_host,
+                    "port": str(epmd_port),
+                    "target": f"{epmd_host}:{epmd_port}",
+                },
+                {
+                    "service": "Erlang dist",
+                    "host": dist_host,
+                    "port": str(dist_port),
+                    "target": f"{dist_host}:{dist_port}",
+                },
+            ]
         )
     if web_ui_available:
         web_ui_host = runtime_env.get("MN_WEB_UI_HOST") or _web_ui_host()
@@ -2133,6 +2059,10 @@ def _print_service_endpoints(ip: Optional[str], web_ui_available: bool):
         table.add_row(row["service"], row["host"], row["port"], row["target"])
 
     console.print(table)
+    runtime_env = _runtime_base_env(runtime_compose_available())
+    docker_mode = _docker_network_mode(runtime_env.get("MN_DOCKER_NETWORK_MODE"), default="disabled")
+    if runtime_compose_available() or _docker_network_uses_internal_identity(docker_mode):
+        console.print("[dim]Redis and Erlang cluster traffic use Docker internal networking.[/dim]")
 
 def _start_web_ui_if_installed(runtime_env: Optional[dict[str, str]] = None) -> bool:
     web_ui_dir = find_web_ui_dir()
@@ -2300,15 +2230,13 @@ def _start_server(
     if join_handshake:
         _validate_remote_redis_details(join_handshake, ip, network_token)
     reconnecting_joined_node = bool(compose_runtime and not ip and _persisted_join_profile(env))
-    local_redis_port: Optional[int] = None
     if compose_runtime:
         env = _ensure_compose_native_port_settings(env)
         env = _ensure_compose_cluster_bind_settings(env, advertised_host)
         if not reconnecting_joined_node:
-            env, local_redis_port = _ensure_compose_redis_publish_settings(
+            env = _ensure_compose_internal_redis_settings(
                 env,
                 token=network_token,
-                advertised_host=advertised_host,
                 network_redis_host=(
                     _docker_redis_alias(node_alias)
                     if use_internal_identity and node_alias
@@ -2349,7 +2277,7 @@ def _start_server(
         else:
             seed_redis_host = advertised_host
             seed_redis_port = redis_port or (
-                local_redis_port or _parse_port(os.getenv("MN_REDIS_PORT"), REDIS_CONTAINER_PORT)
+                _parse_port(os.getenv("MN_REDIS_PORT"), REDIS_CONTAINER_PORT)
             )
 
     console.print("===========================================")
@@ -2482,8 +2410,6 @@ def _start_server(
 
     if compose_runtime:
         env = _compose_runtime_env(env, ip)
-        if not ip:
-            env = _avoid_local_compose_port_conflicts(env)
         console.print("=> Starting MirrorNeuron Docker runtime (Compose)...")
         logger.info("Starting MirrorNeuron Docker Compose runtime")
         try:
@@ -2523,23 +2449,17 @@ def _start_server(
         cmd.extend(["-e", f"ERL_AFLAGS={env['ERL_AFLAGS']}"])
 
         core_publish_host = _docker_publish_host(env["MN_CORE_HOST"])
-        epmd_publish_host = _docker_publish_host(env["MN_EPMD_HOST"])
-        dist_publish_host = _docker_publish_host(env["MN_DIST_HOST"])
-
         system_name = os.uname().sysname
         if requested_docker_mode != "disabled" and node_alias:
             cmd.extend(_docker_network_run_args(requested_docker_mode, network_name, node_alias))
 
         if system_name == "Darwin":
-            cmd.extend(
-                [
-                    "-p",
-                    f"{core_publish_host}:{env['MN_GRPC_PORT']}:{env['MN_GRPC_PORT']}",
-                    "-p",
-                    f"{epmd_publish_host}:{env['MN_EPMD_PORT']}:4369",
-                ]
-            )
-            cmd.extend(["-p", f"{dist_publish_host}:{env['MN_DIST_PORT']}:{env['MN_DIST_PORT']}"])
+            cmd.extend(["-p", f"{core_publish_host}:{env['MN_GRPC_PORT']}:{env['MN_GRPC_PORT']}"])
+            if requested_docker_mode == "disabled":
+                epmd_publish_host = _docker_publish_host(env["MN_EPMD_HOST"])
+                dist_publish_host = _docker_publish_host(env["MN_DIST_HOST"])
+                cmd.extend(["-p", f"{epmd_publish_host}:{env['MN_EPMD_PORT']}:4369"])
+                cmd.extend(["-p", f"{dist_publish_host}:{env['MN_DIST_PORT']}:{env['MN_DIST_PORT']}"])
             cmd.extend(["-e", f"MN_REDIS_URL={env.get('MN_REDIS_URL', 'redis://host.docker.internal:6379/0')}"])
             cmd.extend(["-e", "MN_EXECUTOR_MAX_CONCURRENCY=50"])
         else:
@@ -2616,8 +2536,11 @@ def _start_server(
     _print_service_endpoints(ip, web_ui_available)
     console.print("\nNetwork token:")
     console.print(f"  {network_token}")
+    network_args = ""
+    if _docker_network_uses_internal_identity(requested_docker_mode):
+        network_args = f" --network {requested_docker_mode} --docker-network {network_name}"
     console.print("Add another box with:")
-    console.print(f"  mn node join {advertised_host} --token {network_token}")
+    console.print(f"  mn node join {advertised_host} --token {network_token}{network_args}")
     console.print("Logs are available at:")
     console.print(f"  Core: {BEAM_LOG}")
     console.print(f"  API:  {API_LOG}")

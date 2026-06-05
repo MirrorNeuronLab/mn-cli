@@ -336,7 +336,7 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     mocker.patch('mn_cli.server_cmds.NETWORK_TOKEN_FILE', token_file)
     mocker.patch('mn_cli.server_cmds.secrets.token_urlsafe', return_value="seed-token")
     mocker.patch('mn_cli.server_cmds._docker_container_running', return_value=False)
-    mocker.patch('mn_cli.server_cmds._port_available_or_owned', return_value=True)
+    port_available = mocker.patch('mn_cli.server_cmds._port_available_or_owned', return_value=True)
 
     commands = []
 
@@ -357,7 +357,6 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
         host="192.168.4.10",
         grpc_port=50055,
         dist_port=4500,
-        redis_port=6380,
         docker_network_mode="overlay",
     ) == "seed-token"
 
@@ -366,7 +365,10 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     core_run = next(cmd for cmd in commands if len(cmd) > 4 and cmd[:4] == ["docker", "run", "-d", "--name"] and cmd[4] == "mirror-neuron-network-core")
     assert "mirror-neuron-core:latest" in core_run
     assert "redis:7" not in core_run
-    assert "-p" in core_run
+    assert core_run.count("-p") == 1
+    assert "0.0.0.0:50055:50055" in core_run
+    assert "192.168.4.10:4369:4369" not in core_run
+    assert "192.168.4.10:4500:4500" not in core_run
     assert f"MN_COOKIE={_derive_network_secret('seed-token', 'cookie')}" in core_run
     assert "MN_NETWORK_ONLY=true" in core_run
     assert "MN_NODE_ALIAS=mn-seed" in core_run
@@ -386,6 +388,8 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     redis_run = next(cmd for cmd in commands if len(cmd) > 4 and cmd[:4] == ["docker", "run", "-d", "--name"] and cmd[4] == "mirror-neuron-network-redis")
     assert "--network-alias" in redis_run
     assert "mn-seed-redis" in redis_run
+    assert "-p" not in redis_run
+    port_available.assert_not_called()
 
 def test_start_network_seed_already_exposed_prints_existing_token(mocker):
     output = StringIO()
@@ -689,83 +693,44 @@ def test_runtime_compose_cmd_uses_installed_runtime_files(mocker, tmp_path):
         "-d",
     ]
 
-def test_compose_redis_publish_settings_persists_dynamic_port(mocker, tmp_path):
+def test_compose_internal_redis_settings_persists_docker_alias(mocker, tmp_path):
     compose_env = tmp_path / "docker-compose.env"
     compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
     mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
+    port_available = mocker.patch('mn_cli.server_cmds._port_available_or_owned')
 
-    def available(host, port, owner_container, target_port):
-        return port == 56380
-
-    mocker.patch('mn_cli.server_cmds._port_available_or_owned', side_effect=available)
-
-    env, port = server_cmds._ensure_compose_redis_publish_settings(
-        {"MN_REDIS_BIND_HOST": "0.0.0.0"},
+    env = server_cmds._ensure_compose_internal_redis_settings(
+        {},
         token="join-token",
-        advertised_host="192.168.4.10",
+        network_redis_host="mn-node-redis",
+        network_redis_port=6379,
     )
 
     redis_password = _derive_network_secret("join-token", "redis")
-    assert port == 56380
-    assert env["MN_REDIS_PORT"] == "56380"
     assert env["MN_REDIS_PASSWORD"] == redis_password
     assert env["MN_REDIS_URL"] == f"redis://:{redis_password}@redis:6379/0"
+    assert env["MN_NETWORK_REDIS_HOST"] == "mn-node-redis"
+    assert env["MN_NETWORK_REDIS_PORT"] == "6379"
     compose_env_text = compose_env.read_text()
-    assert "MN_REDIS_BIND_HOST=0.0.0.0" in compose_env_text
-    assert "MN_REDIS_PORT=56380" in compose_env_text
+    assert "MN_REDIS_BIND_HOST=" not in compose_env_text
+    assert "MN_REDIS_PORT=" not in compose_env_text
     assert f"MN_REDIS_PASSWORD={redis_password}" in compose_env_text
-    assert "MN_NETWORK_REDIS_HOST=192.168.4.10" in compose_env_text
-    assert "MN_NETWORK_REDIS_PORT=56380" in compose_env_text
+    assert "MN_NETWORK_REDIS_HOST=mn-node-redis" in compose_env_text
+    assert "MN_NETWORK_REDIS_PORT=6379" in compose_env_text
+    port_available.assert_not_called()
 
-def test_compose_redis_publish_settings_prefers_running_dynamic_port(mocker, tmp_path):
-    compose_env = tmp_path / "docker-compose.env"
-    compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\nMN_REDIS_PORT=56381\n")
-    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
-    mocker.patch('mn_cli.server_cmds._published_container_port', return_value=56379)
-    mocker.patch('mn_cli.server_cmds._port_available_or_owned', return_value=True)
-
-    env, port = server_cmds._ensure_compose_redis_publish_settings(
-        {"MN_REDIS_BIND_HOST": "0.0.0.0", "MN_REDIS_PORT": "56381"},
-        token="join-token",
-        advertised_host="192.168.4.10",
-    )
-
-    assert port == 56379
-    assert env["MN_REDIS_PORT"] == "56379"
-    compose_env_text = compose_env.read_text()
-    assert "MN_REDIS_PORT=56379" in compose_env_text
-    assert "MN_NETWORK_REDIS_PORT=56379" in compose_env_text
-
-def test_compose_redis_publish_settings_replaces_stale_loopback_bind(mocker, tmp_path):
-    compose_env = tmp_path / "docker-compose.env"
-    compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\nMN_REDIS_BIND_HOST=127.0.0.1\n")
-    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
-    mocker.patch('mn_cli.server_cmds._port_available_or_owned', return_value=True)
-
-    env, _port = server_cmds._ensure_compose_redis_publish_settings(
-        {"MN_REDIS_BIND_HOST": "127.0.0.1"},
-        token="join-token",
-        advertised_host="192.168.4.10",
-    )
-
-    assert env["MN_REDIS_BIND_HOST"] == "0.0.0.0"
-    assert "MN_REDIS_BIND_HOST=0.0.0.0" in compose_env.read_text()
-
-def test_compose_redis_explicit_port_must_be_available(mocker, tmp_path, monkeypatch):
+def test_compose_internal_redis_settings_defaults_to_service_name(mocker, tmp_path):
     compose_env = tmp_path / "docker-compose.env"
     compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
     mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
-    mocker.patch('mn_cli.server_cmds._port_available_or_owned', return_value=False)
-    monkeypatch.setenv("MN_REDIS_PORT", "56379")
 
-    with pytest.raises(typer.Exit) as exc:
-        server_cmds._ensure_compose_redis_publish_settings(
-            {},
-            token="join-token",
-            advertised_host="192.168.4.10",
-        )
+    env = server_cmds._ensure_compose_internal_redis_settings(
+        {},
+        token="join-token",
+    )
 
-    assert exc.value.exit_code == 1
+    assert env["MN_NETWORK_REDIS_HOST"] == "redis"
+    assert env["MN_NETWORK_REDIS_PORT"] == "6379"
 
 def test_compose_native_settings_persists_runtime_blueprint_env(mocker, tmp_path):
     compose_env = tmp_path / "docker-compose.env"
@@ -851,14 +816,14 @@ def test_compose_cluster_bind_settings_exposes_lan_advertised_host(mocker, tmp_p
     )
 
     assert env["MN_GRPC_BIND_HOST"] == "0.0.0.0"
-    assert env["MN_EPMD_BIND_HOST"] == "0.0.0.0"
-    assert env["MN_DIST_BIND_HOST"] == "0.0.0.0"
-    assert env["ERL_EPMD_ADDRESS"] == "0.0.0.0"
+    assert env["MN_EPMD_BIND_HOST"] == "127.0.0.1"
+    assert env["MN_DIST_BIND_HOST"] == "127.0.0.1"
+    assert env["ERL_EPMD_ADDRESS"] == "127.0.0.1"
     compose_env_text = compose_env.read_text()
     assert "MN_GRPC_BIND_HOST=0.0.0.0" in compose_env_text
-    assert "MN_EPMD_BIND_HOST=0.0.0.0" in compose_env_text
-    assert "MN_DIST_BIND_HOST=0.0.0.0" in compose_env_text
-    assert "ERL_EPMD_ADDRESS=0.0.0.0" in compose_env_text
+    assert "MN_EPMD_BIND_HOST=0.0.0.0" not in compose_env_text
+    assert "MN_DIST_BIND_HOST=0.0.0.0" not in compose_env_text
+    assert "ERL_EPMD_ADDRESS=0.0.0.0" not in compose_env_text
 
 def test_compose_cluster_bind_settings_preserves_explicit_env(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_GRPC_BIND_HOST", "127.0.0.1")
@@ -883,8 +848,8 @@ def test_compose_cluster_bind_settings_preserves_explicit_env(mocker, tmp_path, 
     )
 
     assert env["MN_GRPC_BIND_HOST"] == "127.0.0.1"
-    assert env["MN_EPMD_BIND_HOST"] == "0.0.0.0"
-    assert env["MN_DIST_BIND_HOST"] == "0.0.0.0"
+    assert env["MN_EPMD_BIND_HOST"] == "127.0.0.1"
+    assert env["MN_DIST_BIND_HOST"] == "127.0.0.1"
 
 def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
     compose_file = tmp_path / "docker-compose.yml"
@@ -1056,7 +1021,7 @@ def test_start_server_preserves_persisted_join_profile_on_restart(mocker, tmp_pa
         return m
 
     mocker.patch('mn_cli.server_cmds.subprocess.run', side_effect=mock_run)
-    ensure_redis = mocker.patch('mn_cli.server_cmds._ensure_compose_redis_publish_settings')
+    ensure_redis = mocker.patch('mn_cli.server_cmds._ensure_compose_internal_redis_settings')
 
     _start_server()
 
@@ -1109,7 +1074,7 @@ def test_start_server_refreshes_generated_node_name_for_joined_runtime_ip_change
         return m
 
     mocker.patch('mn_cli.server_cmds.subprocess.run', side_effect=mock_run)
-    ensure_redis = mocker.patch('mn_cli.server_cmds._ensure_compose_redis_publish_settings')
+    ensure_redis = mocker.patch('mn_cli.server_cmds._ensure_compose_internal_redis_settings')
 
     _start_server()
 
@@ -1126,6 +1091,68 @@ def test_start_server_refreshes_generated_node_name_for_joined_runtime_ip_change
     compose_env_text = compose_env.read_text()
     assert "MN_NETWORK_ADVERTISE_HOST=192.168.4.44" in compose_env_text
     assert "MN_NODE_NAME=mirror_neuron@192.168.4.44" in compose_env_text
+    assert "MN_CLUSTER_NODES=mirror_neuron@192.168.4.35" in compose_env_text
+    assert "MN_NETWORK_REDIS_HOST=192.168.4.35" in compose_env_text
+    assert "MN_NETWORK_REDIS_PORT=56381" in compose_env_text
+    handshake.assert_not_called()
+    ensure_redis.assert_not_called()
+
+def test_start_server_refreshes_generated_node_name_for_joined_runtime_explicit_host_change(mocker, tmp_path):
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_env = tmp_path / "docker-compose.env"
+    redis_password = _derive_network_secret("join-token", "redis")
+    compose_file.write_text("services: {}\n")
+    compose_env.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_NETWORK_JOIN_TOKEN=join-token\n"
+        "MN_NETWORK_ADVERTISE_HOST=192.168.4.173\n"
+        "MN_NODE_NAME=mirror_neuron@192.168.4.173\n"
+        "MN_CLUSTER_NODES=mirror_neuron@192.168.4.35\n"
+        "MN_NETWORK_REDIS_HOST=192.168.4.35\n"
+        "MN_NETWORK_REDIS_PORT=56381\n"
+        f"MN_REDIS_URL=redis://:{redis_password}@192.168.4.35:56381/0\n"
+        f"MN_CONTEXT_REDIS_URL=redis://:{redis_password}@192.168.4.35:56381/1\n"
+    )
+
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_FILE', compose_file)
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
+    mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
+    mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', ())
+    mocker.patch('mn_cli.server_cmds.time.sleep')
+    mocker.patch('mn_cli.server_cmds.PID_DIR', tmp_path / ".pids")
+    mocker.patch('mn_cli.server_cmds.LOG_DIR', tmp_path / ".logs")
+    mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
+    mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
+    mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path)
+    mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.44")
+    handshake = mocker.patch('mn_cli.server_cmds._handshake_with_main_node')
+
+    calls = []
+
+    def mock_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        m = mocker.Mock()
+        m.stdout = "false\n"
+        return m
+
+    mocker.patch('mn_cli.server_cmds.subprocess.run', side_effect=mock_run)
+    ensure_redis = mocker.patch('mn_cli.server_cmds._ensure_compose_internal_redis_settings')
+
+    _start_server(host="gb10-worker.local")
+
+    compose_call = next(item for item in calls if item[0] == runtime_compose_cmd("up", "-d"))
+    env = compose_call[1]["env"]
+    assert env["MN_NETWORK_ADVERTISE_HOST"] == "gb10-worker.local"
+    assert env["MN_NODE_NAME"] == "mirror_neuron@gb10-worker.local"
+    assert env["MN_CLUSTER_NODES"] == "mirror_neuron@192.168.4.35"
+    assert env["MN_NETWORK_REDIS_HOST"] == "192.168.4.35"
+    assert env["MN_NETWORK_REDIS_PORT"] == "56381"
+    assert env["MN_REDIS_URL"] == f"redis://:{redis_password}@192.168.4.35:56381/0"
+    assert env["MN_CONTEXT_REDIS_URL"] == f"redis://:{redis_password}@192.168.4.35:56381/1"
+
+    compose_env_text = compose_env.read_text()
+    assert "MN_NETWORK_ADVERTISE_HOST=gb10-worker.local" in compose_env_text
+    assert "MN_NODE_NAME=mirror_neuron@gb10-worker.local" in compose_env_text
     assert "MN_CLUSTER_NODES=mirror_neuron@192.168.4.35" in compose_env_text
     assert "MN_NETWORK_REDIS_HOST=192.168.4.35" in compose_env_text
     assert "MN_NETWORK_REDIS_PORT=56381" in compose_env_text
@@ -1199,62 +1226,20 @@ def test_compose_runtime_env_preserves_docker_alias_identity(mocker):
     assert resolved["MN_CLUSTER_NODES"] == "mirror_neuron@mn-seed"
     assert resolved["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 4500 inet_dist_listen_max 4500"
 
-def test_compose_port_conflict_resolution_reserves_selected_ports(mocker):
-    mocker.patch("mn_cli.server_cmds.runtime_compose_available", return_value=False)
-    mocker.patch("mn_cli.server_cmds._host_port_available", side_effect=lambda _host, port: port not in {54469, 54470})
+def test_compose_port_conflict_resolution_leaves_internal_ports_unchanged(mocker):
+    host_probe = mocker.patch("mn_cli.server_cmds._host_port_available")
 
-    resolved = _avoid_local_compose_port_conflicts({
-        "MN_EPMD_BIND_HOST": "127.0.0.1",
-        "MN_EPMD_PORT": "54469",
-        "MN_DIST_BIND_HOST": "127.0.0.1",
-        "MN_DIST_PORT": "54470",
-        "ERL_AFLAGS": "-kernel inet_dist_listen_min 54470 inet_dist_listen_max 54470",
-    })
-
-    assert resolved["MN_EPMD_PORT"] == "54471"
-    assert resolved["MN_DIST_PORT"] == "54472"
-    assert resolved["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 54472 inet_dist_listen_max 54472"
-
-def test_compose_port_conflict_resolution_keeps_ports_owned_by_core(mocker):
-    mocker.patch("mn_cli.server_cmds.runtime_compose_available", return_value=True)
-    mocker.patch("mn_cli.server_cmds._host_port_available", return_value=False)
-    mocker.patch(
-        "mn_cli.server_cmds._container_publishes_port",
-        side_effect=lambda name, target, published: (
-            name == "mirror-neuron-core"
-            and target == published
-            and published in {54369, 54370}
-        ),
-    )
-
-    resolved = _avoid_local_compose_port_conflicts({
+    env = {
         "MN_EPMD_BIND_HOST": "0.0.0.0",
         "MN_EPMD_PORT": "54369",
         "MN_DIST_BIND_HOST": "0.0.0.0",
         "MN_DIST_PORT": "54370",
         "ERL_AFLAGS": "-kernel inet_dist_listen_min 54370 inet_dist_listen_max 54370",
-    })
+    }
+    resolved = _avoid_local_compose_port_conflicts(env)
 
-    assert resolved["MN_EPMD_PORT"] == "54369"
-    assert resolved["MN_DIST_PORT"] == "54370"
-    assert resolved["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 54370 inet_dist_listen_max 54370"
-
-def test_compose_port_conflict_resolution_keeps_epmd_stable_for_advertised_clusters(mocker):
-    mocker.patch("mn_cli.server_cmds.runtime_compose_available", return_value=False)
-    mocker.patch("mn_cli.server_cmds._host_port_available", side_effect=lambda _host, port: port == 54470)
-
-    resolved = _avoid_local_compose_port_conflicts({
-        "MN_NETWORK_ADVERTISE_HOST": "192.168.4.35",
-        "MN_EPMD_BIND_HOST": "0.0.0.0",
-        "MN_EPMD_PORT": "54369",
-        "MN_DIST_BIND_HOST": "0.0.0.0",
-        "MN_DIST_PORT": "54370",
-        "ERL_AFLAGS": "-kernel inet_dist_listen_min 54370 inet_dist_listen_max 54370",
-    })
-
-    assert resolved["MN_EPMD_PORT"] == "54369"
-    assert resolved["MN_DIST_PORT"] == "54470"
-    assert resolved["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 54470 inet_dist_listen_max 54470"
+    assert resolved == env
+    host_probe.assert_not_called()
 
 def test_runtime_endpoint_snapshot_uses_local_hosts_for_wildcard_binds():
     snapshot = _runtime_endpoint_snapshot(
@@ -1749,18 +1734,16 @@ def test_print_service_endpoints_shows_compose_native_ports(mocker, monkeypatch,
     rendered = output.getvalue()
     assert "Core gRPC" in rendered
     assert "REST API" in rendered
-    assert "Redis" in rendered
-    assert "Redis host" not in rendered
-    assert "192.168.4.10" in rendered
-    assert "56379" in rendered
-    assert "auth required" in rendered
+    assert "redis://192.168.4.10:56379/0" not in rendered
+    assert "56379" not in rendered
+    assert "auth required" not in rendered
     assert "Context engine" not in rendered
-    assert "internal" not in rendered
-    assert "OpenShell" in rendered
-    assert "http://127.0.0.1:58080" in rendered
-    assert "Erlang EPMD" in rendered
-    assert "Erlang dist" in rendered
-    assert "54370" in rendered
+    assert "Redis and Erlang cluster traffic use Docker internal networking." in rendered
+    assert "OpenShell" not in rendered
+    assert "http://127.0.0.1:58080" not in rendered
+    assert "Erlang EPMD" not in rendered
+    assert "Erlang dist" not in rendered
+    assert "54370" not in rendered
 
 def test_print_service_endpoints_shows_advertised_cluster_host(mocker, monkeypatch, tmp_path):
     output = StringIO()
@@ -1787,7 +1770,8 @@ def test_print_service_endpoints_shows_advertised_cluster_host(mocker, monkeypat
     rendered = output.getvalue()
     assert "192.168.4.173" in rendered
     assert "192.168.4.173:55051" in rendered
-    assert "192.168.4.173:54369" in rendered
-    assert "192.168.4.173:54370" in rendered
-    assert "redis://192.168.4.173:56379/0" in rendered
+    assert "192.168.4.173:54369" not in rendered
+    assert "192.168.4.173:54370" not in rendered
+    assert "redis://192.168.4.173:56379/0" not in rendered
+    assert "Redis and Erlang cluster traffic use Docker internal networking." in rendered
     assert "0.0.0.0" not in rendered

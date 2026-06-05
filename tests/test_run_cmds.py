@@ -1254,7 +1254,9 @@ def test_run_records_blueprint_run_id_mapping(mocker, tmp_path, monkeypatch):
     assert injected_config["identity"]["run_id"] == "bp-run"
     assert injected_config["outputs"]["run_root"] == str(tmp_path / "runs")
 
-def test_run_displays_live_job_type_and_follow_status(mocker, tmp_path):
+def test_run_displays_live_job_type_and_follow_status(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    monkeypatch.setenv("MN_RUN_BACKGROUND_EVENT_RELAY", "0")
     mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-live")
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_pending"}),
@@ -1815,6 +1817,44 @@ def test_stream_all_events(mocker, tmp_path):
     assert "Job Status: Success" in result.stdout
     assert "result.txt" in result.stdout
     assert "result_stream.txt" in result.stdout
+
+
+def test_stream_cancelled_event_is_terminal(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_running"}),
+        json.dumps({"type": "job_cancelled"}),
+    ])
+    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    mock_get = mocker.patch('mn_cli.libs.run_cmds.client.get_job')
+
+    bundle_dir = tmp_path / "run_bundle"
+    bundle_dir.mkdir()
+    manifest_file = bundle_dir / "manifest.json"
+    manifest_file.write_text('{"nodes": []}')
+
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+
+    assert result.exit_code == 0
+    assert "Job Status: Cancelled" in result.stdout
+    mock_get.assert_not_called()
+
+
+def test_stream_helper_cancelled_event_is_terminal_without_follow(mocker, tmp_path):
+    job_id = f"job-cancelled-{uuid.uuid4().hex}"
+    log_writer = run_cmds.JobLogWriter(job_id, run_dir=tmp_path / "run")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_running"}),
+        json.dumps({"type": "job_cancelled"}),
+    ])
+    mock_get = mocker.patch('mn_cli.libs.run_cmds.client.get_job')
+
+    status = run_cmds._stream_and_format_events(job_id, log_writer=log_writer, follow_seconds=0)
+
+    assert status == "cancelled"
+    assert '"type": "job_cancelled"' in log_writer.events_file.read_text()
+    mock_get.assert_not_called()
+
 
 def test_stream_keyboard_interrupt(mocker, tmp_path):
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', side_effect=KeyboardInterrupt)

@@ -94,6 +94,54 @@ def test_restore_rejects_path_traversal_zip(mocker, tmp_path):
     mock_restore.assert_not_called()
 
 
+def test_restore_rejects_missing_required_archive_entries(mocker, tmp_path):
+    archive = tmp_path / "incomplete.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("mn-backup.json", b'{"schema_version":"mn.backup.v1"}')
+
+    mock_restore = mocker.patch("mn_cli.libs.backup_cmds.client.restore_job_backup")
+
+    result = runner.invoke(app, ["job", "restore", "bp", "--input", str(archive)])
+
+    assert result.exit_code == 1
+    assert "Backup zip is missing required entries" in result.stdout
+    assert "runtime/job.json" in result.stdout
+    assert "bundle/manifest.json" in result.stdout
+    mock_restore.assert_not_called()
+
+
+def test_restore_rejects_checksum_mismatch(mocker, tmp_path):
+    archive = tmp_path / "tampered.zip"
+    entries = {
+        "mn-backup.json": b'{"schema_version":"mn.backup.v1"}',
+        "runtime/job.json": b'{"job_id":"old-job","status":"paused"}',
+        "runtime/agents.json": b"[]",
+        "runtime/events.jsonl": b'{"type":"job_paused"}\n',
+        "bundle/manifest.json": b'{"graph_id":"g"}',
+        "bundle/payloads/.mn-empty": b"",
+    }
+    checksums = {
+        "algorithm": "sha256",
+        "entries": {
+            name: hashlib.sha256(contents).hexdigest()
+            for name, contents in entries.items()
+        },
+    }
+    tampered_entries = {**entries, "runtime/job.json": b'{"job_id":"tampered"}'}
+    with zipfile.ZipFile(archive, "w") as zf:
+        for name, contents in tampered_entries.items():
+            zf.writestr(name, contents)
+        zf.writestr("checksums.json", json.dumps(checksums).encode("utf-8"))
+
+    mock_restore = mocker.patch("mn_cli.libs.backup_cmds.client.restore_job_backup")
+
+    result = runner.invoke(app, ["job", "restore", "bp", "--input", str(archive)])
+
+    assert result.exit_code == 1
+    assert "Checksum mismatch for runtime/job.json" in result.stdout
+    mock_restore.assert_not_called()
+
+
 def test_restore_writes_new_run_mapping_and_prints_provenance(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     archive = tmp_path / "backup.zip"

@@ -1,5 +1,6 @@
 import subprocess
 
+import pytest
 from typer.testing import CliRunner
 from mn_cli.banner import format_banner
 from mn_cli.main import app
@@ -24,10 +25,6 @@ def test_expose_node_success(mocker):
             "192.168.4.10",
             "--grpc-port",
             "50055",
-            "--dist-port",
-            "4500",
-            "--redis-port",
-            "6380",
             "--force-new-token",
             "--network",
             "overlay",
@@ -39,12 +36,23 @@ def test_expose_node_success(mocker):
     mock_expose_node.assert_called_once_with(
         host="192.168.4.10",
         grpc_port=50055,
-        dist_port=4500,
-        redis_port=6380,
+        dist_port=54370,
+        redis_port=None,
         force_new_token=True,
         docker_network_mode="overlay",
         docker_network_name="mn-overlay",
     )
+
+def test_node_docker_network_help_hides_redis_and_erlang_ports():
+    expose = runner.invoke(app, ["node", "expose", "--help"])
+    join = runner.invoke(app, ["node", "join", "--help"])
+
+    assert expose.exit_code == 0
+    assert join.exit_code == 0
+    assert "--redis-port" not in expose.stdout
+    assert "--dist-port" not in expose.stdout
+    assert "--redis-port" not in join.stdout
+    assert "--dist-port" not in join.stdout
 
 def test_add_node_success(mocker):
     mock_add_node = mocker.patch('mn_cli.libs.sys_cmds._join_network')
@@ -100,6 +108,22 @@ def test_join_success(mocker):
         docker_network_mode="overlay",
         docker_network_name="mn-overlay",
     )
+
+@pytest.mark.parametrize(
+    ("args", "backend_path"),
+    [
+        (["node", "join", "192.168.1.1"], "mn_cli.libs.sys_cmds._start_server"),
+        (["node", "add", "192.168.1.1"], "mn_cli.libs.sys_cmds._join_network"),
+    ],
+)
+def test_node_cluster_commands_require_join_token(mocker, args, backend_path):
+    backend = mocker.patch(backend_path)
+
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 2
+    assert "Missing option '--token'." in result.stderr
+    backend.assert_not_called()
 
 def test_leave_success(mocker):
     import mn_cli.shared
