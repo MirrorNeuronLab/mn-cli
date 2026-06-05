@@ -1395,13 +1395,19 @@ def _cluster_endpoint_host(env: dict[str, str], host: str) -> str:
 
 def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
     default_repo = str(env.get("MN_DEFAULT_BLUEPRINT_REPO") or os.getenv("MN_DEFAULT_BLUEPRINT_REPO") or DEFAULT_BLUEPRINT_REPO).strip()
-    host_mn_dir = str(env.get("MN_HOST_MN_DIR") or os.getenv("MN_HOST_MN_DIR") or DIR).strip()
+    host_home_dir = str(
+        env.get("MN_HOST_HOME_DIR")
+        or env.get("MN_HOST_MN_DIR")
+        or os.getenv("MN_HOST_HOME_DIR")
+        or os.getenv("MN_HOST_MN_DIR")
+        or DIR
+    ).strip()
     configured_runs_root = str(env.get("MN_RUNS_ROOT") or os.getenv("MN_RUNS_ROOT") or "").strip()
     host_artifacts_dir = str(
         env.get("MN_HOST_ARTIFACTS_DIR") or os.getenv("MN_HOST_ARTIFACTS_DIR") or configured_runs_root
     ).strip()
     if not host_artifacts_dir:
-        host_artifacts_dir = str(Path(host_mn_dir).expanduser() / "runs")
+        host_artifacts_dir = str(Path(host_home_dir).expanduser() / "runs")
     container_runs_root = str(
         env.get("MN_CONTAINER_RUNS_ROOT") or os.getenv("MN_CONTAINER_RUNS_ROOT") or DEFAULT_CONTAINER_RUNS_ROOT
     ).strip()
@@ -2544,11 +2550,11 @@ def _start_server(
             cmd.extend(["-v", f"{openshell_config_dir}:/root/.config/openshell:ro"])
             cmd.extend(["-v", f"{openshell_config_dir}:/opt/mirror_neuron/.config/openshell:ro"])
 
-        host_mn_dir = str(env.get("MN_HOST_MN_DIR") or DIR)
-        host_artifacts_dir = str(env.get("MN_HOST_ARTIFACTS_DIR") or Path(host_mn_dir).expanduser() / "runs")
+        host_home_dir = str(env.get("MN_HOST_HOME_DIR") or env.get("MN_HOST_MN_DIR") or DIR)
+        host_artifacts_dir = str(env.get("MN_HOST_ARTIFACTS_DIR") or Path(host_home_dir).expanduser() / "runs")
         container_runs_root = str(env.get("MN_CONTAINER_RUNS_ROOT") or DEFAULT_CONTAINER_RUNS_ROOT)
-        cmd.extend(["-v", f"{host_mn_dir}:/root/.mn"])
-        cmd.extend(["-v", f"{host_mn_dir}:/opt/mirror_neuron/.mn"])
+        cmd.extend(["-v", f"{host_home_dir}:/root/.mn"])
+        cmd.extend(["-v", f"{host_home_dir}:/opt/mirror_neuron/.mn"])
         cmd.extend(["-v", f"{host_artifacts_dir}:{container_runs_root}"])
         cmd.extend(["-v", f"{host_artifacts_dir}:/opt/mirror_neuron/.mn/runs"])
 

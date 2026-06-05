@@ -29,6 +29,7 @@ from mn_cli.server_cmds import (
     _compose_runtime_env,
     _print_service_endpoints,
     _runtime_endpoint_snapshot,
+    _runtime_blueprint_env_updates,
     runtime_compose_cmd,
 )
 import typer
@@ -209,6 +210,22 @@ def test_resolve_grpc_auth_token_prefers_env(monkeypatch):
     monkeypatch.setenv("MN_GRPC_AUTH_TOKEN", "auth-token")
 
     assert _resolve_grpc_auth_token() == "auth-token"
+
+def test_runtime_blueprint_env_updates_prefers_host_home_dir(tmp_path):
+    host_home = tmp_path / "mn-home"
+
+    updates = _runtime_blueprint_env_updates({"MN_HOST_HOME_DIR": str(host_home)})
+
+    assert updates["MN_HOST_ARTIFACTS_DIR"] == str(host_home / "runs")
+    assert updates["MN_RUNS_ROOT"] == str(host_home / "runs")
+
+def test_runtime_blueprint_env_updates_accepts_legacy_host_mn_dir(tmp_path):
+    legacy_home = tmp_path / "legacy-mn-home"
+
+    updates = _runtime_blueprint_env_updates({"MN_HOST_MN_DIR": str(legacy_home)})
+
+    assert updates["MN_HOST_ARTIFACTS_DIR"] == str(legacy_home / "runs")
+    assert updates["MN_RUNS_ROOT"] == str(legacy_home / "runs")
 
 def test_resolve_grpc_admin_token_generates_persistent_token(tmp_path, mocker):
     token_dir = tmp_path / "state"
