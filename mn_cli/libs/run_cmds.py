@@ -591,6 +591,9 @@ def validate(
         console.print(
             f"  - Model checks: {len(model_result.get('results') or [])}"
         )
+        capacity_summary = _model_capacity_summary(model_result)
+        if capacity_summary:
+            console.print(f"  - Model capacity: {capacity_summary}")
         console.print(
             f"  - Input validation rules: {len(validation_result.get('results') or [])}"
         )
@@ -996,6 +999,28 @@ def _emit_validation_report(
             ),
             markup=False,
         )
+
+
+def _model_capacity_summary(report: dict[str, Any]) -> str:
+    summaries: list[str] = []
+    for result in report.get("results") or []:
+        if not isinstance(result, dict):
+            continue
+        requirements = result.get("requirements")
+        if not isinstance(requirements, dict) or not requirements:
+            continue
+        parts = [str(result.get("model_id") or result.get("model") or result.get("name") or "model")]
+        provider = result.get("provider")
+        if provider:
+            parts.append(f"provider {provider}")
+        min_vram = requirements.get("min_vram_gb")
+        if min_vram is not None:
+            parts.append(f"GPU >= {min_vram}GB")
+        capabilities = requirements.get("required_capabilities")
+        if capabilities:
+            parts.append("capability any of " + ",".join(str(item) for item in capabilities))
+        summaries.append(" ".join(parts))
+    return "; ".join(summaries[:3])
 
 
 def _legacy_validation_issue(error: str, *, source: str) -> dict[str, Any]:
