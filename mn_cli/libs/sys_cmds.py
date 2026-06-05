@@ -19,6 +19,7 @@ from mn_cli.server_cmds import (
     BEAM_PID_FILE,
     DEFAULT_GRPC_PORT,
     DEFAULT_DIST_PORT,
+    DEFAULT_DOCKER_NETWORK_NAME,
     runtime_compose_available,
     runtime_compose_cmd,
     api_pid_files,
@@ -52,12 +53,12 @@ def join(
         hidden=True,
     ),
     docker_network_mode: Optional[str] = typer.Option(
-        None,
+        "bridge",
         "--network",
         help="Docker network mode for the joined node: overlay, bridge, or disabled.",
     ),
     docker_network_name: Optional[str] = typer.Option(
-        None,
+        DEFAULT_DOCKER_NETWORK_NAME,
         "--docker-network",
         help="Docker network name to use for bridge/overlay mode.",
     ),
@@ -99,12 +100,12 @@ def expose_node(
         help="Replace the persisted node exposure token.",
     ),
     docker_network_mode: Optional[str] = typer.Option(
-        None,
+        "bridge",
         "--network",
         help="Docker network mode for the exposed node: overlay, bridge, or disabled.",
     ),
     docker_network_name: Optional[str] = typer.Option(
-        None,
+        DEFAULT_DOCKER_NETWORK_NAME,
         "--docker-network",
         help="Docker network name to use for bridge/overlay mode.",
     ),
@@ -125,12 +126,12 @@ def add_node(
     token: str = typer.Option(..., "--token", help="Token printed by mn node expose on the remote box."),
     grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Remote exposed node gRPC port."),
     docker_network_mode: Optional[str] = typer.Option(
-        None,
+        "bridge",
         "--network",
         help="Docker network mode for the local add handshake: overlay, bridge, or disabled.",
     ),
     docker_network_name: Optional[str] = typer.Option(
-        None,
+        DEFAULT_DOCKER_NETWORK_NAME,
         "--docker-network",
         help="Docker network name to validate for bridge/overlay mode.",
     ),

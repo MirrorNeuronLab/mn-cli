@@ -149,6 +149,18 @@ def test_detect_host_gpu_count_uses_linux_nvidia_smi(mocker):
 
     assert server_cmds._detect_host_gpu_count() == 1
 
+def test_docker_network_command_args_omit_default_bridge_network():
+    assert server_cmds._docker_network_command_args("bridge", "mirror-neuron-runtime") == ""
+    assert server_cmds._docker_network_command_args("disabled", "mirror-neuron-runtime") == ""
+    assert (
+        server_cmds._docker_network_command_args("overlay", "mn-overlay")
+        == " --network overlay --docker-network mn-overlay"
+    )
+    assert (
+        server_cmds._docker_network_command_args("bridge", "custom-bridge")
+        == " --network bridge --docker-network custom-bridge"
+    )
+
 def test_kill_tree(mocker):
     # Mock os.kill to succeed for existence check
     mock_kill = mocker.patch('mn_cli.server_cmds.os.kill')

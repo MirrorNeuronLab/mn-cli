@@ -43,6 +43,28 @@ def test_expose_node_success(mocker):
         docker_network_name="mn-overlay",
     )
 
+def test_expose_node_defaults_to_bridge_network(mocker):
+    mock_expose_node = mocker.patch('mn_cli.libs.sys_cmds._start_network_seed')
+    result = runner.invoke(
+        app,
+        [
+            "node",
+            "expose",
+            "--host",
+            "192.168.4.10",
+        ],
+    )
+    assert result.exit_code == 0
+    mock_expose_node.assert_called_once_with(
+        host="192.168.4.10",
+        grpc_port=55051,
+        dist_port=54370,
+        redis_port=None,
+        force_new_token=False,
+        docker_network_mode="bridge",
+        docker_network_name="mirror-neuron-runtime",
+    )
+
 def test_node_docker_network_help_hides_redis_and_erlang_ports():
     expose = runner.invoke(app, ["node", "expose", "--help"])
     join = runner.invoke(app, ["node", "join", "--help"])
@@ -81,6 +103,27 @@ def test_add_node_success(mocker):
         docker_network_name="mn-overlay",
     )
 
+def test_add_node_defaults_to_bridge_network(mocker):
+    mock_add_node = mocker.patch('mn_cli.libs.sys_cmds._join_network')
+    result = runner.invoke(
+        app,
+        [
+            "node",
+            "add",
+            "192.168.4.10",
+            "--token",
+            "join-token",
+        ],
+    )
+    assert result.exit_code == 0
+    mock_add_node.assert_called_once_with(
+        seed_host="192.168.4.10",
+        token="join-token",
+        grpc_port=55051,
+        docker_network_mode="bridge",
+        docker_network_name="mirror-neuron-runtime",
+    )
+
 def test_join_success(mocker):
     mock_start_server = mocker.patch('mn_cli.libs.sys_cmds._start_server')
     result = runner.invoke(
@@ -107,6 +150,30 @@ def test_join_success(mocker):
         redis_port=None,
         docker_network_mode="overlay",
         docker_network_name="mn-overlay",
+    )
+
+def test_join_defaults_to_bridge_network(mocker):
+    mock_start_server = mocker.patch('mn_cli.libs.sys_cmds._start_server')
+    result = runner.invoke(
+        app,
+        [
+            "node",
+            "join",
+            "192.168.1.1",
+            "--token",
+            "join-token",
+        ],
+    )
+    assert result.exit_code == 0
+    mock_start_server.assert_called_once_with(
+        "192.168.1.1",
+        token="join-token",
+        host=None,
+        grpc_port=55051,
+        dist_port=54370,
+        redis_port=None,
+        docker_network_mode="bridge",
+        docker_network_name="mirror-neuron-runtime",
     )
 
 @pytest.mark.parametrize(

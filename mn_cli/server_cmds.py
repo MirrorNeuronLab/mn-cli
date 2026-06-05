@@ -694,6 +694,14 @@ def _docker_network_mode(mode: Optional[str] = None, *, default: str = "bridge")
 def _docker_network_uses_internal_identity(mode: str) -> bool:
     return mode in {"bridge", "overlay"}
 
+def _docker_network_command_args(mode: Optional[str], name: Optional[str]) -> str:
+    if not mode or not _docker_network_uses_internal_identity(mode):
+        return ""
+    network_name = name or DEFAULT_DOCKER_NETWORK_NAME
+    if mode == "bridge" and network_name == DEFAULT_DOCKER_NETWORK_NAME:
+        return ""
+    return f" --network {mode} --docker-network {network_name}"
+
 def _inspect_docker_network(name: str) -> Optional[dict[str, object]]:
     try:
         result = subprocess.run(
@@ -1095,9 +1103,7 @@ def _print_network_seed_ready(
     console.print(f"gRPC: {host}:{grpc_port}")
     console.print(f"Node: {node_name}")
     console.print(f"Token: {token}")
-    network_args = ""
-    if docker_network_mode and _docker_network_uses_internal_identity(docker_network_mode):
-        network_args = f" --network {docker_network_mode} --docker-network {docker_network_name or DEFAULT_DOCKER_NETWORK_NAME}"
+    network_args = _docker_network_command_args(docker_network_mode, docker_network_name)
     console.print(f"\nOn the main box, add this node with:\n  mn node add {host} --token {token}{network_args}")
 
 def _return_running_network_seed(
@@ -2586,9 +2592,7 @@ def _start_server(
     _print_service_endpoints(ip, web_ui_available)
     console.print("\nNetwork token:")
     console.print(f"  {network_token}")
-    network_args = ""
-    if _docker_network_uses_internal_identity(requested_docker_mode):
-        network_args = f" --network {requested_docker_mode} --docker-network {network_name}"
+    network_args = _docker_network_command_args(requested_docker_mode, network_name)
     console.print("Add another box with:")
     console.print(f"  mn node join {advertised_host} --token {network_token}{network_args}")
     console.print("Logs are available at:")
