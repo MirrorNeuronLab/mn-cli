@@ -9,6 +9,11 @@ from mn_cli.main import app
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def no_local_runtime_mode(mocker):
+    return mocker.patch("mn_cli.main.local_runtime_mode", return_value=None)
+
+
 def test_version_prints_installed_package_version(mocker):
     mocker.patch("mn_cli.main.metadata.version", return_value="1.2.3")
     mock_update_prompt = mocker.patch("mn_cli.update_cmds.maybe_prompt_for_update")
@@ -39,6 +44,59 @@ def test_short_version_flag_prints_banner(mocker):
 
     assert result.exit_code == 0
     assert result.stdout == f"{format_banner('MirrorNeuron CLI')}\nversion 1.2.3\n"
+
+
+def test_version_prints_worker_mode(mocker, no_local_runtime_mode):
+    no_local_runtime_mode.return_value = "worker"
+    mocker.patch("mn_cli.main.metadata.version", return_value="1.2.3")
+
+    result = runner.invoke(app, ["--version"])
+
+    assert result.exit_code == 0
+    assert result.stdout == (
+        f"{format_banner('MirrorNeuron CLI')}\n"
+        "version 1.2.3\n"
+        "runtime mode: worker\n"
+    )
+
+
+def test_short_version_prints_worker_mode(mocker, no_local_runtime_mode):
+    no_local_runtime_mode.return_value = "worker"
+    mocker.patch("mn_cli.main.metadata.version", return_value="1.2.3")
+
+    result = runner.invoke(app, ["-v"])
+
+    assert result.exit_code == 0
+    assert result.stdout == (
+        f"{format_banner('MirrorNeuron CLI')}\n"
+        "version 1.2.3\n"
+        "runtime mode: worker\n"
+    )
+
+
+def test_no_args_prints_banner_above_help(mocker):
+    mock_update_prompt = mocker.patch("mn_cli.update_cmds.maybe_prompt_for_update")
+
+    result = runner.invoke(app, [])
+
+    assert result.exit_code == 0
+    assert result.stdout.startswith(f"{format_banner('MirrorNeuron CLI')}\n")
+    assert "Usage:" in result.stdout
+    mock_update_prompt.assert_not_called()
+
+
+def test_no_args_prints_worker_mode_above_help(mocker, no_local_runtime_mode):
+    no_local_runtime_mode.return_value = "worker"
+    mock_update_prompt = mocker.patch("mn_cli.update_cmds.maybe_prompt_for_update")
+
+    result = runner.invoke(app, [])
+
+    assert result.exit_code == 0
+    assert result.stdout.startswith(
+        f"{format_banner('MirrorNeuron CLI')}\nRuntime mode: worker\n"
+    )
+    assert "Usage:" in result.stdout
+    mock_update_prompt.assert_not_called()
 
 
 @pytest.mark.parametrize(

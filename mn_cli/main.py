@@ -5,11 +5,12 @@ from mn_cli import update_cmds
 from mn_cli.banner import format_banner
 from mn_cli.libs import backup_cmds, deployment_cmds, job_cmds, model_cmds, resource_cmds, run_cmds, schedule_cmds, service_cmds, sys_cmds
 from mn_cli.libs.blueprint_cmds import blueprint_app
+from mn_cli.runtime_mode import local_runtime_mode
 
 PACKAGE_NAME = "mirrorneuron-cli"
 FALLBACK_VERSION = "0.0.0"
 
-app = typer.Typer(help="MirrorNeuron CLI")
+app = typer.Typer(help="MirrorNeuron CLI", invoke_without_command=True, no_args_is_help=False)
 job_app = typer.Typer(help="Job commands")
 node_app = typer.Typer(help="Node and cluster commands")
 runtime_app = typer.Typer(help="Local runtime commands")
@@ -23,7 +24,11 @@ def get_version() -> str:
 
 
 def format_version() -> str:
-    return f"{format_banner('MirrorNeuron CLI')}\nversion {get_version()}"
+    lines = [format_banner("MirrorNeuron CLI"), f"version {get_version()}"]
+    mode = _runtime_mode_line(capitalize=False)
+    if mode:
+        lines.append(mode)
+    return "\n".join(lines)
 
 
 def version_callback(value: bool):
@@ -44,7 +49,21 @@ def main(
         help="Show the installed MirrorNeuron CLI version.",
     ),
 ):
+    if ctx.invoked_subcommand is None:
+        typer.echo(format_banner("MirrorNeuron CLI"))
+        mode = _runtime_mode_line()
+        if mode:
+            typer.echo(mode)
+        typer.echo(ctx.get_help())
+        raise typer.Exit()
     update_cmds.maybe_prompt_for_update(ctx.invoked_subcommand)
+
+
+def _runtime_mode_line(*, capitalize: bool = True) -> str | None:
+    if local_runtime_mode() != "worker":
+        return None
+    prefix = "Runtime mode" if capitalize else "runtime mode"
+    return f"{prefix}: worker"
 
 # Blueprint commands
 blueprint_app.command(name="validate")(run_cmds.validate)

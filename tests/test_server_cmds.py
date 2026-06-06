@@ -447,6 +447,8 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     mocker.patch('mn_cli.server_cmds.secrets.token_urlsafe', return_value="seed-token")
     mocker.patch('mn_cli.server_cmds._docker_container_running', return_value=False)
     port_available = mocker.patch('mn_cli.server_cmds._port_available_or_owned', return_value=True)
+    start_api = mocker.patch('mn_cli.server_cmds._start_api_if_installed')
+    start_web_ui = mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed')
 
     commands = []
 
@@ -500,6 +502,8 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     assert "--network-alias" in redis_run
     assert "mn-seed-redis" in redis_run
     assert "-p" not in redis_run
+    start_api.assert_not_called()
+    start_web_ui.assert_not_called()
     port_available.assert_not_called()
 
 def test_start_network_seed_default_disabled_ignores_stale_named_network(mocker, tmp_path, monkeypatch):
@@ -612,6 +616,8 @@ def test_start_worker_node_clears_state_and_starts_worker(mocker, tmp_path):
     stop_runtime = mocker.patch('mn_cli.server_cmds._stop_local_runtime_for_worker')
     refresh_token = mocker.patch('mn_cli.server_cmds._refresh_network_token', return_value="rotated-token")
     start_seed = mocker.patch('mn_cli.server_cmds._start_network_seed', return_value="worker-token")
+    start_api = mocker.patch('mn_cli.server_cmds._start_api_if_installed')
+    start_web_ui = mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed')
     mocker.patch('mn_cli.server_cmds.subprocess.run')
 
     assert _start_worker_node(host="192.168.4.20", grpc_port=50055) == "worker-token"
@@ -630,6 +636,8 @@ def test_start_worker_node_clears_state_and_starts_worker(mocker, tmp_path):
         docker_network_name=None,
         worker_node=True,
     )
+    start_api.assert_not_called()
+    start_web_ui.assert_not_called()
 
 def test_stop_local_runtime_for_worker_stops_compose_and_sidecars(mocker):
     server_cmds.RUNTIME_COMPOSE_FILE.parent.mkdir(parents=True, exist_ok=True)
