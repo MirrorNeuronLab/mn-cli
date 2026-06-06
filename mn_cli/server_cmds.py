@@ -24,6 +24,12 @@ logger = configure_logging("mn-cli", CliConfig.from_env().log_path)
 GRPC_ADMIN_TOKEN_ENV = "MN_GRPC_ADMIN_TOKEN"
 LEGACY_GRPC_ADMIN_TOKEN_ENV = "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN"
 
+def _erl_aflags(dist_port: str | int) -> str:
+    return (
+        f"-connect_all false -kernel prevent_overlapping_partitions false "
+        f"inet_dist_listen_min {dist_port} inet_dist_listen_max {dist_port}"
+    )
+
 def _mn_home() -> Path:
     configured_home = os.getenv("MN_HOME") or os.getenv("MIRROR_NEURON_HOME")
     return Path(configured_home).expanduser() if configured_home else Path.home() / ".mn"
@@ -311,10 +317,7 @@ def _compose_runtime_env(env: dict[str, str], ip: Optional[str]) -> dict[str, st
 
         if compose_env.get("MN_NODE_NAME"):
             dist_port = compose_env.get("MN_DIST_PORT", DEFAULT_DIST_PORT)
-            compose_env.setdefault(
-                "ERL_AFLAGS",
-                f"-kernel inet_dist_listen_min {dist_port} inet_dist_listen_max {dist_port}",
-            )
+            compose_env.setdefault("ERL_AFLAGS", _erl_aflags(dist_port))
 
     return compose_env
 
@@ -967,7 +970,7 @@ def _network_core_env(
             GRPC_ADMIN_TOKEN_ENV: _derive_network_secret(token, "grpc-admin"),
             "ERL_EPMD_ADDRESS": "0.0.0.0",
             "ERL_EPMD_PORT": str(epmd_port),
-            "ERL_AFLAGS": f"-kernel inet_dist_listen_min {dist_port} inet_dist_listen_max {dist_port}",
+            "ERL_AFLAGS": _erl_aflags(dist_port),
         }
     )
     env = _ensure_node_advertisement_settings(env)
@@ -1655,7 +1658,7 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
     }
     updates.update(_runtime_blueprint_env_updates(adjusted))
     if not adjusted.get("ERL_AFLAGS") or LEGACY_DIST_PORT in adjusted.get("ERL_AFLAGS", ""):
-        updates["ERL_AFLAGS"] = f"-kernel inet_dist_listen_min {dist_port} inet_dist_listen_max {dist_port}"
+        updates["ERL_AFLAGS"] = _erl_aflags(dist_port)
 
     adjusted.update(updates)
     _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
@@ -2685,10 +2688,7 @@ def _start_server(
     env.setdefault("MN_EPMD_BIND_HOST", "0.0.0.0")
     env.setdefault("MN_DIST_BIND_HOST", "0.0.0.0")
     env.setdefault("ERL_EPMD_ADDRESS", "0.0.0.0")
-    env.setdefault(
-        "ERL_AFLAGS",
-        f"-kernel inet_dist_listen_min {env['MN_DIST_PORT']} inet_dist_listen_max {env['MN_DIST_PORT']}",
-    )
+    env.setdefault("ERL_AFLAGS", _erl_aflags(env["MN_DIST_PORT"]))
     env = _ensure_node_advertisement_settings(env)
 
     if join_handshake:

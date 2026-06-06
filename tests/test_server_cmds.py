@@ -16,6 +16,7 @@ from mn_cli.server_cmds import (
     _resolve_network_token,
     _refresh_network_token,
     _derive_network_secret,
+    _erl_aflags,
     _start_server,
     _start_network_seed,
     _start_worker_node,
@@ -1288,7 +1289,7 @@ def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
     assert env["MN_NETWORK_JOIN_TOKEN"] == "join-token"
     assert env["MN_COOKIE"] == _derive_network_secret("join-token", "cookie")
     assert env["MN_DIST_PORT"] == "54370"
-    assert env["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 54370 inet_dist_listen_max 54370"
+    assert env["ERL_AFLAGS"] == _erl_aflags("54370")
 
 def test_start_server_preserves_persisted_join_profile_on_restart(mocker, tmp_path):
     compose_file = tmp_path / "docker-compose.yml"
@@ -1478,7 +1479,7 @@ def test_compose_runtime_env_respects_explicit_cluster_names(monkeypatch):
     assert resolved["MN_NODE_NAME"] == "mn2@192.168.4.173"
     assert resolved["MN_CLUSTER_NODES"] == "mn1@192.168.4.10,mn2@192.168.4.173"
     assert resolved["MN_REDIS_URL"] == "redis://192.168.4.10:6379/0"
-    assert resolved["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 4500 inet_dist_listen_max 4500"
+    assert resolved["ERL_AFLAGS"] == _erl_aflags("4500")
 
 def test_compose_runtime_env_replaces_blank_or_stale_cluster_names(mocker):
     mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.99")
@@ -1494,7 +1495,7 @@ def test_compose_runtime_env_replaces_blank_or_stale_cluster_names(mocker):
     assert resolved["MN_NODE_NAME"] == "mirror_neuron@192.168.4.99"
     assert resolved["MN_NODE_ROLE"] == "runtime"
     assert resolved["MN_CLUSTER_NODES"] == "mirror_neuron@192.168.4.173"
-    assert resolved["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 4500 inet_dist_listen_max 4500"
+    assert resolved["ERL_AFLAGS"] == _erl_aflags("4500")
 
 def test_compose_runtime_env_replaces_stale_generated_names_after_ip_change(mocker):
     mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.35")
@@ -1511,7 +1512,7 @@ def test_compose_runtime_env_replaces_stale_generated_names_after_ip_change(mock
     assert resolved["MN_NODE_NAME"] == "mirror_neuron@192.168.4.35"
     assert resolved["MN_NODE_ROLE"] == "runtime"
     assert resolved["MN_CLUSTER_NODES"] == "mirror_neuron@192.168.4.173"
-    assert resolved["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 4500 inet_dist_listen_max 4500"
+    assert resolved["ERL_AFLAGS"] == _erl_aflags("4500")
 
 def test_compose_runtime_env_preserves_docker_alias_identity(mocker):
     mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.35")
@@ -1530,7 +1531,7 @@ def test_compose_runtime_env_preserves_docker_alias_identity(mocker):
     assert resolved["MN_NODE_NAME"] == "mirror_neuron@mn-local"
     assert resolved["MN_NODE_ROLE"] == "runtime"
     assert resolved["MN_CLUSTER_NODES"] == "mirror_neuron@mn-seed"
-    assert resolved["ERL_AFLAGS"] == "-kernel inet_dist_listen_min 4500 inet_dist_listen_max 4500"
+    assert resolved["ERL_AFLAGS"] == _erl_aflags("4500")
 
 def test_compose_port_conflict_resolution_leaves_internal_ports_unchanged(mocker):
     host_probe = mocker.patch("mn_cli.server_cmds._host_port_available")
@@ -1540,7 +1541,7 @@ def test_compose_port_conflict_resolution_leaves_internal_ports_unchanged(mocker
         "MN_EPMD_PORT": "54369",
         "MN_DIST_BIND_HOST": "0.0.0.0",
         "MN_DIST_PORT": "54370",
-        "ERL_AFLAGS": "-kernel inet_dist_listen_min 54370 inet_dist_listen_max 54370",
+        "ERL_AFLAGS": _erl_aflags("54370"),
     }
     resolved = _avoid_local_compose_port_conflicts(env)
 
