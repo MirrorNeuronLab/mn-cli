@@ -2945,6 +2945,12 @@ def _start_server(
                 "MN_DIST_PORT": env["MN_DIST_PORT"],
                 "MN_NODE_DISPLAY_NAME": env["MN_NODE_DISPLAY_NAME"],
                 "MN_NODE_GPU_COUNT": env["MN_NODE_GPU_COUNT"],
+                "MN_NODE_GPU_VENDOR": env.get("MN_NODE_GPU_VENDOR", ""),
+                "MN_NODE_GPU_DRIVER": env.get("MN_NODE_GPU_DRIVER", ""),
+                "MN_NODE_GPU_TYPE": env.get("MN_NODE_GPU_TYPE", ""),
+                "MN_NODE_GPU_NAME": env.get("MN_NODE_GPU_NAME", ""),
+                "MN_NODE_GPU_API_VERSION": env.get("MN_NODE_GPU_API_VERSION", ""),
+                "MN_NODE_GPU_DRIVER_VERSION": env.get("MN_NODE_GPU_DRIVER_VERSION", ""),
                 "MN_NODE_MODELS": env.get("MN_NODE_MODELS", ""),
                 "MN_NODE_RUNTIME_MODELS": env.get("MN_NODE_RUNTIME_MODELS", ""),
                 "MN_DOCKER_NETWORK_MODE": env.get("MN_DOCKER_NETWORK_MODE", "disabled"),
@@ -2996,6 +3002,16 @@ def _start_server(
         cmd.extend(["-e", f"MN_NODE_ROLE={env['MN_NODE_ROLE']}"])
         cmd.extend(["-e", f"MN_NODE_DISPLAY_NAME={env['MN_NODE_DISPLAY_NAME']}"])
         cmd.extend(["-e", f"MN_NODE_GPU_COUNT={env['MN_NODE_GPU_COUNT']}"])
+        for gpu_env_key in (
+            "MN_NODE_GPU_VENDOR",
+            "MN_NODE_GPU_DRIVER",
+            "MN_NODE_GPU_TYPE",
+            "MN_NODE_GPU_NAME",
+            "MN_NODE_GPU_API_VERSION",
+            "MN_NODE_GPU_DRIVER_VERSION",
+        ):
+            if env.get(gpu_env_key):
+                cmd.extend(["-e", f"{gpu_env_key}={env[gpu_env_key]}"])
         cmd.extend(["-e", f"MN_GRPC_PORT={env['MN_GRPC_PORT']}"])
         cmd.extend(["-e", f"MN_DIST_PORT={env['MN_DIST_PORT']}"])
         cmd.extend(["-e", f"MN_RUNS_ROOT={env.get('MN_CONTAINER_RUNS_ROOT', DEFAULT_CONTAINER_RUNS_ROOT)}"])
