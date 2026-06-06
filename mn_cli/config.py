@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,7 +17,9 @@ class CliConfig:
 
     @classmethod
     def from_env(cls) -> "CliConfig":
-        runtime_env = _read_env_file(_mn_home() / "docker-compose.env")
+        mn_home = _mn_home()
+        runtime_env = _read_env_file(mn_home / "docker-compose.env")
+        runtime_endpoint_target = _read_runtime_grpc_target(mn_home / "runtime-endpoints.json")
         core_host = os.getenv("MN_CORE_HOST") or runtime_env.get("MN_CORE_HOST") or "localhost"
         grpc_port = os.getenv("MN_GRPC_PORT") or runtime_env.get("MN_GRPC_PORT") or "55051"
         return cls(
@@ -25,6 +28,7 @@ class CliConfig:
                 os.getenv(
                     "MN_CORE_GRPC_TARGET",
                     runtime_env.get("MN_GRPC_TARGET")
+                    or runtime_endpoint_target
                     or runtime_env.get("MN_CORE_GRPC_TARGET")
                     or f"{core_host}:{grpc_port}",
                 ),
@@ -61,6 +65,17 @@ def _read_env_file(path: Path) -> dict[str, str]:
         key, value = stripped.split("=", 1)
         values[key] = value
     return values
+
+
+def _read_runtime_grpc_target(path: Path) -> str:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+
+    grpc = payload.get("grpc") if isinstance(payload, dict) else None
+    target = grpc.get("target") if isinstance(grpc, dict) else ""
+    return str(target or "").strip()
 
 
 def _timeout() -> float | None:

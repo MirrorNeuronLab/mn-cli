@@ -123,6 +123,45 @@ def test_shared_client_reads_runtime_env_target_and_tokens(monkeypatch, tmp_path
     ]
 
 
+def test_shared_client_prefers_runtime_endpoint_over_stale_core_target(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN", raising=False)
+    state_dir = tmp_path / ".mn"
+    state_dir.mkdir()
+    (state_dir / "docker-compose.env").write_text(
+        "MN_CORE_GRPC_TARGET=localhost:55051\n"
+        "MN_GRPC_AUTH_TOKEN=auth-from-state\n",
+        encoding="utf-8",
+    )
+    (state_dir / "runtime-endpoints.json").write_text(
+        '{"grpc":{"target":"192.168.4.20:55051"}}\n',
+        encoding="utf-8",
+    )
+
+    class CurrentClient:
+        def __init__(self, target=None, timeout=None, auth_token=None, admin_token=None):
+            calls.append(
+                {
+                    "target": target,
+                    "timeout": timeout,
+                    "auth_token": auth_token,
+                    "admin_token": admin_token,
+                }
+            )
+
+    _fresh_shared(monkeypatch, tmp_path, CurrentClient)
+
+    assert calls == [
+        {
+            "target": "192.168.4.20:55051",
+            "timeout": 10.0,
+            "auth_token": "auth-from-state",
+            "admin_token": "",
+        }
+    ]
+
+
 def test_shared_client_reads_refreshed_token_files(monkeypatch, tmp_path):
     calls = []
     state_dir = tmp_path / ".mn"
