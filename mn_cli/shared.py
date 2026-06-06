@@ -14,10 +14,11 @@ from mn_sdk import Client
 from rich.console import Console
 from mn_cli.config import CliConfig
 from mn_cli.logging_config import configure_logging
+from mn_cli.terminal import color_disabled
 
 config = CliConfig.from_env()
 logger = configure_logging("mn-cli", config.log_path)
-console = Console(no_color=config.output_mode == "plain", width=200)
+console = Console(no_color=color_disabled(config.output_mode), width=200)
 
 
 def _client_kwargs() -> dict:

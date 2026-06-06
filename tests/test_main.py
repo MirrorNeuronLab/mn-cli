@@ -82,6 +82,9 @@ def test_no_args_prints_banner_above_help(mocker):
     assert result.exit_code == 0
     assert result.stdout.startswith(f"{format_banner('MirrorNeuron CLI')}\n")
     assert "Usage:" in result.stdout
+    assert "Examples:" in result.stdout
+    assert "mn blueprint list" in result.stdout
+    assert "MN_GRPC_TARGET" in result.stdout
     mock_update_prompt.assert_not_called()
 
 
@@ -114,3 +117,28 @@ def test_removed_root_commands_fail(args):
     result = runner.invoke(app, args)
 
     assert result.exit_code != 0
+
+
+def test_help_supports_short_help_flag():
+    result = runner.invoke(app, ["job", "-h"])
+
+    assert result.exit_code == 0
+    assert "Submit, inspect, control, and recover workflow jobs." in result.stdout
+    assert "mn job list --running-only" in result.stdout
+
+
+def test_command_help_includes_argument_description_and_examples():
+    result = runner.invoke(app, ["job", "submit", "--help"])
+
+    assert result.exit_code == 0
+    assert "Path to a workflow manifest JSON file." in result.stdout
+    assert "Examples:" in result.stdout
+    assert "mn job submit ./manifest.json" in result.stdout
+
+
+def test_unknown_command_suggests_close_match():
+    result = runner.invoke(app, ["job", "sumbit"])
+
+    assert result.exit_code == 2
+    assert "No such command 'sumbit'" in result.stderr
+    assert "Did you mean 'submit'?" in result.stderr

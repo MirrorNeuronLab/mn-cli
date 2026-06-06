@@ -1,6 +1,7 @@
 import os
 import json
 import hashlib
+import ipaddress
 import signal
 import secrets
 import shutil
@@ -197,26 +198,70 @@ def _loopback_host(host: str) -> bool:
     normalized = (host or "").strip().lower()
     return normalized in {"", "localhost", "127.0.0.1", "::1"} or normalized.startswith("127.")
 
-def _detect_lan_ip() -> str:
+def _valid_lan_ip(value: object) -> bool:
+    try:
+        ip = ipaddress.ip_address(str(value or "").strip())
+    except ValueError:
+        return False
+    return (
+        ip.version == 4
+        and not ip.is_loopback
+        and not ip.is_unspecified
+        and not ip.is_multicast
+    )
+
+def _append_lan_ip(addresses: list[str], value: object) -> None:
+    text = str(value or "").strip()
+    if _valid_lan_ip(text) and text not in addresses:
+        addresses.append(text)
+
+def _interface_lan_ips() -> list[str]:
+    addresses: list[str] = []
+    commands = (
+        ["ip", "-o", "-4", "addr", "show", "scope", "global"],
+        ["ifconfig"],
+    )
+    for command in commands:
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=3)
+        except (FileNotFoundError, subprocess.SubprocessError):
+            continue
+        if result.returncode != 0:
+            continue
+        for line in result.stdout.splitlines():
+            parts = line.strip().split()
+            for index, part in enumerate(parts):
+                candidate = ""
+                if part == "inet" and index + 1 < len(parts):
+                    candidate = parts[index + 1]
+                elif "." in part and "/" in part:
+                    candidate = part
+                if candidate:
+                    _append_lan_ip(addresses, candidate.split("/", 1)[0])
+    return addresses
+
+def _detected_lan_ips() -> list[str]:
+    addresses = _interface_lan_ips()
+
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         probe.connect(("10.255.255.255", 1))
-        detected = probe.getsockname()[0]
-        if not _loopback_host(detected):
-            return detected
+        _append_lan_ip(addresses, probe.getsockname()[0])
     except Exception:
         pass
     finally:
         probe.close()
 
     try:
-        detected = socket.gethostbyname(socket.gethostname())
-        if not _loopback_host(detected):
-            return detected
+        _append_lan_ip(addresses, socket.gethostbyname(socket.gethostname()))
     except socket.gaierror:
         pass
 
-    return "127.0.0.1"
+    return addresses
+
+def _detect_lan_ip() -> str:
+    detected = _detected_lan_ips()
+    return detected[0] if detected else "127.0.0.1"
 
 def _parse_gpu_count(value: object) -> Optional[int]:
     try:
@@ -1375,6 +1420,12 @@ def _join_network(
         _ensure_network_docker_network(requested_mode, network_name)
         if _docker_network_uses_internal_identity(requested_mode):
             local_node_name = _docker_node_name(_resolve_node_alias(env))
+    _ensure_local_cluster_runtime_for_join(
+        local_host=local_host,
+        node_name=local_node_name,
+        docker_network_mode=requested_mode,
+        docker_network_name=network_name,
+    )
     handshake = Client(target=target, auth_token="", timeout=10).network_handshake(
         token,
         node_name=local_node_name,
@@ -1404,6 +1455,94 @@ def _join_network(
         console.print(f"Remote Redis URL: {redis_url}")
     console.print("Run 'mn node list' or 'mn resource list' to inspect aggregate cluster resources.")
     return handshake
+
+def _ensure_local_cluster_runtime_for_join(
+    *,
+    local_host: str,
+    node_name: str,
+    docker_network_mode: str,
+    docker_network_name: str,
+) -> None:
+    if not runtime_compose_available():
+        return
+
+    env = _runtime_base_env(True)
+    existing_node_name = str(env.get("MN_NODE_NAME") or "").strip()
+    existing_advertise_host = str(env.get("MN_NETWORK_ADVERTISE_HOST") or "").strip()
+    if (
+        not _node_name_unset(existing_node_name)
+        and existing_node_name == node_name
+        and existing_advertise_host == local_host
+    ):
+        return
+
+    primary_token = _resolve_network_token()
+    console.print(f"=> Enabling cluster mode for this primary node as {node_name}...")
+    env = _ensure_compose_native_port_settings(env)
+    env = _ensure_compose_cluster_bind_settings(env, local_host)
+    if _docker_network_uses_internal_identity(docker_network_mode):
+        env = _ensure_compose_internal_redis_settings(env, token=primary_token)
+    else:
+        env = _ensure_compose_cluster_port_settings(env, token=primary_token, advertised_host=local_host)
+
+    env["MN_NETWORK_JOIN_TOKEN"] = primary_token
+    env["MN_NETWORK_ADVERTISE_HOST"] = local_host
+    env["MN_NODE_NAME"] = node_name
+    env["MN_CLUSTER_NODES"] = node_name
+    env["MN_NODE_ROLE"] = env.get("MN_NODE_ROLE") or "runtime"
+    env["MN_DIST_PORT"] = str(env.get("MN_DIST_PORT") or DEFAULT_DIST_PORT)
+    env["MN_COOKIE"] = _derive_network_secret(primary_token, "cookie")
+    env.setdefault("ERL_AFLAGS", _erl_aflags(env["MN_DIST_PORT"]))
+    env = _ensure_node_advertisement_settings(env)
+
+    _write_env_file_values(
+        RUNTIME_COMPOSE_ENV,
+        {
+            "MN_NETWORK_ADVERTISE_HOST": env["MN_NETWORK_ADVERTISE_HOST"],
+            "MN_NETWORK_JOIN_TOKEN": env["MN_NETWORK_JOIN_TOKEN"],
+            "MN_NODE_NAME": env["MN_NODE_NAME"],
+            "MN_CLUSTER_NODES": env["MN_CLUSTER_NODES"],
+            "MN_NODE_ROLE": env["MN_NODE_ROLE"],
+            "MN_DIST_PORT": env["MN_DIST_PORT"],
+            "MN_COOKIE": env["MN_COOKIE"],
+            "ERL_AFLAGS": env["ERL_AFLAGS"],
+            "MN_DOCKER_NETWORK_MODE": docker_network_mode,
+            "MN_DOCKER_NETWORK_NAME": docker_network_name,
+        },
+    )
+
+    compose_env = _compose_runtime_env(env, None)
+    try:
+        subprocess.run(
+            runtime_compose_cmd("up", "-d", "--force-recreate", "redis", "mirror-neuron-core"),
+            check=True,
+            stdout=subprocess.DEVNULL,
+            env=compose_env,
+        )
+        _wait_for_local_cluster_grpc()
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        console.print("[red]Error: Could not enable cluster mode for the local runtime.[/red]")
+        console.print("Run 'mn runtime stop' and then 'mn runtime start --host <this-box-ip>' before joining the worker.")
+        console.print(f"[dim]{exc}[/dim]")
+        raise typer.Exit(1) from exc
+
+def _wait_for_local_cluster_grpc(timeout_seconds: float = 10.0) -> None:
+    from mn_cli.shared import client as local_client
+
+    deadline = time.time() + timeout_seconds
+    last_error: Optional[Exception] = None
+    while time.time() < deadline:
+        try:
+            local_client.get_system_summary()
+            return
+        except Exception as exc:
+            last_error = exc
+            time.sleep(0.25)
+
+    console.print("[red]Error: Local MirrorNeuron core did not become ready after enabling cluster mode.[/red]")
+    if last_error is not None:
+        console.print(f"[dim]{last_error}[/dim]")
+    raise typer.Exit(1)
 
 def _stop_network_runtime() -> None:
     for container in [NETWORK_CORE_CONTAINER, NETWORK_REDIS_CONTAINER]:

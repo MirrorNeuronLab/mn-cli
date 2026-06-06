@@ -22,6 +22,7 @@ from mn_cli.server_cmds import (
     _start_worker_node,
     _stop_local_runtime_for_worker,
     _join_network,
+    _ensure_local_cluster_runtime_for_join,
     _avoid_local_compose_port_conflicts,
     _detach_local_docker_node_if_matches,
     _ensure_docker_network,
@@ -101,7 +102,12 @@ def test_check_status_missing(tmp_path):
     pid_file = tmp_path / "test.pid"
     assert check_status(pid_file) == 2
 
-def test_detect_lan_ip_prefers_route_selected_non_loopback(mocker):
+def test_detect_lan_ip_uses_first_interface_lan_ip(mocker):
+    mocker.patch("mn_cli.server_cmds._interface_lan_ips", return_value=["192.168.4.35", "10.0.0.12"])
+
+    assert server_cmds._detect_lan_ip() == "192.168.4.35"
+
+def test_detect_lan_ip_falls_back_to_route_selected_non_loopback(mocker):
     class ProbeSocket:
         def connect(self, _target):
             pass
@@ -112,11 +118,30 @@ def test_detect_lan_ip_prefers_route_selected_non_loopback(mocker):
         def close(self):
             pass
 
+    mocker.patch("mn_cli.server_cmds._interface_lan_ips", return_value=[])
     mocker.patch("mn_cli.server_cmds.socket.socket", return_value=ProbeSocket())
     mocker.patch("mn_cli.server_cmds.socket.gethostname", return_value="loopback-host")
     mocker.patch("mn_cli.server_cmds.socket.gethostbyname", return_value="127.0.0.1")
 
     assert server_cmds._detect_lan_ip() == "192.168.4.35"
+
+def test_detected_lan_ips_filters_loopback_and_deduplicates(mocker):
+    class ProbeSocket:
+        def connect(self, _target):
+            pass
+
+        def getsockname(self):
+            return ("192.168.4.35", 50123)
+
+        def close(self):
+            pass
+
+    mocker.patch("mn_cli.server_cmds._interface_lan_ips", return_value=["127.0.0.1", "192.168.4.35"])
+    mocker.patch("mn_cli.server_cmds.socket.socket", return_value=ProbeSocket())
+    mocker.patch("mn_cli.server_cmds.socket.gethostname", return_value="host")
+    mocker.patch("mn_cli.server_cmds.socket.gethostbyname", return_value="10.0.0.12")
+
+    assert server_cmds._detected_lan_ips() == ["192.168.4.35", "10.0.0.12"]
 
 def test_detect_host_gpu_count_uses_macos_system_profiler(mocker):
     class UnameMock:
@@ -877,6 +902,7 @@ def test_join_network_configures_worker_redis_replica(mocker, tmp_path):
     mocker.patch.object(mn_cli.shared.client, "add_node", return_value="connected")
     mocker.patch('mn_cli.server_cmds._redis_command', side_effect=redis_command)
     mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=0)
+    mocker.patch('mn_cli.server_cmds._ensure_local_cluster_runtime_for_join')
 
     _join_network("192.168.4.20", "join-token", grpc_port=50055)
 
@@ -898,6 +924,42 @@ def test_join_network_configures_worker_redis_replica(mocker, tmp_path):
         primary_password,
         ("WAIT", "1", "1000"),
     ) in redis_calls
+
+def test_join_promotes_local_compose_runtime_to_cluster_mode(mocker, tmp_path):
+    compose_file = server_cmds.RUNTIME_COMPOSE_FILE
+    compose_env = server_cmds.RUNTIME_COMPOSE_ENV
+    compose_file.parent.mkdir(parents=True, exist_ok=True)
+    compose_file.write_text("services: {}\n", encoding="utf-8")
+    compose_env.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_NETWORK_JOIN_TOKEN=primary-token\n"
+        "MN_NODE_NAME=\n"
+        "MN_CLUSTER_NODES=\n"
+        "MN_GRPC_BIND_HOST=127.0.0.1\n",
+        encoding="utf-8",
+    )
+    mocker.patch('mn_cli.server_cmds._port_available_or_owned', return_value=True)
+    mocker.patch('mn_cli.server_cmds._published_container_port', return_value=56379)
+    mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=0)
+    mocker.patch('mn_cli.server_cmds._wait_for_local_cluster_grpc')
+    mock_run = mocker.patch('mn_cli.server_cmds.subprocess.run')
+
+    _ensure_local_cluster_runtime_for_join(
+        local_host="192.168.4.20",
+        node_name="mirror_neuron@192.168.4.20",
+        docker_network_mode="disabled",
+        docker_network_name="mirror-neuron-runtime",
+    )
+
+    env_text = compose_env.read_text(encoding="utf-8")
+    assert "MN_NODE_NAME=mirror_neuron@192.168.4.20" in env_text
+    assert "MN_CLUSTER_NODES=mirror_neuron@192.168.4.20" in env_text
+    assert "MN_NETWORK_ADVERTISE_HOST=192.168.4.20" in env_text
+    assert "MN_GRPC_BIND_HOST=0.0.0.0" in env_text
+    mock_run.assert_called_once()
+    assert mock_run.call_args.args[0] == runtime_compose_cmd(
+        "up", "-d", "--force-recreate", "redis", "mirror-neuron-core"
+    )
 
 def test_start_server_already_running(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")

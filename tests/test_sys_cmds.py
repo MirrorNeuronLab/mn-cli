@@ -12,7 +12,13 @@ def test_start_success(mocker):
     result = runner.invoke(app, ["runtime", "start"])
     assert result.exit_code == 0
     assert format_banner("MirrorNeuron Local Runtime") in result.stdout
-    mock_start_server.assert_called_once_with()
+    mock_start_server.assert_called_once_with(host=None, grpc_port=55051)
+
+def test_start_primary_accepts_advertised_host(mocker):
+    mock_start_server = mocker.patch('mn_cli.libs.sys_cmds._start_server')
+    result = runner.invoke(app, ["runtime", "start", "--host", "192.168.4.10"])
+    assert result.exit_code == 0
+    mock_start_server.assert_called_once_with(host="192.168.4.10", grpc_port=55051)
 
 def test_start_worker_node_success(mocker):
     mock_start_worker = mocker.patch('mn_cli.libs.sys_cmds._start_worker_node')
@@ -144,12 +150,15 @@ def test_join_success(mocker):
             "overlay",
             "--docker-network",
             "mn-overlay",
+            "--local-host",
+            "192.168.1.9",
         ],
     )
     assert result.exit_code == 0
     mock_join.assert_called_once_with(
         seed_host="192.168.1.1",
         token="join-token",
+        host="192.168.1.9",
         grpc_port=55051,
         docker_network_mode="overlay",
         docker_network_name="mn-overlay",
@@ -171,6 +180,7 @@ def test_join_defaults_to_bridge_network(mocker):
     mock_join.assert_called_once_with(
         seed_host="192.168.1.1",
         token="join-token",
+        host=None,
         grpc_port=55051,
         docker_network_mode=None,
         docker_network_name="mirror-neuron-runtime",

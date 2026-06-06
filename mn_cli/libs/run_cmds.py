@@ -44,6 +44,7 @@ from mn_cli.libs.blueprint_observability import (
 )
 from mn_cli.libs.blueprint_resources import cleanup_blueprint_host_hooks
 from mn_cli.shared import console, client, logger
+from mn_cli.terminal import use_progress
 from mn_cli.error_handler import handle_cli_error
 from mn_sdk import (
     make_validation_report,
@@ -157,6 +158,7 @@ def _stream_and_format_events(
             TextColumn("[progress.description]{task.description}"),
             TimeElapsedColumn(),
             console=console,
+            disable=not use_progress(),
         ) as progress:
             job_task = progress.add_task("[cyan]Submitting job bundle...", total=None)
 
@@ -250,6 +252,7 @@ def _stream_and_format_events(
                 TextColumn("[progress.description]{task.description}"),
                 TimeElapsedColumn(),
                 console=console,
+                disable=not use_progress(),
             ) as progress:
                 follow_task = progress.add_task(
                     f"[cyan]Following job for {follow_seconds:g}s before detach...",
@@ -483,13 +486,21 @@ def _follow_job_events(
 
 
 def validate(
-    bundle_path: str,
+    bundle_path: Annotated[
+        str,
+        typer.Argument(help="Path to the local job bundle folder."),
+    ],
     output: Annotated[
         str,
         typer.Option("--output", "-o", help="Output format: table or json."),
     ] = "table",
 ):
-    """Check if a job bundle in a local folder is valid to run"""
+    """Validate a local job bundle before submitting it.
+
+    Examples:
+      mn blueprint validate ./bundle
+      mn blueprint validate ./bundle --output json
+    """
     try:
         output_format = _normalize_validation_output(output)
         bundle_dir = Path(bundle_path)

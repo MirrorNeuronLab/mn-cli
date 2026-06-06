@@ -2,15 +2,28 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from typing import Annotated
+
 from rich.table import Table
 from mn_cli.shared import console, client, logger
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.blueprint_resources import cleanup_blueprint_host_hooks, cleanup_web_ui_process
+
 import typer
 
 
-def submit(manifest_path: str):
-    """Submit a new workflow job"""
+def submit(
+    manifest_path: Annotated[
+        str,
+        typer.Argument(help="Path to a workflow manifest JSON file."),
+    ],
+):
+    """Submit a workflow manifest to the runtime.
+
+    Examples:
+      mn job submit ./manifest.json
+      mn job submit ./examples/tax-review/manifest.json
+    """
     try:
         with open(manifest_path, "r") as f:
             manifest = f.read()
@@ -22,8 +35,17 @@ def submit(manifest_path: str):
         handle_cli_error(e, console, 'submit')
 
 
-def status(job_id: str):
-    """Get the status of a job"""
+def status(
+    job_id: Annotated[
+        str,
+        typer.Argument(help="Job ID returned by submit, run, or schedule output."),
+    ],
+):
+    """Print the raw job status payload as JSON.
+
+    Examples:
+      mn job status job-123
+    """
     try:
         job_json = client.get_job(job_id)
         job = json.loads(job_json)
@@ -32,8 +54,13 @@ def status(job_id: str):
         handle_cli_error(e, console, 'status')
 
 
-def list_jobs(running_only: bool = typer.Option(False, "--running-only", help="Only show running jobs")):
-    """List all jobs"""
+def list_jobs(running_only: bool = typer.Option(False, "--running-only", help="Only show active jobs.")):
+    """List jobs in a readable table.
+
+    Examples:
+      mn job list
+      mn job list --running-only
+    """
     try:
         jobs_json = client.list_jobs()
         data = json.loads(jobs_json)
@@ -67,8 +94,14 @@ def clear():
         handle_cli_error(e, console, 'clear')
 
 
-def cancel(job_id: str):
-    """Cancel a running job"""
+def cancel(
+    job_id: Annotated[str, typer.Argument(help="Job ID to cancel.")],
+):
+    """Cancel a running job.
+
+    Examples:
+      mn job cancel job-123
+    """
     try:
         status = client.cancel_job(job_id)
         _cleanup_cancelled_job_web_ui(job_id)

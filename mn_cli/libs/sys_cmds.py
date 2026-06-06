@@ -36,7 +36,7 @@ def start(
     host: Optional[str] = typer.Option(
         None,
         "--host",
-        help="Advertised host or IP for this worker node.",
+        help="Advertised host or IP for this node.",
     ),
     grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Core gRPC port."),
 ):
@@ -45,12 +45,17 @@ def start(
     if worker_node:
         _start_worker_node(host=host, grpc_port=grpc_port)
     else:
-        _start_server()
+        _start_server(host=host, grpc_port=grpc_port)
 
 def join(
     host: str,
     token: str = typer.Option(..., "--token", help="Worker token printed by mn runtime start --worker-node."),
     grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Worker node gRPC port."),
+    local_host: Optional[str] = typer.Option(
+        None,
+        "--local-host",
+        help="Advertised host or IP for this primary node. Defaults to the first detected LAN IP.",
+    ),
     dist_port: int = typer.Option(
         int(DEFAULT_DIST_PORT),
         "--dist-port",
@@ -78,6 +83,7 @@ def join(
     _join_network(
         seed_host=host,
         token=token,
+        host=local_host,
         grpc_port=grpc_port,
         docker_network_mode=docker_network_mode,
         docker_network_name=docker_network_name,

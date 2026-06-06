@@ -9,11 +9,52 @@ from mn_cli.runtime_mode import local_runtime_mode
 
 PACKAGE_NAME = "mirrorneuron-cli"
 FALLBACK_VERSION = "0.0.0"
+CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
+ROOT_HELP = """Run and operate MirrorNeuron workflows, blueprints, jobs, and local runtime services.
 
-app = typer.Typer(help="MirrorNeuron CLI", invoke_without_command=True, no_args_is_help=False)
-job_app = typer.Typer(help="Job commands")
-node_app = typer.Typer(help="Node and cluster commands")
-runtime_app = typer.Typer(help="Local runtime commands")
+Examples:
+  mn blueprint list
+  mn blueprint run <blueprint-id>
+  mn job status <job-id>
+  mn runtime health --json
+
+Notes:
+  Runtime connection is read from MN_GRPC_TARGET, MN_CORE_GRPC_TARGET, or ~/.mn/runtime-endpoints.json.
+  Set NO_COLOR=1 or MN_CLI_OUTPUT=plain for plain terminal output.
+"""
+JOB_HELP = """Submit, inspect, control, and recover workflow jobs.
+
+Examples:
+  mn job submit ./manifest.json
+  mn job list --running-only
+  mn job monitor <job-id>
+  mn job result <job-id>
+"""
+NODE_HELP = """Inspect cluster nodes and manage node membership or maintenance.
+
+Examples:
+  mn node list
+  mn node drain <node-name> --reason maintenance --wait
+  mn node join <host> --token <token>
+"""
+RUNTIME_HELP = """Start, stop, update, and diagnose the local MirrorNeuron runtime.
+
+Examples:
+  mn runtime start
+  mn runtime health
+  mn runtime health --json
+  mn runtime stop
+"""
+
+app = typer.Typer(
+    help=ROOT_HELP,
+    invoke_without_command=True,
+    no_args_is_help=False,
+    context_settings=CONTEXT_SETTINGS,
+)
+job_app = typer.Typer(help=JOB_HELP, context_settings=CONTEXT_SETTINGS)
+node_app = typer.Typer(help=NODE_HELP, context_settings=CONTEXT_SETTINGS)
+runtime_app = typer.Typer(help=RUNTIME_HELP, context_settings=CONTEXT_SETTINGS)
 
 
 def get_version() -> str:
