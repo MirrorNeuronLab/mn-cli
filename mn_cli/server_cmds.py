@@ -1202,7 +1202,7 @@ def _start_network_seed(
     host = (host or _detect_lan_ip()).strip() or "127.0.0.1"
     env = _runtime_base_env(runtime_compose_available())
     requested_mode = _docker_network_mode(docker_network_mode, default="disabled")
-    container_network_mode = "bridge" if requested_mode == "disabled" else requested_mode
+    container_network_mode = requested_mode
     use_internal_identity = _docker_network_uses_internal_identity(requested_mode)
     network_name = _docker_network_name(docker_network_name)
     node_alias = _resolve_node_alias(env)
@@ -1217,7 +1217,11 @@ def _start_network_seed(
         if not external_redis_url and not use_internal_identity
         else None
     )
-    redis_url = external_redis_url or _network_redis_url(token, redis_alias, 6379)
+    redis_url = external_redis_url or (
+        _network_redis_url(token, redis_alias, 6379)
+        if use_internal_identity
+        else _network_redis_url(token, host, selected_redis_port or REDIS_CONTAINER_PORT)
+    )
     redis_public_host, redis_public_port_value = _host_port_from_target(
         external_redis_url,
         host,

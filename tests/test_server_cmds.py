@@ -500,6 +500,54 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     assert "-p" not in redis_run
     port_available.assert_not_called()
 
+def test_start_network_seed_default_disabled_ignores_stale_named_network(mocker, tmp_path, monkeypatch):
+    monkeypatch.delenv("MN_REDIS_URL", raising=False)
+    monkeypatch.setenv("MN_NODE_ALIAS", "mn-worker")
+    token_file = tmp_path / "network.token"
+    mocker.patch('mn_cli.server_cmds.DIR', tmp_path)
+    mocker.patch('mn_cli.server_cmds.NETWORK_TOKEN_FILE', token_file)
+    mocker.patch('mn_cli.server_cmds.NETWORK_REDIS_ENV_FILE', tmp_path / "network-redis.env")
+    mocker.patch('mn_cli.server_cmds.secrets.token_urlsafe', return_value="worker-token")
+    mocker.patch('mn_cli.server_cmds._docker_container_running', return_value=False)
+    mocker.patch('mn_cli.server_cmds._port_available_or_owned', return_value=True)
+
+    commands = []
+
+    def mock_run(cmd, **kwargs):
+        commands.append(cmd)
+        m = mocker.Mock()
+        m.returncode = 0
+        m.stdout = (
+            json.dumps([{"Driver": "overlay", "Attachable": False}])
+            if cmd[:3] == ["docker", "network", "inspect"]
+            else "false\n"
+        )
+        return m
+
+    mocker.patch('mn_cli.server_cmds.subprocess.run', side_effect=mock_run)
+
+    assert _start_network_seed(
+        host="192.168.4.173",
+        grpc_port=50055,
+        dist_port=4500,
+    ) == "worker-token"
+
+    assert all(cmd[:3] != ["docker", "network", "inspect"] for cmd in commands)
+    assert all(cmd[:3] != ["docker", "network", "create"] for cmd in commands)
+    redis_run = next(cmd for cmd in commands if len(cmd) > 4 and cmd[:4] == ["docker", "run", "-d", "--name"] and cmd[4] == "mirror-neuron-network-redis")
+    core_run = next(cmd for cmd in commands if len(cmd) > 4 and cmd[:4] == ["docker", "run", "-d", "--name"] and cmd[4] == "mirror-neuron-network-core")
+    assert "--network" not in redis_run
+    assert "--network" not in core_run
+    assert f"0.0.0.0:{server_cmds.REDIS_DYNAMIC_PORT_START}:6379" in redis_run
+    assert (
+        f"MN_REDIS_URL=redis://:{_derive_network_secret('worker-token', 'redis')}"
+        f"@192.168.4.173:{server_cmds.REDIS_DYNAMIC_PORT_START}/0"
+    ) in core_run
+    assert "MN_NETWORK_REDIS_HOST=192.168.4.173" in core_run
+    assert f"MN_NETWORK_REDIS_PORT={server_cmds.REDIS_DYNAMIC_PORT_START}" in core_run
+    assert "MN_DOCKER_NETWORK_MODE=disabled" in core_run
+    assert "MN_NODE_NAME=mirror_neuron@192.168.4.173" in core_run
+
 def test_start_network_seed_already_exposed_prints_existing_token(mocker):
     output = StringIO()
     mocker.patch('mn_cli.server_cmds.console', Console(file=output, force_terminal=False, width=120))
