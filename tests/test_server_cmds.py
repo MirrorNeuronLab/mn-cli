@@ -1481,6 +1481,18 @@ def test_compose_runtime_env_respects_explicit_cluster_names(monkeypatch):
     assert resolved["MN_REDIS_URL"] == "redis://192.168.4.10:6379/0"
     assert resolved["ERL_AFLAGS"] == _erl_aflags("4500")
 
+def test_compose_runtime_env_upgrades_stale_erl_aflags(monkeypatch):
+    env = {
+        "MN_NODE_NAME": "mn2@192.168.4.173",
+        "MN_CLUSTER_NODES": "mn1@192.168.4.10",
+        "MN_DIST_PORT": "4500",
+        "ERL_AFLAGS": "-kernel inet_dist_listen_min 4500 inet_dist_listen_max 4500",
+    }
+
+    resolved = _compose_runtime_env(env, ip="192.168.4.10")
+
+    assert resolved["ERL_AFLAGS"] == _erl_aflags("4500")
+
 def test_compose_runtime_env_replaces_blank_or_stale_cluster_names(mocker):
     mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.99")
     env = {

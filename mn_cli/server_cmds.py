@@ -30,6 +30,17 @@ def _erl_aflags(dist_port: str | int) -> str:
         f"inet_dist_listen_min {dist_port} inet_dist_listen_max {dist_port}"
     )
 
+def _erl_aflags_needs_update(value: Optional[str], dist_port: str | int) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return True
+    return (
+        "-connect_all false" not in text
+        or "prevent_overlapping_partitions false" not in text
+        or f"inet_dist_listen_min {dist_port}" not in text
+        or f"inet_dist_listen_max {dist_port}" not in text
+    )
+
 def _mn_home() -> Path:
     configured_home = os.getenv("MN_HOME") or os.getenv("MIRROR_NEURON_HOME")
     return Path(configured_home).expanduser() if configured_home else Path.home() / ".mn"
@@ -317,7 +328,8 @@ def _compose_runtime_env(env: dict[str, str], ip: Optional[str]) -> dict[str, st
 
         if compose_env.get("MN_NODE_NAME"):
             dist_port = compose_env.get("MN_DIST_PORT", DEFAULT_DIST_PORT)
-            compose_env.setdefault("ERL_AFLAGS", _erl_aflags(dist_port))
+            if _erl_aflags_needs_update(compose_env.get("ERL_AFLAGS"), dist_port):
+                compose_env["ERL_AFLAGS"] = _erl_aflags(dist_port)
 
     return compose_env
 
@@ -1657,7 +1669,7 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
         "OPENSHELL_GATEWAY_ENDPOINT": openshell_endpoint,
     }
     updates.update(_runtime_blueprint_env_updates(adjusted))
-    if not adjusted.get("ERL_AFLAGS") or LEGACY_DIST_PORT in adjusted.get("ERL_AFLAGS", ""):
+    if _erl_aflags_needs_update(adjusted.get("ERL_AFLAGS"), dist_port):
         updates["ERL_AFLAGS"] = _erl_aflags(dist_port)
 
     adjusted.update(updates)
