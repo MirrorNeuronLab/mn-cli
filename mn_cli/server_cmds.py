@@ -2378,7 +2378,7 @@ def _print_service_endpoints(ip: Optional[str], web_ui_available: bool):
     console.print(table)
     runtime_env = _runtime_base_env(runtime_compose_available())
     docker_mode = _docker_network_mode(runtime_env.get("MN_DOCKER_NETWORK_MODE"), default="disabled")
-    if runtime_compose_available() or _docker_network_uses_internal_identity(docker_mode):
+    if _docker_network_uses_internal_identity(docker_mode):
         console.print("[dim]Redis and Erlang cluster traffic use Docker internal networking.[/dim]")
 
 def _start_web_ui_if_installed(runtime_env: Optional[dict[str, str]] = None) -> bool:
@@ -2519,8 +2519,6 @@ def _start_server(
     env = _runtime_base_env(compose_runtime)
     persisted_join_profile_before_network = bool(compose_runtime and not ip and _persisted_join_profile(env))
     mode_override = docker_network_mode or os.getenv("MN_DOCKER_NETWORK_MODE", "").strip()
-    if not mode_override and not ip and not persisted_join_profile_before_network:
-        mode_override = str(env.get("MN_DOCKER_NETWORK_MODE") or "").strip()
     requested_docker_mode = _docker_network_mode(
         mode_override or None,
         default="disabled",

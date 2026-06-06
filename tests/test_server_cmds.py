@@ -1120,6 +1120,8 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
     compose_file.write_text("services: {}\n")
     compose_env.write_text(
         "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_DOCKER_NETWORK_MODE=bridge\n"
+        "MN_DOCKER_NETWORK_NAME=mirror-neuron-runtime\n"
         "MN_NODE_NAME=\n"
         "MN_CLUSTER_NODES=nonode@nohost\n"
     )
@@ -1169,6 +1171,7 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
 
     commands = [call[0] for call in calls]
     assert runtime_compose_cmd("up", "-d") in commands
+    assert all(cmd[:3] != ["docker", "network", "inspect"] for cmd in commands)
     assert ["docker", "network", "create", "--driver", "bridge", "mirror-neuron-runtime"] not in commands
     assert all(cmd[:3] != ["docker", "run", "-d"] for cmd in commands)
     compose_call = next(item for item in calls if item[0] == runtime_compose_cmd("up", "-d"))
@@ -2002,7 +2005,7 @@ def test_print_service_endpoints_shows_compose_native_ports(mocker, monkeypatch,
     assert "56379" not in rendered
     assert "auth required" not in rendered
     assert "Context engine" not in rendered
-    assert "Redis and Erlang cluster traffic use Docker internal networking." in rendered
+    assert "Redis and Erlang cluster traffic use Docker internal networking." not in rendered
     assert "OpenShell" not in rendered
     assert "http://127.0.0.1:58080" not in rendered
     assert "Erlang EPMD" not in rendered
@@ -2037,5 +2040,5 @@ def test_print_service_endpoints_shows_advertised_cluster_host(mocker, monkeypat
     assert "192.168.4.173:54369" not in rendered
     assert "192.168.4.173:54370" not in rendered
     assert "redis://192.168.4.173:56379/0" not in rendered
-    assert "Redis and Erlang cluster traffic use Docker internal networking." in rendered
+    assert "Redis and Erlang cluster traffic use Docker internal networking." not in rendered
     assert "0.0.0.0" not in rendered
