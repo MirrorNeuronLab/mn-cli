@@ -391,6 +391,28 @@ def test_runtime_grpc_tokens_from_running_container_reads_normal_and_admin_token
         "MN_GRPC_ADMIN_TOKEN": "container-admin-token",
     }
 
+def test_runtime_grpc_tokens_from_running_container_refreshes_compose_env(mocker):
+    compose_env = server_cmds.RUNTIME_COMPOSE_ENV
+    compose_env.parent.mkdir(parents=True, exist_ok=True)
+    compose_env.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_GRPC_AUTH_TOKEN=stale-auth-token\n"
+        "MN_GRPC_ADMIN_TOKEN=stale-admin-token\n",
+        encoding="utf-8",
+    )
+    tokens = {
+        "MN_GRPC_AUTH_TOKEN": "running-auth-token",
+        "MN_GRPC_ADMIN_TOKEN": "running-admin-token",
+    }
+
+    server_cmds._ensure_runtime_grpc_tokens(tokens, persist_compose=True)
+
+    assert (server_cmds.DIR / "grpc_auth.token").read_text().strip() == "running-auth-token"
+    assert (server_cmds.DIR / "grpc_admin.token").read_text().strip() == "running-admin-token"
+    compose_text = compose_env.read_text(encoding="utf-8")
+    assert "MN_GRPC_AUTH_TOKEN=running-auth-token" in compose_text
+    assert "MN_GRPC_ADMIN_TOKEN=running-admin-token" in compose_text
+
 def test_resolve_network_token_generates_and_reuses_persistent_token(tmp_path, mocker):
     token_dir = tmp_path / "state"
     mocker.patch('mn_cli.server_cmds.DIR', token_dir)
@@ -423,13 +445,24 @@ def test_resolve_network_token_seeds_missing_file_from_compose_env(mocker):
 def test_refresh_network_token_rotates_only_when_requested(mocker):
     server_cmds.NETWORK_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
     server_cmds.NETWORK_TOKEN_FILE.write_text("old-token\n")
+    (server_cmds.DIR / "grpc_auth.token").write_text("stable-auth-token\n")
+    (server_cmds.DIR / "grpc_admin.token").write_text("stable-admin-token\n")
     server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
-    server_cmds.RUNTIME_COMPOSE_ENV.write_text("MN_NETWORK_JOIN_TOKEN=old-token\n")
+    server_cmds.RUNTIME_COMPOSE_ENV.write_text(
+        "MN_NETWORK_JOIN_TOKEN=old-token\n"
+        "MN_GRPC_AUTH_TOKEN=stable-auth-token\n"
+        "MN_GRPC_ADMIN_TOKEN=stable-admin-token\n"
+    )
     mocker.patch('mn_cli.server_cmds.secrets.token_urlsafe', return_value="new-token")
 
     assert _refresh_network_token() == "new-token"
     assert server_cmds.NETWORK_TOKEN_FILE.read_text().strip() == "new-token"
-    assert "MN_NETWORK_JOIN_TOKEN=new-token" in server_cmds.RUNTIME_COMPOSE_ENV.read_text()
+    assert (server_cmds.DIR / "grpc_auth.token").read_text().strip() == "stable-auth-token"
+    assert (server_cmds.DIR / "grpc_admin.token").read_text().strip() == "stable-admin-token"
+    compose_text = server_cmds.RUNTIME_COMPOSE_ENV.read_text()
+    assert "MN_NETWORK_JOIN_TOKEN=new-token" in compose_text
+    assert "MN_GRPC_AUTH_TOKEN=stable-auth-token" in compose_text
+    assert "MN_GRPC_ADMIN_TOKEN=stable-admin-token" in compose_text
 
 def test_resolve_node_alias_generates_and_reuses_stable_alias(mocker):
     mocker.patch("mn_cli.server_cmds.secrets.token_hex", return_value="a1b2c3d4")
@@ -538,6 +571,10 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     assert "192.168.4.10:4369:4369" not in core_run
     assert "192.168.4.10:4500:4500" not in core_run
     assert f"MN_COOKIE={_derive_network_secret('seed-token', 'cookie')}" in core_run
+    assert f"MN_GRPC_AUTH_TOKEN={_derive_network_secret('seed-token', 'grpc-auth')}" not in core_run
+    assert f"MN_GRPC_ADMIN_TOKEN={_derive_network_secret('seed-token', 'grpc-admin')}" not in core_run
+    assert any(value.startswith("MN_GRPC_AUTH_TOKEN=") and value != "MN_GRPC_AUTH_TOKEN=" for value in core_run)
+    assert any(value.startswith("MN_GRPC_ADMIN_TOKEN=") and value != "MN_GRPC_ADMIN_TOKEN=" for value in core_run)
     assert "MN_NETWORK_ONLY=true" in core_run
     assert "MN_REDIS_FORWARD_PRIMARY=true" in core_run
     assert "MN_NODE_ALIAS=mn-seed" in core_run
@@ -681,7 +718,7 @@ def test_start_worker_node_clears_state_and_starts_worker(mocker, tmp_path):
     assert _start_worker_node(host="192.168.4.20", grpc_port=50055) == "worker-token"
 
     stop_runtime.assert_called_once_with()
-    refresh_token.assert_called_once_with()
+    refresh_token.assert_not_called()
     assert not network_redis_dir.exists()
     assert not server_cmds.NETWORK_REDIS_ENV_FILE.exists()
     start_seed.assert_called_once_with(
@@ -959,6 +996,12 @@ def test_join_network_configures_worker_redis_replica(mocker, tmp_path, capsys):
         "192.168.4.20",
         56380,
         worker_password,
+        ("CONFIG", "SET", "requirepass", primary_password),
+    ) in redis_calls
+    assert (
+        "192.168.4.20",
+        56380,
+        primary_password,
         ("REPLICAOF", "192.168.4.99", "56379"),
     ) in redis_calls
     assert (
@@ -1033,6 +1076,101 @@ def test_start_server_already_running(mocker, tmp_path):
     mock_start_web.assert_called_once()
     mock_write_endpoints.assert_called_once()
     mock_print_endpoints.assert_called_once_with(None, True)
+
+def test_start_server_join_compose_imports_primary_grpc_tokens(mocker, tmp_path):
+    compose_file = server_cmds.RUNTIME_COMPOSE_FILE
+    compose_env = server_cmds.RUNTIME_COMPOSE_ENV
+    compose_file.parent.mkdir(parents=True, exist_ok=True)
+    compose_file.write_text("services: {}\n", encoding="utf-8")
+    compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n", encoding="utf-8")
+    redis_password = _derive_network_secret("join-token", "redis")
+
+    mocker.patch(
+        'mn_cli.server_cmds._handshake_with_main_node',
+        return_value={
+            "node_name": "mirror_neuron@192.168.4.20",
+            "redis_host": "192.168.4.20",
+            "redis_port": 56379,
+            "redis_url": f"redis://:{redis_password}@192.168.4.20:56379/0",
+            "grpc_auth_token": "primary-auth-token",
+            "grpc_admin_token": "primary-admin-token",
+        },
+    )
+    mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.99")
+    mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=0)
+    mocker.patch('mn_cli.server_cmds._start_api_if_installed')
+    mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed', return_value=False)
+    mocker.patch('mn_cli.server_cmds._print_service_endpoints')
+    mocker.patch('mn_cli.server_cmds._write_runtime_endpoints_file', return_value={"api": {}})
+    mock_run = mocker.patch('mn_cli.server_cmds.subprocess.run', return_value=mocker.Mock(returncode=0, stdout="false\n"))
+
+    _start_server(ip="192.168.4.20", token="join-token")
+
+    compose_up = next(call for call in mock_run.call_args_list if call.args[0] == runtime_compose_cmd("up", "-d"))
+    assert compose_up.kwargs["env"]["MN_GRPC_AUTH_TOKEN"] == "primary-auth-token"
+    assert compose_up.kwargs["env"]["MN_GRPC_ADMIN_TOKEN"] == "primary-admin-token"
+    assert (server_cmds.DIR / "grpc_auth.token").read_text().strip() == "primary-auth-token"
+    assert (server_cmds.DIR / "grpc_admin.token").read_text().strip() == "primary-admin-token"
+    compose_text = compose_env.read_text(encoding="utf-8")
+    assert "MN_GRPC_AUTH_TOKEN=primary-auth-token" in compose_text
+    assert "MN_GRPC_ADMIN_TOKEN=primary-admin-token" in compose_text
+
+def test_start_server_join_docker_imports_primary_grpc_tokens(mocker, tmp_path):
+    redis_password = _derive_network_secret("join-token", "redis")
+    commands = []
+
+    def mock_run(cmd, **kwargs):
+        commands.append(cmd)
+        if cmd[:3] == ["docker", "inspect", "-f"]:
+            return mocker.Mock(returncode=0, stdout="false\n")
+        return mocker.Mock(returncode=0, stdout="")
+
+    mocker.patch(
+        'mn_cli.server_cmds._handshake_with_main_node',
+        return_value={
+            "node_name": "mirror_neuron@192.168.4.20",
+            "redis_host": "192.168.4.20",
+            "redis_port": 56379,
+            "redis_url": f"redis://:{redis_password}@192.168.4.20:56379/0",
+            "grpc_auth_token": "primary-auth-token",
+            "grpc_admin_token": "primary-admin-token",
+        },
+    )
+    mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.99")
+    mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=0)
+    mocker.patch('mn_cli.server_cmds._start_api_if_installed')
+    mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed', return_value=False)
+    mocker.patch('mn_cli.server_cmds._print_service_endpoints')
+    mocker.patch('mn_cli.server_cmds._write_runtime_endpoints_file', return_value={"api": {}})
+    mocker.patch('mn_cli.server_cmds.subprocess.run', side_effect=mock_run)
+
+    _start_server(ip="192.168.4.20", token="join-token")
+
+    docker_run = next(cmd for cmd in commands if cmd[:3] == ["docker", "run", "-d"])
+    assert "MN_GRPC_AUTH_TOKEN=primary-auth-token" in docker_run
+    assert "MN_GRPC_ADMIN_TOKEN=primary-admin-token" in docker_run
+    assert (server_cmds.DIR / "grpc_auth.token").read_text().strip() == "primary-auth-token"
+    assert (server_cmds.DIR / "grpc_admin.token").read_text().strip() == "primary-admin-token"
+
+def test_start_network_seed_uses_primary_persisted_grpc_tokens(mocker, monkeypatch):
+    monkeypatch.setenv("MN_GRPC_AUTH_TOKEN", "primary-auth-token")
+    monkeypatch.setenv("MN_GRPC_ADMIN_TOKEN", "primary-admin-token")
+    mocker.patch('mn_cli.server_cmds._docker_container_running', return_value=False)
+    mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.20")
+    mocker.patch('mn_cli.server_cmds._ensure_network_docker_network')
+    mocker.patch('mn_cli.server_cmds._find_available_published_port', return_value=56379)
+    mocker.patch('mn_cli.server_cmds._start_network_redis')
+    start_core = mocker.patch('mn_cli.server_cmds._start_network_core')
+    mocker.patch('mn_cli.server_cmds._print_network_seed_ready')
+
+    token = _start_network_seed(host="192.168.4.20", grpc_port=50055)
+
+    assert token
+    env = start_core.call_args.args[0]
+    assert env["MN_GRPC_AUTH_TOKEN"] == "primary-auth-token"
+    assert env["MN_GRPC_ADMIN_TOKEN"] == "primary-admin-token"
+    assert (server_cmds.DIR / "grpc_auth.token").read_text().strip() == "primary-auth-token"
+    assert (server_cmds.DIR / "grpc_admin.token").read_text().strip() == "primary-admin-token"
 
 def test_start_server_existing_api_starts_missing_compose_core(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
@@ -1453,6 +1591,8 @@ def test_start_server_preserves_persisted_join_profile_on_restart(mocker, tmp_pa
         "MN_CLUSTER_NODES=mirror_neuron@192.168.4.35\n"
         "MN_NETWORK_REDIS_HOST=192.168.4.35\n"
         "MN_NETWORK_REDIS_PORT=56381\n"
+        "MN_GRPC_AUTH_TOKEN=stable-auth-token\n"
+        "MN_GRPC_ADMIN_TOKEN=stable-admin-token\n"
         f"MN_REDIS_URL=redis://:{redis_password}@192.168.4.35:56381/0\n"
         f"MN_CONTEXT_REDIS_URL=redis://:{redis_password}@192.168.4.35:56381/1\n"
     )
@@ -1485,11 +1625,15 @@ def test_start_server_preserves_persisted_join_profile_on_restart(mocker, tmp_pa
     compose_call = next(item for item in calls if item[0] == runtime_compose_cmd("up", "-d"))
     env = compose_call[1]["env"]
     assert env["MN_NETWORK_JOIN_TOKEN"] == "join-token"
+    assert env["MN_GRPC_AUTH_TOKEN"] == "stable-auth-token"
+    assert env["MN_GRPC_ADMIN_TOKEN"] == "stable-admin-token"
     assert env["MN_NODE_NAME"] == "mirror_neuron@192.168.4.173"
     assert env["MN_CLUSTER_NODES"] == "mirror_neuron@192.168.4.35"
     assert env["MN_NETWORK_REDIS_HOST"] == "192.168.4.35"
     assert env["MN_NETWORK_REDIS_PORT"] == "56381"
     assert env["MN_REDIS_URL"] == f"redis://:{redis_password}@192.168.4.35:56381/0"
+    assert (server_cmds.DIR / "grpc_auth.token").read_text().strip() == "stable-auth-token"
+    assert (server_cmds.DIR / "grpc_admin.token").read_text().strip() == "stable-admin-token"
     ensure_redis.assert_not_called()
 
 def test_start_server_refreshes_generated_node_name_for_joined_runtime_ip_change(mocker, tmp_path):

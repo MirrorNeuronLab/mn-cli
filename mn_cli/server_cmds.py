@@ -732,6 +732,18 @@ def _ensure_runtime_grpc_tokens(env: dict[str, str], *, persist_compose: bool = 
         )
     return resolved
 
+def _grpc_tokens_from_handshake(handshake: Optional[dict]) -> dict[str, str]:
+    if not handshake:
+        return {}
+    tokens: dict[str, str] = {}
+    auth_token = str(handshake.get("grpc_auth_token") or "").strip()
+    admin_token = str(handshake.get("grpc_admin_token") or "").strip()
+    if auth_token:
+        tokens["MN_GRPC_AUTH_TOKEN"] = auth_token
+    if admin_token:
+        tokens[GRPC_ADMIN_TOKEN_ENV] = admin_token
+    return tokens
+
 def _runtime_grpc_tokens_from_running_container() -> dict[str, str]:
     tokens: dict[str, str] = {}
     for container_name in (LOCAL_CORE_CONTAINER, NETWORK_CORE_CONTAINER):
@@ -1147,8 +1159,8 @@ def _network_core_env(
             "MN_REDIS_URL": redis_url,
             "MN_DIST_PORT": str(dist_port),
             "MN_COOKIE": _derive_network_secret(token, "cookie"),
-            "MN_GRPC_AUTH_TOKEN": _derive_network_secret(token, "grpc-auth"),
-            GRPC_ADMIN_TOKEN_ENV: _derive_network_secret(token, "grpc-admin"),
+            "MN_GRPC_AUTH_TOKEN": _resolve_grpc_auth_token(),
+            GRPC_ADMIN_TOKEN_ENV: _resolve_grpc_admin_token(),
             "ERL_EPMD_ADDRESS": "0.0.0.0",
             "ERL_EPMD_PORT": str(epmd_port),
             "ERL_AFLAGS": _erl_aflags(dist_port),
@@ -1331,6 +1343,10 @@ def _return_running_network_seed(
         console.print(f"Expected a token in {NETWORK_TOKEN_FILE}.")
         raise typer.Exit(1)
 
+    running_tokens = _runtime_grpc_tokens_from_running_container()
+    if running_tokens:
+        _ensure_runtime_grpc_tokens(running_tokens, persist_compose=runtime_compose_available())
+
     advertised_host = _running_network_host(host, container_names)
     node_name = _docker_container_env_value(container_names[0], "MN_NODE_NAME") if container_names else None
     docker_mode = _docker_container_env_value(container_names[0], "MN_DOCKER_NETWORK_MODE") if container_names else None
@@ -1403,7 +1419,6 @@ def _start_worker_node(
     console.print("=> Preparing this box as a clean MirrorNeuron worker node...")
     _stop_local_runtime_for_worker()
     _clear_worker_redis_state()
-    _refresh_network_token()
     return _start_network_seed(
         host=host,
         grpc_port=grpc_port,
@@ -1503,8 +1518,10 @@ def _start_network_seed(
         redis_public_host=redis_public_host,
         redis_public_port=redis_public_port,
     )
+    env["MN_GRPC_AUTH_TOKEN"] = _resolve_grpc_auth_token()
+    env[GRPC_ADMIN_TOKEN_ENV] = _resolve_grpc_admin_token()
 
-    _ensure_runtime_grpc_tokens(env, persist_compose=runtime_compose_available())
+    env = _ensure_runtime_grpc_tokens(env, persist_compose=runtime_compose_available())
 
     console.print("=> Starting MirrorNeuron core-only exposed node...")
     _start_network_core(
@@ -2219,6 +2236,15 @@ def _configure_worker_redis_replica(
             worker_redis_host,
             worker_redis_port,
             worker_password,
+            "CONFIG",
+            "SET",
+            "requirepass",
+            primary_password,
+        )
+        _redis_command(
+            worker_redis_host,
+            worker_redis_port,
+            primary_password,
             "REPLICAOF",
             primary_host,
             str(primary_port),
@@ -2810,10 +2836,9 @@ def _start_server(
         console.print("[yellow]=> MirrorNeuron API is already running; checking runtime sidecars...[/yellow]")
         compose_runtime = runtime_compose_available()
         env = _runtime_base_env(compose_runtime)
-        if not compose_runtime:
-            for key, value in _runtime_grpc_tokens_from_running_container().items():
-                if value and not str(env.get(key) or "").strip():
-                    env[key] = value
+        for key, value in _runtime_grpc_tokens_from_running_container().items():
+            if value:
+                env[key] = value
         env = _ensure_runtime_grpc_tokens(env, persist_compose=compose_runtime)
         if compose_runtime:
             env = _ensure_compose_native_port_settings(env)
@@ -2893,6 +2918,7 @@ def _start_server(
     )
     if join_handshake:
         _validate_remote_redis_details(join_handshake, ip, network_token)
+        env.update(_grpc_tokens_from_handshake(join_handshake))
     reconnecting_joined_node = bool(compose_runtime and not ip and _persisted_join_profile(env))
     if compose_runtime:
         env = _ensure_compose_native_port_settings(env)

@@ -1,11 +1,12 @@
 import json
 import os
 import subprocess
+import grpc
 from pathlib import Path
 from typing import Annotated
 
 from rich.table import Table
-from mn_cli.shared import console, client, logger
+from mn_cli.shared import console, client, config, logger
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.blueprint_resources import cleanup_blueprint_host_hooks, cleanup_web_ui_process
 from mn_cli.libs.ui import print_confirmed, print_success_confirmation
@@ -93,6 +94,11 @@ def list_jobs(running_only: bool = typer.Option(False, "--running-only", help="O
 def clear():
     """Remove all job records except running ones"""
     try:
+        admin_token = str(getattr(client, "admin_token", "") or config.grpc_admin_token or "").strip()
+        if not admin_token:
+            console.print("[red]Error: No local MN_GRPC_ADMIN_TOKEN was found for job clear.[/red]")
+            console.print("Restart the runtime so tokens are regenerated, or set MN_GRPC_ADMIN_TOKEN from the primary box.")
+            return
         cleared_count = client.clear_jobs()
         logger.info("Cleared %d non-running jobs", cleared_count)
         print_success_confirmation(
@@ -101,6 +107,17 @@ def clear():
             details={"Jobs cleared": f"{cleared_count} non-running"},
             next_steps="mn job list",
         )
+    except grpc.RpcError as e:
+        if e.code() == grpc.StatusCode.PERMISSION_DENIED and "MN_GRPC_ADMIN_TOKEN" in str(e.details()):
+            console.print("[red]Error: ClearJobs admin authorization failed.[/red]")
+            console.print(
+                "The local admin token exists, but the running core rejected it. "
+                "This usually means the CLI/API is pointed at a runtime with different cluster tokens, "
+                "or the core was started from a different MN_HOME."
+            )
+            console.print("Restart the runtime from the primary token state, then retry: mn runtime stop; mn runtime start")
+            return
+        handle_cli_error(e, console, 'clear')
     except Exception as e:
         handle_cli_error(e, console, 'clear')
 
