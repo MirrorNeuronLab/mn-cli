@@ -19,6 +19,7 @@ from mn_cli.server_cmds import (
     _start_server,
     _start_network_seed,
     _start_worker_node,
+    _stop_local_runtime_for_worker,
     _join_network,
     _avoid_local_compose_port_conflicts,
     _detach_local_docker_node_if_matches,
@@ -607,7 +608,7 @@ def test_start_worker_node_clears_state_and_starts_worker(mocker, tmp_path):
     server_cmds.NETWORK_REDIS_ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
     server_cmds.NETWORK_REDIS_ENV_FILE.write_text("MN_REDIS_PORT=56379\n")
 
-    stop_runtime = mocker.patch('mn_cli.server_cmds._stop_network_runtime')
+    stop_runtime = mocker.patch('mn_cli.server_cmds._stop_local_runtime_for_worker')
     refresh_token = mocker.patch('mn_cli.server_cmds._refresh_network_token', return_value="rotated-token")
     start_seed = mocker.patch('mn_cli.server_cmds._start_network_seed', return_value="worker-token")
     mocker.patch('mn_cli.server_cmds.subprocess.run')
@@ -628,6 +629,28 @@ def test_start_worker_node_clears_state_and_starts_worker(mocker, tmp_path):
         docker_network_name=None,
         worker_node=True,
     )
+
+def test_stop_local_runtime_for_worker_stops_compose_and_sidecars(mocker):
+    server_cmds.RUNTIME_COMPOSE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n")
+    server_cmds.RUNTIME_COMPOSE_ENV.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
+    server_cmds.API_WATCHDOG_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    server_cmds.API_WATCHDOG_PID_FILE.write_text("1234")
+    server_cmds.WEB_UI_PID_FILE.write_text("5678")
+
+    stop_network = mocker.patch('mn_cli.server_cmds._stop_network_runtime')
+    run = mocker.patch('mn_cli.server_cmds.subprocess.run')
+    mocker.patch('mn_cli.server_cmds.os.kill')
+    kill = mocker.patch('mn_cli.server_cmds.kill_tree')
+
+    _stop_local_runtime_for_worker()
+
+    stop_network.assert_called_once_with()
+    run.assert_any_call(runtime_compose_cmd("down"), stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+    assert call(1234) in kill.call_args_list
+    assert call(5678) in kill.call_args_list
+    assert not server_cmds.API_WATCHDOG_PID_FILE.exists()
+    assert not server_cmds.WEB_UI_PID_FILE.exists()
 
 def test_add_node_uses_handshake_and_local_core(mocker, tmp_path):
     import mn_sdk

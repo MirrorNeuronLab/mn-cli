@@ -1150,12 +1150,39 @@ def _compose_project_name() -> str:
         or "mirror-neuron"
     )
 
+def _stop_local_runtime_for_worker() -> None:
+    _stop_network_runtime()
+    if runtime_compose_available():
+        subprocess.run(runtime_compose_cmd("down"), stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+    else:
+        subprocess.run(["docker", "rm", "-f", LOCAL_CORE_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+
+    for pid_file, _name in [
+        *web_ui_pid_files(),
+        *api_pid_files(),
+        (BEAM_PID_FILE, "Legacy Core Service"),
+    ]:
+        if not pid_file.exists():
+            continue
+        try:
+            pid = int(pid_file.read_text().strip())
+            try:
+                os.kill(pid, 0)
+                kill_tree(pid)
+            except OSError:
+                pass
+        except ValueError:
+            pass
+        try:
+            pid_file.unlink(missing_ok=True)
+        except OSError:
+            logger.debug("Failed to remove runtime pid file %s during worker start", pid_file, exc_info=True)
+
 def _clear_worker_redis_state() -> None:
     shutil.rmtree(DIR / "network-redis", ignore_errors=True)
     NETWORK_REDIS_ENV_FILE.unlink(missing_ok=True)
 
     if runtime_compose_available():
-        subprocess.run(runtime_compose_cmd("down"), stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
         subprocess.run(
             ["docker", "volume", "rm", "-f", f"{_compose_project_name()}_redis-data"],
             stderr=subprocess.DEVNULL,
@@ -1171,7 +1198,7 @@ def _start_worker_node(
     docker_network_name: Optional[str] = None,
 ) -> str:
     console.print("=> Preparing this box as a clean MirrorNeuron worker node...")
-    _stop_network_runtime()
+    _stop_local_runtime_for_worker()
     _clear_worker_redis_state()
     _refresh_network_token()
     return _start_network_seed(
