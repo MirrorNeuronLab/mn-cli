@@ -365,6 +365,17 @@ def _container_publishes_port(container_name: str, target_port: int, published_p
             continue
     return False
 
+def _docker_container_running(container_name: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return False
+    return result.stdout.strip().lower() == "true"
+
 def _published_container_port(container_name: str, target_port: int) -> Optional[int]:
     if not _docker_container_running(container_name):
         return None
@@ -2525,6 +2536,14 @@ def _start_server(
         env = _ensure_runtime_grpc_tokens(env, persist_compose=compose_runtime)
         if compose_runtime:
             env = _ensure_compose_native_port_settings(env)
+            if not _docker_container_running("mirror-neuron-core"):
+                console.print("=> MirrorNeuron Core is not running; starting Docker runtime (Compose)...")
+                try:
+                    subprocess.run(runtime_compose_cmd("up", "-d"), check=True, stdout=subprocess.DEVNULL, env=env)
+                    console.print("   [green][Started][/green] Docker runtime (Compose project: mirror-neuron)")
+                except (FileNotFoundError, subprocess.CalledProcessError):
+                    console.print("[red]Failed to start MirrorNeuron Docker runtime.[/red]")
+                    raise typer.Exit(1)
         env.setdefault("MN_API_HOST", _api_host())
         env.setdefault("MN_API_PORT", DEFAULT_API_PORT)
         env.setdefault("MN_WEB_UI_HOST", _web_ui_host())

@@ -916,6 +916,37 @@ def test_start_server_already_running(mocker, tmp_path):
     mock_write_endpoints.assert_called_once()
     mock_print_endpoints.assert_called_once_with(None, True)
 
+def test_start_server_existing_api_starts_missing_compose_core(mocker, tmp_path):
+    mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
+    (tmp_path / "api.pid").write_text("1234")
+    mocker.patch('mn_cli.server_cmds.os.kill') # check_status returns 0
+
+    compose_file = server_cmds.RUNTIME_COMPOSE_FILE
+    compose_env = server_cmds.RUNTIME_COMPOSE_ENV
+    compose_file.parent.mkdir(parents=True, exist_ok=True)
+    compose_file.write_text("services: {}\n", encoding="utf-8")
+    compose_env.write_text("MN_GRPC_PORT=55051\n", encoding="utf-8")
+    mocker.patch('mn_cli.server_cmds._docker_container_running', return_value=False)
+    mocker.patch('mn_cli.server_cmds._start_api_if_installed')
+    mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed', return_value=False)
+    mocker.patch('mn_cli.server_cmds._write_runtime_endpoints_file', return_value={"api": {}})
+    mocker.patch('mn_cli.server_cmds._print_service_endpoints')
+
+    calls = []
+
+    def mock_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        result = mocker.Mock()
+        result.stdout = ""
+        return result
+
+    mocker.patch('mn_cli.server_cmds.subprocess.run', side_effect=mock_run)
+
+    _start_server(host="192.168.4.20")
+
+    compose_up = next(item for item in calls if item[0] == runtime_compose_cmd("up", "-d"))
+    assert compose_up[1]["env"]["ERL_AFLAGS"] == _erl_aflags("54370")
+
 def test_join_still_errors_when_local_api_already_running(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
     (tmp_path / "api.pid").write_text("1234")
