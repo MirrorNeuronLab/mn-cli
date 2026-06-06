@@ -1705,10 +1705,11 @@ def _ensure_compose_cluster_port_settings(
 ) -> dict[str, str]:
     adjusted = dict(env)
     publish_host = _network_publish_host(advertised_host)
+    env_redis_port = os.getenv("MN_REDIS_PORT", "").strip()
     selected_redis_port = _resolve_published_redis_port(
         bind_host=publish_host,
-        configured_port=redis_port if redis_port is not None else adjusted.get("MN_REDIS_PORT"),
-        explicit=redis_port is not None or bool(str(adjusted.get("MN_REDIS_PORT") or "").strip()),
+        configured_port=redis_port if redis_port is not None else (env_redis_port or adjusted.get("MN_REDIS_PORT")),
+        explicit=redis_port is not None or bool(env_redis_port),
         owner_container=COMPOSE_REDIS_CONTAINER,
     )
     redis_password = _derive_network_secret(token, "redis")
