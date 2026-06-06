@@ -559,7 +559,10 @@ def test_resource_list_success(mocker):
     assert '"cpu_cores": 12' in result.stdout
     assert '"gpu_count": 2' in result.stdout
     assert '"gpu_memory_total_mb": 48000.0' in result.stdout
+    assert '"gpu_memory_total_gb": 46.88' in result.stdout
     assert '"memory_gb": 24.0' in result.stdout
+    assert '"memory_total_gb": 24.0' in result.stdout
+    assert '"memory_available_gb": 0.0' in result.stdout
     assert '"name": "mn1"' in result.stdout
     assert '"native_ports"' in result.stdout
     mock_resource.assert_called_once()
@@ -568,7 +571,18 @@ def test_resource_list_success(mocker):
 def test_resource_set_success(mocker):
     mock_set = mocker.patch(
         "mn_cli.libs.resource_cmds.client.set_resource",
-        return_value=json.dumps({"limits": {"cpu": 50, "gpu": 75}}),
+        return_value=json.dumps(
+            {
+                "limits": {"cpu": 50, "gpu": 75},
+                "totals": {
+                    "cpu_cores": 8,
+                    "gpu_count": 1,
+                    "gpu_memory_total_mb": 24_576,
+                    "gpu_memory_free_mb": 20_480,
+                    "memory_gb": 32.0,
+                },
+            }
+        ),
         create=True,
     )
     result = runner.invoke(app, ["resource", "set", "--cpu", "50", "--gpu", "75"])
@@ -576,6 +590,8 @@ def test_resource_set_success(mocker):
     assert "Resource set successful." in result.stdout
     assert "CPU: 50" in result.stdout
     assert "GPU: 75" in result.stdout
+    assert '"gpu_memory_total_gb": 24.0' in result.stdout
+    assert '"memory_total_gb": 32.0' in result.stdout
     mock_set.assert_called_once_with({"cpu": 50, "gpu": 75})
 
 
