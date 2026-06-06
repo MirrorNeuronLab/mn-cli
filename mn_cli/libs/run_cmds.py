@@ -1132,8 +1132,26 @@ def run(
             help="Start or register the blueprint Web UI for this run.",
         ),
     ] = False,
+    auto_schedule: Annotated[
+        bool,
+        typer.Option(
+            "--auto-schedule",
+            help="Queue the run until the cluster has the required agent resources.",
+        ),
+    ] = False,
+    schedule: Annotated[
+        Optional[str],
+        typer.Option(
+            "--schedule",
+            help="Create a schedule instead of running now. Accepts JSON, a delay like 30m, or an ISO run_at timestamp.",
+        ),
+    ] = None,
 ):
     """Run a catalog blueprint, or a local folder with --folder."""
+    if auto_schedule and schedule:
+        console.print("[red]Error: pass either --auto-schedule or --schedule, not both.[/red]")
+        raise typer.Exit(1)
+
     if folder and target:
         console.print("[red]Error: pass either a blueprint ID or --folder, not both.[/red]")
         raise typer.Exit(1)
@@ -1146,6 +1164,8 @@ def run(
             force=force,
             detached=detached,
             web_ui=web_ui,
+            auto_schedule=auto_schedule,
+            schedule=schedule,
         )
         return
 
@@ -1174,6 +1194,8 @@ def run(
         force=force,
         detached=detached,
         web_ui=web_ui,
+        auto_schedule=auto_schedule,
+        schedule=schedule,
     )
 
 
@@ -1185,6 +1207,8 @@ def _run_local_folder(
     force: bool,
     detached: bool = False,
     web_ui: bool = False,
+    auto_schedule: bool = False,
+    schedule: Optional[str] = None,
 ) -> None:
     bundle_dir = Path(folder).expanduser()
     manifest = _load_manifest_for_local_run(bundle_dir)
@@ -1198,6 +1222,8 @@ def _run_local_folder(
             force=force,
             detached=detached,
             web_ui=web_ui,
+            auto_schedule=auto_schedule,
+            schedule=schedule,
         )
         return
 
@@ -1211,6 +1237,8 @@ def _run_local_folder(
         force=force,
         detached=detached,
         web_ui=web_ui,
+        auto_schedule=auto_schedule,
+        schedule=schedule,
     )
 
 
@@ -1230,6 +1258,58 @@ def _is_python_source_manifest(manifest: dict[str, Any]) -> bool:
     return metadata.get("python_source_mode") is True or bool(metadata.get("python_workflow"))
 
 
+def _run_schedule_attrs(*, auto_schedule: bool, schedule: Optional[str]) -> Optional[dict[str, Any]]:
+    if auto_schedule and schedule:
+        console.print("[red]Error: pass either --auto-schedule or --schedule, not both.[/red]")
+        raise typer.Exit(1)
+    if auto_schedule:
+        return {
+            "kind": "resource_wait",
+            "retry_interval_ms": int(os.getenv("MN_RESOURCE_WAIT_RETRY_MS", "30000")),
+            "metadata": {"requested_by": "mn run --auto-schedule"},
+        }
+    if not schedule:
+        return None
+
+    raw = schedule.strip()
+    if not raw:
+        raise typer.BadParameter("--schedule cannot be empty")
+    if raw.startswith("{"):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise typer.BadParameter("--schedule JSON must be valid") from exc
+        if not isinstance(parsed, dict):
+            raise typer.BadParameter("--schedule JSON must be an object")
+        return parsed
+    if raw.lower() in {"auto", "resource", "resource_wait", "resource-wait"}:
+        return {
+            "kind": "resource_wait",
+            "retry_interval_ms": int(os.getenv("MN_RESOURCE_WAIT_RETRY_MS", "30000")),
+            "metadata": {"requested_by": "mn run --schedule"},
+        }
+    if re.fullmatch(r"\d+(\.\d+)?(ms|s|m|h|d)?", raw.lower()):
+        return {
+            "kind": "delayed",
+            "delay_ms": _duration_ms_for_schedule(raw),
+            "metadata": {"requested_by": "mn run --schedule"},
+        }
+    return {
+        "kind": "delayed",
+        "run_at": raw,
+        "metadata": {"requested_by": "mn run --schedule"},
+    }
+
+
+def _duration_ms_for_schedule(value: str) -> int:
+    raw = str(value or "").strip().lower()
+    units = {"ms": 1, "s": 1000, "m": 60_000, "h": 3_600_000, "d": 86_400_000}
+    for suffix, multiplier in units.items():
+        if raw.endswith(suffix):
+            return int(float(raw[: -len(suffix)]) * multiplier)
+    return int(float(raw) * 1000)
+
+
 def run_bundle(
     bundle_path: str,
     *,
@@ -1240,6 +1320,8 @@ def run_bundle(
     force: bool = False,
     detached: bool = False,
     web_ui: bool = False,
+    auto_schedule: bool = False,
+    schedule: Optional[str] = None,
 ):
     """Run a bundle after applying optional runtime metadata and environment."""
     pre_launch_process: subprocess.Popen[Any] | None = None
@@ -1372,6 +1454,18 @@ def run_bundle(
         stage_local_input_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
         manifest = json.dumps(manifest_dict)
         submitted_manifest = manifest_dict
+
+        schedule_attrs = _run_schedule_attrs(auto_schedule=auto_schedule, schedule=schedule)
+        if schedule_attrs is not None:
+            result_json = client.create_schedule(
+                manifest,
+                payloads,
+                schedule=schedule_attrs,
+                source={"cli": "run", "bundle": bundle_dir.name},
+            )
+            result = json.loads(result_json)
+            console.print_json(data=result)
+            return
 
         blueprint_run_dir = (
             _blueprint_run_dir(blueprint_run_id, env_overrides)

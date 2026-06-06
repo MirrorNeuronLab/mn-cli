@@ -428,6 +428,29 @@ def test_run_success(mocker, tmp_path, monkeypatch):
     mock_stream.assert_called_once_with("job-123", follow=True, timeout=None, heartbeat_interval_ms=5000)
 
 
+def test_run_auto_schedule_creates_resource_wait_schedule(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="run-scheduled")
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job')
+    mock_create_schedule = mocker.patch(
+        'mn_cli.libs.run_cmds.client.create_schedule',
+        return_value=json.dumps({"schedule_id": "schedule-123", "kind": "resource_wait"}),
+    )
+
+    bundle_dir = tmp_path / "run_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text('{"nodes": []}')
+    (bundle_dir / "payloads").mkdir()
+
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--auto-schedule"])
+
+    assert result.exit_code == 0
+    assert '"schedule_id": "schedule-123"' in result.stdout
+    mock_submit.assert_not_called()
+    mock_create_schedule.assert_called_once()
+    assert mock_create_schedule.call_args.kwargs["schedule"]["kind"] == "resource_wait"
+
+
 @requires_blueprint_support
 def test_run_shows_runtime_web_ui_url_in_submit_and_detach_panels(
     mocker, tmp_path, monkeypatch

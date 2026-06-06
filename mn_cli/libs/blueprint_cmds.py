@@ -168,6 +168,8 @@ def _run_resolved_blueprint(
     force: bool,
     detached: bool = False,
     web_ui: bool = False,
+    auto_schedule: bool = False,
+    schedule: Optional[str] = None,
 ) -> None:
     shared_run_id = run_id or _make_blueprint_run_id(blueprint_id)
     _print_blueprint_run_phase(1, 4, "Prepare blueprint bundle")
@@ -210,6 +212,8 @@ def _run_resolved_blueprint(
         force=force,
         detached=detached,
         web_ui=web_ui,
+        auto_schedule=auto_schedule,
+        schedule=schedule,
     )
 
 
@@ -456,6 +460,8 @@ def run_catalog_blueprint(
     force: bool = False,
     detached: bool = False,
     web_ui: bool = False,
+    auto_schedule: bool = False,
+    schedule: Optional[str] = None,
 ) -> None:
     """Run a catalog blueprint by name through the shared blueprint runner."""
     _reject_local_blueprint_path(blueprint_name)
@@ -502,6 +508,8 @@ def run_catalog_blueprint(
         force=force,
         detached=detached,
         web_ui=web_ui,
+        auto_schedule=auto_schedule,
+        schedule=schedule,
     )
 
 
@@ -513,6 +521,8 @@ def run_local_blueprint_folder(
     force: bool = False,
     detached: bool = False,
     web_ui: bool = False,
+    auto_schedule: bool = False,
+    schedule: Optional[str] = None,
 ) -> None:
     """Run a local Python source blueprint folder through the shared blueprint runner."""
     blueprint_dir = Path(folder).expanduser()
@@ -531,6 +541,8 @@ def run_local_blueprint_folder(
         force=force,
         detached=detached,
         web_ui=web_ui,
+        auto_schedule=auto_schedule,
+        schedule=schedule,
     )
 
 
@@ -608,8 +620,26 @@ def blueprint_run(
             help="Start or register the blueprint Web UI for this run.",
         ),
     ] = False,
+    auto_schedule: Annotated[
+        bool,
+        typer.Option(
+            "--auto-schedule",
+            help="Queue the run until the cluster has the required agent resources.",
+        ),
+    ] = False,
+    schedule: Annotated[
+        Optional[str],
+        typer.Option(
+            "--schedule",
+            help="Create a schedule instead of running now. Accepts JSON, a delay like 30m, or an ISO run_at timestamp.",
+        ),
+    ] = None,
 ):
     """Run a catalog blueprint, or a local folder with --folder."""
+    if auto_schedule and schedule:
+        console.print("[red]Error: pass either --auto-schedule or --schedule, not both.[/red]")
+        raise typer.Exit(1)
+
     if folder and target:
         console.print("[red]Error: pass either a blueprint ID or --folder, not both.[/red]")
         raise typer.Exit(1)
@@ -622,6 +652,8 @@ def blueprint_run(
             force=force,
             detached=detached,
             web_ui=web_ui,
+            auto_schedule=auto_schedule,
+            schedule=schedule,
         )
         return
 
@@ -648,6 +680,8 @@ def blueprint_run(
         force=force,
         detached=detached,
         web_ui=web_ui,
+        auto_schedule=auto_schedule,
+        schedule=schedule,
     )
 
 
