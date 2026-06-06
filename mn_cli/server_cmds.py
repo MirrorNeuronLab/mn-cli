@@ -241,7 +241,9 @@ def _interface_lan_ips() -> list[str]:
     return addresses
 
 def _detected_lan_ips() -> list[str]:
-    addresses = _interface_lan_ips()
+    addresses: list[str] = []
+    for address in _interface_lan_ips():
+        _append_lan_ip(addresses, address)
 
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:

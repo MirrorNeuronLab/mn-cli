@@ -693,6 +693,7 @@ def test_add_node_uses_handshake_and_local_core(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.DIR', tmp_path)
     mocker.patch('mn_cli.server_cmds._docker_container_running', return_value=False)
     mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=1)
+    mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.99")
     redis_password = _derive_network_secret("join-token", "redis")
 
     class StubClient:
@@ -1046,6 +1047,7 @@ def test_start_server_no_docker(mocker, tmp_path):
 
 def test_start_server_docker_start_fails(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
+    mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.99")
     
     def mock_run(cmd, **kwargs):
         if cmd[1] == "inspect":
