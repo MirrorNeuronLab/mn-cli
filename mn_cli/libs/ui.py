@@ -154,7 +154,7 @@ def generate_live_layout(job_id: str, data: Dict[str, Any], state: Optional[JobM
     header.add_row(title, meta)
 
     subtitle = Text(
-        f"Job {job_id}  |  Graph {job.get('graph_id', 'N/A')}  |  Live {summary.get('live?', False)}  {spinner}",
+        f"Job {job_id}  |  Workflow {job.get('graph_id', 'N/A')}  |  Live {summary.get('live?', False)}  {spinner}",
         style="dim",
     )
 

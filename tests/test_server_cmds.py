@@ -49,6 +49,13 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_NODE_GPU", raising=False)
     monkeypatch.delenv("MN_NODE_GPU_COUNT", raising=False)
     monkeypatch.delenv("MN_NODE_DISPLAY_NAME", raising=False)
+    monkeypatch.delenv("MN_NODE_CPU_MODEL", raising=False)
+    monkeypatch.delenv("MN_NODE_GPU_VENDOR", raising=False)
+    monkeypatch.delenv("MN_NODE_GPU_DRIVER", raising=False)
+    monkeypatch.delenv("MN_NODE_GPU_TYPE", raising=False)
+    monkeypatch.delenv("MN_NODE_GPU_NAME", raising=False)
+    monkeypatch.delenv("MN_NODE_GPU_API_VERSION", raising=False)
+    monkeypatch.delenv("MN_NODE_GPU_DRIVER_VERSION", raising=False)
     monkeypatch.delenv("MN_NODE_ALIAS", raising=False)
     monkeypatch.delenv("MN_DOCKER_NETWORK_MODE", raising=False)
     monkeypatch.delenv("MN_DOCKER_NETWORK_NAME", raising=False)
@@ -176,6 +183,30 @@ def test_detect_host_gpu_count_uses_linux_nvidia_smi(mocker):
     mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
 
     assert server_cmds._detect_host_gpu_count() == 1
+
+def test_ensure_node_advertisement_adds_cpu_and_gpu_profile(mocker):
+    mocker.patch("mn_cli.server_cmds._node_display_name", return_value="lab-box")
+    mocker.patch("mn_cli.server_cmds._detect_host_cpu_model", return_value="AMD Ryzen AI Max+ 395")
+    mocker.patch("mn_cli.server_cmds._detect_host_gpu_count", return_value=1)
+    mocker.patch(
+        "mn_cli.server_cmds._detect_host_gpu_profile",
+        return_value={
+            "MN_NODE_GPU_VENDOR": "nvidia",
+            "MN_NODE_GPU_DRIVER": "cuda",
+            "MN_NODE_GPU_TYPE": "nvidia/gpu",
+            "MN_NODE_GPU_NAME": "NVIDIA GB10",
+            "MN_NODE_GPU_API_VERSION": "12.6",
+        },
+    )
+
+    env = server_cmds._ensure_node_advertisement_settings({})
+
+    assert env["MN_NODE_DISPLAY_NAME"] == "lab-box"
+    assert env["MN_NODE_CPU_MODEL"] == "AMD Ryzen AI Max+ 395"
+    assert env["MN_NODE_GPU_COUNT"] == "1"
+    assert env["MN_NODE_GPU_VENDOR"] == "nvidia"
+    assert env["MN_NODE_GPU_NAME"] == "NVIDIA GB10"
+    assert env["MN_NODE_GPU_API_VERSION"] == "12.6"
 
 def test_docker_network_command_args_omit_default_bridge_network():
     assert server_cmds._docker_network_command_args("bridge", "mirror-neuron-runtime") == ""
@@ -956,6 +987,7 @@ def test_join_promotes_local_compose_runtime_to_cluster_mode(mocker, tmp_path):
     )
     mocker.patch('mn_cli.server_cmds._port_available_or_owned', return_value=True)
     mocker.patch('mn_cli.server_cmds._published_container_port', return_value=56379)
+    mocker.patch('mn_cli.server_cmds._detect_host_cpu_model', return_value="")
     mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=0)
     mocker.patch('mn_cli.server_cmds._wait_for_local_cluster_grpc')
     mock_run = mocker.patch('mn_cli.server_cmds.subprocess.run')

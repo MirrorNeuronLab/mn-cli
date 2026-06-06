@@ -302,7 +302,7 @@ def recovery_requires_review(job: dict) -> bool:
 def recovery_table(time_column: str, include_review: bool = False) -> Table:
     table = Table()
     table.add_column("Job ID", no_wrap=True)
-    table.add_column("Graph ID", no_wrap=True)
+    table.add_column("Workflow ID", no_wrap=True)
     table.add_column("Status", no_wrap=True)
     table.add_column("Recovery", no_wrap=True)
     if include_review:

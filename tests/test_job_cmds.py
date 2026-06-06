@@ -541,7 +541,10 @@ def test_resource_list_success(mocker):
                     {
                         "name": "mn1",
                         "cpu_cores": 8,
+                        "cpu_model": "AMD Ryzen AI Max+ 395",
                         "gpu_count": 2,
+                        "gpu_model": "NVIDIA RTX 4090",
+                        "gpu_models": ["NVIDIA RTX 4090", "NVIDIA RTX 6000 Ada"],
                         "gpu_memory_total_mb": 48_000,
                         "gpu_memory_free_mb": 32_000,
                         "memory_gb": 16.0,
@@ -564,6 +567,9 @@ def test_resource_list_success(mocker):
     assert '"memory_total_gb": 24.0' in result.stdout
     assert '"memory_available_gb": 0.0' in result.stdout
     assert '"name": "mn1"' in result.stdout
+    assert '"cpu_model": "AMD Ryzen AI Max+ 395"' in result.stdout
+    assert '"gpu_models": [' in result.stdout
+    assert '"NVIDIA RTX 4090"' in result.stdout
     assert '"native_ports"' in result.stdout
     mock_resource.assert_called_once()
 

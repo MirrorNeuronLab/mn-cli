@@ -2,6 +2,7 @@ import os
 import json
 import hashlib
 import ipaddress
+import re
 import signal
 import secrets
 import shutil
@@ -316,6 +317,105 @@ def _detect_host_gpu_count() -> int:
 
     return 0
 
+def _command_stdout(command: list[str], timeout: int = 5) -> str:
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return ""
+    return result.stdout if result.returncode == 0 else ""
+
+def _detect_host_cpu_model() -> str:
+    explicit = os.getenv("MN_NODE_CPU_MODEL", "").strip()
+    if explicit:
+        return explicit
+
+    system_name = os.uname().sysname
+    if system_name == "Darwin":
+        return _command_stdout(["sysctl", "-n", "machdep.cpu.brand_string"]).strip()
+
+    if system_name == "Linux":
+        try:
+            cpuinfo = Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return ""
+        for line in cpuinfo.splitlines():
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            if key.strip().lower() in {"model name", "hardware", "processor", "cpu model"}:
+                return value.strip()
+
+    return ""
+
+def _version_after(text: str, label: str) -> str:
+    match = re.search(rf"{re.escape(label)}\s*[:=\- ]*\s*([0-9]+(?:\.[0-9]+)*)", text, re.I)
+    return match.group(1) if match else ""
+
+def _detect_host_gpu_profile() -> dict[str, str]:
+    profile: dict[str, str] = {}
+    system_name = os.uname().sysname
+
+    if system_name == "Darwin":
+        output = _command_stdout(["system_profiler", "SPDisplaysDataType"], timeout=10)
+        for line in output.splitlines():
+            if "Chipset Model:" not in line:
+                continue
+            name = line.split(":", 1)[1].strip()
+            if name:
+                return {
+                    "MN_NODE_GPU_VENDOR": "apple",
+                    "MN_NODE_GPU_DRIVER": "metal",
+                    "MN_NODE_GPU_TYPE": "apple/gpu",
+                    "MN_NODE_GPU_NAME": name,
+                }
+
+    if system_name == "Linux":
+        output = _command_stdout(
+            ["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader,nounits"]
+        )
+        if output.strip():
+            first = [part.strip() for part in output.splitlines()[0].split(",", 1)]
+            profile = {
+                "MN_NODE_GPU_VENDOR": "nvidia",
+                "MN_NODE_GPU_DRIVER": "cuda",
+                "MN_NODE_GPU_TYPE": "nvidia/gpu",
+                "MN_NODE_GPU_NAME": first[0],
+            }
+            if len(first) > 1 and first[1]:
+                profile["MN_NODE_GPU_DRIVER_VERSION"] = first[1]
+            cuda = _version_after(_command_stdout(["nvidia-smi"]), "CUDA Version:")
+            if cuda:
+                profile["MN_NODE_GPU_API_VERSION"] = cuda
+            return profile
+
+        lspci = _command_stdout(["lspci", "-mm"])
+        for line in lspci.splitlines():
+            normalized = line.lower()
+            if not any(kind in normalized for kind in ("vga compatible controller", "3d controller", "display controller")):
+                continue
+            quoted = re.findall(r'"([^"]*)"', line)
+            name = " ".join(part for part in quoted[1:3] if part).strip() or line
+            if "amd" in normalized or "advanced micro devices" in normalized or "radeon" in normalized:
+                rocm = os.getenv("ROCM_VERSION", "").strip() or os.getenv("HIP_VERSION", "").strip()
+                profile = {
+                    "MN_NODE_GPU_VENDOR": "amd",
+                    "MN_NODE_GPU_DRIVER": "rocm",
+                    "MN_NODE_GPU_TYPE": "amd/gpu",
+                    "MN_NODE_GPU_NAME": name,
+                }
+                if rocm:
+                    profile["MN_NODE_GPU_API_VERSION"] = rocm
+                return profile
+            if "intel" in normalized:
+                return {
+                    "MN_NODE_GPU_VENDOR": "intel",
+                    "MN_NODE_GPU_DRIVER": "intel",
+                    "MN_NODE_GPU_TYPE": "intel/gpu",
+                    "MN_NODE_GPU_NAME": name,
+                }
+
+    return {}
+
 def _node_display_name() -> str:
     explicit = os.getenv("MN_NODE_DISPLAY_NAME", "").strip()
     if explicit:
@@ -333,12 +433,22 @@ def _ensure_node_advertisement_settings(env: dict[str, str]) -> dict[str, str]:
     if not os.getenv("MN_NODE_DISPLAY_NAME", "").strip():
         adjusted["MN_NODE_DISPLAY_NAME"] = _node_display_name()
 
+    if not str(adjusted.get("MN_NODE_CPU_MODEL") or "").strip():
+        cpu_model = _detect_host_cpu_model()
+        if cpu_model:
+            adjusted["MN_NODE_CPU_MODEL"] = cpu_model
+
     detected_gpu_count = _detect_host_gpu_count()
     existing_gpu_count = _parse_gpu_count(adjusted.get("MN_NODE_GPU_COUNT"))
     if os.getenv("MN_NODE_GPU_COUNT", "").strip():
         adjusted["MN_NODE_GPU_COUNT"] = str(detected_gpu_count)
     elif detected_gpu_count > 0 or existing_gpu_count is None:
         adjusted["MN_NODE_GPU_COUNT"] = str(detected_gpu_count)
+
+    if detected_gpu_count > 0:
+        for key, value in _detect_host_gpu_profile().items():
+            if value and not str(adjusted.get(key) or "").strip():
+                adjusted[key] = value
 
     return adjusted
 
@@ -2944,6 +3054,7 @@ def _start_server(
                 "MN_NETWORK_REDIS_PORT": env["MN_NETWORK_REDIS_PORT"],
                 "MN_DIST_PORT": env["MN_DIST_PORT"],
                 "MN_NODE_DISPLAY_NAME": env["MN_NODE_DISPLAY_NAME"],
+                "MN_NODE_CPU_MODEL": env.get("MN_NODE_CPU_MODEL", ""),
                 "MN_NODE_GPU_COUNT": env["MN_NODE_GPU_COUNT"],
                 "MN_NODE_GPU_VENDOR": env.get("MN_NODE_GPU_VENDOR", ""),
                 "MN_NODE_GPU_DRIVER": env.get("MN_NODE_GPU_DRIVER", ""),
@@ -3001,6 +3112,8 @@ def _start_server(
             cmd.extend(["-e", f"MN_DOCKER_NETWORK_NAME={env['MN_DOCKER_NETWORK_NAME']}"])
         cmd.extend(["-e", f"MN_NODE_ROLE={env['MN_NODE_ROLE']}"])
         cmd.extend(["-e", f"MN_NODE_DISPLAY_NAME={env['MN_NODE_DISPLAY_NAME']}"])
+        if env.get("MN_NODE_CPU_MODEL"):
+            cmd.extend(["-e", f"MN_NODE_CPU_MODEL={env['MN_NODE_CPU_MODEL']}"])
         cmd.extend(["-e", f"MN_NODE_GPU_COUNT={env['MN_NODE_GPU_COUNT']}"])
         for gpu_env_key in (
             "MN_NODE_GPU_VENDOR",

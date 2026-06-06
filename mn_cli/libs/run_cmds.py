@@ -604,7 +604,7 @@ def validate(
         details: list[tuple[str, Any]] = [
             ("Bundle", bundle_path),
             ("Job Name", manifest.get("job_name")),
-            ("Graph ID", manifest.get("graph_id")),
+            ("Workflow ID", manifest.get("graph_id")),
         ]
         if workflow_manifest:
             steps = manifest.get("flow", {}).get("steps") if isinstance(manifest.get("flow"), dict) else []
