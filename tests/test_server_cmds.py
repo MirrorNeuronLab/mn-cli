@@ -539,6 +539,9 @@ def test_start_network_seed_default_disabled_ignores_stale_named_network(mocker,
     assert "--network" not in redis_run
     assert "--network" not in core_run
     assert f"0.0.0.0:{server_cmds.REDIS_DYNAMIC_PORT_START}:6379" in redis_run
+    assert f"0.0.0.0:{server_cmds.DEFAULT_EPMD_PORT}:{server_cmds.DEFAULT_EPMD_PORT}" in core_run
+    assert f"ERL_EPMD_PORT={server_cmds.DEFAULT_EPMD_PORT}" in core_run
+    assert "0.0.0.0:4369:4369" not in core_run
     assert (
         f"MN_REDIS_URL=redis://:{_derive_network_secret('worker-token', 'redis')}"
         f"@192.168.4.173:{server_cmds.REDIS_DYNAMIC_PORT_START}/0"

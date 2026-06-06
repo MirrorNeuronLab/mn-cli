@@ -936,6 +936,7 @@ def _network_core_env(
     node_name: str,
     cluster_nodes: str,
     grpc_port: int,
+    epmd_port: int,
     dist_port: int,
     redis_url: str,
     redis_public_host: str,
@@ -955,6 +956,7 @@ def _network_core_env(
             "MN_DOCKER_NETWORK_NAME": docker_network_name,
             "MN_CORE_HOST": "0.0.0.0",
             "MN_GRPC_PORT": str(grpc_port),
+            "MN_EPMD_PORT": str(epmd_port),
             "MN_NODE_NAME": node_name,
             "MN_NODE_ROLE": "runtime",
             "MN_CLUSTER_NODES": cluster_nodes,
@@ -964,6 +966,7 @@ def _network_core_env(
             "MN_GRPC_AUTH_TOKEN": _derive_network_secret(token, "grpc-auth"),
             GRPC_ADMIN_TOKEN_ENV: _derive_network_secret(token, "grpc-admin"),
             "ERL_EPMD_ADDRESS": "0.0.0.0",
+            "ERL_EPMD_PORT": str(epmd_port),
             "ERL_AFLAGS": f"-kernel inet_dist_listen_min {dist_port} inet_dist_listen_max {dist_port}",
         }
     )
@@ -973,7 +976,7 @@ def _network_core_env(
 def _docker_env_args(env: dict[str, str]) -> list[str]:
     args: list[str] = []
     for key in sorted(env):
-        if key.startswith("MN_") or key in {"ERL_AFLAGS", "ERL_EPMD_ADDRESS"}:
+        if key.startswith("MN_") or key in {"ERL_AFLAGS", "ERL_EPMD_ADDRESS", "ERL_EPMD_PORT"}:
             args.extend(["-e", f"{key}={env[key]}"])
     return args
 
@@ -1031,10 +1034,11 @@ def _start_network_core(
     env_args = _docker_env_args(env)
     port_args = ["-p", f"{publish_host}:{grpc_port}:{grpc_port}"]
     if publish_cluster_ports:
+        epmd_port = _parse_configured_port(env.get("MN_EPMD_PORT")) or int(DEFAULT_EPMD_PORT)
         port_args.extend(
             [
                 "-p",
-                f"{publish_host}:4369:4369",
+                f"{publish_host}:{epmd_port}:{epmd_port}",
                 "-p",
                 f"{publish_host}:{dist_port}:{dist_port}",
             ]
@@ -1205,6 +1209,10 @@ def _start_network_seed(
     container_network_mode = requested_mode
     use_internal_identity = _docker_network_uses_internal_identity(requested_mode)
     network_name = _docker_network_name(docker_network_name)
+    epmd_port = _parse_configured_port(
+        os.getenv("MN_EPMD_PORT", "").strip()
+        or _read_env_file(RUNTIME_COMPOSE_ENV).get("MN_EPMD_PORT")
+    ) or int(DEFAULT_EPMD_PORT)
     node_alias = _resolve_node_alias(env)
     node_name = _docker_node_name(node_alias) if use_internal_identity else _network_node_name(host)
     redis_alias = _docker_redis_alias(node_alias)
@@ -1258,6 +1266,7 @@ def _start_network_seed(
         node_name=node_name,
         cluster_nodes=node_name,
         grpc_port=grpc_port,
+        epmd_port=epmd_port,
         dist_port=dist_port,
         redis_url=redis_url,
         redis_public_host=redis_public_host,
