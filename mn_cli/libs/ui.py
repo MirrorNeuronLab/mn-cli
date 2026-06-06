@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import time
 
@@ -6,7 +8,11 @@ from rich.console import Group
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
-from typing import Dict, Any, Optional
+from collections.abc import Iterable, Mapping
+from typing import Dict, Any, Optional, Union
+
+
+ConfirmationDetails = Union[Mapping[str, Any], Iterable[tuple[str, Any]]]
 
 
 class JobMonitorState:
@@ -36,6 +42,86 @@ class JobMonitorState:
 
     def clamp(self, agent_count: int) -> None:
         self.selected_index = min(self.selected_index, max(agent_count - 1, 0))
+
+
+def print_success_confirmation(
+    console,
+    action: str,
+    *,
+    status: Any = None,
+    details: ConfirmationDetails | None = None,
+    next_steps: str | Iterable[str] | None = None,
+) -> None:
+    print_confirmation(
+        console,
+        action,
+        verb="successful",
+        status=status,
+        details=details,
+        next_steps=next_steps,
+    )
+
+
+def print_confirmed(
+    console,
+    action: str,
+    *,
+    status: Any = None,
+    details: ConfirmationDetails | None = None,
+    next_steps: str | Iterable[str] | None = None,
+) -> None:
+    print_confirmation(
+        console,
+        action,
+        verb="confirmed",
+        status=status,
+        details=details,
+        next_steps=next_steps,
+    )
+
+
+def print_confirmation(
+    console,
+    action: str,
+    *,
+    verb: str = "successful",
+    status: Any = None,
+    details: ConfirmationDetails | None = None,
+    next_steps: str | Iterable[str] | None = None,
+) -> None:
+    console.print(f"[green]{action} {verb}.[/green]")
+    if _present(status):
+        console.print(f"Status: {status}", markup=False)
+    for label, value in _confirmation_detail_items(details):
+        console.print(f"{label}: {value}", markup=False)
+    for next_step in _confirmation_next_steps(next_steps):
+        console.print(f"Next: {next_step}", markup=False)
+
+
+def _confirmation_detail_items(details: ConfirmationDetails | None) -> list[tuple[str, Any]]:
+    if not details:
+        return []
+    raw_items = details.items() if isinstance(details, Mapping) else details
+    items: list[tuple[str, Any]] = []
+    for label, value in raw_items:
+        if not _present(label) or not _present(value):
+            continue
+        items.append((str(label), value))
+    return items
+
+
+def _confirmation_next_steps(next_steps: str | Iterable[str] | None) -> list[str]:
+    if not next_steps:
+        return []
+    if isinstance(next_steps, str):
+        candidates = [next_steps]
+    else:
+        candidates = [str(step) for step in next_steps]
+    return [step for step in candidates if step.strip()]
+
+
+def _present(value: Any) -> bool:
+    return value is not None and str(value).strip() != ""
 
 
 def generate_live_layout(job_id: str, data: Dict[str, Any], state: Optional[JobMonitorState] = None) -> Panel:
@@ -503,7 +589,7 @@ def generate_run_submitted_panel(
 
     return Panel(
         table,
-        title="Job submitted successfully",
+        title="Job submit successful",
         border_style="cyan",
         expand=False,
     )

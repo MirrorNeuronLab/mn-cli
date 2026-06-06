@@ -64,6 +64,8 @@ def test_backup_writes_zip_members_and_secret_warning(mocker, tmp_path):
 
     assert result.exit_code == 0
     assert "may contain secrets" in result.stdout
+    assert "Job backup successful." in result.stdout
+    assert "Source job: job-1" in result.stdout
     archives = list(tmp_path.glob("*.mnbackup.zip"))
     assert len(archives) == 1
     with zipfile.ZipFile(archives[0]) as zf:
@@ -194,6 +196,8 @@ def test_restore_writes_new_run_mapping_and_prints_provenance(mocker, tmp_path, 
     result = runner.invoke(app, ["job", "restore", "bp", "--input", str(archive)])
 
     assert result.exit_code == 0
+    assert "Job restore successful." in result.stdout
+    assert "Status: paused" in result.stdout
     assert "new-job" in result.stdout
     assert "old-job" in result.stdout
     _, restore_kwargs = mock_restore.call_args

@@ -8,6 +8,7 @@ from rich.table import Table
 from mn_cli.shared import console, client, logger
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.blueprint_resources import cleanup_blueprint_host_hooks, cleanup_web_ui_process
+from mn_cli.libs.ui import print_confirmed, print_success_confirmation
 
 import typer
 
@@ -30,7 +31,12 @@ def submit(
 
         job_id = client.submit_job(manifest, {})
         logger.info("Submitted job id=%s from manifest=%s", job_id, manifest_path)
-        console.print(f"[green]Job submitted successfully. Job ID: {job_id}[/green]")
+        print_success_confirmation(
+            console,
+            "Job submit",
+            details=[("Job ID", job_id), ("Manifest", manifest_path)],
+            next_steps=f"mn job status {job_id}",
+        )
     except Exception as e:
         handle_cli_error(e, console, 'submit')
 
@@ -89,7 +95,12 @@ def clear():
     try:
         cleared_count = client.clear_jobs()
         logger.info("Cleared %d non-running jobs", cleared_count)
-        console.print(f"[green]Successfully cleared {cleared_count} non-running jobs.[/green]")
+        print_success_confirmation(
+            console,
+            "Job clear",
+            details={"Jobs cleared": f"{cleared_count} non-running"},
+            next_steps="mn job list",
+        )
     except Exception as e:
         handle_cli_error(e, console, 'clear')
 
@@ -105,7 +116,13 @@ def cancel(
     try:
         status = client.cancel_job(job_id)
         _cleanup_cancelled_job_web_ui(job_id)
-        console.print(f"[green]Job cancelled. Status: {status}[/green]")
+        print_success_confirmation(
+            console,
+            "Job cancel",
+            status=status,
+            details={"Job ID": job_id},
+            next_steps=f"mn job status {job_id}",
+        )
     except Exception as e:
         _cleanup_cancelled_job_web_ui(job_id)
         handle_cli_error(e, console, 'cancel')
@@ -206,7 +223,13 @@ def pause(job_id: str):
     """Pause a running job"""
     try:
         status = client.pause_job(job_id)
-        console.print(f"[green]Job paused. Status: {status}[/green]")
+        print_success_confirmation(
+            console,
+            "Job pause",
+            status=status,
+            details={"Job ID": job_id},
+            next_steps=f"mn job status {job_id}",
+        )
     except Exception as e:
         handle_cli_error(e, console, 'pause')
 
@@ -215,7 +238,13 @@ def resume(job_id: str):
     """Resume a paused job"""
     try:
         status = client.resume_job(job_id)
-        console.print(f"[green]Job resumed. Status: {status}[/green]")
+        print_success_confirmation(
+            console,
+            "Job resume",
+            status=status,
+            details={"Job ID": job_id},
+            next_steps=f"mn job status {job_id}",
+        )
     except Exception as e:
         handle_cli_error(e, console, 'resume')
 
@@ -228,7 +257,7 @@ def unfinished():
         jobs = data.get("data", [])
 
         if not jobs:
-            console.print("[green]No unfinished jobs.[/green]")
+            print_confirmed(console, "Unfinished job check", status="none found")
             return
 
         table = recovery_table("Updated At", include_review=True)
@@ -300,7 +329,12 @@ def reconcile_node(
     """Reconcile jobs affected by an unavailable node"""
     try:
         result_json = client.reconcile_node(node_name, reason=reason, dry_run=dry_run)
-        console.print_json(data=json.loads(result_json))
+        _print_node_mutation_confirmation(
+            "Node reconcile",
+            json.loads(result_json),
+            node_name=node_name,
+            details={"Dry run": dry_run},
+        )
     except Exception as e:
         handle_cli_error(e, console, 'reconcile-node')
 
@@ -333,7 +367,16 @@ def drain_node(
         if wait and not dry_run:
             result = wait_for_drain(node_name, result)
 
-        console.print_json(data=result)
+        _print_node_mutation_confirmation(
+            "Node drain",
+            result,
+            node_name=node_name,
+            details={
+                "Deadline": deadline,
+                "Dry run": dry_run,
+                "System jobs": "ignored" if ignore_system_jobs else "included",
+            },
+        )
     except Exception as e:
         handle_cli_error(e, console, 'drain-node')
 
@@ -354,7 +397,12 @@ def undrain_node(
             reason=reason,
             mark_eligible=mark_eligible,
         )
-        console.print_json(data=json.loads(result_json))
+        _print_node_mutation_confirmation(
+            "Node undrain",
+            json.loads(result_json),
+            node_name=node_name,
+            details={"Mark eligible": mark_eligible},
+        )
     except Exception as e:
         handle_cli_error(e, console, 'undrain-node')
 
@@ -371,7 +419,12 @@ def maintenance_node(
     """Toggle node maintenance mode without moving existing work"""
     try:
         result_json = client.set_node_maintenance(node_name, enable, reason=reason)
-        console.print_json(data=json.loads(result_json))
+        _print_node_mutation_confirmation(
+            "Node maintenance",
+            json.loads(result_json),
+            node_name=node_name,
+            details={"Mode": "enabled" if enable else "disabled"},
+        )
     except Exception as e:
         handle_cli_error(e, console, 'maintenance-node')
 
@@ -429,6 +482,31 @@ def wait_for_drain(node_name: str, first_result: dict) -> dict:
         }
 
     return result
+
+
+def _print_node_mutation_confirmation(
+    action: str,
+    payload: dict,
+    *,
+    node_name: str,
+    details: dict | None = None,
+) -> None:
+    detail_items: list[tuple[str, object]] = [("Node", payload.get("node") or node_name)]
+    detail_items.extend(
+        [
+            ("Reason", payload.get("reason")),
+            ("Scheduling eligible", payload.get("scheduling_eligible")),
+        ]
+    )
+    if details:
+        detail_items.extend(details.items())
+    print_success_confirmation(
+        console,
+        action,
+        status=payload.get("status"),
+        details=detail_items,
+        next_steps="mn node list",
+    )
 
 
 def metrics():

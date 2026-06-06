@@ -29,6 +29,8 @@ def test_schedule_create_passes_cron_policy_and_payloads(mocker, tmp_path):
     )
 
     assert result.exit_code == 0
+    assert "Schedule create successful." in result.stdout
+    assert "Schedule ID: sched-1" in result.stdout
     assert "sched-1" in result.stdout
     args, kwargs = mock_create.call_args
     assert args[0] == '{"graph_id": "scheduled"}'
@@ -57,6 +59,8 @@ def test_trigger_create_builds_event_schedule(mocker, tmp_path):
     )
 
     assert result.exit_code == 0
+    assert "Trigger create successful." in result.stdout
+    assert "Schedule ID: sched-event" in result.stdout
     schedule = mock_create.call_args.kwargs["schedule"]
     assert schedule["kind"] == "event"
     assert schedule["trigger"]["event_type"] == "file_uploaded"
@@ -75,4 +79,6 @@ def test_event_emit_passes_payload(mocker):
     )
 
     assert result.exit_code == 0
+    assert "Event emit successful." in result.stdout
+    assert "Event: demo" in result.stdout
     mock_emit.assert_called_once_with("demo", payload={"topic": "alpha"}, source="cli")

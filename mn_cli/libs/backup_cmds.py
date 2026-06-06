@@ -14,6 +14,7 @@ import typer
 
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.blueprint_observability import make_blueprint_run_id
+from mn_cli.libs.ui import print_success_confirmation
 from mn_cli.shared import client, console, logger
 
 SCHEMA_VERSION = "mn.backup.v1"
@@ -69,8 +70,12 @@ def backup(
         _merge_cli_source_metadata(backup_payload, target)
 
         archive_path = _write_backup_archive(backup_payload, bundle_files, output, target)
-        console.print(f"[green]Backup written:[/green] {archive_path}")
-        console.print(f"Source job: [bold]{job_id}[/bold]")
+        print_success_confirmation(
+            console,
+            "Job backup",
+            details=[("Backup", archive_path), ("Source job", job_id)],
+            next_steps=f"mn job restore <blueprint-id> --input {archive_path}",
+        )
     except BackupRestoreError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
@@ -119,12 +124,17 @@ def restore(
             knowledge_files,
         )
 
-        console.print(f"[green]Restored backup as paused job:[/green] {new_job_id}")
-        console.print(f"New run: [bold]{new_run_id}[/bold]")
-        console.print(
-            f"Original job: [bold]{result.get('source_job_id', 'unknown')}[/bold]"
+        print_success_confirmation(
+            console,
+            "Job restore",
+            status="paused",
+            details=[
+                ("Job ID", new_job_id),
+                ("Run ID", new_run_id),
+                ("Original job", result.get("source_job_id", "unknown")),
+            ],
+            next_steps=f"mn job resume {new_job_id}",
         )
-        console.print(f"Resume when ready: [bold]mn job resume {new_job_id}[/bold]")
     except BackupRestoreError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)

@@ -8,6 +8,7 @@ import typer
 
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.deployment_cmds import read_bundle
+from mn_cli.libs.ui import print_success_confirmation
 from mn_cli.shared import client, console
 
 
@@ -44,8 +45,34 @@ def _local_timezone() -> str:
     return time.tzname[0] or "UTC"
 
 
-def _print_result(result_json: str) -> None:
-    console.print_json(data=json.loads(result_json))
+def _print_result(
+    result_json: str,
+    *,
+    action: str | None = None,
+    details: dict[str, Any] | list[tuple[str, Any]] | None = None,
+    next_steps: str | None = None,
+) -> None:
+    payload = json.loads(result_json)
+    if action is None:
+        console.print_json(data=payload)
+        return
+    detail_items: list[tuple[str, Any]] = []
+    if details:
+        detail_items.extend(details.items() if isinstance(details, dict) else details)
+    detail_items.extend(
+        [
+            ("Schedule ID", payload.get("schedule_id") or payload.get("id")),
+            ("Event ID", payload.get("event_id")),
+            ("Job ID", payload.get("job_id")),
+        ]
+    )
+    print_success_confirmation(
+        console,
+        action,
+        status=payload.get("status"),
+        details=detail_items,
+        next_steps=next_steps,
+    )
 
 
 @schedule_app.command(name="create")
@@ -78,7 +105,12 @@ def create_schedule(
             schedule["name"] = name
         if window:
             schedule["window"] = {"duration_ms": _duration_ms(window), "end_action": "cancel"}
-        _print_result(client.create_schedule(manifest_json, payloads, schedule=schedule, source={"cli": "schedule create"}))
+        _print_result(
+            client.create_schedule(manifest_json, payloads, schedule=schedule, source={"cli": "schedule create"}),
+            action="Schedule create",
+            details=[("Bundle", bundle), ("Kind", "periodic"), ("Name", name)],
+            next_steps="mn schedule list",
+        )
     except Exception as exc:
         handle_cli_error(exc, console, "schedule create")
 
@@ -102,7 +134,12 @@ def delay_schedule(
             schedule["delay_ms"] = _duration_ms(in_)
         if name:
             schedule["name"] = name
-        _print_result(client.create_schedule(manifest_json, payloads, schedule=schedule, source={"cli": "schedule delay"}))
+        _print_result(
+            client.create_schedule(manifest_json, payloads, schedule=schedule, source={"cli": "schedule delay"}),
+            action="Schedule delay",
+            details=[("Bundle", bundle), ("Kind", "delayed"), ("Name", name)],
+            next_steps="mn schedule list",
+        )
     except Exception as exc:
         handle_cli_error(exc, console, "schedule delay")
 
@@ -129,7 +166,12 @@ def schedule_status(schedule_id: str):
 def pause_schedule(schedule_id: str, reason: str = typer.Option("", "--reason")):
     """Pause a schedule."""
     try:
-        _print_result(client.pause_schedule(schedule_id, reason=reason))
+        _print_result(
+            client.pause_schedule(schedule_id, reason=reason),
+            action="Schedule pause",
+            details={"Schedule": schedule_id},
+            next_steps=f"mn schedule status {schedule_id}",
+        )
     except Exception as exc:
         handle_cli_error(exc, console, "schedule pause")
 
@@ -138,7 +180,12 @@ def pause_schedule(schedule_id: str, reason: str = typer.Option("", "--reason"))
 def resume_schedule(schedule_id: str, reason: str = typer.Option("", "--reason")):
     """Resume a schedule."""
     try:
-        _print_result(client.resume_schedule(schedule_id, reason=reason))
+        _print_result(
+            client.resume_schedule(schedule_id, reason=reason),
+            action="Schedule resume",
+            details={"Schedule": schedule_id},
+            next_steps=f"mn schedule status {schedule_id}",
+        )
     except Exception as exc:
         handle_cli_error(exc, console, "schedule resume")
 
@@ -147,7 +194,12 @@ def resume_schedule(schedule_id: str, reason: str = typer.Option("", "--reason")
 def delete_schedule(schedule_id: str, reason: str = typer.Option("", "--reason")):
     """Delete a schedule."""
     try:
-        _print_result(client.delete_schedule(schedule_id, reason=reason))
+        _print_result(
+            client.delete_schedule(schedule_id, reason=reason),
+            action="Schedule delete",
+            details={"Schedule": schedule_id},
+            next_steps="mn schedule list",
+        )
     except Exception as exc:
         handle_cli_error(exc, console, "schedule delete")
 
@@ -156,7 +208,12 @@ def delete_schedule(schedule_id: str, reason: str = typer.Option("", "--reason")
 def run_now(schedule_id: str, payload_json: str = typer.Option("", "--payload-json")):
     """Dispatch a schedule immediately."""
     try:
-        _print_result(client.dispatch_schedule(schedule_id, payload=_json_option(payload_json, "--payload-json"), reason="manual"))
+        _print_result(
+            client.dispatch_schedule(schedule_id, payload=_json_option(payload_json, "--payload-json"), reason="manual"),
+            action="Schedule run now",
+            details={"Schedule": schedule_id},
+            next_steps="mn job list --running-only",
+        )
     except Exception as exc:
         handle_cli_error(exc, console, "schedule run-now")
 
@@ -181,7 +238,12 @@ def create_trigger(
             },
             "prohibit_overlap": not allow_overlap,
         }
-        _print_result(client.create_schedule(manifest_json, payloads, schedule=schedule, source={"cli": "trigger create"}))
+        _print_result(
+            client.create_schedule(manifest_json, payloads, schedule=schedule, source={"cli": "trigger create"}),
+            action="Trigger create",
+            details=[("Bundle", bundle), ("Event", event_type), ("Name", name)],
+            next_steps="mn trigger list",
+        )
     except Exception as exc:
         handle_cli_error(exc, console, "trigger create")
 
@@ -209,7 +271,12 @@ def emit_event(
 ):
     """Emit a runtime event that can trigger schedules."""
     try:
-        _print_result(client.emit_trigger_event(event_type, payload=_json_option(payload_json, "--payload-json"), source=source))
+        _print_result(
+            client.emit_trigger_event(event_type, payload=_json_option(payload_json, "--payload-json"), source=source),
+            action="Event emit",
+            details=[("Event", event_type), ("Source", source)],
+            next_steps="mn event list",
+        )
     except Exception as exc:
         handle_cli_error(exc, console, "event emit")
 

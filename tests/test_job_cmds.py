@@ -17,7 +17,8 @@ def test_submit_success(mocker, tmp_path):
     result = runner.invoke(app, ["job", "submit", str(manifest_file)])
 
     assert result.exit_code == 0
-    assert "Job submitted successfully. Job ID: job-123" in result.stdout
+    assert "Job submit successful." in result.stdout
+    assert "Job ID: job-123" in result.stdout
     mock_submit.assert_called_once_with('{"graph_id": "test"}', {})
 
 
@@ -134,7 +135,8 @@ def test_clear_success(mocker):
     mock_clear = mocker.patch("mn_cli.libs.job_cmds.client.clear_jobs", return_value=5)
     result = runner.invoke(app, ["job", "clear"])
     assert result.exit_code == 0
-    assert "Successfully cleared 5 non-running jobs" in result.stdout
+    assert "Job clear successful." in result.stdout
+    assert "Jobs cleared: 5 non-running" in result.stdout
     mock_clear.assert_called_once()
 
 
@@ -154,7 +156,8 @@ def test_cancel_success(mocker):
     mock_cleanup = mocker.patch("mn_cli.libs.job_cmds._cleanup_cancelled_job_web_ui")
     result = runner.invoke(app, ["job", "cancel", "job-123"])
     assert result.exit_code == 0
-    assert "Job cancelled. Status: cancelled" in result.stdout
+    assert "Job cancel successful." in result.stdout
+    assert "Status: cancelled" in result.stdout
     mock_cancel.assert_called_once_with("job-123")
     mock_cleanup.assert_called_once_with("job-123")
 
@@ -195,7 +198,8 @@ def test_pause_success(mocker):
     )
     result = runner.invoke(app, ["job", "pause", "job-123"])
     assert result.exit_code == 0
-    assert "Job paused. Status: paused" in result.stdout
+    assert "Job pause successful." in result.stdout
+    assert "Status: paused" in result.stdout
     mock_pause.assert_called_once_with("job-123")
 
 
@@ -212,7 +216,8 @@ def test_resume_success(mocker):
     )
     result = runner.invoke(app, ["job", "resume", "job-123"])
     assert result.exit_code == 0
-    assert "Job resumed. Status: running" in result.stdout
+    assert "Job resume successful." in result.stdout
+    assert "Status: running" in result.stdout
     mock_resume.assert_called_once_with("job-123")
 
 
@@ -262,7 +267,8 @@ def test_unfinished_jobs_empty(mocker):
     result = runner.invoke(app, ["job", "unfinished"])
 
     assert result.exit_code == 0
-    assert "No unfinished jobs" in result.stdout
+    assert "Unfinished job check confirmed." in result.stdout
+    assert "Status: none found" in result.stdout
 
 
 def test_unfinished_jobs_accepts_nested_recovery_summary(mocker):
@@ -323,7 +329,9 @@ def test_reconcile_node_success(mocker):
         app, ["node", "reconcile", "node@lab", "--reason", "test", "--dry-run"]
     )
     assert result.exit_code == 0
-    assert '"recovered": 1' in result.stdout
+    assert "Node reconcile successful." in result.stdout
+    assert "Node: node@lab" in result.stdout
+    assert "Dry run: True" in result.stdout
     mock_reconcile.assert_called_once_with("node@lab", reason="test", dry_run=True)
 
 
@@ -355,7 +363,8 @@ def test_drain_node_success(mocker):
         ],
     )
     assert result.exit_code == 0
-    assert '"status": "dry_run"' in result.stdout
+    assert "Node drain successful." in result.stdout
+    assert "Status: dry_run" in result.stdout
     mock_drain.assert_called_once_with(
         "node@lab",
         reason="update",
@@ -376,7 +385,7 @@ def test_drain_node_can_include_system_jobs(mocker):
         ["node", "drain", "node@lab", "--deadline", "2m", "--include-system-jobs"],
     )
     assert result.exit_code == 0
-    assert '"status": "complete"' in result.stdout
+    assert "Status: complete" in result.stdout
     mock_drain.assert_called_once_with(
         "node@lab",
         reason="",
@@ -420,7 +429,7 @@ def test_drain_node_wait_polls_status(mocker):
 
     result = runner.invoke(app, ["node", "drain", "node@lab", "--wait"])
     assert result.exit_code == 0
-    assert '"status": "complete"' in result.stdout
+    assert "Status: complete" in result.stdout
     mock_drain.assert_called_once_with(
         "node@lab",
         reason="",
@@ -449,8 +458,7 @@ def test_drain_node_wait_stops_on_paused_for_review(mocker):
     result = runner.invoke(app, ["node", "drain", "node@lab", "--wait"])
 
     assert result.exit_code == 0
-    assert '"status": "paused_for_review"' in result.stdout
-    assert '"manual recovery required"' in result.stdout
+    assert "Status: paused_for_review" in result.stdout
     mock_drain.assert_called_once_with(
         "node@lab",
         reason="",
@@ -470,7 +478,8 @@ def test_undrain_node_success(mocker):
     )
     result = runner.invoke(app, ["node", "undrain", "node@lab", "--mark-eligible"])
     assert result.exit_code == 0
-    assert '"scheduling_eligible": true' in result.stdout
+    assert "Node undrain successful." in result.stdout
+    assert "Node: node@lab" in result.stdout
     mock_undrain.assert_called_once_with("node@lab", reason="", mark_eligible=True)
 
 
@@ -481,7 +490,7 @@ def test_undrain_node_defaults_to_not_mark_eligible(mocker):
     )
     result = runner.invoke(app, ["node", "undrain", "node@lab"])
     assert result.exit_code == 0
-    assert '"status": "maintenance"' in result.stdout
+    assert "Status: maintenance" in result.stdout
     mock_undrain.assert_called_once_with("node@lab", reason="", mark_eligible=False)
 
 
@@ -494,7 +503,7 @@ def test_maintenance_node_success(mocker):
         app, ["node", "maintenance", "node@lab", "--enable", "--reason", "patch"]
     )
     assert result.exit_code == 0
-    assert '"status": "maintenance"' in result.stdout
+    assert "Status: maintenance" in result.stdout
     mock_maintenance.assert_called_once_with("node@lab", True, reason="patch")
 
 
@@ -507,7 +516,7 @@ def test_maintenance_node_can_disable(mocker):
         app, ["node", "maintenance", "node@lab", "--disable", "--reason", "done"]
     )
     assert result.exit_code == 0
-    assert '"status": "healthy"' in result.stdout
+    assert "Status: healthy" in result.stdout
     mock_maintenance.assert_called_once_with("node@lab", False, reason="done")
 
 
@@ -564,7 +573,9 @@ def test_resource_set_success(mocker):
     )
     result = runner.invoke(app, ["resource", "set", "--cpu", "50", "--gpu", "75"])
     assert result.exit_code == 0
-    assert '"cpu": 50' in result.stdout
+    assert "Resource set successful." in result.stdout
+    assert "CPU: 50" in result.stdout
+    assert "GPU: 75" in result.stdout
     mock_set.assert_called_once_with({"cpu": 50, "gpu": 75})
 
 

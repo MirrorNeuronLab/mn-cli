@@ -8,6 +8,7 @@ import typer
 from mn_cli.banner import format_banner
 from mn_cli.shared import console
 from mn_cli.error_handler import handle_cli_error
+from mn_cli.libs.ui import print_success_confirmation
 from mn_cli.server_cmds import (
     _start_server,
     _start_network_seed,
@@ -87,6 +88,7 @@ def join(
         grpc_port=grpc_port,
         docker_network_mode=docker_network_mode,
         docker_network_name=docker_network_name,
+        action="Node join",
     )
 
 def expose_node(
@@ -157,6 +159,7 @@ def add_node(
         grpc_port=grpc_port,
         docker_network_mode=docker_network_mode,
         docker_network_name=docker_network_name,
+        action="Node add",
     )
 
 def stop():
@@ -190,7 +193,13 @@ def stop():
             except ValueError:
                 pass
             pid_file.unlink()
-    console.print("=> [green]All services stopped.[/green]")
+    print_success_confirmation(
+        console,
+        "Runtime stop",
+        status="stopped",
+        details={"Services": "all"},
+        next_steps="mn runtime start",
+    )
 
 def health(
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
@@ -208,14 +217,22 @@ def leave(node_name: str):
     try:
         status = client.remove_node(node_name)
         _detach_local_docker_node_if_matches(node_name)
-        console.print(f"[green]Successfully requested {node_name} to leave. Status: {status}[/green]")
+        print_success_confirmation(
+            console,
+            "Node leave",
+            status=status,
+            details={"Node": node_name},
+            next_steps="mn node list",
+        )
     except Exception as e:
         handle_cli_error(e, console, 'leave')
 
 def refresh_token():
     """Rotate the persistent MirrorNeuron network join token"""
     token = _refresh_network_token()
-    console.print("[green]MirrorNeuron network join token refreshed.[/green]")
-    console.print("Restart MirrorNeuron on cluster boxes for the new token to take effect.")
-    console.print("New token:")
-    console.print(f"  {token}")
+    print_success_confirmation(
+        console,
+        "Network join token refresh",
+        details={"New token": token},
+        next_steps="restart MirrorNeuron on cluster boxes",
+    )

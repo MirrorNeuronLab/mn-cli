@@ -269,7 +269,8 @@ def test_blueprint_observability_commands_read_shared_run_store(tmp_path):
     assert human.exit_code == 0
     assert "hitl-1" in human.stdout
     assert response.exit_code == 0
-    assert '"approved": true' in response.stdout
+    assert "Human response successful." in response.stdout
+    assert "Approved: True" in response.stdout
     assert resources.exit_code == 0
     assert "15" in resources.stdout
 
@@ -457,10 +458,11 @@ def test_blueprint_update_cleans_resources_for_removed_blueprints(mocker, tmp_pa
     assert active_run.exists()
     assert active_generated.exists()
     assert active_bundle_cache.exists()
-    assert "Removed 1 Python env resource" in result.stdout
-    assert "1 run record" in result.stdout
-    assert "1 generated bundle" in result.stdout
-    assert "1 bundle cache" in result.stdout
+    assert "Blueprint cleanup successful." in result.stdout
+    assert "Python env resources: 1" in result.stdout
+    assert "Run records: 1" in result.stdout
+    assert "Generated bundles: 1" in result.stdout
+    assert "Bundle cache resources: 1" in result.stdout
 
 
 def test_blueprint_cleanup_removes_dead_and_stale_resources(mocker, tmp_path, monkeypatch):
@@ -519,7 +521,8 @@ def test_blueprint_cleanup_removes_dead_and_stale_resources(mocker, tmp_path, mo
     assert not corrupt_env.exists()
     assert not orphan_generated.exists()
     assert not incomplete_bundle_cache.exists()
-    assert "Removed 3 Python env resource" in result.stdout
+    assert "Blueprint cleanup successful." in result.stdout
+    assert "Python env resources: 3" in result.stdout
 
 
 def test_blueprint_uninstall_removes_storage_and_owned_resources(mocker, tmp_path, monkeypatch):

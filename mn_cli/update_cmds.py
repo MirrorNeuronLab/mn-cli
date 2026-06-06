@@ -15,6 +15,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 
+from mn_cli.libs.ui import print_confirmed, print_success_confirmation
 from mn_cli.server_cmds import DIR, WEB_UI_DIRS, _start_server
 
 console = Console()
@@ -90,7 +91,7 @@ def update(
         raise typer.Exit(1) from exc
 
     if not available:
-        console.print("[green]MirrorNeuron is up to date.[/green]")
+        print_confirmed(console, "MirrorNeuron update", status="up to date")
         return
 
     console.print("[yellow]A MirrorNeuron update is available.[/yellow]")
@@ -161,7 +162,7 @@ def get_available_updates() -> list[dict[str, str]]:
 def perform_update(available: list[dict[str, str]] | None = None) -> None:
     available = available if available is not None else get_available_updates()
     if not available:
-        console.print("[green]MirrorNeuron is up to date.[/green]")
+        print_confirmed(console, "MirrorNeuron update", status="up to date")
         return
 
     console.print("=> Stopping MirrorNeuron components...")
@@ -179,7 +180,14 @@ def perform_update(available: list[dict[str, str]] | None = None) -> None:
         _update_core()
 
     _record_check()
-    console.print("[green]=> Update complete. Restarting MirrorNeuron...[/green]")
+    print_success_confirmation(
+        console,
+        "MirrorNeuron update",
+        status="installed",
+        details={"Components": ", ".join(item["component"] for item in available)},
+        next_steps="mn runtime health",
+    )
+    console.print("=> Restarting MirrorNeuron...")
     _start_server()
 
 

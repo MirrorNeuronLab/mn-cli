@@ -5,6 +5,7 @@ from typing import Optional
 import typer
 
 from mn_cli.error_handler import handle_cli_error
+from mn_cli.libs.ui import print_success_confirmation
 from mn_cli.shared import client, console
 
 deployment_app = typer.Typer(help="Deployment commands")
@@ -30,7 +31,12 @@ def deploy(
             update_policy=update_policy(strategy, canary, max_parallel, auto_promote, auto_revert),
             wait=wait,
         )
-        console.print_json(data=json.loads(result_json))
+        _print_deployment_confirmation(
+            "Deployment deploy",
+            result_json,
+            details=[("Bundle", bundle), ("Key", key), ("Strategy", strategy)],
+            next_steps="mn deployment list",
+        )
     except Exception as exc:
         handle_cli_error(exc, console, "deploy")
 
@@ -57,7 +63,12 @@ def status(id_or_key: str):
 def promote(id_or_key: str):
     """Promote a canary deployment."""
     try:
-        console.print_json(data=json.loads(client.promote_deployment(id_or_key)))
+        _print_deployment_confirmation(
+            "Deployment promote",
+            client.promote_deployment(id_or_key),
+            details={"Deployment": id_or_key},
+            next_steps=f"mn deployment status {id_or_key}",
+        )
     except Exception as exc:
         handle_cli_error(exc, console, "deployment promote")
 
@@ -71,15 +82,16 @@ def rollback(
 ):
     """Roll back to a previous stable version."""
     try:
-        console.print_json(
-            data=json.loads(
-                client.rollback_deployment(
-                    id_or_key,
-                    version=version or "",
-                    tag=tag,
-                    reason=reason,
-                )
-            )
+        _print_deployment_confirmation(
+            "Deployment rollback",
+            client.rollback_deployment(
+                id_or_key,
+                version=version or "",
+                tag=tag,
+                reason=reason,
+            ),
+            details=[("Deployment", id_or_key), ("Version", version or tag)],
+            next_steps=f"mn deployment status {id_or_key}",
         )
     except Exception as exc:
         handle_cli_error(exc, console, "deployment rollback")
@@ -89,7 +101,12 @@ def rollback(
 def pause(id_or_key: str, reason: str = typer.Option("", "--reason")):
     """Pause deployment bookkeeping."""
     try:
-        console.print_json(data=json.loads(client.pause_deployment(id_or_key, reason=reason)))
+        _print_deployment_confirmation(
+            "Deployment pause",
+            client.pause_deployment(id_or_key, reason=reason),
+            details={"Deployment": id_or_key},
+            next_steps=f"mn deployment status {id_or_key}",
+        )
     except Exception as exc:
         handle_cli_error(exc, console, "deployment pause")
 
@@ -98,7 +115,12 @@ def pause(id_or_key: str, reason: str = typer.Option("", "--reason")):
 def resume(id_or_key: str, reason: str = typer.Option("", "--reason")):
     """Resume deployment bookkeeping."""
     try:
-        console.print_json(data=json.loads(client.resume_deployment(id_or_key, reason=reason)))
+        _print_deployment_confirmation(
+            "Deployment resume",
+            client.resume_deployment(id_or_key, reason=reason),
+            details={"Deployment": id_or_key},
+            next_steps=f"mn deployment status {id_or_key}",
+        )
     except Exception as exc:
         handle_cli_error(exc, console, "deployment resume")
 
@@ -107,9 +129,42 @@ def resume(id_or_key: str, reason: str = typer.Option("", "--reason")):
 def fail(id_or_key: str, reason: str = typer.Option("", "--reason")):
     """Mark a deployment failed."""
     try:
-        console.print_json(data=json.loads(client.fail_deployment(id_or_key, reason=reason)))
+        _print_deployment_confirmation(
+            "Deployment fail",
+            client.fail_deployment(id_or_key, reason=reason),
+            details={"Deployment": id_or_key},
+            next_steps=f"mn deployment status {id_or_key}",
+        )
     except Exception as exc:
         handle_cli_error(exc, console, "deployment fail")
+
+
+def _print_deployment_confirmation(
+    action: str,
+    result_json: str,
+    *,
+    details=None,
+    next_steps: str | None = None,
+) -> None:
+    payload = json.loads(result_json)
+    detail_items: list[tuple[str, object]] = []
+    if details:
+        detail_items.extend(details.items() if isinstance(details, dict) else details)
+    detail_items.extend(
+        [
+            ("Deployment ID", payload.get("deployment_id") or payload.get("id")),
+            ("Key", payload.get("deployment_key") or payload.get("key")),
+            ("Job ID", payload.get("job_id")),
+            ("Version", payload.get("version")),
+        ]
+    )
+    print_success_confirmation(
+        console,
+        action,
+        status=payload.get("status"),
+        details=detail_items,
+        next_steps=next_steps,
+    )
 
 
 def read_bundle(path: str) -> tuple[str, dict[str, bytes]]:

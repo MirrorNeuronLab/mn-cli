@@ -70,4 +70,5 @@ def test_service_check_runs_local_required_service_validation(tmp_path):
     result = runner.invoke(app, ["service", "check", str(bundle_dir)])
 
     assert result.exit_code == 0
-    assert "Required services are healthy" in result.stdout
+    assert "Service check confirmed." in result.stdout
+    assert "Status: healthy" in result.stdout

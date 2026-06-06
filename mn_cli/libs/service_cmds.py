@@ -7,6 +7,7 @@ from typing import Annotated, Any, Optional
 import typer
 
 from mn_cli.error_handler import handle_cli_error
+from mn_cli.libs.ui import print_confirmed
 from mn_cli.libs.run_cmds import (
     _emit_validation_report,
     _normalize_validation_output,
@@ -103,7 +104,12 @@ def check_services(
             return
 
         if report.get("ok"):
-            console.print("[green]✓ Required services are healthy.[/green]")
+            print_confirmed(
+                console,
+                "Service check",
+                status="healthy",
+                details={"Bundle": bundle_path},
+            )
             return
 
         _emit_validation_report(report, output_format, title="Service validation failed")

@@ -47,6 +47,7 @@ from mn_cli.libs.blueprint_resources import (
     default_python_envs_dir as _default_python_envs_dir,
     default_runs_root as _default_runs_root,
 )
+from mn_cli.libs.ui import print_confirmed, print_success_confirmation
 from mn_cli.shared import console, logger
 from mn_cli.libs.run_cmds import _run_local_folder, run_bundle as _run_bundle
 from mn_cli.libs.run_manifest import load_blueprint_config as _load_blueprint_config
@@ -190,10 +191,16 @@ def _run_resolved_blueprint(
     if model_summary.get("models"):
         _print_model_install_summary(model_summary)
     _print_blueprint_run_phase(4, 4, "Submit runtime job")
-    console.print(f"[green]Blueprint '{display_name}' validated. Running...[/green]")
-    console.print(f"Blueprint run_id: [bold green]{shared_run_id}[/bold green]")
-    if revision:
-        console.print(f"Blueprint revision: {revision}")
+    print_confirmed(
+        console,
+        "Blueprint validation",
+        status="valid",
+        details=[
+            ("Blueprint", display_name),
+            ("Run ID", shared_run_id),
+            ("Revision", revision),
+        ],
+    )
     _run_bundle(
         str(bundle_path),
         follow_seconds=follow_seconds,
@@ -724,7 +731,12 @@ def blueprint_install(
     except BlueprintIndexError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
-    console.print(f"[green]Installed blueprints at {storage_dir}.[/green]")
+    print_success_confirmation(
+        console,
+        "Blueprint library install",
+        details={"Storage": storage_dir},
+        next_steps="mn blueprint list",
+    )
 
 
 def _install_catalog_blueprint_with_models(
@@ -769,7 +781,12 @@ def _install_catalog_blueprint_with_models(
         install_source=install_source,
         model_summary=model_summary,
     )
-    console.print(f"[green]Installed blueprint {blueprint_id}.[/green]")
+    print_success_confirmation(
+        console,
+        "Blueprint install",
+        details=[("Blueprint", blueprint_id), ("Storage", storage_dir), ("Bundle", bundle_root)],
+        next_steps=f"mn blueprint run {blueprint_id}",
+    )
     _print_model_install_summary(model_summary)
 
 
@@ -866,7 +883,11 @@ def _install_blueprint_model_dependencies(
 def _print_model_install_summary(summary: dict[str, Any]) -> None:
     models = summary.get("models") or []
     if not models:
-        console.print("[green]No runtime model dependencies declared.[/green]")
+        print_confirmed(
+            console,
+            "Blueprint model dependency check",
+            status="none declared",
+        )
         return
     table = Table(title="Blueprint model dependencies", show_header=True, header_style="bold")
     table.add_column("Model")
@@ -909,8 +930,20 @@ def _uninstall_catalog_blueprint(
         entry=entry,
         dry_run=dry_run,
     )
-    action = "Would archive" if dry_run else "Archived"
-    console.print(f"[green]{action} blueprint install metadata at {archive_path}.[/green]")
+    if dry_run:
+        print_confirmed(
+            console,
+            "Blueprint uninstall dry run",
+            status="planned",
+            details=[("Blueprint", blueprint_id), ("Archive", archive_path)],
+        )
+    else:
+        print_success_confirmation(
+            console,
+            "Blueprint uninstall",
+            status="metadata archived",
+            details=[("Blueprint", blueprint_id), ("Archive", archive_path)],
+        )
 
     if not keep_resources:
         summary = _cleanup_blueprint_resources(
@@ -1077,8 +1110,20 @@ def _remove_or_prompt_for_orphaned_models(
         else:
             kept += 1
     if removed:
-        verb = "Would remove" if dry_run else "Removed"
-        console.print(f"[green]{verb} {removed} orphaned model(s).[/green]")
+        if dry_run:
+            print_confirmed(
+                console,
+                "Orphaned model cleanup dry run",
+                status="planned",
+                details={"Models": removed},
+            )
+        else:
+            print_success_confirmation(
+                console,
+                "Orphaned model cleanup",
+                status="removed",
+                details={"Models": removed},
+            )
     if kept:
         console.print(f"[yellow]Kept {kept} orphaned model(s).[/yellow]")
 
@@ -1115,6 +1160,17 @@ def blueprint_update(
         dry_run=False,
     )
     _print_cleanup_summary(cleanup_summary)
+    print_success_confirmation(
+        console,
+        "Blueprint library update",
+        details=[
+            ("Storage", storage_dir),
+            ("Blueprints before", len(before_ids)),
+            ("Blueprints after", len(after_ids)),
+            ("Blueprints removed", len(removed_ids)),
+        ],
+        next_steps="mn blueprint list",
+    )
 
 
 @blueprint_app.command("cleanup")
@@ -1186,10 +1242,20 @@ def blueprint_uninstall(
     if not storage_dir.exists():
         console.print(f"[yellow]Blueprint storage not found at {storage_dir}.[/yellow]")
     elif dry_run:
-        console.print(f"Would remove blueprint storage at {storage_dir}.")
+        print_confirmed(
+            console,
+            "Blueprint storage uninstall dry run",
+            status="planned",
+            details={"Storage": storage_dir},
+        )
     else:
         shutil.rmtree(storage_dir)
-        console.print(f"[green]Removed blueprint storage at {storage_dir}.[/green]")
+        print_success_confirmation(
+            console,
+            "Blueprint storage uninstall",
+            status="removed",
+            details={"Storage": storage_dir},
+        )
 
     if keep_resources:
         return
@@ -1276,16 +1342,28 @@ def _print_cleanup_summary(summary: dict[str, Any] | None) -> None:
     process_removed = summary.get("process_removed") or []
     errors = summary.get("errors") or []
     dry_run = bool(summary.get("dry_run"))
-    verb = "Would remove" if dry_run else "Removed"
     if python_removed or run_removed or generated_removed or bundle_removed or docker_removed or process_removed:
-        console.print(
-            f"[green]{verb} {len(python_removed)} Python env resource(s), "
-            f"{len(run_removed)} run record(s), {len(generated_removed)} generated bundle(s), "
-            f"{len(bundle_removed)} bundle cache resource(s), {len(docker_removed)} Docker resource(s), "
-            f"and {len(process_removed)} web UI process(es).[/green]"
+        action = "Blueprint cleanup dry run" if dry_run else "Blueprint cleanup"
+        printer = print_confirmed if dry_run else print_success_confirmation
+        printer(
+            console,
+            action,
+            status="planned" if dry_run else "removed",
+            details=[
+                ("Python env resources", len(python_removed)),
+                ("Run records", len(run_removed)),
+                ("Generated bundles", len(generated_removed)),
+                ("Bundle cache resources", len(bundle_removed)),
+                ("Docker resources", len(docker_removed)),
+                ("Web UI processes", len(process_removed)),
+            ],
         )
     else:
-        console.print("[green]No blueprint runtime resources needed cleanup.[/green]")
+        print_confirmed(
+            console,
+            "Blueprint cleanup",
+            status="no resources matched",
+        )
     for error in errors:
         console.print(f"[yellow]Cleanup warning: {error}[/yellow]")
 
@@ -1554,7 +1632,17 @@ def blueprint_human_respond(
         {"decision": decision, "notes": notes, "reviewer": reviewer},
         runs_root=runs_root,
     )
-    console.print(json.dumps(event, indent=2, sort_keys=True), markup=False)
+    payload = event.get("payload") if isinstance(event, dict) else {}
+    print_success_confirmation(
+        console,
+        "Human response",
+        details=[
+            ("Run ID", run_id),
+            ("Request ID", request_id),
+            ("Decision", decision),
+            ("Approved", payload.get("approved") if isinstance(payload, dict) else None),
+        ],
+    )
 
 
 @human_app.command("ack")
@@ -1567,8 +1655,12 @@ def blueprint_human_ack(
     """Acknowledge a human notice."""
     _load_run_or_exit(run_id, runs_root)
     tools = _load_observability_tools()
-    event = tools["acknowledge_human_notice"](run_id, notice_id, {"reviewer": reviewer}, runs_root=runs_root)
-    console.print(json.dumps(event, indent=2, sort_keys=True), markup=False)
+    tools["acknowledge_human_notice"](run_id, notice_id, {"reviewer": reviewer}, runs_root=runs_root)
+    print_success_confirmation(
+        console,
+        "Human notice acknowledgement",
+        details=[("Run ID", run_id), ("Notice ID", notice_id), ("Reviewer", reviewer)],
+    )
 
 
 @blueprint_app.command("compare")

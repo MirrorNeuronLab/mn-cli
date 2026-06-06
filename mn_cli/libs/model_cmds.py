@@ -8,6 +8,7 @@ import typer
 from rich.table import Table
 
 from mn_cli.error_handler import handle_cli_error
+from mn_cli.libs.ui import print_confirmed, print_success_confirmation
 from mn_cli.shared import console
 from mn_sdk import (
     DEFAULT_MODEL_ID,
@@ -117,7 +118,13 @@ def install_model(
         compatibility = result["compatibility"]
         target = result["docker_model"]
         record_manual_model_install(entry, backend=compatibility["backend"])
-        console.print(f"[green]✓ Installed and started {entry.get('id')} ({target}).[/green]")
+        print_success_confirmation(
+            console,
+            "Model install",
+            status="running",
+            details=[("Model", entry.get("id")), ("Docker model", target), ("Backend", compatibility.get("backend"))],
+            next_steps=f"mn model doctor {entry.get('id')}",
+        )
         if compatibility.get("warnings"):
             for warning in compatibility["warnings"]:
                 console.print(f"[yellow]Warning: {warning}[/yellow]")
@@ -152,7 +159,13 @@ def update_model(
             _ensure_runner(compatibility.backend, compatibility.accelerator)
             _docker(["model", "pull", target], timeout=900)
             _docker(["model", "run", "--detach", target], timeout=300)
-            console.print(f"[green]✓ Updated {entry.get('id')} ({target}).[/green]")
+            print_success_confirmation(
+                console,
+                "Model update",
+                status="running",
+                details=[("Model", entry.get("id")), ("Docker model", target), ("Backend", compatibility.backend)],
+                next_steps=f"mn model doctor {entry.get('id')}",
+            )
             updated += 1
         if all_models and updated == 0:
             console.print("[yellow]No installed catalog models found to update.[/yellow]")
@@ -173,7 +186,13 @@ def remove_model(
         target = _resolve_or_raw_model(model)
         remove_model_ref(target, force=force)
         remove_model_record(target)
-        console.print(f"[green]✓ Removed {target}.[/green]")
+        print_success_confirmation(
+            console,
+            "Model remove",
+            status="removed",
+            details={"Model": target},
+            next_steps="mn model list --installed",
+        )
     except Exception as exc:
         handle_cli_error(exc, console, "model remove")
         raise typer.Exit(1)
@@ -338,7 +357,12 @@ def _print_doctor(payload: dict[str, Any]) -> None:
     console.print(f"  Endpoint: {'ok' if runner.get('endpoint_ok') else 'not reachable'}")
     _print_compatibility(payload["compatibility"])
     if payload.get("ok"):
-        console.print("[green]✓ Model runtime is ready.[/green]")
+        print_confirmed(
+            console,
+            "Model runtime",
+            status="ready",
+            details={"Model": model.get("id")},
+        )
     else:
         console.print("[yellow]Model runtime needs attention.[/yellow]")
 

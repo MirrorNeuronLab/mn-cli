@@ -39,8 +39,9 @@ def test_validate_success(tmp_path):
     
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
     assert result.exit_code == 0
-    assert "Job bundle at" in result.stdout
-    assert "is valid" in result.stdout
+    assert "Job bundle validation confirmed." in result.stdout
+    assert "Status: valid" in result.stdout
+    assert "Bundle:" in result.stdout
 
 
 def test_validate_accepts_workflow_manifest_without_legacy_nodes(tmp_path):
@@ -248,7 +249,8 @@ def test_validate_accepts_host_local_python_environment(tmp_path):
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
 
     assert result.exit_code == 0
-    assert "is valid" in result.stdout
+    assert "Job bundle validation confirmed." in result.stdout
+    assert "Status: valid" in result.stdout
 
 
 def test_validate_rejects_invalid_python_environment(tmp_path):
@@ -417,7 +419,7 @@ def test_run_success(mocker, tmp_path, monkeypatch):
     result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--web-ui"])
     
     assert result.exit_code == 0
-    assert "Job submitted successfully" in result.stdout
+    assert "Job submit successful" in result.stdout
     assert "run-bundle-auto" in result.stdout
     assert "Type" in result.stdout
     assert "Batch" in result.stdout
@@ -445,7 +447,8 @@ def test_run_auto_schedule_creates_resource_wait_schedule(mocker, tmp_path, monk
     result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--auto-schedule"])
 
     assert result.exit_code == 0
-    assert '"schedule_id": "schedule-123"' in result.stdout
+    assert "Schedule create successful." in result.stdout
+    assert "Schedule ID: schedule-123" in result.stdout
     mock_submit.assert_not_called()
     mock_create_schedule.assert_called_once()
     assert mock_create_schedule.call_args.kwargs["schedule"]["kind"] == "resource_wait"
@@ -690,7 +693,8 @@ def test_run_prebuilds_custom_openshell_image_from_payload_directory(mocker, tmp
     result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
 
     assert result.exit_code == 0
-    assert "OpenShell sandbox image ready" in result.stdout
+    assert "OpenShell sandbox image build successful." in result.stdout
+    assert "Status: ready" in result.stdout
     mock_build.assert_called_once()
     assert mock_build.call_args.kwargs["env"]["OPENSHELL_GATEWAY_ENDPOINT"] == "http://127.0.0.1:58080"
     manifest = json.loads(mock_submit.call_args.args[0])
@@ -1766,8 +1770,9 @@ def test_result_success(mocker, tmp_path):
     result = runner.invoke(app, ["job", "result", "job-123"])
     
     assert result.exit_code == 0
-    assert "Final result saved to" in result.stdout
-    assert "Stream results saved to" in result.stdout
+    assert "Job result fetch successful." in result.stdout
+    assert "Final result:" in result.stdout
+    assert "Stream results:" in result.stdout
 
 def test_result_not_completed(mocker, tmp_path):
     mocker.patch('mn_cli.libs.run_cmds.client.get_job', return_value=json.dumps({

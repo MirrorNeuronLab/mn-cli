@@ -5,6 +5,7 @@ from typing import Any, Optional
 import typer
 
 from mn_cli.error_handler import handle_cli_error
+from mn_cli.libs.ui import print_success_confirmation
 from mn_cli.shared import client, console
 
 resource_app = typer.Typer(help="Inspect and update core resource limits")
@@ -63,8 +64,19 @@ def set_resources(
             for key, value in {"cpu": cpu, "gpu": gpu, "memory": memory, "disk": disk}.items()
             if value is not None
         }
-        resource = json.loads(client.set_resource(payload))
-        console.print_json(data=ensure_combined_resource_totals(resource))
+        resource = ensure_combined_resource_totals(json.loads(client.set_resource(payload)))
+        print_success_confirmation(
+            console,
+            "Resource set",
+            status=resource.get("status") if isinstance(resource, dict) else None,
+            details=[
+                ("CPU", payload.get("cpu")),
+                ("GPU", payload.get("gpu")),
+                ("Memory", payload.get("memory")),
+                ("Disk", payload.get("disk")),
+            ],
+            next_steps="mn resource list",
+        )
     except Exception as e:
         handle_cli_error(e, console, "resource set")
 

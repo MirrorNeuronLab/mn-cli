@@ -38,7 +38,8 @@ def test_deploy_command_passes_policy_and_payloads(mocker, tmp_path):
     )
 
     assert result.exit_code == 0
-    assert "awaiting_promotion" in result.stdout
+    assert "Deployment deploy successful." in result.stdout
+    assert "Status: awaiting_promotion" in result.stdout
     mock_deploy.assert_called_once()
     args, kwargs = mock_deploy.call_args
     assert args[0] == '{"graph_id": "agent-api"}'
@@ -59,5 +60,6 @@ def test_deployment_promote_command(mocker):
     result = runner.invoke(app, ["deployment", "promote", "agent-api"])
 
     assert result.exit_code == 0
-    assert "successful" in result.stdout
+    assert "Deployment promote successful." in result.stdout
+    assert "Status: successful" in result.stdout
     mock_promote.assert_called_once_with("agent-api")

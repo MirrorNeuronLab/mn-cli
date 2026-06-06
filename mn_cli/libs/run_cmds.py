@@ -19,6 +19,8 @@ from mn_cli.libs.ui import (
     generate_live_layout,
     generate_run_submitted_panel,
     generate_summary_panel,
+    print_confirmed,
+    print_success_confirmation,
 )
 from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress
 from mn_cli.libs.run_logs import (
@@ -599,25 +601,27 @@ def validate(
             console.print_json(data=validation_result)
             return
 
-        console.print(f"[green]✓ Job bundle at '{bundle_path}' is valid.[/green]")
-        console.print(f"  - Job Name: {manifest.get('job_name')}")
-        console.print(f"  - Graph ID: {manifest.get('graph_id')}")
+        details: list[tuple[str, Any]] = [
+            ("Bundle", bundle_path),
+            ("Job Name", manifest.get("job_name")),
+            ("Graph ID", manifest.get("graph_id")),
+        ]
         if workflow_manifest:
             steps = manifest.get("flow", {}).get("steps") if isinstance(manifest.get("flow"), dict) else []
-            console.print(f"  - Workflow steps: {len(steps if isinstance(steps, list) else [])}")
+            details.append(("Workflow steps", len(steps if isinstance(steps, list) else [])))
         else:
-            console.print(f"  - Nodes count: {len(manifest.get('nodes'))}")
-        console.print(
-            f"  - Service checks: {len(service_result.get('results') or [])}"
-        )
-        console.print(
-            f"  - Model checks: {len(model_result.get('results') or [])}"
-        )
+            details.append(("Nodes", len(manifest.get("nodes"))))
+        details.append(("Service checks", len(service_result.get("results") or [])))
+        details.append(("Model checks", len(model_result.get("results") or [])))
         capacity_summary = _model_capacity_summary(model_result)
         if capacity_summary:
-            console.print(f"  - Model capacity: {capacity_summary}")
-        console.print(
-            f"  - Input validation rules: {len(validation_result.get('results') or [])}"
+            details.append(("Model capacity", capacity_summary))
+        details.append(("Input validation rules", len(validation_result.get("results") or [])))
+        print_confirmed(
+            console,
+            "Job bundle validation",
+            status="valid",
+            details=details,
         )
 
     except typer.Exit:
@@ -1475,7 +1479,17 @@ def run_bundle(
                 source={"cli": "run", "bundle": bundle_dir.name},
             )
             result = json.loads(result_json)
-            console.print_json(data=result)
+            print_success_confirmation(
+                console,
+                "Schedule create",
+                status=result.get("status"),
+                details=[
+                    ("Schedule ID", result.get("schedule_id") or result.get("id")),
+                    ("Kind", result.get("kind") or schedule_attrs.get("kind")),
+                    ("Bundle", bundle_dir),
+                ],
+                next_steps="mn schedule list",
+            )
             return
 
         blueprint_run_dir = (
@@ -1875,7 +1889,12 @@ def _build_openshell_from_image(source_path: Path, node_id: Any) -> str:
     )
     if _openshell_gateway_uses_local_docker():
         image_ref = _build_local_docker_sandbox_image(source_path)
-        console.print(f"[green]✓ OpenShell sandbox image ready:[/green] {image_ref}")
+        print_success_confirmation(
+            console,
+            "OpenShell sandbox image build",
+            status="ready",
+            details={"Image": image_ref},
+        )
         return image_ref
 
     result = subprocess.run(
@@ -1913,7 +1932,12 @@ def _build_openshell_from_image(source_path: Path, node_id: Any) -> str:
         raise typer.Exit(1)
 
     image_ref = ANSI_ESCAPE_RE.sub("", matches[-1])
-    console.print(f"[green]✓ OpenShell sandbox image ready:[/green] {image_ref}")
+    print_success_confirmation(
+        console,
+        "OpenShell sandbox image build",
+        status="ready",
+        details={"Image": image_ref},
+    )
     return image_ref
 
 
@@ -3090,15 +3114,23 @@ def result(job_id: str):
         res_file = log_dir / "result.txt"
         stream_file = log_dir / "result_stream.txt"
 
+        details: list[tuple[str, Path]] = []
         if res_file.exists():
-            console.print(f"[green]Final result saved to: {res_file}[/green]")
+            details.append(("Final result", res_file))
         else:
             console.print(
                 "[yellow]No final result found (job might not be completed).[/yellow]"
             )
 
         if stream_file.exists():
-            console.print(f"[green]Stream results saved to: {stream_file}[/green]")
+            details.append(("Stream results", stream_file))
+
+        if details:
+            print_success_confirmation(
+                console,
+                "Job result fetch",
+                details=[("Job ID", job_id), *details],
+            )
 
     except Exception as e:
         handle_cli_error(e, console, "fetch results")

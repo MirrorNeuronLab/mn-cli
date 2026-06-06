@@ -80,7 +80,7 @@ def test_update_skips_release_flow_for_local_source_install(mocker, tmp_path):
     mock_get_updates.assert_not_called()
 
 
-def test_update_yes_stops_updates_and_restarts(mocker):
+def test_update_yes_stops_updates_and_restarts(mocker, capsys):
     updates = [
         {
             "component": "mirrorneuron-cli",
@@ -110,6 +110,9 @@ def test_update_yes_stops_updates_and_restarts(mocker):
 
     update_cmds.perform_update(updates)
 
+    output = capsys.readouterr().out
+    assert "MirrorNeuron update successful." in output
+    assert "Status: installed" in output
     mock_stop.assert_called_once()
     mock_python.assert_called_once()
     mock_web.assert_called_once()

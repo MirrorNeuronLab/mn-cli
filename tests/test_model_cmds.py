@@ -84,6 +84,9 @@ def test_model_install_pulls_and_runs_compatible_model(mocker):
     result = runner.invoke(app, ["model", "install", "gemma4:e2b", "--context-size", "8192"])
 
     assert result.exit_code == 0
+    assert "Model install successful." in result.stdout
+    assert "Status: running" in result.stdout
+    assert "Model: gemma4:e2b" in result.stdout
     assert ["docker", "model", "pull", "ai/gemma4:E2B"] in calls
     assert ["docker", "model", "run", "--detach", "--context-size", "8192", "ai/gemma4:E2B"] in calls
 
@@ -311,4 +314,6 @@ def test_model_remove_uses_resolved_docker_model_with_force(mocker):
     result = runner.invoke(app, ["model", "remove", "gemma4:e2b", "--force"])
 
     assert result.exit_code == 0
+    assert "Model remove successful." in result.stdout
+    assert "Status: removed" in result.stdout
     assert ["docker", "model", "rm", "--force", "ai/gemma4:E2B"] in calls

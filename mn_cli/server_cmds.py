@@ -18,6 +18,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 from mn_cli.config import CliConfig
+from mn_cli.libs.ui import print_confirmed, print_success_confirmation
 from mn_cli.logging_config import configure_logging
 
 console = Console()
@@ -1177,18 +1178,37 @@ def _print_network_seed_ready(
     worker_node: bool = False,
 ) -> None:
     node_name = node_name or _network_node_name(host)
-    if already_running:
-        console.print("\n[green]MirrorNeuron node is already ready to join.[/green]")
-    elif worker_node:
-        console.print("\n[green]MirrorNeuron worker node is running.[/green]")
-    else:
-        console.print("\n[green]MirrorNeuron exposed node is running.[/green]")
-    console.print(f"Host: {host}")
-    console.print(f"gRPC: {host}:{grpc_port}")
-    console.print(f"Node: {node_name}")
-    console.print(f"Token: {token}")
     network_args = _docker_network_command_args(docker_network_mode, docker_network_name)
-    console.print(f"\nOn the primary box, join this worker with:\n  mn node join {host} --token {token}{network_args}")
+    details = [
+        ("Host", host),
+        ("gRPC", f"{host}:{grpc_port}"),
+        ("Node", node_name),
+        ("Token", token),
+    ]
+    if already_running:
+        print_confirmed(
+            console,
+            "MirrorNeuron node ready",
+            status="already running",
+            details=details,
+            next_steps=f"mn node join {host} --token {token}{network_args}",
+        )
+    elif worker_node:
+        print_success_confirmation(
+            console,
+            "Worker node start",
+            status="running",
+            details=details,
+            next_steps=f"mn node join {host} --token {token}{network_args}",
+        )
+    else:
+        print_success_confirmation(
+            console,
+            "Node expose",
+            status="running",
+            details=details,
+            next_steps=f"mn node join {host} --token {token}{network_args}",
+        )
 
 def _return_running_network_seed(
     host: Optional[str],
@@ -1408,6 +1428,7 @@ def _join_network(
     redis_port: Optional[int] = None,
     docker_network_mode: Optional[str] = None,
     docker_network_name: Optional[str] = None,
+    action: str = "Node join",
 ) -> dict:
     from mn_sdk import Client
     from mn_cli.shared import client as local_client
@@ -1450,12 +1471,21 @@ def _join_network(
         console.print("Check that the local MirrorNeuron core is running, and that the remote host and token are correct.")
         console.print(f"[dim]{exc}[/dim]")
         raise typer.Exit(1) from exc
-    console.print(f"[green]Remote node added. Status: {status}[/green]")
+    details: list[tuple[str, str]] = [("Node", remote_node)]
     if runtime_compose_available() or os.getenv("MN_REDIS_URL", "").strip():
-        _configure_worker_redis_replica(seed_host, handshake, token)
+        replication = _configure_worker_redis_replica(seed_host, handshake, token)
+        if replication:
+            details.append(("Replication", replication))
     if not _docker_network_uses_internal_identity(requested_mode):
-        console.print(f"Remote Redis URL: {redis_url}")
-    console.print("Run 'mn node list' or 'mn resource list' to inspect aggregate cluster resources.")
+        details.insert(1, ("Remote Redis", f"{redis_host}:{redis_port}"))
+        details.append(("Remote Redis URL", redis_url))
+    print_success_confirmation(
+        console,
+        action,
+        status=status,
+        details=details,
+        next_steps=("mn node list", "mn resource list"),
+    )
     return handshake
 
 def _ensure_local_cluster_runtime_for_join(
@@ -2050,11 +2080,11 @@ def _configure_worker_redis_replica(
     worker_host: str,
     worker_handshake: dict,
     token: str,
-) -> bool:
+) -> str | None:
     primary = _primary_redis_details(token)
     if primary is None:
         console.print("[yellow]Warning: Could not determine primary Redis details; worker Redis replication was skipped.[/yellow]")
-        return False
+        return None
 
     primary_host, primary_port, primary_password = primary
     worker_redis_host, worker_redis_port, worker_redis_url = _validate_remote_redis_details(
@@ -2098,7 +2128,7 @@ def _configure_worker_redis_replica(
         f"=> Worker Redis {worker_redis_host}:{worker_redis_port} is replicating from "
         f"{primary_host}:{primary_port}."
     )
-    return True
+    return f"{worker_redis_host}:{worker_redis_port} -> {primary_host}:{primary_port}"
 
 def runtime_compose_cmd(*args: str) -> list[str]:
     cmd = [
@@ -3051,22 +3081,23 @@ def _start_server(
         console.print(f"   Runtime endpoints: {RUNTIME_ENDPOINTS_FILE}")
         logger.info("Wrote MirrorNeuron runtime endpoints: %s", endpoint_snapshot.get("api", {}))
 
-    console.print("\n===========================================")
-    if ip:
-        console.print(f"MirrorNeuron is running and attempting to join cluster at {ip}!")
-    else:
-        console.print("MirrorNeuron is running in the background!")
     _print_service_endpoints(ip, web_ui_available)
-    console.print("\nNetwork token:")
-    console.print(f"  {network_token}")
     network_args = _docker_network_command_args(requested_docker_mode, network_name)
-    console.print("Add another box with:")
-    console.print("  1. On the worker box: mn runtime start --worker-node")
-    console.print(f"  2. On this primary box: mn node join <worker-host> --token <worker-token>{network_args}")
-    console.print("Logs are available at:")
-    console.print(f"  Core: {BEAM_LOG}")
-    console.print(f"  API:  {API_LOG}")
+    details = [
+        ("Network token", network_token),
+        ("Core log", BEAM_LOG),
+        ("API log", API_LOG),
+    ]
     if WEB_UI_LOG.exists():
-        console.print(f"  Web:  {WEB_UI_LOG}")
-    console.print("\nRun 'mn runtime stop' to shut down the services.")
-    console.print("===========================================")
+        details.append(("Web log", WEB_UI_LOG))
+    print_success_confirmation(
+        console,
+        "Runtime start",
+        status=f"joining cluster at {ip}" if ip else "running",
+        details=details,
+        next_steps=(
+            "mn runtime start --worker-node",
+            f"mn node join <worker-host> --token <worker-token>{network_args}",
+            "mn runtime stop",
+        ),
+    )

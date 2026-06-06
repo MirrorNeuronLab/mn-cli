@@ -113,6 +113,7 @@ def test_add_node_success(mocker):
         grpc_port=50055,
         docker_network_mode="overlay",
         docker_network_name="mn-overlay",
+        action="Node add",
     )
 
 def test_add_node_defaults_to_bridge_network(mocker):
@@ -134,6 +135,7 @@ def test_add_node_defaults_to_bridge_network(mocker):
         grpc_port=55051,
         docker_network_mode=None,
         docker_network_name="mirror-neuron-runtime",
+        action="Node add",
     )
 
 def test_join_success(mocker):
@@ -162,6 +164,7 @@ def test_join_success(mocker):
         grpc_port=55051,
         docker_network_mode="overlay",
         docker_network_name="mn-overlay",
+        action="Node join",
     )
 
 def test_join_defaults_to_bridge_network(mocker):
@@ -184,6 +187,7 @@ def test_join_defaults_to_bridge_network(mocker):
         grpc_port=55051,
         docker_network_mode=None,
         docker_network_name="mirror-neuron-runtime",
+        action="Node join",
     )
 
 @pytest.mark.parametrize(
@@ -208,7 +212,9 @@ def test_leave_success(mocker):
     mock_detach = mocker.patch("mn_cli.libs.sys_cmds._detach_local_docker_node_if_matches")
     result = runner.invoke(app, ["node", "leave", "mirror_neuron@1.2.3.4"])
     assert result.exit_code == 0
-    assert "Successfully requested mirror_neuron@1.2.3.4 to leave" in result.stdout
+    assert "Node leave successful." in result.stdout
+    assert "Status: disconnected" in result.stdout
+    assert "Node: mirror_neuron@1.2.3.4" in result.stdout
     mock_remove.assert_called_once_with("mirror_neuron@1.2.3.4")
     mock_detach.assert_called_once_with("mirror_neuron@1.2.3.4")
 
@@ -225,7 +231,7 @@ def test_refresh_token_success(mocker):
     mock_refresh = mocker.patch('mn_cli.libs.sys_cmds._refresh_network_token', return_value="new-token")
     result = runner.invoke(app, ["node", "refresh-token"])
     assert result.exit_code == 0
-    assert "network join token refreshed" in result.stdout
+    assert "Network join token refresh successful." in result.stdout
     assert "new-token" in result.stdout
     mock_refresh.assert_called_once_with()
 
@@ -257,7 +263,8 @@ def test_stop(mocker, tmp_path):
     result = runner.invoke(app, ["runtime", "stop"])
     
     assert result.exit_code == 0
-    assert "All services stopped." in result.stdout
+    assert "Runtime stop successful." in result.stdout
+    assert "Status: stopped" in result.stdout
     assert mock_kill_tree.call_count == 4
     
     assert not (tmp_path / "api.pid").exists()
@@ -351,7 +358,7 @@ def test_stop_pid_file_invalid(mocker, tmp_path):
     result = runner.invoke(app, ["runtime", "stop"])
     
     assert result.exit_code == 0
-    assert "All services stopped." in result.stdout
+    assert "Runtime stop successful." in result.stdout
     assert mock_kill_tree.call_count == 0
 
 def test_stop_kill_oserror(mocker, tmp_path):
@@ -378,6 +385,6 @@ def test_stop_kill_oserror(mocker, tmp_path):
     result = runner.invoke(app, ["runtime", "stop"])
     
     assert result.exit_code == 0
-    assert "All services stopped." in result.stdout
+    assert "Runtime stop successful." in result.stdout
     # kill_tree shouldn't be called because os.kill raised OSError
     mock_kill_tree.assert_not_called()

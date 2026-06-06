@@ -603,7 +603,8 @@ def test_start_network_seed_already_exposed_prints_existing_token(mocker):
 
     rendered = output.getvalue()
     assert token == "seed-token"
-    assert "already ready to join" in rendered
+    assert "MirrorNeuron node ready confirmed." in rendered
+    assert "Status: already running" in rendered
     assert "Token: seed-token" in rendered
     assert "mn node join 192.168.4.10 --token seed-token" in rendered
     mock_start_redis.assert_not_called()
@@ -625,7 +626,8 @@ def test_start_network_seed_running_local_runtime_prints_existing_token(mocker):
 
     rendered = output.getvalue()
     assert token == "runtime-token"
-    assert "already ready to join" in rendered
+    assert "MirrorNeuron node ready confirmed." in rendered
+    assert "Status: already running" in rendered
     assert "Token: runtime-token" in rendered
     assert "mn node join 192.168.4.20 --token runtime-token" in rendered
     mock_start_redis.assert_not_called()
@@ -686,7 +688,7 @@ def test_stop_local_runtime_for_worker_stops_compose_and_sidecars(mocker):
     assert not server_cmds.API_WATCHDOG_PID_FILE.exists()
     assert not server_cmds.WEB_UI_PID_FILE.exists()
 
-def test_add_node_uses_handshake_and_local_core(mocker, tmp_path):
+def test_add_node_uses_handshake_and_local_core(mocker, tmp_path, capsys):
     import mn_sdk
     import mn_cli.shared
 
@@ -726,6 +728,15 @@ def test_add_node_uses_handshake_and_local_core(mocker, tmp_path):
 
     mock_run.assert_not_called()
     mock_add_node.assert_called_once_with("mirror_neuron@192.168.4.10", token="join-token")
+    output = capsys.readouterr().out
+    assert "Node join successful." in output
+    assert "Status: connected" in output
+    assert "Node: mirror_neuron@192.168.4.10" in output
+    assert "Remote Redis: 192.168.4.10:6380" in output
+    assert "Remote Redis URL:" in output
+    assert "redis://:" in output
+    assert "Next: mn node list" in output
+    assert "Next: mn resource list" in output
 
 def test_add_node_overlay_uses_local_alias_in_handshake(mocker, tmp_path, monkeypatch):
     import mn_sdk
@@ -861,7 +872,7 @@ def test_add_node_rejects_redis_url_without_token_password(mocker, tmp_path):
 
     assert exc.value.exit_code == 1
 
-def test_join_network_configures_worker_redis_replica(mocker, tmp_path):
+def test_join_network_configures_worker_redis_replica(mocker, tmp_path, capsys):
     import mn_sdk
     import mn_cli.shared
 
@@ -925,6 +936,10 @@ def test_join_network_configures_worker_redis_replica(mocker, tmp_path):
         primary_password,
         ("WAIT", "1", "1000"),
     ) in redis_calls
+    output = capsys.readouterr().out
+    assert "Node join successful." in output
+    assert "Status: connected" in output
+    assert "Replication: 192.168.4.20:56380 -> 192.168.4.99:56379" in output
 
 def test_join_promotes_local_compose_runtime_to_cluster_mode(mocker, tmp_path):
     compose_file = server_cmds.RUNTIME_COMPOSE_FILE
