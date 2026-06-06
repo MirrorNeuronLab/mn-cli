@@ -18,6 +18,7 @@ from mn_cli.server_cmds import (
     _derive_network_secret,
     _start_server,
     _start_network_seed,
+    _start_worker_node,
     _join_network,
     _avoid_local_compose_port_conflicts,
     _detach_local_docker_node_if_matches,
@@ -308,6 +309,7 @@ def test_start_server_refreshes_token_files_from_compose_runtime_env(mocker, tmp
     mocker.patch('mn_cli.server_cmds.time.sleep')
     mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=0)
     mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.99")
+    mocker.patch('mn_cli.server_cmds._find_available_published_port', return_value=56379)
 
     _start_server()
 
@@ -477,6 +479,7 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     assert "192.168.4.10:4500:4500" not in core_run
     assert f"MN_COOKIE={_derive_network_secret('seed-token', 'cookie')}" in core_run
     assert "MN_NETWORK_ONLY=true" in core_run
+    assert "MN_REDIS_FORWARD_PRIMARY=true" in core_run
     assert "MN_NODE_ALIAS=mn-seed" in core_run
     assert "MN_DOCKER_NETWORK_MODE=overlay" in core_run
     assert "MN_DOCKER_NETWORK_NAME=mirror-neuron-runtime" in core_run
@@ -520,7 +523,7 @@ def test_start_network_seed_already_exposed_prints_existing_token(mocker):
     assert token == "seed-token"
     assert "already ready to join" in rendered
     assert "Token: seed-token" in rendered
-    assert "mn node add 192.168.4.10 --token seed-token" in rendered
+    assert "mn node join 192.168.4.10 --token seed-token" in rendered
     mock_start_redis.assert_not_called()
     mock_start_core.assert_not_called()
 
@@ -542,9 +545,36 @@ def test_start_network_seed_running_local_runtime_prints_existing_token(mocker):
     assert token == "runtime-token"
     assert "already ready to join" in rendered
     assert "Token: runtime-token" in rendered
-    assert "mn node add 192.168.4.20 --token runtime-token" in rendered
+    assert "mn node join 192.168.4.20 --token runtime-token" in rendered
     mock_start_redis.assert_not_called()
     mock_start_core.assert_not_called()
+
+def test_start_worker_node_clears_state_and_starts_worker(mocker, tmp_path):
+    network_redis_dir = server_cmds.DIR / "network-redis"
+    network_redis_dir.mkdir(parents=True)
+    (network_redis_dir / "appendonly.aof").write_text("old-state")
+    server_cmds.NETWORK_REDIS_ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
+    server_cmds.NETWORK_REDIS_ENV_FILE.write_text("MN_REDIS_PORT=56379\n")
+
+    stop_runtime = mocker.patch('mn_cli.server_cmds._stop_network_runtime')
+    start_seed = mocker.patch('mn_cli.server_cmds._start_network_seed', return_value="worker-token")
+    mocker.patch('mn_cli.server_cmds.subprocess.run')
+
+    assert _start_worker_node(host="192.168.4.20", grpc_port=50055) == "worker-token"
+
+    stop_runtime.assert_called_once_with()
+    assert not network_redis_dir.exists()
+    assert not server_cmds.NETWORK_REDIS_ENV_FILE.exists()
+    start_seed.assert_called_once_with(
+        host="192.168.4.20",
+        grpc_port=50055,
+        dist_port=54370,
+        redis_port=None,
+        force_new_token=False,
+        docker_network_mode=None,
+        docker_network_name=None,
+        worker_node=True,
+    )
 
 def test_add_node_uses_handshake_and_local_core(mocker, tmp_path):
     import mn_sdk
@@ -719,6 +749,70 @@ def test_add_node_rejects_redis_url_without_token_password(mocker, tmp_path):
         _join_network("192.168.4.10", "join-token", grpc_port=50055)
 
     assert exc.value.exit_code == 1
+
+def test_join_network_configures_worker_redis_replica(mocker, tmp_path):
+    import mn_sdk
+    import mn_cli.shared
+
+    compose_file = server_cmds.RUNTIME_COMPOSE_FILE
+    compose_env = server_cmds.RUNTIME_COMPOSE_ENV
+    primary_password = _derive_network_secret("primary-token", "redis")
+    worker_password = _derive_network_secret("join-token", "redis")
+    compose_file.parent.mkdir(parents=True, exist_ok=True)
+    compose_file.write_text("services: {}\n")
+    compose_env.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_NETWORK_JOIN_TOKEN=primary-token\n"
+        "MN_NETWORK_REDIS_HOST=192.168.4.99\n"
+        "MN_NETWORK_REDIS_PORT=56379\n"
+        f"MN_REDIS_PASSWORD={primary_password}\n"
+        f"MN_REDIS_URL=redis://:{primary_password}@redis:6379/0\n"
+    )
+
+    class StubClient:
+        def __init__(self, target, auth_token, timeout):
+            assert target == "192.168.4.20:50055"
+
+        def network_handshake(self, token, node_name="", node_info=None):
+            assert token == "join-token"
+            return {
+                "node_name": "mirror_neuron@192.168.4.20",
+                "redis_host": "192.168.4.20",
+                "redis_port": 56380,
+                "redis_url": f"redis://:{worker_password}@192.168.4.20:56380/0",
+            }
+
+    redis_calls = []
+
+    def redis_command(host, port, password, *args):
+        redis_calls.append((host, port, password, args))
+        return "OK"
+
+    mocker.patch.object(mn_sdk, "Client", StubClient)
+    mocker.patch.object(mn_cli.shared.client, "add_node", return_value="connected")
+    mocker.patch('mn_cli.server_cmds._redis_command', side_effect=redis_command)
+    mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=0)
+
+    _join_network("192.168.4.20", "join-token", grpc_port=50055)
+
+    assert (
+        "192.168.4.20",
+        56380,
+        worker_password,
+        ("CONFIG", "SET", "masterauth", primary_password),
+    ) in redis_calls
+    assert (
+        "192.168.4.20",
+        56380,
+        worker_password,
+        ("REPLICAOF", "192.168.4.99", "56379"),
+    ) in redis_calls
+    assert (
+        "192.168.4.99",
+        56379,
+        primary_password,
+        ("WAIT", "1", "1000"),
+    ) in redis_calls
 
 def test_start_server_already_running(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
@@ -1022,31 +1116,32 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
 
     commands = [call[0] for call in calls]
     assert runtime_compose_cmd("up", "-d") in commands
-    assert ["docker", "network", "create", "--driver", "bridge", "mirror-neuron-runtime"] in commands
+    assert ["docker", "network", "create", "--driver", "bridge", "mirror-neuron-runtime"] not in commands
     assert all(cmd[:3] != ["docker", "run", "-d"] for cmd in commands)
     compose_call = next(item for item in calls if item[0] == runtime_compose_cmd("up", "-d"))
     env = compose_call[1]["env"]
-    assert env["MN_NODE_ALIAS"] == "mn-abc12345"
-    assert env["MN_DOCKER_NETWORK_MODE"] == "bridge"
-    assert env["MN_DOCKER_NETWORK_NAME"] == "mirror-neuron-runtime"
-    assert env["MN_NODE_NAME"] == "mirror_neuron@mn-abc12345"
-    assert env["MN_CLUSTER_NODES"] == "mirror_neuron@mn-abc12345"
-    assert env["MN_NETWORK_REDIS_HOST"] == "mn-abc12345-redis"
-    assert env["MN_NETWORK_REDIS_PORT"] == "6379"
+    assert env["MN_DOCKER_NETWORK_MODE"] == "disabled"
+    assert env["MN_NODE_NAME"] == "mirror_neuron@192.168.4.99"
+    assert env["MN_CLUSTER_NODES"] == "mirror_neuron@192.168.4.99"
+    assert env["MN_NETWORK_REDIS_HOST"] == "192.168.4.99"
+    assert env["MN_NETWORK_REDIS_PORT"] == "56379"
+    assert env["MN_REDIS_BIND_HOST"] == "0.0.0.0"
+    assert env["MN_REDIS_PORT"] == "56379"
     assert env["MN_COOKIE"] == _derive_network_secret(env["MN_NETWORK_JOIN_TOKEN"], "cookie")
     compose_env_text = compose_env.read_text()
     assert "MN_NETWORK_ADVERTISE_HOST=192.168.4.99" in compose_env_text
-    assert "MN_NODE_ALIAS=mn-abc12345" in compose_env_text
-    assert "MN_DOCKER_NETWORK_MODE=bridge" in compose_env_text
-    assert "MN_DOCKER_NETWORK_NAME=mirror-neuron-runtime" in compose_env_text
-    assert "MN_NODE_NAME=mirror_neuron@mn-abc12345" in compose_env_text
-    assert "MN_CLUSTER_NODES=mirror_neuron@mn-abc12345" in compose_env_text
+    assert "MN_DOCKER_NETWORK_MODE=disabled" in compose_env_text
+    assert "MN_NODE_NAME=mirror_neuron@192.168.4.99" in compose_env_text
+    assert "MN_CLUSTER_NODES=mirror_neuron@192.168.4.99" in compose_env_text
+    assert "MN_NETWORK_REDIS_HOST=192.168.4.99" in compose_env_text
+    assert "MN_NETWORK_REDIS_PORT=56379" in compose_env_text
     assert "MN_GRPC_AUTH_TOKEN=" in compose_env_text
     assert "MN_GRPC_ADMIN_TOKEN=" in compose_env_text
     assert "MN_COOKIE=" in compose_env_text
     assert "MN_HOST_ARTIFACTS_DIR=" in compose_env_text
     assert "MN_RUNS_ROOT=" in compose_env_text
     assert "MN_CONTAINER_RUNS_ROOT=/root/.mn/runs" in compose_env_text
+    assert "mirror-neuron-core:" in (server_cmds.DIR / server_cmds.RUNTIME_CLUSTER_OVERRIDE_FILE).read_text()
 
 def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
     compose_file = tmp_path / "docker-compose.yml"

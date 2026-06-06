@@ -14,6 +14,12 @@ def test_start_success(mocker):
     assert format_banner("MirrorNeuron Local Runtime") in result.stdout
     mock_start_server.assert_called_once_with()
 
+def test_start_worker_node_success(mocker):
+    mock_start_worker = mocker.patch('mn_cli.libs.sys_cmds._start_worker_node')
+    result = runner.invoke(app, ["runtime", "start", "--worker-node", "--host", "192.168.4.20"])
+    assert result.exit_code == 0
+    mock_start_worker.assert_called_once_with(host="192.168.4.20", grpc_port=55051)
+
 def test_expose_node_success(mocker):
     mock_expose_node = mocker.patch('mn_cli.libs.sys_cmds._start_network_seed')
     result = runner.invoke(
@@ -61,7 +67,7 @@ def test_expose_node_defaults_to_bridge_network(mocker):
         dist_port=54370,
         redis_port=None,
         force_new_token=False,
-        docker_network_mode="bridge",
+        docker_network_mode=None,
         docker_network_name="mirror-neuron-runtime",
     )
 
@@ -120,12 +126,12 @@ def test_add_node_defaults_to_bridge_network(mocker):
         seed_host="192.168.4.10",
         token="join-token",
         grpc_port=55051,
-        docker_network_mode="bridge",
+        docker_network_mode=None,
         docker_network_name="mirror-neuron-runtime",
     )
 
 def test_join_success(mocker):
-    mock_start_server = mocker.patch('mn_cli.libs.sys_cmds._start_server')
+    mock_join = mocker.patch('mn_cli.libs.sys_cmds._join_network')
     result = runner.invoke(
         app,
         [
@@ -141,19 +147,16 @@ def test_join_success(mocker):
         ],
     )
     assert result.exit_code == 0
-    mock_start_server.assert_called_once_with(
-        "192.168.1.1",
+    mock_join.assert_called_once_with(
+        seed_host="192.168.1.1",
         token="join-token",
-        host=None,
         grpc_port=55051,
-        dist_port=54370,
-        redis_port=None,
         docker_network_mode="overlay",
         docker_network_name="mn-overlay",
     )
 
 def test_join_defaults_to_bridge_network(mocker):
-    mock_start_server = mocker.patch('mn_cli.libs.sys_cmds._start_server')
+    mock_join = mocker.patch('mn_cli.libs.sys_cmds._join_network')
     result = runner.invoke(
         app,
         [
@@ -165,21 +168,18 @@ def test_join_defaults_to_bridge_network(mocker):
         ],
     )
     assert result.exit_code == 0
-    mock_start_server.assert_called_once_with(
-        "192.168.1.1",
+    mock_join.assert_called_once_with(
+        seed_host="192.168.1.1",
         token="join-token",
-        host=None,
         grpc_port=55051,
-        dist_port=54370,
-        redis_port=None,
-        docker_network_mode="bridge",
+        docker_network_mode=None,
         docker_network_name="mirror-neuron-runtime",
     )
 
 @pytest.mark.parametrize(
     ("args", "backend_path"),
     [
-        (["node", "join", "192.168.1.1"], "mn_cli.libs.sys_cmds._start_server"),
+        (["node", "join", "192.168.1.1"], "mn_cli.libs.sys_cmds._join_network"),
         (["node", "add", "192.168.1.1"], "mn_cli.libs.sys_cmds._join_network"),
     ],
 )

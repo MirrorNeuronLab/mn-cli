@@ -3,6 +3,7 @@ import json
 import hashlib
 import signal
 import secrets
+import shutil
 import socket
 import subprocess
 import sys
@@ -108,8 +109,10 @@ NETWORK_REDIS_ENV_FILE = DIR / "network-redis.env"
 DEFAULT_DOCKER_NETWORK_NAME = "mirror-neuron-runtime"
 NETWORK_DOCKER_NETWORK = DEFAULT_DOCKER_NETWORK_NAME
 LOCAL_CORE_CONTAINER = "mirror-neuron-core"
+COMPOSE_REDIS_CONTAINER = "mirror-neuron-redis"
 NETWORK_CORE_CONTAINER = "mirror-neuron-network-core"
 NETWORK_REDIS_CONTAINER = "mirror-neuron-network-redis"
+RUNTIME_CLUSTER_OVERRIDE_FILE = "docker-compose.cluster.yml"
 
 
 def _openshell_config_dir() -> Path:
@@ -942,6 +945,7 @@ def _network_core_env(
     env.update(
         {
             "MN_NETWORK_ONLY": "true",
+            "MN_REDIS_FORWARD_PRIMARY": "true",
             "MN_NETWORK_JOIN_TOKEN": token,
             "MN_NETWORK_ADVERTISE_HOST": host,
             "MN_NETWORK_REDIS_HOST": redis_public_host,
@@ -1093,10 +1097,13 @@ def _print_network_seed_ready(
     docker_network_mode: Optional[str] = None,
     docker_network_name: Optional[str] = None,
     already_running: bool = False,
+    worker_node: bool = False,
 ) -> None:
     node_name = node_name or _network_node_name(host)
     if already_running:
         console.print("\n[green]MirrorNeuron node is already ready to join.[/green]")
+    elif worker_node:
+        console.print("\n[green]MirrorNeuron worker node is running.[/green]")
     else:
         console.print("\n[green]MirrorNeuron exposed node is running.[/green]")
     console.print(f"Host: {host}")
@@ -1104,7 +1111,7 @@ def _print_network_seed_ready(
     console.print(f"Node: {node_name}")
     console.print(f"Token: {token}")
     network_args = _docker_network_command_args(docker_network_mode, docker_network_name)
-    console.print(f"\nOn the main box, add this node with:\n  mn node add {host} --token {token}{network_args}")
+    console.print(f"\nOn the primary box, join this worker with:\n  mn node join {host} --token {token}{network_args}")
 
 def _return_running_network_seed(
     host: Optional[str],
@@ -1132,6 +1139,47 @@ def _return_running_network_seed(
     )
     return token
 
+def _compose_project_name() -> str:
+    return (
+        _read_env_file(RUNTIME_COMPOSE_ENV).get("COMPOSE_PROJECT_NAME", "").strip()
+        or os.getenv("COMPOSE_PROJECT_NAME", "").strip()
+        or "mirror-neuron"
+    )
+
+def _clear_worker_redis_state() -> None:
+    shutil.rmtree(DIR / "network-redis", ignore_errors=True)
+    NETWORK_REDIS_ENV_FILE.unlink(missing_ok=True)
+
+    if runtime_compose_available():
+        subprocess.run(runtime_compose_cmd("down"), stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        subprocess.run(
+            ["docker", "volume", "rm", "-f", f"{_compose_project_name()}_redis-data"],
+            stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+        )
+
+def _start_worker_node(
+    host: Optional[str] = None,
+    grpc_port: int = int(DEFAULT_GRPC_PORT),
+    dist_port: int = int(DEFAULT_DIST_PORT),
+    redis_port: Optional[int] = None,
+    docker_network_mode: Optional[str] = None,
+    docker_network_name: Optional[str] = None,
+) -> str:
+    console.print("=> Preparing this box as a clean MirrorNeuron worker node...")
+    _stop_network_runtime()
+    _clear_worker_redis_state()
+    return _start_network_seed(
+        host=host,
+        grpc_port=grpc_port,
+        dist_port=dist_port,
+        redis_port=redis_port,
+        force_new_token=False,
+        docker_network_mode=docker_network_mode,
+        docker_network_name=docker_network_name,
+        worker_node=True,
+    )
+
 def _start_network_seed(
     host: Optional[str] = None,
     grpc_port: int = int(DEFAULT_GRPC_PORT),
@@ -1140,6 +1188,7 @@ def _start_network_seed(
     force_new_token: bool = False,
     docker_network_mode: Optional[str] = None,
     docker_network_name: Optional[str] = None,
+    worker_node: bool = False,
 ) -> str:
     if check_status(API_PID_FILE) == 0:
         return _return_running_network_seed(host, grpc_port, (LOCAL_CORE_CONTAINER,))
@@ -1232,6 +1281,7 @@ def _start_network_seed(
         node_name=node_name,
         docker_network_mode=requested_mode,
         docker_network_name=network_name,
+        worker_node=worker_node,
     )
     return token
 
@@ -1281,6 +1331,8 @@ def _join_network(
         console.print(f"[dim]{exc}[/dim]")
         raise typer.Exit(1) from exc
     console.print(f"[green]Remote node added. Status: {status}[/green]")
+    if runtime_compose_available() or os.getenv("MN_REDIS_URL", "").strip():
+        _configure_worker_redis_replica(seed_host, handshake, token)
     if not _docker_network_uses_internal_identity(requested_mode):
         console.print(f"Remote Redis URL: {redis_url}")
     console.print("Run 'mn node list' or 'mn resource list' to inspect aggregate cluster resources.")
@@ -1586,6 +1638,53 @@ def _ensure_compose_cluster_bind_settings(env: dict[str, str], advertised_host: 
         _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
     return adjusted
 
+def _runtime_compose_cluster_override_file() -> Path:
+    return DIR / RUNTIME_CLUSTER_OVERRIDE_FILE
+
+def _write_runtime_compose_cluster_override() -> None:
+    override = """services:
+  redis:
+    ports:
+      - "${MN_REDIS_BIND_HOST:-127.0.0.1}:${MN_REDIS_PORT:-56379}:6379"
+  mirror-neuron-core:
+    ports:
+      - "${MN_EPMD_BIND_HOST:-127.0.0.1}:${MN_EPMD_PORT:-54369}:${MN_EPMD_PORT:-54369}"
+      - "${MN_DIST_BIND_HOST:-127.0.0.1}:${MN_DIST_PORT:-54370}:${MN_DIST_PORT:-54370}"
+"""
+    path = _runtime_compose_cluster_override_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(override, encoding="utf-8")
+
+def _ensure_compose_cluster_port_settings(
+    env: dict[str, str],
+    *,
+    token: str,
+    advertised_host: str,
+    redis_port: Optional[int] = None,
+) -> dict[str, str]:
+    adjusted = dict(env)
+    publish_host = _network_publish_host(advertised_host)
+    selected_redis_port = _resolve_published_redis_port(
+        bind_host=publish_host,
+        configured_port=redis_port if redis_port is not None else adjusted.get("MN_REDIS_PORT"),
+        explicit=redis_port is not None or bool(str(adjusted.get("MN_REDIS_PORT") or "").strip()),
+        owner_container=COMPOSE_REDIS_CONTAINER,
+    )
+    redis_password = _derive_network_secret(token, "redis")
+    updates = {
+        "MN_REDIS_PASSWORD": redis_password,
+        "MN_REDIS_BIND_HOST": publish_host,
+        "MN_REDIS_PORT": str(selected_redis_port),
+        "MN_NETWORK_REDIS_HOST": advertised_host,
+        "MN_NETWORK_REDIS_PORT": str(selected_redis_port),
+        "MN_EPMD_BIND_HOST": publish_host,
+        "MN_DIST_BIND_HOST": publish_host,
+    }
+    adjusted.update(updates)
+    _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
+    _write_runtime_compose_cluster_override()
+    return adjusted
+
 def _ensure_compose_internal_redis_settings(
     env: dict[str, str],
     *,
@@ -1652,16 +1751,160 @@ def _validate_remote_redis_details(handshake: dict, seed_host: str, token: str) 
 
     return redis_host, redis_port, redis_url
 
+def _redis_password_from_url(redis_url: str) -> str:
+    try:
+        return urlparse(redis_url).password or ""
+    except Exception:
+        return ""
+
+def _usable_remote_host(host: str, fallback: str) -> str:
+    normalized = str(host or "").strip()
+    if normalized in {"", "0.0.0.0", "::", "redis", "localhost", "127.0.0.1"}:
+        return fallback
+    return normalized
+
+def _primary_redis_details(fallback_token: str) -> Optional[tuple[str, int, str]]:
+    env = _runtime_base_env(runtime_compose_available())
+    redis_url = str(env.get("MN_REDIS_URL") or "").strip()
+    parsed = urlparse(redis_url) if redis_url else None
+    host = (
+        str(env.get("MN_NETWORK_REDIS_HOST") or "").strip()
+        or (parsed.hostname if parsed else "")
+        or _advertised_network_host(None)
+    )
+    port = (
+        _parse_configured_port(env.get("MN_NETWORK_REDIS_PORT"))
+        or _parse_configured_port(env.get("MN_REDIS_PORT"))
+        or _parse_configured_port(parsed.port if parsed else None)
+        or REDIS_CONTAINER_PORT
+    )
+    password = (
+        str(env.get("MN_REDIS_PASSWORD") or "").strip()
+        or (_redis_password_from_url(redis_url) if redis_url else "")
+    )
+    if not password:
+        primary_token = _running_network_token((LOCAL_CORE_CONTAINER, NETWORK_CORE_CONTAINER)) or fallback_token
+        password = _derive_network_secret(primary_token, "redis")
+    if not host or not port or not password:
+        return None
+    return host, port, password
+
+def _redis_encode_command(args: tuple[str, ...]) -> bytes:
+    chunks = [f"*{len(args)}\r\n".encode("utf-8")]
+    for arg in args:
+        payload = str(arg).encode("utf-8")
+        chunks.append(f"${len(payload)}\r\n".encode("utf-8"))
+        chunks.append(payload + b"\r\n")
+    return b"".join(chunks)
+
+def _redis_read_line(stream) -> str:
+    line = stream.readline()
+    if not line:
+        raise OSError("Redis closed the connection")
+    return line.rstrip(b"\r\n").decode("utf-8", errors="replace")
+
+def _redis_read_response(stream):
+    prefix = stream.read(1)
+    if not prefix:
+        raise OSError("Redis closed the connection")
+    kind = prefix.decode("ascii", errors="replace")
+    if kind == "+":
+        return _redis_read_line(stream)
+    if kind == "-":
+        raise RuntimeError(_redis_read_line(stream))
+    if kind == ":":
+        return int(_redis_read_line(stream))
+    if kind == "$":
+        length = int(_redis_read_line(stream))
+        if length < 0:
+            return None
+        data = stream.read(length)
+        stream.read(2)
+        return data.decode("utf-8", errors="replace")
+    if kind == "*":
+        length = int(_redis_read_line(stream))
+        if length < 0:
+            return None
+        return [_redis_read_response(stream) for _ in range(length)]
+    raise RuntimeError(f"unexpected Redis response prefix {kind!r}")
+
+def _redis_command(host: str, port: int, password: str, *args: str):
+    with socket.create_connection((host, port), timeout=5) as conn:
+        stream = conn.makefile("rb")
+        if password:
+            conn.sendall(_redis_encode_command(("AUTH", password)))
+            _redis_read_response(stream)
+        conn.sendall(_redis_encode_command(tuple(str(arg) for arg in args)))
+        return _redis_read_response(stream)
+
+def _configure_worker_redis_replica(
+    worker_host: str,
+    worker_handshake: dict,
+    token: str,
+) -> bool:
+    primary = _primary_redis_details(token)
+    if primary is None:
+        console.print("[yellow]Warning: Could not determine primary Redis details; worker Redis replication was skipped.[/yellow]")
+        return False
+
+    primary_host, primary_port, primary_password = primary
+    worker_redis_host, worker_redis_port, worker_redis_url = _validate_remote_redis_details(
+        worker_handshake,
+        worker_host,
+        token,
+    )
+    worker_redis_host = _usable_remote_host(worker_redis_host, worker_host)
+    worker_password = _redis_password_from_url(worker_redis_url) or _derive_network_secret(token, "redis")
+
+    try:
+        _redis_command(
+            worker_redis_host,
+            worker_redis_port,
+            worker_password,
+            "CONFIG",
+            "SET",
+            "masterauth",
+            primary_password,
+        )
+        _redis_command(
+            worker_redis_host,
+            worker_redis_port,
+            worker_password,
+            "REPLICAOF",
+            primary_host,
+            str(primary_port),
+        )
+        try:
+            _redis_command(primary_host, primary_port, primary_password, "WAIT", "1", "1000")
+        except Exception:
+            logger.debug("Primary Redis WAIT after worker replica setup failed", exc_info=True)
+    except Exception as exc:
+        console.print("[red]Error: Could not configure worker Redis replication.[/red]")
+        console.print(f"Primary Redis: {primary_host}:{primary_port}")
+        console.print(f"Worker Redis:  {worker_redis_host}:{worker_redis_port}")
+        console.print(f"[dim]{exc}[/dim]")
+        raise typer.Exit(1) from exc
+
+    console.print(
+        f"=> Worker Redis {worker_redis_host}:{worker_redis_port} is replicating from "
+        f"{primary_host}:{primary_port}."
+    )
+    return True
+
 def runtime_compose_cmd(*args: str) -> list[str]:
-    return [
+    cmd = [
         "docker",
         "compose",
         "--env-file",
         str(RUNTIME_COMPOSE_ENV),
         "-f",
         str(RUNTIME_COMPOSE_FILE),
-        *args,
     ]
+    cluster_override = _runtime_compose_cluster_override_file()
+    if cluster_override.exists():
+        cmd.extend(["-f", str(cluster_override)])
+    cmd.extend(args)
+    return cmd
 
 def web_ui_pid_files() -> tuple[tuple[Path, str], ...]:
     paths = [
@@ -2266,7 +2509,7 @@ def _start_server(
         mode_override = str(env.get("MN_DOCKER_NETWORK_MODE") or "").strip()
     requested_docker_mode = _docker_network_mode(
         mode_override or None,
-        default="disabled" if (ip or not compose_runtime or persisted_join_profile_before_network) else "bridge",
+        default="disabled",
     )
     network_name = _docker_network_name(docker_network_name)
     use_internal_identity = _docker_network_uses_internal_identity(requested_docker_mode)
@@ -2314,6 +2557,13 @@ def _start_server(
                     else None
                 ),
             )
+            if not join_handshake:
+                env = _ensure_compose_cluster_port_settings(
+                    env,
+                    token=network_token,
+                    advertised_host=advertised_host,
+                    redis_port=redis_port,
+                )
     else:
         env.update(_runtime_blueprint_env_updates(env))
     _ensure_host_artifacts_dir(env)
@@ -2343,7 +2593,10 @@ def _start_server(
         else:
             seed_redis_host = advertised_host
             seed_redis_port = redis_port or (
-                _parse_port(os.getenv("MN_REDIS_PORT"), REDIS_CONTAINER_PORT)
+                _parse_port(
+                    env.get("MN_NETWORK_REDIS_PORT") or env.get("MN_REDIS_PORT") or os.getenv("MN_REDIS_PORT"),
+                    REDIS_CONTAINER_PORT,
+                )
             )
 
     console.print("===========================================")
@@ -2452,6 +2705,8 @@ def _start_server(
                 "MN_NODE_GPU_COUNT": env["MN_NODE_GPU_COUNT"],
                 "MN_NODE_MODELS": env.get("MN_NODE_MODELS", ""),
                 "MN_NODE_RUNTIME_MODELS": env.get("MN_NODE_RUNTIME_MODELS", ""),
+                "MN_DOCKER_NETWORK_MODE": env.get("MN_DOCKER_NETWORK_MODE", "disabled"),
+                "MN_DOCKER_NETWORK_NAME": env.get("MN_DOCKER_NETWORK_NAME", network_name),
                 **(
                     _docker_network_env(requested_docker_mode, network_name, node_alias)
                     if requested_docker_mode != "disabled" and node_alias
@@ -2594,7 +2849,8 @@ def _start_server(
     console.print(f"  {network_token}")
     network_args = _docker_network_command_args(requested_docker_mode, network_name)
     console.print("Add another box with:")
-    console.print(f"  mn node join {advertised_host} --token {network_token}{network_args}")
+    console.print("  1. On the worker box: mn runtime start --worker-node")
+    console.print(f"  2. On this primary box: mn node join <worker-host> --token <worker-token>{network_args}")
     console.print("Logs are available at:")
     console.print(f"  Core: {BEAM_LOG}")
     console.print(f"  API:  {API_LOG}")
