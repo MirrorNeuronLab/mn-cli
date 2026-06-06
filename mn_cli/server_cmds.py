@@ -1173,6 +1173,7 @@ def _start_worker_node(
     console.print("=> Preparing this box as a clean MirrorNeuron worker node...")
     _stop_network_runtime()
     _clear_worker_redis_state()
+    _refresh_network_token()
     return _start_network_seed(
         host=host,
         grpc_port=grpc_port,

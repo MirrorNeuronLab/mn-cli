@@ -608,12 +608,14 @@ def test_start_worker_node_clears_state_and_starts_worker(mocker, tmp_path):
     server_cmds.NETWORK_REDIS_ENV_FILE.write_text("MN_REDIS_PORT=56379\n")
 
     stop_runtime = mocker.patch('mn_cli.server_cmds._stop_network_runtime')
+    refresh_token = mocker.patch('mn_cli.server_cmds._refresh_network_token', return_value="rotated-token")
     start_seed = mocker.patch('mn_cli.server_cmds._start_network_seed', return_value="worker-token")
     mocker.patch('mn_cli.server_cmds.subprocess.run')
 
     assert _start_worker_node(host="192.168.4.20", grpc_port=50055) == "worker-token"
 
     stop_runtime.assert_called_once_with()
+    refresh_token.assert_called_once_with()
     assert not network_redis_dir.exists()
     assert not server_cmds.NETWORK_REDIS_ENV_FILE.exists()
     start_seed.assert_called_once_with(
