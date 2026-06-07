@@ -5,6 +5,7 @@ import uuid
 import pytest
 
 from mn_cli.libs.run_logs import JobLogWriter, materialize_sent_email_copy
+from mn_cli.libs.artifacts import promote_large_payloads_to_blob_refs
 from mn_cli.libs.run_manifest import (
     apply_manifest_config_bindings,
     load_blueprint_config,
@@ -69,6 +70,33 @@ def test_prepare_manifest_for_submission_merges_runtime_env_and_metadata(tmp_pat
     assert env["MN_LLM_MODEL"] == "ollama/test"
     assert env["MN_LLM_API_KEY"] == "kept"
     assert prepared["metadata"]["mn_cli"]["blueprint_id"] == "bp"
+
+
+def test_promote_large_payloads_to_blob_refs(tmp_path, monkeypatch):
+    blob_root = tmp_path / "blobs"
+    monkeypatch.setenv("MN_HOST_BLOB_STORE_DIR", str(blob_root))
+    monkeypatch.setenv("MN_INLINE_PAYLOAD_MAX_BYTES", "5")
+    monkeypatch.setenv("MN_ARTIFACT_ADVERTISE_URL", "http://node-a:55660")
+    monkeypatch.setenv("MN_NODE_NAME", "node-a@lab")
+
+    manifest = {"metadata": {}}
+    payloads = {
+        "small.txt": b"12345",
+        "media/demo.mp4": b"123456",
+    }
+
+    promoted = promote_large_payloads_to_blob_refs(manifest, payloads)
+
+    assert "small.txt" in payloads
+    assert "media/demo.mp4" not in payloads
+    assert len(promoted) == 1
+    ref = manifest["metadata"]["mn_artifacts"]["blob_refs"][0]
+    assert ref["type"] == "blob_ref"
+    assert ref["payload_path"] == "media/demo.mp4"
+    assert ref["size_bytes"] == 6
+    assert ref["locations"][0]["node"] == "node-a@lab"
+    assert ref["locations"][0]["url"].endswith(f"/blobs/{ref['sha256']}")
+    assert (blob_root / ref["sha256"][:2] / ref["sha256"]).read_bytes() == b"123456"
 
 
 def test_prepare_manifest_injects_docker_model_runner_llm_env_by_node_runtime(tmp_path):

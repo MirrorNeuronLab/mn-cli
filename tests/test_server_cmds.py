@@ -1044,6 +1044,7 @@ def test_join_promotes_local_compose_runtime_to_cluster_mode(mocker, tmp_path):
 
     env_text = compose_env.read_text(encoding="utf-8")
     assert "MN_NODE_NAME=mirror_neuron@192.168.4.20" in env_text
+    assert "MN_MODEL_SERVICE_NODE_NAME=mirror_neuron@192.168.4.20" in env_text
     assert "MN_CLUSTER_NODES=mirror_neuron@192.168.4.20" in env_text
     assert "MN_NETWORK_ADVERTISE_HOST=192.168.4.20" in env_text
     assert "MN_GRPC_BIND_HOST=0.0.0.0" in env_text
@@ -1506,6 +1507,7 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
     env = compose_call[1]["env"]
     assert env["MN_DOCKER_NETWORK_MODE"] == "disabled"
     assert env["MN_NODE_NAME"] == "mirror_neuron@192.168.4.99"
+    assert env["MN_MODEL_SERVICE_NODE_NAME"] == "mirror_neuron@192.168.4.99"
     assert env["MN_CLUSTER_NODES"] == "mirror_neuron@192.168.4.99"
     assert env["MN_NETWORK_REDIS_HOST"] == "192.168.4.99"
     assert env["MN_NETWORK_REDIS_PORT"] == "56379"
@@ -1516,6 +1518,7 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
     assert "MN_NETWORK_ADVERTISE_HOST=192.168.4.99" in compose_env_text
     assert "MN_DOCKER_NETWORK_MODE=disabled" in compose_env_text
     assert "MN_NODE_NAME=mirror_neuron@192.168.4.99" in compose_env_text
+    assert "MN_MODEL_SERVICE_NODE_NAME=mirror_neuron@192.168.4.99" in compose_env_text
     assert "MN_CLUSTER_NODES=mirror_neuron@192.168.4.99" in compose_env_text
     assert "MN_NETWORK_REDIS_HOST=192.168.4.99" in compose_env_text
     assert "MN_NETWORK_REDIS_PORT=56379" in compose_env_text

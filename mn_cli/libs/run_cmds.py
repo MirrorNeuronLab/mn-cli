@@ -30,6 +30,7 @@ from mn_cli.libs.run_logs import (
     materialize_sent_email_copy as _materialize_sent_email_copy,
     write_result_stream_event as _write_result_stream_event,
 )
+from mn_cli.libs.artifacts import promote_large_payloads_to_blob_refs
 from mn_cli.libs.run_manifest import (
     add_mn_llm_aliases as _add_mn_llm_aliases,
     blueprint_runtime_environment as _blueprint_runtime_environment,
@@ -1467,6 +1468,7 @@ def run_bundle(
         if web_ui:
             payloads.update(runtime_web_ui_support_payloads_for_manifest(manifest_dict))
         stage_local_input_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
+        promote_large_payloads_to_blob_refs(manifest_dict, payloads)
         manifest = json.dumps(manifest_dict)
         submitted_manifest = manifest_dict
 

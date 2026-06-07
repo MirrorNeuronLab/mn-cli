@@ -107,6 +107,7 @@ DEFAULT_DIST_PORT = "54370"
 DEFAULT_WEB_UI_PORT = "55173"
 DEFAULT_WEB_UI_RESTART_DELAY_SECONDS = "2"
 DEFAULT_OPENSHELL_GATEWAY_PORT = "58080"
+DEFAULT_ARTIFACT_PORT = "55660"
 DEFAULT_BLUEPRINT_REPO = "https://github.com/MirrorNeuronLab/mn-blueprints.git"
 DEFAULT_BLUEPRINT_WEB_UI_BIND_HOST = "0.0.0.0"
 DEFAULT_BLUEPRINT_WEB_UI_PUBLIC_HOST = "localhost"
@@ -114,6 +115,7 @@ DEFAULT_BLUEPRINT_WEB_UI_PORT_START = "61000"
 DEFAULT_BLUEPRINT_WEB_UI_PORT_END = "61049"
 DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE = "prepublished"
 DEFAULT_CONTAINER_RUNS_ROOT = "/root/.mn/runs"
+DEFAULT_CONTAINER_BLOB_STORE_ROOT = "/root/.mn/blobs"
 LEGACY_GRPC_PORT = "50051"
 LEGACY_API_PORT = "4001"
 LEGACY_EPMD_PORT = "4369"
@@ -1647,6 +1649,7 @@ def _ensure_local_cluster_runtime_for_join(
     env["MN_NETWORK_JOIN_TOKEN"] = primary_token
     env["MN_NETWORK_ADVERTISE_HOST"] = local_host
     env["MN_NODE_NAME"] = node_name
+    env["MN_MODEL_SERVICE_NODE_NAME"] = node_name
     env["MN_CLUSTER_NODES"] = node_name
     env["MN_NODE_ROLE"] = env.get("MN_NODE_ROLE") or "runtime"
     env["MN_DIST_PORT"] = str(env.get("MN_DIST_PORT") or DEFAULT_DIST_PORT)
@@ -1660,6 +1663,7 @@ def _ensure_local_cluster_runtime_for_join(
             "MN_NETWORK_ADVERTISE_HOST": env["MN_NETWORK_ADVERTISE_HOST"],
             "MN_NETWORK_JOIN_TOKEN": env["MN_NETWORK_JOIN_TOKEN"],
             "MN_NODE_NAME": env["MN_NODE_NAME"],
+            "MN_MODEL_SERVICE_NODE_NAME": env["MN_MODEL_SERVICE_NODE_NAME"],
             "MN_CLUSTER_NODES": env["MN_CLUSTER_NODES"],
             "MN_NODE_ROLE": env["MN_NODE_ROLE"],
             "MN_DIST_PORT": env["MN_DIST_PORT"],
@@ -1831,15 +1835,28 @@ def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
     ).strip()
     if not host_artifacts_dir:
         host_artifacts_dir = str(Path(host_home_dir).expanduser() / "runs")
+    host_blob_store_dir = str(
+        env.get("MN_HOST_BLOB_STORE_DIR") or os.getenv("MN_HOST_BLOB_STORE_DIR") or ""
+    ).strip()
+    if not host_blob_store_dir:
+        host_blob_store_dir = str(Path(host_home_dir).expanduser() / "blobs")
     container_runs_root = str(
         env.get("MN_CONTAINER_RUNS_ROOT") or os.getenv("MN_CONTAINER_RUNS_ROOT") or DEFAULT_CONTAINER_RUNS_ROOT
+    ).strip()
+    container_blob_store_root = str(
+        env.get("MN_CONTAINER_BLOB_STORE_ROOT")
+        or os.getenv("MN_CONTAINER_BLOB_STORE_ROOT")
+        or DEFAULT_CONTAINER_BLOB_STORE_ROOT
     ).strip()
     updates: dict[str, str] = {
         "MN_DEFAULT_BLUEPRINT_REPO": default_repo,
         "MN_BLUEPRINT_REPO": str(env.get("MN_BLUEPRINT_REPO") or "").strip() or default_repo,
         "MN_HOST_ARTIFACTS_DIR": host_artifacts_dir,
+        "MN_HOST_BLOB_STORE_DIR": host_blob_store_dir,
         "MN_RUNS_ROOT": configured_runs_root or host_artifacts_dir,
         "MN_CONTAINER_RUNS_ROOT": container_runs_root,
+        "MN_CONTAINER_BLOB_STORE_ROOT": container_blob_store_root,
+        "MN_BLOB_STORE_ROOT": container_blob_store_root,
         "MN_BLUEPRINT_WEB_UI_BIND_HOST": str(
             env.get("MN_BLUEPRINT_WEB_UI_BIND_HOST") or DEFAULT_BLUEPRINT_WEB_UI_BIND_HOST
         ).strip(),
@@ -1940,6 +1957,10 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
         _env_or_default(adjusted, "MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT, LEGACY_WEB_UI_PORT),
         DEFAULT_WEB_UI_PORT,
     )
+    artifact_port = _valid_port_text(
+        _env_or_default(adjusted, "MN_ARTIFACT_PORT", DEFAULT_ARTIFACT_PORT),
+        DEFAULT_ARTIFACT_PORT,
+    )
     openshell_port = _valid_port_text(
         _env_or_default(
             adjusted,
@@ -1973,6 +1994,12 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
         "MN_DIST_PORT": dist_port,
         "MN_WEB_UI_HOST": adjusted.get("MN_WEB_UI_HOST") or DEFAULT_HOST,
         "MN_WEB_UI_PORT": web_ui_port,
+        "MN_ARTIFACT_ENABLED": adjusted.get("MN_ARTIFACT_ENABLED") or "true",
+        "MN_ARTIFACT_BIND_HOST": adjusted.get("MN_ARTIFACT_BIND_HOST") or "0.0.0.0",
+        "MN_ARTIFACT_PUBLISH_HOST": adjusted.get("MN_ARTIFACT_PUBLISH_HOST") or "127.0.0.1",
+        "MN_ARTIFACT_PORT": artifact_port,
+        "MN_ARTIFACT_ADVERTISE_URL": adjusted.get("MN_ARTIFACT_ADVERTISE_URL")
+        or f"http://127.0.0.1:{artifact_port}",
         "OPENSHELL_GATEWAY_BIND_HOST": openshell_bind_host,
         "OPENSHELL_GATEWAY_PORT": openshell_port,
         "OPENSHELL_GATEWAY_ENDPOINT": openshell_endpoint,
@@ -3007,10 +3034,26 @@ def _start_server(
     env["MN_NETWORK_ADVERTISE_HOST"] = advertised_host
     env["MN_NETWORK_REDIS_HOST"] = seed_redis_host
     env["MN_NETWORK_REDIS_PORT"] = str(seed_redis_port)
+    artifact_port = _valid_port_text(
+        str(env.get("MN_ARTIFACT_PORT") or DEFAULT_ARTIFACT_PORT),
+        DEFAULT_ARTIFACT_PORT,
+    )
+    env["MN_ARTIFACT_ENABLED"] = str(env.get("MN_ARTIFACT_ENABLED") or "true")
+    env["MN_ARTIFACT_BIND_HOST"] = str(env.get("MN_ARTIFACT_BIND_HOST") or "0.0.0.0")
+    env["MN_ARTIFACT_PUBLISH_HOST"] = _network_publish_host(advertised_host)
+    env["MN_ARTIFACT_PORT"] = artifact_port
+    env["MN_ARTIFACT_ADVERTISE_URL"] = f"http://{advertised_host}:{artifact_port}"
+    env["MN_ARTIFACT_AUTH_TOKEN"] = str(env.get("MN_ARTIFACT_AUTH_TOKEN") or network_token)
     if requested_docker_mode != "disabled" and node_alias:
         env.update(_docker_network_env(requested_docker_mode, network_name, node_alias))
     if _generated_node_setting_should_update("MN_NODE_NAME", env.get("MN_NODE_NAME"), local_node_name):
         env["MN_NODE_NAME"] = local_node_name
+    if _generated_node_setting_should_update(
+        "MN_MODEL_SERVICE_NODE_NAME",
+        env.get("MN_MODEL_SERVICE_NODE_NAME"),
+        env["MN_NODE_NAME"],
+    ):
+        env["MN_MODEL_SERVICE_NODE_NAME"] = env["MN_NODE_NAME"]
     if not str(env.get("MN_NODE_ROLE") or "").strip():
         env["MN_NODE_ROLE"] = "runtime"
     if ip or not compose_runtime:
@@ -3048,6 +3091,12 @@ def _start_server(
                     "MN_CONTEXT_REDIS_URL": env["MN_CONTEXT_REDIS_URL"],
                     "MN_NETWORK_REDIS_HOST": seed_redis_host,
                     "MN_NETWORK_REDIS_PORT": str(seed_redis_port),
+                    "MN_ARTIFACT_ENABLED": env["MN_ARTIFACT_ENABLED"],
+                    "MN_ARTIFACT_BIND_HOST": env["MN_ARTIFACT_BIND_HOST"],
+                    "MN_ARTIFACT_PUBLISH_HOST": env["MN_ARTIFACT_PUBLISH_HOST"],
+                    "MN_ARTIFACT_PORT": env["MN_ARTIFACT_PORT"],
+                    "MN_ARTIFACT_ADVERTISE_URL": env["MN_ARTIFACT_ADVERTISE_URL"],
+                    "MN_ARTIFACT_AUTH_TOKEN": env["MN_ARTIFACT_AUTH_TOKEN"],
                     **(
                         _docker_network_env(requested_docker_mode, network_name, node_alias)
                         if requested_docker_mode != "disabled" and node_alias
@@ -3073,11 +3122,18 @@ def _start_server(
             RUNTIME_COMPOSE_ENV,
             {
                 "MN_NETWORK_ADVERTISE_HOST": env["MN_NETWORK_ADVERTISE_HOST"],
+                "MN_MODEL_SERVICE_NODE_NAME": env.get("MN_MODEL_SERVICE_NODE_NAME", ""),
                 "MN_NODE_NAME": env["MN_NODE_NAME"],
                 "MN_NODE_ROLE": env["MN_NODE_ROLE"],
                 "MN_CLUSTER_NODES": env["MN_CLUSTER_NODES"],
                 "MN_NETWORK_REDIS_HOST": env["MN_NETWORK_REDIS_HOST"],
                 "MN_NETWORK_REDIS_PORT": env["MN_NETWORK_REDIS_PORT"],
+                "MN_ARTIFACT_ENABLED": env["MN_ARTIFACT_ENABLED"],
+                "MN_ARTIFACT_BIND_HOST": env["MN_ARTIFACT_BIND_HOST"],
+                "MN_ARTIFACT_PUBLISH_HOST": env["MN_ARTIFACT_PUBLISH_HOST"],
+                "MN_ARTIFACT_PORT": env["MN_ARTIFACT_PORT"],
+                "MN_ARTIFACT_ADVERTISE_URL": env["MN_ARTIFACT_ADVERTISE_URL"],
+                "MN_ARTIFACT_AUTH_TOKEN": env["MN_ARTIFACT_AUTH_TOKEN"],
                 "MN_DIST_PORT": env["MN_DIST_PORT"],
                 "MN_NODE_DISPLAY_NAME": env["MN_NODE_DISPLAY_NAME"],
                 "MN_NODE_CPU_MODEL": env.get("MN_NODE_CPU_MODEL", ""),
@@ -3127,8 +3183,15 @@ def _start_server(
         cmd.extend(["-e", f"{GRPC_ADMIN_TOKEN_ENV}={env[GRPC_ADMIN_TOKEN_ENV]}"])
         cmd.extend(["-e", f"MN_NETWORK_JOIN_TOKEN={env['MN_NETWORK_JOIN_TOKEN']}"])
         cmd.extend(["-e", f"MN_NETWORK_ADVERTISE_HOST={env['MN_NETWORK_ADVERTISE_HOST']}"])
+        if env.get("MN_MODEL_SERVICE_NODE_NAME"):
+            cmd.extend(["-e", f"MN_MODEL_SERVICE_NODE_NAME={env['MN_MODEL_SERVICE_NODE_NAME']}"])
         cmd.extend(["-e", f"MN_NETWORK_REDIS_HOST={env['MN_NETWORK_REDIS_HOST']}"])
         cmd.extend(["-e", f"MN_NETWORK_REDIS_PORT={env['MN_NETWORK_REDIS_PORT']}"])
+        cmd.extend(["-e", f"MN_ARTIFACT_ENABLED={env['MN_ARTIFACT_ENABLED']}"])
+        cmd.extend(["-e", f"MN_ARTIFACT_BIND_HOST={env['MN_ARTIFACT_BIND_HOST']}"])
+        cmd.extend(["-e", f"MN_ARTIFACT_PORT={env['MN_ARTIFACT_PORT']}"])
+        cmd.extend(["-e", f"MN_ARTIFACT_ADVERTISE_URL={env['MN_ARTIFACT_ADVERTISE_URL']}"])
+        cmd.extend(["-e", f"MN_ARTIFACT_AUTH_TOKEN={env['MN_ARTIFACT_AUTH_TOKEN']}"])
         cmd.extend(["-e", f"MN_CLUSTER_NODES={env['MN_CLUSTER_NODES']}"])
         if env.get("MN_NODE_ALIAS"):
             cmd.extend(["-e", f"MN_NODE_ALIAS={env['MN_NODE_ALIAS']}"])
@@ -3163,6 +3226,10 @@ def _start_server(
 
         if system_name == "Darwin":
             cmd.extend(["-p", f"{core_publish_host}:{env['MN_GRPC_PORT']}:{env['MN_GRPC_PORT']}"])
+            cmd.extend([
+                "-p",
+                f"{env['MN_ARTIFACT_PUBLISH_HOST']}:{env['MN_ARTIFACT_PORT']}:{env['MN_ARTIFACT_PORT']}",
+            ])
             if requested_docker_mode == "disabled":
                 epmd_publish_host = _docker_publish_host(env["MN_EPMD_HOST"])
                 dist_publish_host = _docker_publish_host(env["MN_DIST_HOST"])
@@ -3211,10 +3278,15 @@ def _start_server(
         host_home_dir = str(env.get("MN_HOST_HOME_DIR") or env.get("MN_HOST_MN_DIR") or DIR)
         host_artifacts_dir = str(env.get("MN_HOST_ARTIFACTS_DIR") or Path(host_home_dir).expanduser() / "runs")
         container_runs_root = str(env.get("MN_CONTAINER_RUNS_ROOT") or DEFAULT_CONTAINER_RUNS_ROOT)
+        host_blob_store_dir = str(env.get("MN_HOST_BLOB_STORE_DIR") or Path(host_home_dir).expanduser() / "blobs")
+        container_blob_store_root = str(env.get("MN_CONTAINER_BLOB_STORE_ROOT") or DEFAULT_CONTAINER_BLOB_STORE_ROOT)
         cmd.extend(["-v", f"{host_home_dir}:/root/.mn"])
         cmd.extend(["-v", f"{host_home_dir}:/opt/mirror_neuron/.mn"])
         cmd.extend(["-v", f"{host_artifacts_dir}:{container_runs_root}"])
         cmd.extend(["-v", f"{host_artifacts_dir}:/opt/mirror_neuron/.mn/runs"])
+        cmd.extend(["-v", f"{host_blob_store_dir}:{container_blob_store_root}"])
+        cmd.extend(["-v", f"{host_blob_store_dir}:/opt/mirror_neuron/.mn/blobs"])
+        cmd.extend(["-e", f"MN_BLOB_STORE_ROOT={container_blob_store_root}"])
 
         cmd.append("mirror-neuron-core:latest")
 
