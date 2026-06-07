@@ -45,6 +45,8 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_COOKIE", raising=False)
     monkeypatch.delenv("MN_GRPC_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("MN_GRPC_AUTH_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN_FILE", raising=False)
     monkeypatch.delenv("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN", raising=False)
     monkeypatch.delenv("MN_NODE_GPU", raising=False)
     monkeypatch.delenv("MN_NODE_GPU_COUNT", raising=False)
@@ -342,6 +344,9 @@ def test_start_server_persists_env_grpc_tokens_for_later_cli_process(mocker, mon
     assert ["docker", "run", "-d", "--name", "mirror-neuron-core"] == next(
         cmd[:5] for cmd in commands if cmd[:3] == ["docker", "run", "-d"]
     )
+    docker_run = next(cmd for cmd in commands if cmd[:3] == ["docker", "run", "-d"])
+    assert "MN_GRPC_AUTH_TOKEN_FILE=/root/.mn/grpc_auth.token" in docker_run
+    assert "MN_GRPC_ADMIN_TOKEN_FILE=/root/.mn/grpc_admin.token" in docker_run
     assert (server_cmds.DIR / "grpc_auth.token").read_text().strip() == "runtime-auth-token"
     assert (server_cmds.DIR / "grpc_admin.token").read_text().strip() == "runtime-admin-token"
     assert (server_cmds.DIR / "grpc_auth.token").stat().st_mode & 0o777 == 0o600
@@ -375,6 +380,8 @@ def test_start_server_refreshes_token_files_from_compose_runtime_env(mocker, tmp
     assert (server_cmds.DIR / "grpc_admin.token").read_text().strip() == "compose-admin-token"
     assert "MN_GRPC_AUTH_TOKEN=compose-auth-token" in compose_env.read_text()
     assert "MN_GRPC_ADMIN_TOKEN=compose-admin-token" in compose_env.read_text()
+    assert "MN_GRPC_AUTH_TOKEN_FILE=/root/.mn/grpc_auth.token" in compose_env.read_text()
+    assert "MN_GRPC_ADMIN_TOKEN_FILE=/root/.mn/grpc_admin.token" in compose_env.read_text()
 
 def test_runtime_grpc_tokens_from_running_container_reads_normal_and_admin_tokens(mocker):
     values = {
@@ -1524,6 +1531,8 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
     assert "MN_NETWORK_REDIS_PORT=56379" in compose_env_text
     assert "MN_GRPC_AUTH_TOKEN=" in compose_env_text
     assert "MN_GRPC_ADMIN_TOKEN=" in compose_env_text
+    assert "MN_GRPC_AUTH_TOKEN_FILE=/root/.mn/grpc_auth.token" in compose_env_text
+    assert "MN_GRPC_ADMIN_TOKEN_FILE=/root/.mn/grpc_admin.token" in compose_env_text
     assert "MN_COOKIE=" in compose_env_text
     assert "MN_HOST_ARTIFACTS_DIR=" in compose_env_text
     assert "MN_RUNS_ROOT=" in compose_env_text
@@ -2011,11 +2020,19 @@ def test_start_server_passes_slack_env_to_docker(mocker, tmp_path, monkeypatch):
     docker_run = next(cmd for cmd in commands if cmd[:3] == ["docker", "run", "-d"])
     cookie_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_COOKIE="))
     auth_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_GRPC_AUTH_TOKEN="))
+    auth_file_env = next(
+        value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_GRPC_AUTH_TOKEN_FILE=")
+    )
     admin_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_GRPC_ADMIN_TOKEN="))
+    admin_file_env = next(
+        value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_GRPC_ADMIN_TOKEN_FILE=")
+    )
     runs_root_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_RUNS_ROOT="))
     assert cookie_env != "MN_COOKIE=mirrorneuron"
     assert auth_env != "MN_GRPC_AUTH_TOKEN="
+    assert auth_file_env == "MN_GRPC_AUTH_TOKEN_FILE=/root/.mn/grpc_auth.token"
     assert admin_env != "MN_GRPC_ADMIN_TOKEN="
+    assert admin_file_env == "MN_GRPC_ADMIN_TOKEN_FILE=/root/.mn/grpc_admin.token"
     assert runs_root_env == "MN_RUNS_ROOT=/root/.mn/runs"
     assert ["-v", f"{server_cmds.DIR}:/root/.mn"] == docker_run[
         docker_run.index(f"{server_cmds.DIR}:/root/.mn") - 1 : docker_run.index(f"{server_cmds.DIR}:/root/.mn") + 1

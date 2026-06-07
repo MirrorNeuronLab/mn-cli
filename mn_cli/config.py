@@ -92,24 +92,36 @@ def _grpc_auth_token(runtime_env: dict[str, str] | None = None) -> str:
     token = os.getenv("MN_GRPC_AUTH_TOKEN")
     if token:
         return token
-    token = (runtime_env or {}).get("MN_GRPC_AUTH_TOKEN", "")
+
+    token = _read_configured_token_file("MN_GRPC_AUTH_TOKEN_FILE") or _read_token_file("grpc_auth.token")
     if token:
         return token
 
-    return _read_token_file("grpc_auth.token")
+    return (runtime_env or {}).get("MN_GRPC_AUTH_TOKEN", "")
 
 
 def _grpc_admin_token(runtime_env: dict[str, str] | None = None) -> str:
     token = os.getenv("MN_GRPC_ADMIN_TOKEN") or os.getenv("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN")
     if token:
         return token
-    token = (runtime_env or {}).get("MN_GRPC_ADMIN_TOKEN", "") or (runtime_env or {}).get(
-        "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN", ""
-    )
+
+    token = _read_configured_token_file("MN_GRPC_ADMIN_TOKEN_FILE") or _read_token_file("grpc_admin.token")
     if token:
         return token
 
-    return _read_token_file("grpc_admin.token")
+    return (runtime_env or {}).get("MN_GRPC_ADMIN_TOKEN", "") or (runtime_env or {}).get(
+        "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN", ""
+    )
+
+
+def _read_configured_token_file(env_name: str) -> str:
+    path = os.getenv(env_name)
+    if not path:
+        return ""
+    try:
+        return Path(path).expanduser().read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def _read_token_file(name: str) -> str:

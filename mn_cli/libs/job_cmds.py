@@ -96,8 +96,8 @@ def clear():
     try:
         admin_token = str(getattr(client, "admin_token", "") or config.grpc_admin_token or "").strip()
         if not admin_token:
-            console.print("[red]Error: No local MN_GRPC_ADMIN_TOKEN was found for job clear.[/red]")
-            console.print("Restart the runtime so tokens are regenerated, or set MN_GRPC_ADMIN_TOKEN from the primary box.")
+            console.print("[red]Error: No local gRPC admin token was found for job clear.[/red]")
+            console.print("Start or recreate the runtime so the shared grpc_admin.token file is generated.")
             return
         cleared_count = client.clear_jobs()
         logger.info("Cleared %d non-running jobs", cleared_count)
@@ -113,9 +113,9 @@ def clear():
             console.print(
                 "The local admin token exists, but the running core rejected it. "
                 "This usually means the CLI/API is pointed at a runtime with different cluster tokens, "
-                "or the core was started from a different MN_HOME."
+                "or the running core has not been recreated with the shared token-file mount."
             )
-            console.print("Restart the runtime from the primary token state, then retry: mn runtime stop; mn runtime start")
+            console.print("Recreate the runtime once, then retry: mn runtime stop; mn runtime start")
             return
         handle_cli_error(e, console, 'clear')
     except Exception as e:

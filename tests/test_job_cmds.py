@@ -34,8 +34,8 @@ def test_clear_preflights_missing_admin_token(monkeypatch):
     job_cmds.clear()
 
     rendered = output.getvalue()
-    assert "No local MN_GRPC_ADMIN_TOKEN was found" in rendered
-    assert "Restart the runtime" in rendered
+    assert "No local gRPC admin token was found" in rendered
+    assert "shared grpc_admin.token file" in rendered
 
 
 def test_clear_reports_admin_token_mismatch(monkeypatch):

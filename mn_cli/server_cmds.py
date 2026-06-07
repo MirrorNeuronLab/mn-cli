@@ -25,6 +25,8 @@ from mn_cli.logging_config import configure_logging
 console = Console()
 logger = configure_logging("mn-cli", CliConfig.from_env().log_path)
 GRPC_ADMIN_TOKEN_ENV = "MN_GRPC_ADMIN_TOKEN"
+GRPC_AUTH_TOKEN_FILE_ENV = "MN_GRPC_AUTH_TOKEN_FILE"
+GRPC_ADMIN_TOKEN_FILE_ENV = "MN_GRPC_ADMIN_TOKEN_FILE"
 LEGACY_GRPC_ADMIN_TOKEN_ENV = "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN"
 
 def _erl_aflags(dist_port: str | int) -> str:
@@ -116,6 +118,8 @@ DEFAULT_BLUEPRINT_WEB_UI_PORT_END = "61049"
 DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE = "prepublished"
 DEFAULT_CONTAINER_RUNS_ROOT = "/root/.mn/runs"
 DEFAULT_CONTAINER_BLOB_STORE_ROOT = "/root/.mn/blobs"
+DEFAULT_CONTAINER_GRPC_AUTH_TOKEN_FILE = "/root/.mn/grpc_auth.token"
+DEFAULT_CONTAINER_GRPC_ADMIN_TOKEN_FILE = "/root/.mn/grpc_admin.token"
 LEGACY_GRPC_PORT = "50051"
 LEGACY_API_PORT = "4001"
 LEGACY_EPMD_PORT = "4369"
@@ -717,6 +721,10 @@ def _ensure_runtime_grpc_tokens(env: dict[str, str], *, persist_compose: bool = 
         resolved[GRPC_ADMIN_TOKEN_ENV] = str(resolved.get(LEGACY_GRPC_ADMIN_TOKEN_ENV) or "").strip()
     if not str(resolved.get(GRPC_ADMIN_TOKEN_ENV) or "").strip():
         resolved[GRPC_ADMIN_TOKEN_ENV] = _resolve_grpc_admin_token()
+    if not str(resolved.get(GRPC_AUTH_TOKEN_FILE_ENV) or "").strip():
+        resolved[GRPC_AUTH_TOKEN_FILE_ENV] = DEFAULT_CONTAINER_GRPC_AUTH_TOKEN_FILE
+    if not str(resolved.get(GRPC_ADMIN_TOKEN_FILE_ENV) or "").strip():
+        resolved[GRPC_ADMIN_TOKEN_FILE_ENV] = DEFAULT_CONTAINER_GRPC_ADMIN_TOKEN_FILE
 
     _write_grpc_token_file(DIR / "grpc_auth.token", resolved["MN_GRPC_AUTH_TOKEN"], "gRPC auth")
     _write_grpc_token_file(
@@ -730,6 +738,8 @@ def _ensure_runtime_grpc_tokens(env: dict[str, str], *, persist_compose: bool = 
             {
                 "MN_GRPC_AUTH_TOKEN": resolved["MN_GRPC_AUTH_TOKEN"],
                 GRPC_ADMIN_TOKEN_ENV: resolved[GRPC_ADMIN_TOKEN_ENV],
+                GRPC_AUTH_TOKEN_FILE_ENV: resolved[GRPC_AUTH_TOKEN_FILE_ENV],
+                GRPC_ADMIN_TOKEN_FILE_ENV: resolved[GRPC_ADMIN_TOKEN_FILE_ENV],
             },
         )
     return resolved
@@ -3180,7 +3190,9 @@ def _start_server(
         cmd.extend(["-e", f"MN_NODE_NAME={env['MN_NODE_NAME']}"])
         cmd.extend(["-e", f"MN_COOKIE={env['MN_COOKIE']}"])
         cmd.extend(["-e", f"MN_GRPC_AUTH_TOKEN={env['MN_GRPC_AUTH_TOKEN']}"])
+        cmd.extend(["-e", f"{GRPC_AUTH_TOKEN_FILE_ENV}={env[GRPC_AUTH_TOKEN_FILE_ENV]}"])
         cmd.extend(["-e", f"{GRPC_ADMIN_TOKEN_ENV}={env[GRPC_ADMIN_TOKEN_ENV]}"])
+        cmd.extend(["-e", f"{GRPC_ADMIN_TOKEN_FILE_ENV}={env[GRPC_ADMIN_TOKEN_FILE_ENV]}"])
         cmd.extend(["-e", f"MN_NETWORK_JOIN_TOKEN={env['MN_NETWORK_JOIN_TOKEN']}"])
         cmd.extend(["-e", f"MN_NETWORK_ADVERTISE_HOST={env['MN_NETWORK_ADVERTISE_HOST']}"])
         if env.get("MN_MODEL_SERVICE_NODE_NAME"):

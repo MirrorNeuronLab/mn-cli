@@ -21,7 +21,9 @@ def _fresh_shared(monkeypatch, tmp_path, client_class):
     monkeypatch.delenv("MN_HOME", raising=False)
     monkeypatch.delenv("MIRROR_NEURON_HOME", raising=False)
     monkeypatch.delenv("MN_GRPC_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("MN_GRPC_AUTH_TOKEN_FILE", raising=False)
     monkeypatch.delenv("MN_GRPC_TARGET", raising=False)
+    monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN_FILE", raising=False)
     monkeypatch.delenv("MN_GRPC_TIMEOUT_SECONDS", raising=False)
     monkeypatch.setitem(sys.modules, "mn_sdk", SimpleNamespace(Client=client_class))
     return importlib.import_module("mn_cli.shared")
@@ -170,6 +172,43 @@ def test_shared_client_reads_refreshed_token_files(monkeypatch, tmp_path):
     (state_dir / "grpc_admin.token").write_text("admin-from-file\n", encoding="utf-8")
     monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN", raising=False)
     monkeypatch.delenv("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN", raising=False)
+
+    class CurrentClient:
+        def __init__(self, target=None, timeout=None, auth_token=None, admin_token=None):
+            calls.append(
+                {
+                    "target": target,
+                    "timeout": timeout,
+                    "auth_token": auth_token,
+                    "admin_token": admin_token,
+                }
+            )
+
+    _fresh_shared(monkeypatch, tmp_path, CurrentClient)
+
+    assert calls == [
+        {
+            "target": "localhost:55051",
+            "timeout": 10.0,
+            "auth_token": "auth-from-file",
+            "admin_token": "admin-from-file",
+        }
+    ]
+
+
+def test_shared_client_reads_token_files_before_stale_runtime_env(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN", raising=False)
+    state_dir = tmp_path / ".mn"
+    state_dir.mkdir()
+    (state_dir / "docker-compose.env").write_text(
+        "MN_GRPC_AUTH_TOKEN=stale-auth-from-state\n"
+        "MN_GRPC_ADMIN_TOKEN=stale-admin-from-state\n",
+        encoding="utf-8",
+    )
+    (state_dir / "grpc_auth.token").write_text("auth-from-file\n", encoding="utf-8")
+    (state_dir / "grpc_admin.token").write_text("admin-from-file\n", encoding="utf-8")
 
     class CurrentClient:
         def __init__(self, target=None, timeout=None, auth_token=None, admin_token=None):
