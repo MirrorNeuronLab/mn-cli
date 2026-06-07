@@ -48,6 +48,7 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_GRPC_AUTH_TOKEN_FILE", raising=False)
     monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN_FILE", raising=False)
     monkeypatch.delenv("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("MN_ARTIFACT_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("MN_NODE_GPU", raising=False)
     monkeypatch.delenv("MN_NODE_GPU_COUNT", raising=False)
     monkeypatch.delenv("MN_NODE_DISPLAY_NAME", raising=False)
@@ -347,6 +348,7 @@ def test_start_server_persists_env_grpc_tokens_for_later_cli_process(mocker, mon
     docker_run = next(cmd for cmd in commands if cmd[:3] == ["docker", "run", "-d"])
     assert "MN_GRPC_AUTH_TOKEN_FILE=/root/.mn/grpc_auth.token" in docker_run
     assert "MN_GRPC_ADMIN_TOKEN_FILE=/root/.mn/grpc_admin.token" in docker_run
+    assert not any(value.startswith("MN_ARTIFACT_AUTH_TOKEN=") for value in docker_run)
     assert (server_cmds.DIR / "grpc_auth.token").read_text().strip() == "runtime-auth-token"
     assert (server_cmds.DIR / "grpc_admin.token").read_text().strip() == "runtime-admin-token"
     assert (server_cmds.DIR / "grpc_auth.token").stat().st_mode & 0o777 == 0o600
@@ -419,6 +421,33 @@ def test_runtime_grpc_tokens_from_running_container_refreshes_compose_env(mocker
     compose_text = compose_env.read_text(encoding="utf-8")
     assert "MN_GRPC_AUTH_TOKEN=running-auth-token" in compose_text
     assert "MN_GRPC_ADMIN_TOKEN=running-admin-token" in compose_text
+
+def test_runtime_base_env_scrubs_deprecated_artifact_auth_token(monkeypatch):
+    compose_env = server_cmds.RUNTIME_COMPOSE_ENV
+    compose_file = server_cmds.RUNTIME_COMPOSE_FILE
+    compose_env.parent.mkdir(parents=True, exist_ok=True)
+    compose_env.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_ARTIFACT_AUTH_TOKEN=stale-artifact-token\n"
+        "MN_NETWORK_JOIN_TOKEN=join-token\n",
+        encoding="utf-8",
+    )
+    compose_file.write_text(
+        "services:\n"
+        "  mirror-neuron-core:\n"
+        "    environment:\n"
+        "      MN_ARTIFACT_AUTH_TOKEN: ${MN_ARTIFACT_AUTH_TOKEN:-}\n"
+        "      MN_NETWORK_JOIN_TOKEN: ${MN_NETWORK_JOIN_TOKEN:-}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MN_ARTIFACT_AUTH_TOKEN", "ambient-artifact-token")
+
+    env = server_cmds._runtime_base_env(True)
+
+    assert env["MN_NETWORK_JOIN_TOKEN"] == "join-token"
+    assert "MN_ARTIFACT_AUTH_TOKEN" not in env
+    assert "MN_ARTIFACT_AUTH_TOKEN" not in compose_env.read_text(encoding="utf-8")
+    assert "MN_ARTIFACT_AUTH_TOKEN" not in compose_file.read_text(encoding="utf-8")
 
 def test_resolve_network_token_generates_and_reuses_persistent_token(tmp_path, mocker):
     token_dir = tmp_path / "state"
@@ -1595,6 +1624,7 @@ def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
     assert env["MN_REDIS_URL"] == f"redis://:{redis_password}@192.168.4.173:6380/0"
     assert env["MN_CONTEXT_REDIS_URL"] == f"redis://:{redis_password}@192.168.4.173:6380/1"
     assert env["MN_NETWORK_JOIN_TOKEN"] == "join-token"
+    assert "MN_ARTIFACT_AUTH_TOKEN" not in env
     assert env["MN_COOKIE"] == _derive_network_secret("join-token", "cookie")
     assert env["MN_DIST_PORT"] == "54370"
     assert env["ERL_AFLAGS"] == _erl_aflags("54370")

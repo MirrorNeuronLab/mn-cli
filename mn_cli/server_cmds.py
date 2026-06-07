@@ -139,6 +139,7 @@ COMPOSE_REDIS_CONTAINER = "mirror-neuron-redis"
 NETWORK_CORE_CONTAINER = "mirror-neuron-network-core"
 NETWORK_REDIS_CONTAINER = "mirror-neuron-network-redis"
 RUNTIME_CLUSTER_OVERRIDE_FILE = "docker-compose.cluster.yml"
+DEPRECATED_RUNTIME_ENV_KEYS = {"MN_ARTIFACT_AUTH_TOKEN"}
 
 
 def _openshell_config_dir() -> Path:
@@ -1797,9 +1798,71 @@ def _write_env_file_values(path: Path, updates: dict[str, str]) -> None:
     except OSError:
         logger.debug("Failed to chmod env file %s", path, exc_info=True)
 
+def _remove_env_file_keys(path: Path, keys: set[str]) -> None:
+    if not keys:
+        return
+
+    try:
+        original_lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+
+    lines: list[str] = []
+    changed = False
+    for line in original_lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key, _ = stripped.split("=", 1)
+            if key in keys:
+                changed = True
+                continue
+        lines.append(line)
+
+    if not changed:
+        return
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        logger.debug("Failed to chmod env file %s", path, exc_info=True)
+
+def _remove_compose_file_env_keys(path: Path, keys: set[str]) -> None:
+    if not keys:
+        return
+
+    try:
+        original_lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+
+    lines: list[str] = []
+    changed = False
+    for line in original_lines:
+        stripped = line.strip()
+        remove = any(
+            stripped.startswith(f"{key}:")
+            or stripped == f"- {key}"
+            or stripped.startswith(f"- {key}=")
+            for key in keys
+        )
+        if remove:
+            changed = True
+            continue
+        lines.append(line)
+
+    if changed:
+        path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+
 def _runtime_base_env(compose_runtime: bool) -> dict[str, str]:
+    if compose_runtime:
+        _remove_env_file_keys(RUNTIME_COMPOSE_ENV, DEPRECATED_RUNTIME_ENV_KEYS)
+        _remove_compose_file_env_keys(RUNTIME_COMPOSE_FILE, DEPRECATED_RUNTIME_ENV_KEYS)
     env = _read_env_file(RUNTIME_COMPOSE_ENV) if compose_runtime else {}
     env.update(os.environ)
+    for key in DEPRECATED_RUNTIME_ENV_KEYS:
+        env.pop(key, None)
     return env
 
 def _env_or_default(env: dict[str, str], key: str, default: str, legacy_default: Optional[str] = None) -> str:
@@ -3103,7 +3166,6 @@ def _start_server(
     env["MN_ARTIFACT_PUBLISH_HOST"] = _network_publish_host(advertised_host)
     env["MN_ARTIFACT_PORT"] = artifact_port
     env["MN_ARTIFACT_ADVERTISE_URL"] = f"http://{advertised_host}:{artifact_port}"
-    env["MN_ARTIFACT_AUTH_TOKEN"] = str(env.get("MN_ARTIFACT_AUTH_TOKEN") or network_token)
     if requested_docker_mode != "disabled" and node_alias:
         env.update(_docker_network_env(requested_docker_mode, network_name, node_alias))
     if _generated_node_setting_should_update("MN_NODE_NAME", env.get("MN_NODE_NAME"), local_node_name):
@@ -3156,7 +3218,6 @@ def _start_server(
                     "MN_ARTIFACT_PUBLISH_HOST": env["MN_ARTIFACT_PUBLISH_HOST"],
                     "MN_ARTIFACT_PORT": env["MN_ARTIFACT_PORT"],
                     "MN_ARTIFACT_ADVERTISE_URL": env["MN_ARTIFACT_ADVERTISE_URL"],
-                    "MN_ARTIFACT_AUTH_TOKEN": env["MN_ARTIFACT_AUTH_TOKEN"],
                     **(
                         _docker_network_env(requested_docker_mode, network_name, node_alias)
                         if requested_docker_mode != "disabled" and node_alias
@@ -3193,7 +3254,6 @@ def _start_server(
                 "MN_ARTIFACT_PUBLISH_HOST": env["MN_ARTIFACT_PUBLISH_HOST"],
                 "MN_ARTIFACT_PORT": env["MN_ARTIFACT_PORT"],
                 "MN_ARTIFACT_ADVERTISE_URL": env["MN_ARTIFACT_ADVERTISE_URL"],
-                "MN_ARTIFACT_AUTH_TOKEN": env["MN_ARTIFACT_AUTH_TOKEN"],
                 "MN_DIST_PORT": env["MN_DIST_PORT"],
                 "MN_NODE_DISPLAY_NAME": env["MN_NODE_DISPLAY_NAME"],
                 "MN_NODE_CPU_MODEL": env.get("MN_NODE_CPU_MODEL", ""),
@@ -3253,7 +3313,6 @@ def _start_server(
         cmd.extend(["-e", f"MN_ARTIFACT_BIND_HOST={env['MN_ARTIFACT_BIND_HOST']}"])
         cmd.extend(["-e", f"MN_ARTIFACT_PORT={env['MN_ARTIFACT_PORT']}"])
         cmd.extend(["-e", f"MN_ARTIFACT_ADVERTISE_URL={env['MN_ARTIFACT_ADVERTISE_URL']}"])
-        cmd.extend(["-e", f"MN_ARTIFACT_AUTH_TOKEN={env['MN_ARTIFACT_AUTH_TOKEN']}"])
         cmd.extend(["-e", f"MN_CLUSTER_NODES={env['MN_CLUSTER_NODES']}"])
         if env.get("MN_NODE_ALIAS"):
             cmd.extend(["-e", f"MN_NODE_ALIAS={env['MN_NODE_ALIAS']}"])
