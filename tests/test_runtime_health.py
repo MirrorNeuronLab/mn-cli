@@ -101,6 +101,16 @@ def test_runtime_health_web_ui_not_installed_is_warning(mocker, tmp_path):
     assert report["components"][2]["status"] == "warning"
 
 
+def test_runtime_health_compose_native_port_env_normalizes_legacy_ports():
+    env = runtime_health._compose_native_port_env(
+        {"MN_GRPC_PORT": "50051", "MN_API_PORT": "4001", "MN_WEB_UI_PORT": "5173"}
+    )
+
+    assert env["MN_GRPC_PORT"] == "55051"
+    assert env["MN_API_PORT"] == "54001"
+    assert env["MN_WEB_UI_PORT"] == "55173"
+
+
 def test_runtime_health_command_json_exits_nonzero_for_critical(mocker):
     mocker.patch(
         "mn_cli.libs.runtime_health.collect_runtime_health",

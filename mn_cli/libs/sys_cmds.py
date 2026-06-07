@@ -18,11 +18,11 @@ from mn_cli.server_cmds import (
     _detach_local_docker_node_if_matches,
     _refresh_network_token,
     _stop_network_runtime,
-    _ensure_compose_native_port_settings,
     _runtime_base_env,
     _start_api_if_installed,
     _start_web_ui_if_installed,
     _write_runtime_endpoints_file,
+    _valid_port_text,
     kill_tree,
     BEAM_PID_FILE,
     DEFAULT_HOST,
@@ -31,9 +31,12 @@ from mn_cli.server_cmds import (
     DEFAULT_DIST_PORT,
     DEFAULT_WEB_UI_PORT,
     DEFAULT_DOCKER_NETWORK_NAME,
+    LEGACY_API_PORT,
+    LEGACY_WEB_UI_PORT,
     find_web_ui_dir,
     runtime_compose_available,
     runtime_compose_cmd,
+    stop_matching_sidecar_processes as _stop_matching_sidecar_processes,
     api_pid_files,
     web_ui_pid_files,
 )
@@ -203,6 +206,8 @@ def stop():
             except ValueError:
                 pass
             pid_file.unlink()
+    _stop_matching_sidecar_processes("mn-api", "REST API")
+    _stop_matching_sidecar_processes("mn-web-ui-server", "Web UI")
     print_success_confirmation(
         console,
         "Runtime stop",
@@ -240,6 +245,7 @@ def restart_sidecars(
     if restart_api:
         console.print("=> Restarting REST API sidecar...")
         _stop_sidecar_processes(api_pid_files())
+        _stop_matching_sidecar_processes("mn-api", "REST API")
         api_started = _start_api_if_installed(env)
         details.append(("REST API", "restarted" if api_started else "skipped"))
         restarted_any = restarted_any or api_started
@@ -247,6 +253,7 @@ def restart_sidecars(
     if restart_web_ui:
         console.print("=> Restarting Web UI sidecar...")
         _stop_sidecar_processes(web_ui_pid_files())
+        _stop_matching_sidecar_processes("mn-web-ui-server", "Web UI")
         web_ui_started = _start_web_ui_if_installed(env)
         details.append(("Web UI", "restarted" if web_ui_started else "skipped"))
         restarted_any = restarted_any or web_ui_started
@@ -268,13 +275,17 @@ def restart_sidecars(
 def _sidecar_runtime_env() -> dict[str, str]:
     compose_runtime = runtime_compose_available()
     env = _runtime_base_env(compose_runtime)
-    if compose_runtime:
-        env = _ensure_compose_native_port_settings(env)
     env.setdefault("MN_API_HOST", DEFAULT_HOST)
-    env.setdefault("MN_API_PORT", DEFAULT_API_PORT)
+    env["MN_API_PORT"] = _sidecar_port_value(env, "MN_API_PORT", DEFAULT_API_PORT, LEGACY_API_PORT)
     env.setdefault("MN_WEB_UI_HOST", DEFAULT_HOST)
-    env.setdefault("MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT)
+    env["MN_WEB_UI_PORT"] = _sidecar_port_value(env, "MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT, LEGACY_WEB_UI_PORT)
     return env
+
+def _sidecar_port_value(env: dict[str, str], key: str, default: str, legacy_default: str) -> str:
+    value = str(env.get(key) or "").strip()
+    if not value or value == legacy_default:
+        value = default
+    return _valid_port_text(value, default)
 
 def _stop_sidecar_processes(pid_files: tuple[tuple[Path, str], ...]) -> bool:
     stopped = False

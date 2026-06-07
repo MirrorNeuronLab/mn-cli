@@ -2318,12 +2318,19 @@ def runtime_compose_cmd(*args: str) -> list[str]:
     cmd.extend(args)
     return cmd
 
+def _legacy_checkout_pid_dir() -> Path:
+    checkout_dir = Path(__file__).resolve().parents[2]
+    return checkout_dir / "MirrorNeuron" / "pids"
+
 def web_ui_pid_files() -> tuple[tuple[Path, str], ...]:
+    legacy_pid_dir = _legacy_checkout_pid_dir()
     paths = [
         (WEB_UI_WATCHDOG_PID_FILE, "Web UI watchdog"),
         (WEB_UI_PID_FILE, "Web UI"),
         (DEFAULT_DIR / "pids" / "web-ui-watchdog.pid", "Web UI watchdog"),
         (DEFAULT_DIR / "pids" / "web-ui.pid", "Web UI"),
+        (legacy_pid_dir / "web-ui-watchdog.pid", "Web UI watchdog"),
+        (legacy_pid_dir / "web-ui.pid", "Web UI"),
     ]
     unique: list[tuple[Path, str]] = []
     seen: set[str] = set()
@@ -2336,11 +2343,14 @@ def web_ui_pid_files() -> tuple[tuple[Path, str], ...]:
     return tuple(unique)
 
 def api_pid_files() -> tuple[tuple[Path, str], ...]:
+    legacy_pid_dir = _legacy_checkout_pid_dir()
     paths = [
         (API_WATCHDOG_PID_FILE, "REST API watchdog"),
         (API_PID_FILE, "REST API"),
         (DEFAULT_DIR / "pids" / "api-watchdog.pid", "REST API watchdog"),
         (DEFAULT_DIR / "pids" / "api.pid", "REST API"),
+        (legacy_pid_dir / "api-watchdog.pid", "REST API watchdog"),
+        (legacy_pid_dir / "api.pid", "REST API"),
     ]
     unique: list[tuple[Path, str]] = []
     seen: set[str] = set()
@@ -2373,6 +2383,38 @@ def kill_tree(parent_pid: int):
     except OSError:
         logger.exception("Failed to stop process %s", parent_pid)
         pass
+
+def stop_matching_sidecar_processes(command_name: str, display_name: str) -> bool:
+    try:
+        output = subprocess.check_output(
+            ["pgrep", "-fl", command_name],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return False
+
+    current_pid = os.getpid()
+    stopped = False
+    seen: set[int] = set()
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        pid_text, _, _command = stripped.partition(" ")
+        try:
+            pid = int(pid_text)
+        except ValueError:
+            continue
+        if pid == current_pid or pid in seen:
+            continue
+        seen.add(pid)
+        console.print(f"   Stopping orphaned {display_name} sidecar process (PID: {pid})...")
+        kill_tree(pid)
+        stopped = True
+    if stopped:
+        time.sleep(1)
+    return stopped
 
 def find_web_ui_dir() -> Optional[Path]:
     for web_ui_dir in WEB_UI_DIRS:
@@ -2575,6 +2617,10 @@ def _start_api_if_installed(runtime_env: Optional[dict[str, str]] = None) -> boo
         API_PID_FILE.unlink(missing_ok=True)
     elif child_status == 1:
         API_PID_FILE.unlink(missing_ok=True)
+
+    if _wait_for_api(api_host, api_port, timeout_seconds=1.0):
+        console.print("[yellow]=> REST API is responding without the current watchdog; restarting it under watchdog.[/yellow]")
+    stop_matching_sidecar_processes("mn-api", "REST API")
 
     console.print(f"=> Starting mn-api watchdog (REST on port {api_port})...")
     try:
@@ -2803,13 +2849,14 @@ def _start_web_ui_if_installed(runtime_env: Optional[dict[str, str]] = None) -> 
 
     watchdog_status = check_status(WEB_UI_WATCHDOG_PID_FILE)
     child_status = check_status(WEB_UI_PID_FILE)
+    stopped_untracked = False
     if (
         watchdog_status == 2
         and child_status == 2
         and _wait_for_web_ui(web_ui_host, web_ui_port, timeout_seconds=1.0)
     ):
-        console.print("[yellow]=> Web UI is already responding, advertising existing instance.[/yellow]")
-        return True
+        console.print("[yellow]=> Web UI is responding without the current watchdog; restarting it under watchdog.[/yellow]")
+        stopped_untracked = stop_matching_sidecar_processes("mn-web-ui-server", "Web UI")
     if watchdog_status == 0:
         if _wait_for_web_ui(web_ui_host, web_ui_port, timeout_seconds=5.0):
             console.print("[yellow]=> Web UI watchdog is already running, skipping.[/yellow]")
@@ -2837,6 +2884,9 @@ def _start_web_ui_if_installed(runtime_env: Optional[dict[str, str]] = None) -> 
         WEB_UI_PID_FILE.unlink(missing_ok=True)
     elif child_status == 1:
         WEB_UI_PID_FILE.unlink(missing_ok=True)
+
+    if not stopped_untracked:
+        stop_matching_sidecar_processes("mn-web-ui-server", "Web UI")
 
     console.print(f"=> Starting mn-web-ui watchdog (static server on {web_ui_host}:{web_ui_port})...")
     try:

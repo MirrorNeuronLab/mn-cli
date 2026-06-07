@@ -763,6 +763,14 @@ def test_stop_local_runtime_for_worker_stops_compose_and_sidecars(mocker):
     assert not server_cmds.API_WATCHDOG_PID_FILE.exists()
     assert not server_cmds.WEB_UI_PID_FILE.exists()
 
+def test_sidecar_pid_files_include_legacy_checkout_paths():
+    legacy_pid_dir = server_cmds._legacy_checkout_pid_dir()
+
+    assert (legacy_pid_dir / "api-watchdog.pid", "REST API watchdog") in server_cmds.api_pid_files()
+    assert (legacy_pid_dir / "api.pid", "REST API") in server_cmds.api_pid_files()
+    assert (legacy_pid_dir / "web-ui-watchdog.pid", "Web UI watchdog") in server_cmds.web_ui_pid_files()
+    assert (legacy_pid_dir / "web-ui.pid", "Web UI") in server_cmds.web_ui_pid_files()
+
 def test_add_node_uses_handshake_and_local_core(mocker, tmp_path, capsys):
     import mn_sdk
     import mn_cli.shared
@@ -2136,6 +2144,7 @@ def test_start_api_if_installed(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
     mocker.patch('mn_cli.server_cmds.API_WATCHDOG_LOG', tmp_path / "api-watchdog.log")
     mock_wait = mocker.patch('mn_cli.server_cmds._wait_for_api', side_effect=[False, True])
+    stop_matching = mocker.patch('mn_cli.server_cmds.stop_matching_sidecar_processes', return_value=False)
 
     mock_popen = mocker.patch('mn_cli.server_cmds.subprocess.Popen')
     mock_popen.return_value.pid = 54001
@@ -2152,6 +2161,32 @@ def test_start_api_if_installed(mocker, tmp_path):
     assert watchdog_config["pid_file"] == str(tmp_path / "api.pid")
     assert mock_popen.call_args.kwargs["stdin"] == subprocess.DEVNULL
     assert mock_wait.call_args_list == [
+        call("localhost", "54001", timeout_seconds=1.0),
+        call("localhost", "54001", timeout_seconds=10.0),
+    ]
+    stop_matching.assert_called_once_with("mn-api", "REST API")
+
+def test_start_api_restarts_untracked_healthy_instance_under_watchdog(mocker, tmp_path):
+    api_bin = tmp_path / "mn_venv" / "bin" / "mn-api"
+    api_bin.parent.mkdir(parents=True)
+    api_bin.write_text("#!/bin/sh\n")
+
+    mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path / "mn_venv")
+    mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
+    mocker.patch('mn_cli.server_cmds.API_WATCHDOG_PID_FILE', tmp_path / "api-watchdog.pid")
+    mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
+    mocker.patch('mn_cli.server_cmds.API_WATCHDOG_LOG', tmp_path / "api-watchdog.log")
+    mock_wait = mocker.patch('mn_cli.server_cmds._wait_for_api', side_effect=[True, True])
+    stop_matching = mocker.patch('mn_cli.server_cmds.stop_matching_sidecar_processes', return_value=True)
+    mock_popen = mocker.patch('mn_cli.server_cmds.subprocess.Popen')
+    mock_popen.return_value.pid = 54001
+
+    assert _start_api_if_installed({"MN_API_HOST": "localhost", "MN_API_PORT": "54001"}) is True
+
+    stop_matching.assert_called_once_with("mn-api", "REST API")
+    mock_popen.assert_called_once()
+    assert mock_wait.call_args_list == [
+        call("localhost", "54001", timeout_seconds=1.0),
         call("localhost", "54001", timeout_seconds=10.0),
     ]
 
@@ -2166,6 +2201,7 @@ def test_start_web_ui_if_installed(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.WEB_UI_LOG', tmp_path / "web-ui.log")
     mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_LOG', tmp_path / "web-ui-watchdog.log")
     mock_wait = mocker.patch('mn_cli.server_cmds._wait_for_web_ui', side_effect=[False, True])
+    stop_matching = mocker.patch('mn_cli.server_cmds.stop_matching_sidecar_processes', return_value=False)
 
     mock_popen = mocker.patch('mn_cli.server_cmds.subprocess.Popen')
     mock_popen.return_value.pid = 5173
@@ -2186,6 +2222,7 @@ def test_start_web_ui_if_installed(mocker, tmp_path):
         call("localhost", "55173", timeout_seconds=1.0),
         call("localhost", "55173", timeout_seconds=10.0),
     ]
+    stop_matching.assert_called_once_with("mn-web-ui-server", "Web UI")
 
 def test_start_web_ui_reports_available_when_watchdog_starts_before_health(mocker, tmp_path):
     web_ui_dir = tmp_path / "web-ui"
@@ -2198,6 +2235,7 @@ def test_start_web_ui_reports_available_when_watchdog_starts_before_health(mocke
     mocker.patch('mn_cli.server_cmds.WEB_UI_LOG', tmp_path / "web-ui.log")
     mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_LOG', tmp_path / "web-ui-watchdog.log")
     mocker.patch('mn_cli.server_cmds._wait_for_web_ui', return_value=False)
+    mocker.patch('mn_cli.server_cmds.stop_matching_sidecar_processes', return_value=False)
 
     mock_popen = mocker.patch('mn_cli.server_cmds.subprocess.Popen')
     mock_popen.return_value.pid = 5173
@@ -2205,7 +2243,7 @@ def test_start_web_ui_reports_available_when_watchdog_starts_before_health(mocke
     assert _start_web_ui_if_installed() is True
     assert (tmp_path / "web-ui-watchdog.pid").read_text() == "5173"
 
-def test_start_web_ui_advertises_existing_healthy_instance_without_pid_files(mocker, tmp_path):
+def test_start_web_ui_restarts_untracked_healthy_instance_under_watchdog(mocker, tmp_path):
     web_ui_dir = tmp_path / "web-ui"
     (web_ui_dir / "dist").mkdir(parents=True)
     (web_ui_dir / "dist" / "index.html").write_text("<div id=\"root\"></div>")
@@ -2213,12 +2251,21 @@ def test_start_web_ui_advertises_existing_healthy_instance_without_pid_files(moc
     mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', (web_ui_dir,))
     mocker.patch('mn_cli.server_cmds.WEB_UI_PID_FILE', tmp_path / "web-ui.pid")
     mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_PID_FILE', tmp_path / "web-ui-watchdog.pid")
-    mocker.patch('mn_cli.server_cmds._wait_for_web_ui', return_value=True)
+    mocker.patch('mn_cli.server_cmds.WEB_UI_LOG', tmp_path / "web-ui.log")
+    mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_LOG', tmp_path / "web-ui-watchdog.log")
+    mock_wait = mocker.patch('mn_cli.server_cmds._wait_for_web_ui', side_effect=[True, True])
+    stop_matching = mocker.patch('mn_cli.server_cmds.stop_matching_sidecar_processes', return_value=True)
 
     mock_popen = mocker.patch('mn_cli.server_cmds.subprocess.Popen')
+    mock_popen.return_value.pid = 5173
 
     assert _start_web_ui_if_installed() is True
-    mock_popen.assert_not_called()
+    stop_matching.assert_called_once_with("mn-web-ui-server", "Web UI")
+    mock_popen.assert_called_once()
+    assert mock_wait.call_args_list == [
+        call("localhost", "55173", timeout_seconds=1.0),
+        call("localhost", "55173", timeout_seconds=10.0),
+    ]
 
 def test_start_web_ui_restarts_unresponsive_watchdog(mocker, tmp_path):
     web_ui_dir = tmp_path / "web-ui"
@@ -2236,6 +2283,7 @@ def test_start_web_ui_restarts_unresponsive_watchdog(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_LOG', tmp_path / "web-ui-watchdog.log")
     mocker.patch('mn_cli.server_cmds.os.kill')
     mock_kill_tree = mocker.patch('mn_cli.server_cmds.kill_tree')
+    mocker.patch('mn_cli.server_cmds.stop_matching_sidecar_processes', return_value=False)
     mock_wait = mocker.patch('mn_cli.server_cmds._wait_for_web_ui', side_effect=[False, True])
     mock_popen = mocker.patch('mn_cli.server_cmds.subprocess.Popen')
     mock_popen.return_value.pid = 5173
@@ -2263,6 +2311,7 @@ def test_start_web_ui_cleans_stale_watchdog_pid(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_LOG', tmp_path / "web-ui-watchdog.log")
     mocker.patch('mn_cli.server_cmds.os.kill', side_effect=OSError("stale pid"))
     mocker.patch('mn_cli.server_cmds._wait_for_web_ui', return_value=True)
+    mocker.patch('mn_cli.server_cmds.stop_matching_sidecar_processes', return_value=False)
     mock_popen = mocker.patch('mn_cli.server_cmds.subprocess.Popen')
     mock_popen.return_value.pid = 5173
 

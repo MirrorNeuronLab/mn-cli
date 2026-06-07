@@ -13,11 +13,17 @@ from rich.table import Table
 from mn_cli.shared import client, console
 from mn_cli.server_cmds import (
     RUNTIME_ENDPOINTS_FILE,
-    _ensure_compose_native_port_settings,
+    DEFAULT_API_PORT,
+    DEFAULT_GRPC_PORT,
+    DEFAULT_WEB_UI_PORT,
+    LEGACY_API_PORT,
+    LEGACY_GRPC_PORT,
+    LEGACY_WEB_UI_PORT,
     _start_api_if_installed,
     _start_web_ui_if_installed,
     _runtime_base_env,
     _runtime_endpoint_snapshot,
+    _valid_port_text,
     _write_runtime_endpoints_file,
     find_web_ui_dir,
     runtime_compose_available,
@@ -44,7 +50,7 @@ def health(
 def collect_runtime_health(timeout: float = 3.0) -> dict[str, Any]:
     env = _runtime_base_env(runtime_compose_available())
     if runtime_compose_available():
-        env = _ensure_compose_native_port_settings(env)
+        env = _compose_native_port_env(env)
     installed_web_ui = find_web_ui_dir() is not None
     snapshot = _runtime_endpoint_snapshot(env, web_ui_available=installed_web_ui)
     persisted = _read_runtime_endpoints()
@@ -147,7 +153,7 @@ def _repair_runtime_sidecars(report: dict[str, Any]) -> bool:
 
     env = _runtime_base_env(runtime_compose_available())
     if runtime_compose_available():
-        env = _ensure_compose_native_port_settings(env)
+        env = _compose_native_port_env(env)
     env.setdefault("MN_API_HOST", "localhost")
     env.setdefault("MN_API_PORT", "54001")
     env.setdefault("MN_WEB_UI_HOST", "localhost")
@@ -163,6 +169,21 @@ def _repair_runtime_sidecars(report: dict[str, Any]) -> bool:
     if changed:
         _write_runtime_endpoints_file(env, web_ui_available=find_web_ui_dir() is not None)
     return changed
+
+
+def _compose_native_port_env(env: dict[str, str]) -> dict[str, str]:
+    adjusted = dict(env)
+    adjusted["MN_GRPC_PORT"] = _port_value(adjusted, "MN_GRPC_PORT", DEFAULT_GRPC_PORT, LEGACY_GRPC_PORT)
+    adjusted["MN_API_PORT"] = _port_value(adjusted, "MN_API_PORT", DEFAULT_API_PORT, LEGACY_API_PORT)
+    adjusted["MN_WEB_UI_PORT"] = _port_value(adjusted, "MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT, LEGACY_WEB_UI_PORT)
+    return adjusted
+
+
+def _port_value(env: dict[str, str], key: str, default: str, legacy_default: str) -> str:
+    value = str(env.get(key) or "").strip()
+    if not value or value == legacy_default:
+        value = default
+    return _valid_port_text(value, default)
 
 
 def _targets(snapshot: dict[str, Any], persisted: dict[str, Any]) -> dict[str, str]:
