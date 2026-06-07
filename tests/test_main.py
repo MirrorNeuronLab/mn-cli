@@ -136,6 +136,13 @@ def test_command_help_includes_argument_description_and_examples():
     assert "mn job submit ./manifest.json" in result.stdout
 
 
+def test_runtime_help_includes_sidecar_restart_command():
+    result = runner.invoke(app, ["runtime", "--help"])
+
+    assert result.exit_code == 0
+    assert "restart-sidecars" in result.stdout
+
+
 def test_unknown_command_suggests_close_match():
     result = runner.invoke(app, ["job", "sumbit"])
 

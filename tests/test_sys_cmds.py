@@ -1,10 +1,10 @@
+import importlib
 from io import StringIO
 from types import SimpleNamespace
 
 from rich.console import Console
 
 import mn_cli.libs.sys_cmds as sys_cmds
-import mn_cli.shared
 
 
 def test_leave_does_not_rotate_grpc_tokens(monkeypatch, tmp_path):
@@ -13,9 +13,10 @@ def test_leave_does_not_rotate_grpc_tokens(monkeypatch, tmp_path):
     auth_file.write_text("stable-auth-token\n")
     admin_file.write_text("stable-admin-token\n")
     calls = []
+    shared = importlib.import_module("mn_cli.shared")
 
-    monkeypatch.setattr(mn_cli.shared, "client", SimpleNamespace(remove_node=lambda node: "removed"))
-    monkeypatch.setattr(mn_cli.shared, "console", Console(file=StringIO(), force_terminal=False, width=160))
+    monkeypatch.setattr(shared, "client", SimpleNamespace(remove_node=lambda node: "removed"))
+    monkeypatch.setattr(shared, "console", Console(file=StringIO(), force_terminal=False, width=160))
     monkeypatch.setattr(sys_cmds, "_detach_local_docker_node_if_matches", lambda node: calls.append(node))
 
     sys_cmds.leave("mirror_neuron@192.168.4.20")
@@ -23,3 +24,71 @@ def test_leave_does_not_rotate_grpc_tokens(monkeypatch, tmp_path):
     assert calls == ["mirror_neuron@192.168.4.20"]
     assert auth_file.read_text().strip() == "stable-auth-token"
     assert admin_file.read_text().strip() == "stable-admin-token"
+
+
+def test_restart_sidecars_api_only_restarts_api_without_web_ui(mocker, tmp_path):
+    api_pid_files = ((tmp_path / "api-watchdog.pid", "REST API watchdog"),)
+    mocker.patch.object(sys_cmds, "api_pid_files", return_value=api_pid_files)
+    mocker.patch.object(sys_cmds, "runtime_compose_available", return_value=False)
+    mocker.patch.object(sys_cmds, "_runtime_base_env", return_value={})
+    stop_sidecar = mocker.patch.object(sys_cmds, "_stop_sidecar_processes", return_value=True)
+    start_api = mocker.patch.object(sys_cmds, "_start_api_if_installed", return_value=True)
+    start_web_ui = mocker.patch.object(sys_cmds, "_start_web_ui_if_installed", return_value=True)
+    mocker.patch.object(sys_cmds, "find_web_ui_dir", return_value=None)
+    write_endpoints = mocker.patch.object(sys_cmds, "_write_runtime_endpoints_file", return_value={})
+
+    sys_cmds.restart_sidecars(api=True, web_ui=False)
+
+    stop_sidecar.assert_called_once_with(api_pid_files)
+    start_api.assert_called_once()
+    env = start_api.call_args.args[0]
+    assert env["MN_API_HOST"] == "localhost"
+    assert env["MN_API_PORT"] == "54001"
+    start_web_ui.assert_not_called()
+    write_endpoints.assert_called_once_with(env, web_ui_available=False)
+
+
+def test_restart_sidecars_web_ui_only_restarts_web_ui_without_api(mocker, tmp_path):
+    web_pid_files = ((tmp_path / "web-ui-watchdog.pid", "Web UI watchdog"),)
+    web_ui_dir = tmp_path / "web-ui"
+    mocker.patch.object(sys_cmds, "web_ui_pid_files", return_value=web_pid_files)
+    mocker.patch.object(sys_cmds, "runtime_compose_available", return_value=False)
+    mocker.patch.object(sys_cmds, "_runtime_base_env", return_value={})
+    stop_sidecar = mocker.patch.object(sys_cmds, "_stop_sidecar_processes", return_value=True)
+    start_api = mocker.patch.object(sys_cmds, "_start_api_if_installed", return_value=True)
+    start_web_ui = mocker.patch.object(sys_cmds, "_start_web_ui_if_installed", return_value=True)
+    mocker.patch.object(sys_cmds, "find_web_ui_dir", return_value=web_ui_dir)
+    write_endpoints = mocker.patch.object(sys_cmds, "_write_runtime_endpoints_file", return_value={})
+
+    sys_cmds.restart_sidecars(api=False, web_ui=True)
+
+    stop_sidecar.assert_called_once_with(web_pid_files)
+    start_web_ui.assert_called_once()
+    env = start_web_ui.call_args.args[0]
+    assert env["MN_WEB_UI_HOST"] == "localhost"
+    assert env["MN_WEB_UI_PORT"] == "55173"
+    start_api.assert_not_called()
+    write_endpoints.assert_called_once_with(env, web_ui_available=True)
+
+
+def test_stop_sidecar_processes_kills_running_processes_and_cleans_pid_files(mocker, tmp_path):
+    running_pid_file = tmp_path / "api-watchdog.pid"
+    stale_pid_file = tmp_path / "api.pid"
+    running_pid_file.write_text("1234")
+    stale_pid_file.write_text("not-a-pid")
+    mocker.patch.object(sys_cmds.os, "kill")
+    kill = mocker.patch.object(sys_cmds, "kill_tree")
+    sleep = mocker.patch.object(sys_cmds.time, "sleep")
+
+    stopped = sys_cmds._stop_sidecar_processes(
+        (
+            (running_pid_file, "REST API watchdog"),
+            (stale_pid_file, "REST API"),
+        )
+    )
+
+    assert stopped is True
+    kill.assert_called_once_with(1234)
+    sleep.assert_called_once_with(1)
+    assert not running_pid_file.exists()
+    assert not stale_pid_file.exists()

@@ -2,6 +2,7 @@ import subprocess
 import os
 import time
 from typing import Optional
+from pathlib import Path
 
 import typer
 
@@ -17,11 +18,20 @@ from mn_cli.server_cmds import (
     _detach_local_docker_node_if_matches,
     _refresh_network_token,
     _stop_network_runtime,
+    _ensure_compose_native_port_settings,
+    _runtime_base_env,
+    _start_api_if_installed,
+    _start_web_ui_if_installed,
+    _write_runtime_endpoints_file,
     kill_tree,
     BEAM_PID_FILE,
+    DEFAULT_HOST,
+    DEFAULT_API_PORT,
     DEFAULT_GRPC_PORT,
     DEFAULT_DIST_PORT,
+    DEFAULT_WEB_UI_PORT,
     DEFAULT_DOCKER_NETWORK_NAME,
+    find_web_ui_dir,
     runtime_compose_available,
     runtime_compose_cmd,
     api_pid_files,
@@ -210,6 +220,90 @@ def health(
     from mn_cli.libs.runtime_health import health as runtime_health
 
     runtime_health(json_output=json_output, timeout=timeout, repair=repair)
+
+def restart_sidecars(
+    api: bool = typer.Option(False, "--api", help="Restart the REST API sidecar."),
+    web_ui: bool = typer.Option(False, "--web-ui", help="Restart the Web UI sidecar."),
+):
+    """Restart only the REST API and/or Web UI sidecars"""
+    restart_api = bool(api)
+    restart_web_ui = bool(web_ui)
+    if not restart_api and not restart_web_ui:
+        restart_api = True
+        restart_web_ui = True
+
+    console.print("=> Restarting MirrorNeuron runtime sidecars...")
+    env = _sidecar_runtime_env()
+    details: list[tuple[str, str]] = []
+    restarted_any = False
+
+    if restart_api:
+        console.print("=> Restarting REST API sidecar...")
+        _stop_sidecar_processes(api_pid_files())
+        api_started = _start_api_if_installed(env)
+        details.append(("REST API", "restarted" if api_started else "skipped"))
+        restarted_any = restarted_any or api_started
+
+    if restart_web_ui:
+        console.print("=> Restarting Web UI sidecar...")
+        _stop_sidecar_processes(web_ui_pid_files())
+        web_ui_started = _start_web_ui_if_installed(env)
+        details.append(("Web UI", "restarted" if web_ui_started else "skipped"))
+        restarted_any = restarted_any or web_ui_started
+
+    _write_runtime_endpoints_file(env, web_ui_available=find_web_ui_dir() is not None)
+
+    if not restarted_any:
+        console.print("[red]Error: no selected sidecars could be restarted.[/red]")
+        raise typer.Exit(1)
+
+    print_success_confirmation(
+        console,
+        "Runtime sidecar restart",
+        status="complete",
+        details=details,
+        next_steps="mn runtime health",
+    )
+
+def _sidecar_runtime_env() -> dict[str, str]:
+    compose_runtime = runtime_compose_available()
+    env = _runtime_base_env(compose_runtime)
+    if compose_runtime:
+        env = _ensure_compose_native_port_settings(env)
+    env.setdefault("MN_API_HOST", DEFAULT_HOST)
+    env.setdefault("MN_API_PORT", DEFAULT_API_PORT)
+    env.setdefault("MN_WEB_UI_HOST", DEFAULT_HOST)
+    env.setdefault("MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT)
+    return env
+
+def _stop_sidecar_processes(pid_files: tuple[tuple[Path, str], ...]) -> bool:
+    stopped = False
+    for pid_file, name in pid_files:
+        if not pid_file.exists():
+            continue
+        try:
+            pid = int(pid_file.read_text().strip())
+        except (ValueError, OSError):
+            _unlink_pid_file(pid_file)
+            continue
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            _unlink_pid_file(pid_file)
+            continue
+        console.print(f"   Stopping {name} (PID: {pid})...")
+        kill_tree(pid)
+        stopped = True
+        _unlink_pid_file(pid_file)
+    if stopped:
+        time.sleep(1)
+    return stopped
+
+def _unlink_pid_file(pid_file: Path) -> None:
+    try:
+        pid_file.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 def leave(node_name: str):
     """Remove a node from the cluster by its node name (e.g. mirror_neuron@192.168.4.173)"""
