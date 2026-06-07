@@ -46,15 +46,19 @@ def _runtime_model_manifest(
     *,
     provider: str = "docker_model_runner",
     backend: str = "llama.cpp",
+    model_config: dict | None = None,
 ) -> dict:
+    entry = {
+        "model": model,
+        "provider": provider,
+        "backend": backend,
+    }
+    if model_config:
+        entry.update(model_config)
     return {
         "runtime": {
             "models": {
-                "primary": {
-                    "model": model,
-                    "provider": provider,
-                    "backend": backend,
-                }
+                "primary": entry
             }
         }
     }
@@ -182,6 +186,41 @@ def test_blueprint_model_dependency_service_model_records_owner_without_docker_i
     assert record["backend"] == "vllm"
     assert record["manual"] is False
     assert record["owners"]["bp-service"]["blueprint_revision"] == "rev-2"
+
+
+def test_blueprint_model_dependency_cluster_provided_skips_local_install(
+    mocker,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
+    model_id = "video-vlm:default"
+    docker_model = "hf.co/acme/video-vlm"
+    mocker.patch(
+        "mn_cli.libs.blueprint_cmds._load_model_catalog",
+        return_value=_single_model_catalog(model_id, docker_model),
+    )
+    model_installed = mocker.patch("mn_cli.libs.blueprint_cmds._model_installed")
+    install_model = mocker.patch("mn_cli.libs.blueprint_cmds._install_model_entry")
+
+    summary = blueprint_cmds._install_blueprint_model_dependencies(
+        blueprint_id="bp-cluster-model",
+        blueprint_revision="rev-3",
+        bundle_root=tmp_path / "bundle",
+        manifest=_runtime_model_manifest(
+            model_id,
+            model_config={"install_mode": "cluster_provided"},
+        ),
+        config={},
+        install_source="test-source",
+        force=False,
+    )
+
+    model_installed.assert_not_called()
+    install_model.assert_not_called()
+    assert summary["ok"] is True
+    assert summary["models"][0]["status"] == "cluster_provided"
+    assert load_model_ownership()["models"] == {}
 
 
 def test_blueprint_list_not_initialized(mocker, tmp_path):

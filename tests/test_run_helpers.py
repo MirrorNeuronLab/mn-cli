@@ -157,6 +157,136 @@ def test_prepare_manifest_injects_docker_model_runner_llm_env_by_node_runtime(tm
 
 
 @requires_blueprint_support
+def test_prepare_manifest_for_submission_injects_flow_nodes_and_scheduler_binding(tmp_path):
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps(
+            {
+                "identity": {"blueprint_id": "safety_video_analyser"},
+                "llm": {"provider": "docker_model_runner", "model": "gemma4:e2b"},
+                "node_allocation": {
+                    "report_generator_preferred_node": "mirror_neuron@192.168.4.173"
+                },
+                "manifest_config_bindings": [
+                    {
+                        "config_path": "node_allocation.report_generator_preferred_node",
+                        "manifest_path": "flow.nodes.report_generator.policies.scheduler.preferred_node",
+                    }
+                ],
+            }
+        )
+    )
+    manifest = {
+        "manifest_version": "1.0",
+        "graph_id": "flow-node-env",
+        "flow": {
+            "nodes": [
+                {
+                    "node_id": "video_understanding_agent",
+                    "config": {
+                        "environment": {
+                            "MN_LLM_MODEL": "hf.co/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16"
+                        }
+                    },
+                },
+                {
+                    "node_id": "report_generator",
+                    "config": {"environment": {}},
+                    "policies": {"scheduler": {}},
+                },
+            ],
+            "edges": [],
+        },
+    }
+
+    prepared = prepare_manifest_for_submission(
+        bundle_dir,
+        manifest,
+        env_overrides={"MN_RUN_ID": "safety-run"},
+    )
+
+    nodes = {node["node_id"]: node for node in prepared["flow"]["nodes"]}
+    video_env = nodes["video_understanding_agent"]["config"]["environment"]
+    report_env = nodes["report_generator"]["config"]["environment"]
+
+    assert video_env["MN_RUN_ID"] == "safety-run"
+    assert video_env["MN_LLM_MODEL"].startswith("hf.co/nvidia/")
+    assert report_env["MN_LLM_MODEL"] == "ai/gemma4:E2B"
+    assert (
+        nodes["report_generator"]["policies"]["scheduler"]["preferred_node"]
+        == "mirror_neuron@192.168.4.173"
+    )
+    assert "nodes" not in prepared
+
+
+@requires_blueprint_support
+def test_flow_node_local_video_inputs_promote_to_blob_refs(tmp_path, monkeypatch):
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    videos = tmp_path / "videos"
+    videos.mkdir()
+    (videos / "work_safety_1.mp4").write_bytes(b"0123456789abcdef")
+    (config_dir / "default.json").write_text(
+        json.dumps(
+            {
+                "identity": {"blueprint_id": "safety_video_analyser"},
+                "video_inputs": {"folder_path": str(videos)},
+                "inputs": {"payload": {"video_folder": str(videos)}},
+                "local_inputs": {
+                    "folders": [
+                        {
+                            "config_path": "video_inputs.folder_path",
+                            "payload_path": "safety_video_analyser/mn_local_inputs/videos",
+                            "runtime_path": "mn_local_inputs/videos",
+                            "allowed_extensions": [".mp4"],
+                            "linked_config_paths": ["inputs.payload.video_folder"],
+                        }
+                    ]
+                },
+            }
+        )
+    )
+    manifest = {
+        "manifest_version": "1.0",
+        "graph_id": "flow-video-blobs",
+        "flow": {
+            "nodes": [
+                {
+                    "node_id": "video_understanding_agent",
+                    "config": {"environment": {}},
+                }
+            ],
+            "edges": [],
+        },
+    }
+    monkeypatch.setenv("MN_INLINE_PAYLOAD_MAX_BYTES", "5")
+    monkeypatch.setenv("MN_HOST_BLOB_STORE_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setenv("MN_ARTIFACT_ADVERTISE_URL", "http://node-a:55660")
+    monkeypatch.setenv("MN_NODE_NAME", "mirror_neuron@node-a")
+
+    prepared = prepare_manifest_for_submission(bundle_dir, manifest)
+    payloads = {}
+    summary = stage_local_input_payloads_for_manifest(prepared, payloads, bundle_dir=bundle_dir)
+
+    assert summary["folders"][0]["file_count"] == 1
+    assert "safety_video_analyser/mn_local_inputs/videos/work_safety_1.mp4" in payloads
+
+    promoted = promote_large_payloads_to_blob_refs(prepared, payloads)
+
+    assert len(promoted) == 1
+    assert payloads == {}
+    ref = prepared["metadata"]["mn_artifacts"]["blob_refs"][0]
+    assert ref["type"] == "blob_ref"
+    assert ref["payload_path"] == "safety_video_analyser/mn_local_inputs/videos/work_safety_1.mp4"
+    assert ref["locations"][0]["node"] == "mirror_neuron@node-a"
+
+
+@requires_blueprint_support
 def test_stage_local_input_payloads_after_manifest_preparation(tmp_path):
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()

@@ -57,6 +57,7 @@ from mn_cli.libs.model_cmds import (
     remove_model_ref as _remove_model_ref,
 )
 from mn_sdk import (
+    cluster_provided_model as _cluster_provided_model,
     docker_model_name as _docker_model_name,
     load_model_catalog as _load_model_catalog,
     load_model_ownership as _load_model_ownership,
@@ -825,6 +826,10 @@ def _install_blueprint_model_dependencies(
             "backend": backend,
             "path": requirement.get("path"),
         }
+        if _cluster_provided_model(requirement):
+            results.append({**base_result, "status": "cluster_provided"})
+            continue
+
         if provider != "docker_model_runner":
             _record_model_owner(
                 entry,

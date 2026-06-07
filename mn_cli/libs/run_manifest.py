@@ -130,10 +130,19 @@ def blueprint_web_ui_enabled(config: dict[str, Any] | None) -> bool:
     )
 
 
+def manifest_nodes(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    flow = manifest.get("flow") if isinstance(manifest.get("flow"), dict) else {}
+    flow_nodes = flow.get("nodes") if isinstance(flow, dict) else None
+    if isinstance(flow_nodes, list):
+        return [node for node in flow_nodes if isinstance(node, dict)]
+    nodes = manifest.get("nodes")
+    if isinstance(nodes, list):
+        return [node for node in nodes if isinstance(node, dict)]
+    return []
+
+
 def manifest_local_inputs_enabled(manifest: dict[str, Any]) -> bool:
-    for node in manifest.get("nodes") or []:
-        if not isinstance(node, dict):
-            continue
+    for node in manifest_nodes(manifest):
         environment = (node.get("config") or {}).get("environment") or {}
         config_json = environment.get("MN_BLUEPRINT_CONFIG_JSON")
         if not config_json:
@@ -204,10 +213,8 @@ def stage_local_input_payloads_for_manifest(
 
 
 def render_agent_templates_for_submission(manifest: dict[str, Any]) -> None:
-    nodes = manifest.get("nodes")
-    if not isinstance(nodes, list) or not any(
-        isinstance(node, dict) and "uses" in node for node in nodes
-    ):
+    nodes = manifest_nodes(manifest)
+    if not nodes or not any("uses" in node for node in nodes):
         return
     _inject_local_blueprint_support_path()
     try:
@@ -445,23 +452,24 @@ def load_blueprint_config_overwrites(
 
 
 def inject_node_environment(manifest: dict[str, Any], env: dict[str, str]) -> None:
-    for node in manifest.get("nodes") or []:
-        if not isinstance(node, dict):
-            continue
+    for node in manifest_nodes(manifest):
         config = node.setdefault("config", {})
         if not isinstance(config, dict):
             continue
         environment = config.setdefault("environment", {})
         if not isinstance(environment, dict):
             continue
+        existing_env = dict(environment)
         node_env = dict(env)
-        if environment.get("PYTHONPATH") and node_env.get("PYTHONPATH"):
-            node_env["PYTHONPATH"] = merge_path_values(
-                str(environment["PYTHONPATH"]),
+        if existing_env.get("PYTHONPATH") and node_env.get("PYTHONPATH"):
+            existing_env["PYTHONPATH"] = merge_path_values(
+                str(existing_env["PYTHONPATH"]),
                 str(node_env["PYTHONPATH"]),
             )
         adjust_llm_environment_for_node(node_env, node)
+        environment.clear()
         environment.update(node_env)
+        environment.update(existing_env)
         add_mn_llm_aliases(environment)
 
 
@@ -501,9 +509,7 @@ def adjust_llm_environment_for_node(environment: dict[str, Any], node: dict[str,
 
 
 def normalize_host_local_uploads(manifest: dict[str, Any]) -> None:
-    for node in manifest.get("nodes") or []:
-        if not isinstance(node, dict):
-            continue
+    for node in manifest_nodes(manifest):
         config = node.get("config")
         if not isinstance(config, dict):
             continue
