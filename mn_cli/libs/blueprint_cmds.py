@@ -536,7 +536,17 @@ def run_local_blueprint_folder(
     blueprint_dir = Path(folder).expanduser()
     manifest = _load_blueprint_manifest(blueprint_dir, str(blueprint_dir))
     metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
-    blueprint_id = str(metadata.get("blueprint_id") or manifest.get("graph_id") or blueprint_dir.name)
+    workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
+    workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v1" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
+    blueprint_id = str(
+        metadata.get("blueprint_id")
+        or manifest.get("id")
+        or manifest.get("blueprint_id")
+        or manifest.get("workflow_id")
+        or workflow.get("workflow_id")
+        or (None if workflow_manifest else manifest.get("graph_id"))
+        or blueprint_dir.name
+    )
     _run_resolved_blueprint(
         blueprint_dir=blueprint_dir,
         manifest=manifest,

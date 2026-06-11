@@ -1,0 +1,261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mirrorneuron.dev/schemas/mn.workflow.v1.manifest.schema.json",
+  "title": "MirrorNeuron workflow manifest",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "kind",
+    "id",
+    "name",
+    "manifest_version",
+    "job_name",
+    "contract",
+    "workflow",
+    "agents",
+    "runtime"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "mn.workflow/v1"
+    },
+    "kind": {
+      "const": "Workflow"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "manifest_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "job_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "flow": false,
+    "graph_id": false,
+    "nodes": false,
+    "edges": false,
+    "entrypoints": false,
+    "contract": {
+      "type": "object",
+      "required": ["inputs", "outputs"],
+      "properties": {
+        "inputs": {
+          "type": "object"
+        },
+        "outputs": {
+          "type": "object",
+          "required": ["primary"],
+          "properties": {
+            "primary": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "workflow": {
+      "type": "object",
+      "required": [
+        "schema",
+        "workflow_id",
+        "entrypoint",
+        "source",
+        "sink",
+        "steps",
+        "edges"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mn.workflow.problem_graph/v1"
+        },
+        "workflow_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mode": {
+          "enum": ["static_dag"]
+        },
+        "entrypoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sink": {
+          "type": "string",
+          "minLength": 1
+        },
+        "execution": {
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": ["parallel", "serial"]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "strategy": {
+                  "enum": ["parallel", "serial"]
+                },
+                "max_parallel_steps": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "additionalProperties": true
+            }
+          ]
+        },
+        "dynamic": {
+          "type": "object"
+        },
+        "state": {
+          "type": "object"
+        },
+        "policy": {
+          "type": "object"
+        },
+        "observers": {
+          "type": ["array", "object"]
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "edges": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["id", "from", "to"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "from": {
+                "type": "string",
+                "minLength": 1
+              },
+              "to": {
+                "type": "string",
+                "minLength": 1
+              },
+              "event": {
+                "type": "string"
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "accepts": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "condition": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "agents": {
+      "type": "object",
+      "required": ["schema", "nodes", "edges", "entrypoints"],
+      "properties": {
+        "schema": {
+          "const": "mn.agents.communication_graph/v1"
+        },
+        "entrypoints": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["node_id"],
+            "properties": {
+              "node_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["edge_id", "from_node", "to_node"],
+            "properties": {
+              "edge_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "from_node": {
+                "type": "string",
+                "minLength": 1
+              },
+              "to_node": {
+                "type": "string",
+                "minLength": 1
+              },
+              "message_type": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "runtime": {
+      "type": "object",
+      "required": ["bindings"],
+      "properties": {
+        "bindings": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

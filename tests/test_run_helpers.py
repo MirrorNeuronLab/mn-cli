@@ -250,7 +250,7 @@ def test_prepare_manifest_for_submission_injects_flow_nodes_and_scheduler_bindin
                 "manifest_config_bindings": [
                     {
                         "config_path": "node_allocation.report_generator_preferred_node",
-                        "manifest_path": "flow.nodes.report_generator.policies.scheduler.preferred_node",
+                        "manifest_path": "agents.nodes.report_generator.policies.scheduler.preferred_node",
                     }
                 ],
             }
@@ -258,8 +258,8 @@ def test_prepare_manifest_for_submission_injects_flow_nodes_and_scheduler_bindin
     )
     manifest = {
         "manifest_version": "1.0",
-        "graph_id": "flow-node-env",
-        "flow": {
+        "workflow_id": "agent-node-env",
+        "agents": {
             "nodes": [
                 {
                     "node_id": "video_understanding_agent",
@@ -285,7 +285,7 @@ def test_prepare_manifest_for_submission_injects_flow_nodes_and_scheduler_bindin
         env_overrides={"MN_RUN_ID": "safety-run"},
     )
 
-    nodes = {node["node_id"]: node for node in prepared["flow"]["nodes"]}
+    nodes = {node["node_id"]: node for node in prepared["agents"]["nodes"]}
     video_env = nodes["video_understanding_agent"]["config"]["environment"]
     report_env = nodes["report_generator"]["config"]["environment"]
 
@@ -330,8 +330,8 @@ def test_flow_node_local_video_inputs_promote_to_blob_refs(tmp_path, monkeypatch
     )
     manifest = {
         "manifest_version": "1.0",
-        "graph_id": "flow-video-blobs",
-        "flow": {
+        "workflow_id": "agent-video-blobs",
+        "agents": {
             "nodes": [
                 {
                     "node_id": "video_understanding_agent",

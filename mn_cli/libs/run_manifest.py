@@ -131,10 +131,10 @@ def blueprint_web_ui_enabled(config: dict[str, Any] | None) -> bool:
 
 
 def manifest_nodes(manifest: dict[str, Any]) -> list[dict[str, Any]]:
-    flow = manifest.get("flow") if isinstance(manifest.get("flow"), dict) else {}
-    flow_nodes = flow.get("nodes") if isinstance(flow, dict) else None
-    if isinstance(flow_nodes, list):
-        return [node for node in flow_nodes if isinstance(node, dict)]
+    agents = manifest.get("agents") if isinstance(manifest.get("agents"), dict) else {}
+    agent_nodes = agents.get("nodes") if isinstance(agents, dict) else None
+    if isinstance(agent_nodes, list):
+        return [node for node in agent_nodes if isinstance(node, dict)]
     nodes = manifest.get("nodes")
     if isinstance(nodes, list):
         return [node for node in nodes if isinstance(node, dict)]

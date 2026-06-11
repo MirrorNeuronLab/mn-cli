@@ -24,6 +24,48 @@ requires_blueprint_support = pytest.mark.skipif(
 )
 
 
+def _workflow_manifest_fixture():
+    return {
+        "apiVersion": "mn.workflow/v1",
+        "kind": "Workflow",
+        "id": "tax_flow",
+        "name": "Tax Flow",
+        "manifest_version": "1.0",
+        "job_name": "tax-flow",
+        "contract": {
+            "inputs": {},
+            "outputs": {"primary": {"path": "final_artifact.json"}},
+        },
+        "workflow": {
+            "schema": "mn.workflow.problem_graph/v1",
+            "workflow_id": "tax_flow_v1",
+            "mode": "static_dag",
+            "entrypoint": "intake",
+            "source": "intake",
+            "sink": "report",
+            "edges": [
+                {"id": "intake_to_income", "from": "intake", "to": "income", "required": True},
+                {"id": "intake_to_property", "from": "intake", "to": "property", "required": False},
+                {"id": "income_to_report", "from": "income", "to": "report", "required": True},
+                {"id": "property_to_report", "from": "property", "to": "report", "required": False},
+            ],
+            "steps": [
+                {"id": "intake", "label": "Intake"},
+                {"id": "income", "label": "Income"},
+                {"id": "property", "label": "Property"},
+                {"id": "report", "label": "Report"},
+            ],
+        },
+        "agents": {
+            "schema": "mn.agents.communication_graph/v1",
+            "entrypoints": ["worker"],
+            "nodes": [{"node_id": "worker"}],
+            "edges": [],
+        },
+        "runtime": {"bindings": {}},
+    }
+
+
 def test_validate_success(tmp_path):
     bundle_dir = tmp_path / "valid_bundle"
     bundle_dir.mkdir()
@@ -47,44 +89,17 @@ def test_validate_success(tmp_path):
 def test_validate_accepts_workflow_manifest_without_legacy_nodes(tmp_path):
     bundle_dir = tmp_path / "workflow_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps({
-        "apiVersion": "mn.workflow/v1",
-        "kind": "Workflow",
-        "manifest_version": "1.0",
-        "graph_id": "tax_flow",
-        "job_name": "tax-flow",
-        "flow": {
-            "graph": {
-                "schema": "mn.workflow.problem_graph/v1",
-                "mode": "static_dag",
-                "source": "intake",
-                "sink": "report",
-                "edges": [
-                    {"id": "intake_to_income", "from": "intake", "to": "income", "required": True},
-                    {"id": "intake_to_property", "from": "intake", "to": "property", "required": False},
-                    {"id": "income_to_report", "from": "income", "to": "report", "required": True},
-                    {"id": "property_to_report", "from": "property", "to": "report", "required": False},
-                ],
-            },
-            "steps": [
-                {"id": "intake", "label": "Intake"},
-                {"id": "income", "label": "Income"},
-                {"id": "property", "label": "Property"},
-                {"id": "report", "label": "Report"},
+    manifest = _workflow_manifest_fixture()
+    manifest["runtime"]["bindings"] = {
+        "income": {
+            "type": "team",
+            "workers": [
+                {"id": "income_worker", "kind": "worker"},
+                {"id": "income_validator", "kind": "validator", "depends_on": ["income_worker"]},
             ],
-        },
-        "runtime": {
-            "bindings": {
-                "income": {
-                    "type": "team",
-                    "workers": [
-                        {"id": "income_worker", "kind": "worker"},
-                        {"id": "income_validator", "kind": "validator", "depends_on": ["income_worker"]},
-                    ],
-                }
-            }
-        },
-    }))
+        }
+    }
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
 
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
 
@@ -95,34 +110,68 @@ def test_validate_accepts_workflow_manifest_without_legacy_nodes(tmp_path):
 def test_validate_rejects_workflow_manifest_cycles(tmp_path):
     bundle_dir = tmp_path / "workflow_cycle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps({
-        "apiVersion": "mn.workflow/v1",
-        "kind": "Workflow",
-        "manifest_version": "1.0",
-        "graph_id": "cyclic_flow",
-        "job_name": "cyclic-flow",
-        "flow": {
-            "graph": {
-                "schema": "mn.workflow.problem_graph/v1",
-                "mode": "static_dag",
-                "source": "a",
-                "sink": "c",
-                "edges": [
-                    {"id": "a_to_b", "from": "a", "to": "b"},
-                    {"id": "b_to_c", "from": "b", "to": "c"},
-                    {"id": "c_to_b", "from": "c", "to": "b"},
-                ],
-            },
-            "steps": [{"id": "a"}, {"id": "b"}, {"id": "c"}],
-        },
-        "runtime": {"bindings": {}},
-    }))
+    manifest = _workflow_manifest_fixture()
+    manifest["id"] = "cyclic_flow"
+    manifest["workflow"]["workflow_id"] = "cyclic_flow_v1"
+    manifest["workflow"]["entrypoint"] = "a"
+    manifest["workflow"]["source"] = "a"
+    manifest["workflow"]["sink"] = "c"
+    manifest["workflow"]["steps"] = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+    manifest["workflow"]["edges"] = [
+        {"id": "a_to_b", "from": "a", "to": "b"},
+        {"id": "b_to_c", "from": "b", "to": "c"},
+        {"id": "c_to_b", "from": "c", "to": "b"},
+    ]
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
 
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--output", "json"])
 
     assert result.exit_code == 1
     report = json.loads(result.stdout)
     assert any("acyclic" in issue["message"] for issue in report["issues"])
+
+
+def test_validate_rejects_workflow_manifest_root_graph_id(tmp_path):
+    bundle_dir = tmp_path / "workflow_root_graph_id"
+    bundle_dir.mkdir()
+    manifest = _workflow_manifest_fixture()
+    manifest["graph_id"] = "tax_flow_v1"
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
+
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--output", "json"])
+
+    assert result.exit_code == 1
+    report = json.loads(result.stdout)
+    assert any(issue["location"]["path"] == "graph_id" for issue in report["issues"])
+
+
+def test_validate_rejects_workflow_manifest_missing_workflow_id(tmp_path):
+    bundle_dir = tmp_path / "workflow_missing_id"
+    bundle_dir.mkdir()
+    manifest = _workflow_manifest_fixture()
+    del manifest["workflow"]["workflow_id"]
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
+
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--output", "json"])
+
+    assert result.exit_code == 1
+    report = json.loads(result.stdout)
+    assert any("workflow_id" in issue["message"] for issue in report["issues"])
+
+
+def test_validate_rejects_old_flow_workflow_manifest(tmp_path):
+    bundle_dir = tmp_path / "workflow_old_flow"
+    bundle_dir.mkdir()
+    manifest = _workflow_manifest_fixture()
+    manifest["flow"] = {"steps": manifest["workflow"]["steps"]}
+    del manifest["workflow"]
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
+
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--output", "json"])
+
+    assert result.exit_code == 1
+    report = json.loads(result.stdout)
+    assert any(issue["location"]["path"] in {"flow", "manifest"} for issue in report["issues"])
 
 
 def test_openshell_env_prefers_active_gateway_metadata(tmp_path, monkeypatch):
@@ -1329,10 +1378,13 @@ def test_run_displays_workflow_steps_and_agents(mocker, tmp_path):
     bundle_dir = tmp_path / "workflow_bundle"
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text(json.dumps({
+        "apiVersion": "mn.workflow/v1",
+        "kind": "Workflow",
         "id": "workflow-blueprint",
         "name": "Workflow Blueprint",
         "description": "Two workers inside one workflow step.",
-        "flow": {
+        "workflow": {
+            "workflow_id": "workflow-blueprint_v1",
             "entrypoint": "research",
             "steps": [
                 {
@@ -1344,6 +1396,12 @@ def test_run_displays_workflow_steps_and_agents(mocker, tmp_path):
                     "on": {"research_done": "completed"},
                 }
             ],
+        },
+        "agents": {
+            "schema": "mn.agents.communication_graph/v1",
+            "entrypoints": ["research:docs"],
+            "nodes": [{"node_id": "research:docs"}, {"node_id": "research:risks"}],
+            "edges": [],
         },
         "runtime": {
             "bindings": {
@@ -1368,7 +1426,6 @@ def test_run_displays_workflow_steps_and_agents(mocker, tmp_path):
                 }
             }
         },
-        "nodes": [],
     }))
 
     result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
@@ -1591,13 +1648,21 @@ def test_run_detached_starts_without_live_workflow_ui(flag, mocker, tmp_path, mo
     bundle_dir = tmp_path / f"run_bundle_{flag.strip('-')}"
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text(json.dumps({
+        "apiVersion": "mn.workflow/v1",
+        "kind": "Workflow",
         "id": "detached-workflow",
-        "flow": {
+        "workflow": {
+            "workflow_id": "detached-workflow_v1",
             "entrypoint": "step_one",
             "steps": [{"id": "step_one", "label": "Step One", "run": "step_one"}],
         },
+        "agents": {
+            "schema": "mn.agents.communication_graph/v1",
+            "entrypoints": ["worker-one"],
+            "nodes": [{"node_id": "worker-one"}],
+            "edges": [],
+        },
         "runtime": {"bindings": {"step_one": {"worker": {"id": "worker-one"}}}},
-        "nodes": [],
     }))
 
     result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), flag])
