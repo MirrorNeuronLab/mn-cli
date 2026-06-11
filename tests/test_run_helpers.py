@@ -205,6 +205,34 @@ def test_prepare_manifest_injects_docker_model_runner_llm_env_by_node_runtime(tm
     assert host_env["MN_LLM_MAX_TOKENS"] == "800"
 
 
+def test_prepare_manifest_model_only_llm_config_does_not_request_scheduler_model(tmp_path):
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps({"llm": {"enabled": True, "model": "default"}})
+    )
+    manifest = {
+        "nodes": [
+            {
+                "node_id": "support_worker",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.HostLocal",
+                    "environment": {},
+                },
+            }
+        ]
+    }
+
+    prepared = prepare_manifest_for_submission(bundle_dir, manifest)
+
+    env = prepared["nodes"][0]["config"]["environment"]
+    assert env["MN_LLM_PROVIDER"] == "docker_model_runner"
+    assert env["MN_LLM_MODEL"] == "ai/gemma4:E2B"
+    assert "MN_LLM_RUNTIME_MODEL" not in env
+
+
 @requires_blueprint_support
 def test_prepare_manifest_for_submission_injects_flow_nodes_and_scheduler_binding(tmp_path):
     bundle_dir = tmp_path / "bundle"
