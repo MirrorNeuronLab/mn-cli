@@ -13,7 +13,7 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Optional
 from urllib.parse import urlparse
 import typer
 from rich.console import Console
@@ -1718,18 +1718,25 @@ def _ensure_local_cluster_runtime_for_join(
         console.print(f"[dim]{exc}[/dim]")
         raise typer.Exit(1) from exc
 
-def _wait_for_local_cluster_grpc(timeout_seconds: float = 10.0) -> None:
+def _wait_for_local_cluster_grpc(
+    timeout_seconds: float = 10.0,
+    *,
+    core_client: Any | None = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    time_fn: Callable[[], float] = time.time,
+) -> None:
     from mn_cli.shared import client as local_client
 
-    deadline = time.time() + timeout_seconds
+    grpc_client = core_client if core_client is not None else local_client
+    deadline = time_fn() + timeout_seconds
     last_error: Optional[Exception] = None
-    while time.time() < deadline:
+    while time_fn() < deadline:
         try:
-            local_client.get_system_summary()
+            grpc_client.get_system_summary()
             return
         except Exception as exc:
             last_error = exc
-            time.sleep(0.25)
+            sleep_fn(0.25)
 
     console.print("[red]Error: Local MirrorNeuron core did not become ready after enabling cluster mode.[/red]")
     if last_error is not None:

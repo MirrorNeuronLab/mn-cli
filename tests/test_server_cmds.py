@@ -1097,6 +1097,54 @@ def test_join_promotes_local_compose_runtime_to_cluster_mode(mocker, tmp_path):
         "up", "-d", "--force-recreate", "redis", "mirror-neuron-core"
     )
 
+def test_wait_for_local_cluster_grpc_uses_injected_core_client(mocker):
+    shared_summary = mocker.patch(
+        "mn_cli.shared.client.get_system_summary",
+        side_effect=AssertionError("shared client should not be called"),
+    )
+    core_client = _FlakyCoreClient(failures=1)
+    sleeps = []
+    times = iter([0.0, 0.0, 0.1])
+
+    server_cmds._wait_for_local_cluster_grpc(
+        timeout_seconds=1.0,
+        core_client=core_client,
+        sleep_fn=sleeps.append,
+        time_fn=lambda: next(times),
+    )
+
+    assert core_client.calls == 2
+    assert sleeps == [0.25]
+    shared_summary.assert_not_called()
+
+def test_wait_for_local_cluster_grpc_raises_after_injected_client_timeout(capsys):
+    core_client = _FlakyCoreClient(failures=10)
+    times = iter([0.0, 0.0, 1.1])
+
+    with pytest.raises(typer.Exit) as exc_info:
+        server_cmds._wait_for_local_cluster_grpc(
+            timeout_seconds=1.0,
+            core_client=core_client,
+            sleep_fn=lambda _seconds: None,
+            time_fn=lambda: next(times),
+        )
+
+    assert exc_info.value.exit_code == 1
+    assert core_client.calls == 1
+    assert "Local MirrorNeuron core did not become ready" in capsys.readouterr().out
+
+class _FlakyCoreClient:
+    def __init__(self, *, failures: int):
+        self.calls = 0
+        self.failures = failures
+
+    def get_system_summary(self):
+        self.calls += 1
+        if self.failures > 0:
+            self.failures -= 1
+            raise RuntimeError("core not ready")
+        return '{"nodes":[]}'
+
 def test_start_server_already_running(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
     (tmp_path / "api.pid").write_text("1234")

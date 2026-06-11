@@ -384,6 +384,11 @@ def _docker_model_cli_available() -> bool:
     return result.returncode == 0
 
 
+def _docker_available() -> bool:
+    result = _docker(["--version"], check=False, timeout=15)
+    return result.returncode == 0
+
+
 def _docker_model_run_supports_context_size() -> bool:
     result = _docker(["model", "run", "--help"], check=False, timeout=15)
     return result.returncode == 0 and "--context-size" in (result.stdout or result.stderr or "")
@@ -402,6 +407,8 @@ def _ensure_runner(backend: str, accelerator: str) -> None:
 
 def _installed_model_names() -> set[str]:
     if not _docker_model_cli_available():
+        if not _docker_available():
+            return set()
         return dmr_api_list_models(timeout=60)
     result = _docker(["model", "list", "--format", "json"], check=False, timeout=60)
     if result.returncode != 0:
@@ -414,6 +421,8 @@ def _model_installed(model: str) -> bool:
         result = _docker(["model", "inspect", model], check=False, timeout=30)
         if result.returncode == 0:
             return True
+    if not _docker_available():
+        return False
     try:
         return dmr_api_model_installed(model, timeout=30)
     except Exception:

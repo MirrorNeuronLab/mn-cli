@@ -56,12 +56,17 @@ def test_model_show_resolves_gemme_alias():
 
 def test_model_show_does_not_require_docker_binary(mocker):
     mocker.patch("subprocess.run", side_effect=FileNotFoundError("docker"))
+    mock_api_model_installed = mocker.patch(
+        "mn_cli.libs.model_cmds.dmr_api_model_installed",
+        return_value=True,
+    )
 
     result = runner.invoke(app, ["model", "show", "gemma4:e2b", "--json"])
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["installed"] is False
+    mock_api_model_installed.assert_not_called()
 
 
 def test_model_install_pulls_and_runs_compatible_model(mocker):

@@ -65,6 +65,29 @@ def test_runtime_health_grpc_down_is_critical(mocker, tmp_path):
     assert report["components"][0]["status"] == "critical"
 
 
+def test_runtime_health_uses_injected_core_client_without_shared_client(mocker, tmp_path):
+    _patch_targets(mocker, tmp_path, web_ui_installed=True)
+    shared_summary = mocker.patch.object(
+        runtime_health.client,
+        "get_system_summary",
+        side_effect=AssertionError("shared client should not be called"),
+    )
+    core_client = _CoreClient()
+    mocker.patch(
+        "mn_cli.libs.runtime_health.urllib.request.urlopen",
+        side_effect=[
+            _HttpResponse({"status": "ok"}),
+            _HttpResponse({"status": "ok", "component": "web-ui"}),
+        ],
+    )
+
+    report = runtime_health.collect_runtime_health(timeout=1, core_client=core_client)
+
+    assert report["overall"] == "passing"
+    assert core_client.calls == 1
+    shared_summary.assert_not_called()
+
+
 def test_runtime_health_web_ui_down_when_advertised_is_critical(mocker, tmp_path):
     endpoints = _patch_targets(mocker, tmp_path, web_ui_installed=False)
     endpoints.write_text(
@@ -176,6 +199,15 @@ def _patch_targets(mocker, tmp_path: Path, *, web_ui_installed: bool) -> Path:
     )
     mocker.patch("mn_cli.libs.runtime_health.find_web_ui_dir", return_value=(tmp_path / "web-ui") if web_ui_installed else None)
     return endpoints
+
+
+class _CoreClient:
+    def __init__(self):
+        self.calls = 0
+
+    def get_system_summary(self):
+        self.calls += 1
+        return '{"nodes":[]}'
 
 
 class _HttpResponse:

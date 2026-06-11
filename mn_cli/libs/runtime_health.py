@@ -47,7 +47,7 @@ def health(
         raise typer.Exit(1)
 
 
-def collect_runtime_health(timeout: float = 3.0) -> dict[str, Any]:
+def collect_runtime_health(timeout: float = 3.0, *, core_client: Any | None = None) -> dict[str, Any]:
     env = _runtime_base_env(runtime_compose_available())
     if runtime_compose_available():
         env = _compose_native_port_env(env)
@@ -57,7 +57,7 @@ def collect_runtime_health(timeout: float = 3.0) -> dict[str, Any]:
     targets = _targets(snapshot, persisted)
 
     components = [
-        check_core_grpc(targets["core_grpc"], timeout),
+        check_core_grpc(targets["core_grpc"], timeout, core_client=core_client),
         check_http_component("api", _append_path(targets["api"], "/health"), timeout, expected_component=None),
         check_web_ui(targets.get("web_ui"), timeout, installed_web_ui, "web_ui" in persisted),
     ]
@@ -69,10 +69,11 @@ def collect_runtime_health(timeout: float = 3.0) -> dict[str, Any]:
     }
 
 
-def check_core_grpc(target: str, timeout: float) -> dict[str, Any]:
+def check_core_grpc(target: str, timeout: float, *, core_client: Any | None = None) -> dict[str, Any]:
     started = time.perf_counter()
+    grpc_client = core_client if core_client is not None else client
     try:
-        client.get_system_summary()
+        grpc_client.get_system_summary()
         return _component("core_grpc", "passing", target, started, detail="system summary ok")
     except Exception as exc:
         return _component("core_grpc", "critical", target, started, error=str(exc))

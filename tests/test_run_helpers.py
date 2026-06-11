@@ -99,6 +99,55 @@ def test_promote_large_payloads_to_blob_refs(tmp_path, monkeypatch):
     assert (blob_root / ref["sha256"][:2] / ref["sha256"]).read_bytes() == b"123456"
 
 
+def test_promote_large_payloads_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("MN_INLINE_PAYLOAD_MAX_BYTES", "-1")
+    manifest = {}
+    payloads = {"media/demo.mp4": b"123456"}
+
+    promoted = promote_large_payloads_to_blob_refs(manifest, payloads)
+
+    assert promoted == []
+    assert payloads == {"media/demo.mp4": b"123456"}
+    assert "metadata" not in manifest
+
+
+def test_promote_large_payloads_prefers_injected_runtime_env(tmp_path, monkeypatch):
+    home = tmp_path / "mn-home"
+    home.mkdir()
+    (home / "docker-compose.env").write_text(
+        "MN_ARTIFACT_ADVERTISE_URL=http://from-file:55660\n"
+        "MN_NODE_NAME=file-node\n"
+        f"MN_HOST_BLOB_STORE_DIR={tmp_path / 'file-blobs'}\n",
+        encoding="utf-8",
+    )
+    blob_root = tmp_path / "runtime-blobs"
+    monkeypatch.setenv("MN_HOME", str(home))
+    monkeypatch.setenv("MN_INLINE_PAYLOAD_MAX_BYTES", "2")
+    monkeypatch.setenv("MN_ARTIFACT_ADVERTISE_URL", "http://from-env:55660")
+    monkeypatch.setenv("MN_NODE_NAME", "env-node")
+    monkeypatch.setenv("MN_HOST_BLOB_STORE_DIR", str(tmp_path / "env-blobs"))
+
+    manifest = {}
+    payloads = {"docs/report.txt": b"large"}
+
+    promoted = promote_large_payloads_to_blob_refs(
+        manifest,
+        payloads,
+        runtime_env={
+            "MN_ARTIFACT_ADVERTISE_URL": "http://from-runtime:55660",
+            "MN_NODE_NAME": "runtime-node",
+            "MN_HOST_BLOB_STORE_DIR": str(blob_root),
+        },
+    )
+
+    assert payloads == {}
+    assert len(promoted) == 1
+    ref = manifest["metadata"]["mn_artifacts"]["blob_refs"][0]
+    assert ref["locations"][0]["url"].startswith("http://from-runtime:55660/blobs/")
+    assert ref["locations"][0]["node"] == "runtime-node"
+    assert (blob_root / ref["sha256"][:2] / ref["sha256"]).read_bytes() == b"large"
+
+
 def test_prepare_manifest_injects_docker_model_runner_llm_env_by_node_runtime(tmp_path):
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
