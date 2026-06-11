@@ -87,6 +87,24 @@ def _source_checkout_web_ui_dir() -> Optional[Path]:
     return web_ui_dir if web_ui_dir.exists() else None
 
 
+def _source_checkout_api_dir() -> Optional[Path]:
+    checkout_dir = Path(__file__).resolve().parents[2]
+    api_dir = checkout_dir / "mn-api"
+    return api_dir if (api_dir / "mn_api").is_dir() else None
+
+
+def _prepend_pythonpath(env: dict[str, str], path: Path) -> None:
+    current = env.get("PYTHONPATH")
+    value = str(path)
+    if current:
+        parts = [part for part in current.split(os.pathsep) if part]
+        if value in parts:
+            return
+        env["PYTHONPATH"] = os.pathsep.join([value, *parts])
+    else:
+        env["PYTHONPATH"] = value
+
+
 def _web_ui_dirs() -> tuple[Path, ...]:
     paths = [
         DIR / "webui",
@@ -2646,6 +2664,9 @@ def _start_api_if_installed(runtime_env: Optional[dict[str, str]] = None) -> boo
     env = os.environ.copy()
     if runtime_env:
         env.update(runtime_env)
+    source_api_dir = _source_checkout_api_dir()
+    if source_api_dir is not None:
+        _prepend_pythonpath(env, source_api_dir)
     api_host = env.get("MN_API_HOST") or _api_host()
     api_port = _valid_port_text(str(env.get("MN_API_PORT") or DEFAULT_API_PORT), DEFAULT_API_PORT)
     env["MN_API_HOST"] = api_host

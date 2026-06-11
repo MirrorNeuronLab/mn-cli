@@ -2167,8 +2167,11 @@ def test_start_api_if_installed(mocker, tmp_path):
     api_bin = tmp_path / "mn_venv" / "bin" / "mn-api"
     api_bin.parent.mkdir(parents=True)
     api_bin.write_text("#!/bin/sh\n")
+    source_api = tmp_path / "mn-api"
+    (source_api / "mn_api").mkdir(parents=True)
 
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path / "mn_venv")
+    mocker.patch('mn_cli.server_cmds._source_checkout_api_dir', return_value=source_api)
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
     mocker.patch('mn_cli.server_cmds.API_WATCHDOG_PID_FILE', tmp_path / "api-watchdog.pid")
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
@@ -2190,6 +2193,8 @@ def test_start_api_if_installed(mocker, tmp_path):
     assert watchdog_config["command"] == [str(api_bin)]
     assert watchdog_config["pid_file"] == str(tmp_path / "api.pid")
     assert mock_popen.call_args.kwargs["stdin"] == subprocess.DEVNULL
+    pythonpath = mock_popen.call_args.kwargs["env"]["PYTHONPATH"].split(server_cmds.os.pathsep)
+    assert pythonpath[0] == str(source_api)
     assert mock_wait.call_args_list == [
         call("localhost", "54001", timeout_seconds=1.0),
         call("localhost", "54001", timeout_seconds=10.0),
