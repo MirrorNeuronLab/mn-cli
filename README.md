@@ -9,10 +9,10 @@ services installed by `mn-deploy`.
 Install locally and run tests:
 
 ```bash
-python3 -m venv .venv
+python3.11 -m venv .venv
 . .venv/bin/activate
-python3 -m pip install -e .
-python3 -m pytest -q
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m pytest -q
 ```
 
 Try the CLI:

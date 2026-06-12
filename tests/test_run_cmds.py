@@ -1043,7 +1043,7 @@ def test_prepare_manifest_injects_runtime_web_ui_service_from_config(tmp_path, m
 
     node = next(node for node in manifest["nodes"] if node["node_id"] == "web_ui_dashboard")
     command = node["config"]["command"]
-    assert command[0] == "python3"
+    assert command[0] == "python3.11"
     assert "--host" in command
     assert command[command.index("--host") + 1] == "0.0.0.0"
     assert "--port" in command
