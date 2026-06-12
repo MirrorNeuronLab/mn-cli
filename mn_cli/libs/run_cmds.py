@@ -55,6 +55,7 @@ from mn_cli.terminal import use_progress
 from mn_cli.error_handler import handle_cli_error
 from mn_sdk import (
     make_validation_report,
+    prepare_job_submission,
     run_input_validation,
     run_model_validation,
     run_service_validation,
@@ -1635,13 +1636,13 @@ def run_bundle(
         if web_ui:
             payloads.update(runtime_web_ui_support_payloads_for_manifest(manifest_dict))
         stage_blueprint_support_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
-        stage_local_input_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
-        promote_large_payloads_to_blob_refs(manifest_dict, payloads)
-        manifest = json.dumps(manifest_dict)
-        submitted_manifest = manifest_dict
 
         schedule_attrs = _run_schedule_attrs(auto_schedule=auto_schedule, schedule=schedule)
         if schedule_attrs is not None:
+            stage_local_input_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
+            promote_large_payloads_to_blob_refs(manifest_dict, payloads)
+            manifest = json.dumps(manifest_dict)
+            submitted_manifest = manifest_dict
             result_json = client.create_schedule(
                 manifest,
                 payloads,
@@ -1661,6 +1662,16 @@ def run_bundle(
                 next_steps="mn schedule list",
             )
             return
+
+        prepared_submission = prepare_job_submission(
+            manifest_dict,
+            payloads,
+            bundle_dir=bundle_dir,
+            run_id=blueprint_run_id,
+        )
+        manifest = prepared_submission.manifest_json
+        payloads = prepared_submission.payloads
+        submitted_manifest = json.loads(manifest)
 
         blueprint_run_dir = (
             _blueprint_run_dir(blueprint_run_id, env_overrides)

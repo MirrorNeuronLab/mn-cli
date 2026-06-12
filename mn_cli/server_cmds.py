@@ -136,6 +136,7 @@ DEFAULT_BLUEPRINT_WEB_UI_PORT_END = "61049"
 DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE = "prepublished"
 DEFAULT_CONTAINER_RUNS_ROOT = "/root/.mn/runs"
 DEFAULT_CONTAINER_BLOB_STORE_ROOT = "/root/.mn/blobs"
+DEFAULT_RUNTIME_SHARED_STORAGE_ROOT = "/root/.mn/shared"
 DEFAULT_CONTAINER_GRPC_AUTH_TOKEN_FILE = "/root/.mn/grpc_auth.token"
 DEFAULT_CONTAINER_GRPC_ADMIN_TOKEN_FILE = "/root/.mn/grpc_admin.token"
 LEGACY_GRPC_PORT = "50051"
@@ -1977,6 +1978,17 @@ def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
     ).strip()
     if not host_blob_store_dir:
         host_blob_store_dir = str(Path(host_home_dir).expanduser() / "blobs")
+    host_shared_storage_root = str(
+        env.get("MN_SHARED_STORAGE_ROOT")
+        or env.get("MN_HOST_SHARED_STORAGE_ROOT")
+        or env.get("MN_HOST_SHARED_ARTIFACT_ROOT")
+        or os.getenv("MN_SHARED_STORAGE_ROOT")
+        or os.getenv("MN_HOST_SHARED_STORAGE_ROOT")
+        or os.getenv("MN_HOST_SHARED_ARTIFACT_ROOT")
+        or ""
+    ).strip()
+    if not host_shared_storage_root:
+        host_shared_storage_root = str(Path(host_home_dir).expanduser() / "shared")
     container_runs_root = str(
         env.get("MN_CONTAINER_RUNS_ROOT") or os.getenv("MN_CONTAINER_RUNS_ROOT") or DEFAULT_CONTAINER_RUNS_ROOT
     ).strip()
@@ -1985,14 +1997,29 @@ def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
         or os.getenv("MN_CONTAINER_BLOB_STORE_ROOT")
         or DEFAULT_CONTAINER_BLOB_STORE_ROOT
     ).strip()
+    runtime_shared_storage_root = str(
+        env.get("MN_RUNTIME_SHARED_STORAGE_ROOT")
+        or env.get("MN_CONTAINER_SHARED_STORAGE_ROOT")
+        or env.get("MN_CONTAINER_SHARED_ARTIFACT_ROOT")
+        or os.getenv("MN_RUNTIME_SHARED_STORAGE_ROOT")
+        or os.getenv("MN_CONTAINER_SHARED_STORAGE_ROOT")
+        or os.getenv("MN_CONTAINER_SHARED_ARTIFACT_ROOT")
+        or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT
+    ).strip()
     updates: dict[str, str] = {
         "MN_DEFAULT_BLUEPRINT_REPO": default_repo,
         "MN_BLUEPRINT_REPO": str(env.get("MN_BLUEPRINT_REPO") or "").strip() or default_repo,
         "MN_HOST_ARTIFACTS_DIR": host_artifacts_dir,
         "MN_HOST_BLOB_STORE_DIR": host_blob_store_dir,
+        "MN_SHARED_STORAGE_ROOT": host_shared_storage_root,
+        "MN_HOST_SHARED_STORAGE_ROOT": host_shared_storage_root,
+        "MN_HOST_SHARED_ARTIFACT_ROOT": host_shared_storage_root,
         "MN_RUNS_ROOT": configured_runs_root or host_artifacts_dir,
         "MN_CONTAINER_RUNS_ROOT": container_runs_root,
         "MN_CONTAINER_BLOB_STORE_ROOT": container_blob_store_root,
+        "MN_RUNTIME_SHARED_STORAGE_ROOT": runtime_shared_storage_root,
+        "MN_CONTAINER_SHARED_STORAGE_ROOT": runtime_shared_storage_root,
+        "MN_CONTAINER_SHARED_ARTIFACT_ROOT": runtime_shared_storage_root,
         "MN_BLOB_STORE_ROOT": container_blob_store_root,
         "MN_BLUEPRINT_WEB_UI_BIND_HOST": str(
             env.get("MN_BLUEPRINT_WEB_UI_BIND_HOST") or DEFAULT_BLUEPRINT_WEB_UI_BIND_HOST
@@ -2017,13 +2044,16 @@ def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
     return updates
 
 def _ensure_host_artifacts_dir(env: dict[str, str]) -> None:
-    path_text = str(env.get("MN_HOST_ARTIFACTS_DIR") or env.get("MN_RUNS_ROOT") or "").strip()
-    if not path_text:
-        return
-    try:
-        Path(path_text).expanduser().mkdir(parents=True, exist_ok=True)
-    except OSError:
-        logger.warning("Failed to create shared artifact directory %s", path_text, exc_info=True)
+    for path_text in (
+        str(env.get("MN_HOST_ARTIFACTS_DIR") or env.get("MN_RUNS_ROOT") or "").strip(),
+        str(env.get("MN_SHARED_STORAGE_ROOT") or env.get("MN_HOST_SHARED_STORAGE_ROOT") or "").strip(),
+    ):
+        if not path_text:
+            continue
+        try:
+            Path(path_text).expanduser().mkdir(parents=True, exist_ok=True)
+        except OSError:
+            logger.warning("Failed to create shared artifact directory %s", path_text, exc_info=True)
 
 def _runtime_endpoint_snapshot(env: dict[str, str], web_ui_available: bool = False) -> dict[str, object]:
     api_host = _native_endpoint_host(str(env.get("MN_API_HOST") or DEFAULT_HOST))
@@ -3405,6 +3435,8 @@ def _start_server(
         cmd.extend(["-e", f"MN_GRPC_PORT={env['MN_GRPC_PORT']}"])
         cmd.extend(["-e", f"MN_DIST_PORT={env['MN_DIST_PORT']}"])
         cmd.extend(["-e", f"MN_RUNS_ROOT={env.get('MN_CONTAINER_RUNS_ROOT', DEFAULT_CONTAINER_RUNS_ROOT)}"])
+        cmd.extend(["-e", f"MN_SHARED_STORAGE_ROOT={env.get('MN_RUNTIME_SHARED_STORAGE_ROOT', DEFAULT_RUNTIME_SHARED_STORAGE_ROOT)}"])
+        cmd.extend(["-e", f"MN_RUNTIME_SHARED_STORAGE_ROOT={env.get('MN_RUNTIME_SHARED_STORAGE_ROOT', DEFAULT_RUNTIME_SHARED_STORAGE_ROOT)}"])
         cmd.extend(["-e", f"ERL_AFLAGS={env['ERL_AFLAGS']}"])
 
         core_publish_host = _docker_publish_host(env["MN_CORE_HOST"])
@@ -3468,12 +3500,16 @@ def _start_server(
         container_runs_root = str(env.get("MN_CONTAINER_RUNS_ROOT") or DEFAULT_CONTAINER_RUNS_ROOT)
         host_blob_store_dir = str(env.get("MN_HOST_BLOB_STORE_DIR") or Path(host_home_dir).expanduser() / "blobs")
         container_blob_store_root = str(env.get("MN_CONTAINER_BLOB_STORE_ROOT") or DEFAULT_CONTAINER_BLOB_STORE_ROOT)
+        host_shared_storage_root = str(env.get("MN_SHARED_STORAGE_ROOT") or env.get("MN_HOST_SHARED_STORAGE_ROOT") or Path(host_home_dir).expanduser() / "shared")
+        runtime_shared_storage_root = str(env.get("MN_RUNTIME_SHARED_STORAGE_ROOT") or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT)
         cmd.extend(["-v", f"{host_home_dir}:/root/.mn"])
         cmd.extend(["-v", f"{host_home_dir}:/opt/mirror_neuron/.mn"])
         cmd.extend(["-v", f"{host_artifacts_dir}:{container_runs_root}"])
         cmd.extend(["-v", f"{host_artifacts_dir}:/opt/mirror_neuron/.mn/runs"])
         cmd.extend(["-v", f"{host_blob_store_dir}:{container_blob_store_root}"])
         cmd.extend(["-v", f"{host_blob_store_dir}:/opt/mirror_neuron/.mn/blobs"])
+        cmd.extend(["-v", f"{host_shared_storage_root}:{runtime_shared_storage_root}"])
+        cmd.extend(["-v", f"{host_shared_storage_root}:/opt/mirror_neuron/.mn/shared"])
         cmd.extend(["-e", f"MN_BLOB_STORE_ROOT={container_blob_store_root}"])
 
         cmd.append("mirror-neuron-core:latest")

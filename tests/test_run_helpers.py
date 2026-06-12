@@ -174,11 +174,14 @@ def test_prepare_manifest_for_submission_lowers_legacy_agent_graph_workflow_id(t
 def test_stage_blueprint_support_payloads_for_support_dependent_hostlocal_worker(tmp_path, monkeypatch):
     bundle_dir = tmp_path / "bundle"
     script_dir = bundle_dir / "payloads" / "simulation_loop" / "scripts"
+    config_dir = bundle_dir / "config"
     script_dir.mkdir(parents=True)
+    config_dir.mkdir()
     (script_dir / "run_blueprint.py").write_text(
         "from mn_blueprint_support import run_blueprint_cli\n",
         encoding="utf-8",
     )
+    (config_dir / "default.json").write_text('{"identity": {"blueprint_id": "bp"}}\n')
     manifest = {
         "agents": {
             "nodes": [
@@ -206,6 +209,11 @@ def test_stage_blueprint_support_payloads_for_support_dependent_hostlocal_worker
     assert summary == {"staged": True, "sources": ["simulation_loop"]}
     assert "simulation_loop/mn_blueprint_support/__init__.py" in payloads
     assert "simulation_loop/scripts/mn_blueprint_support/__init__.py" in payloads
+    assert (
+        "simulation_loop/scripts/litellm_communicate_skill/src/"
+        "mn_litellm_communicate_skill/__init__.py"
+    ) in payloads
+    assert payloads["simulation_loop/config/default.json"] == b'{"identity": {"blueprint_id": "bp"}}\n'
 
 
 def test_promote_large_payloads_to_blob_refs(tmp_path, monkeypatch):
@@ -335,7 +343,7 @@ def test_prepare_manifest_injects_docker_model_runner_llm_env_by_node_runtime(tm
     assert host_env["MN_LLM_PROVIDER"] == "docker_model_runner"
     assert host_env["MN_LLM_MODEL"] == "ai/gemma4:E2B"
     assert host_env["MN_LLM_RUNTIME_MODEL"] == "ai/gemma4:E2B"
-    assert host_env["MN_LLM_API_BASE"] == "http://localhost:12434/engines/v1"
+    assert host_env["MN_LLM_API_BASE"] == "http://model-runner.docker.internal/engines/v1"
     assert sandbox_env["MN_LLM_API_BASE"] == "http://model-runner.docker.internal/engines/v1"
     assert host_env["MN_LLM_CONTEXT_SIZE"] == "4096"
     assert host_env["MN_LLM_MAX_TOKENS"] == "800"

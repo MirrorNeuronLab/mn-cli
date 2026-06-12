@@ -24,6 +24,18 @@ requires_blueprint_support = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(autouse=True)
+def isolated_mn_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_HOME", str(tmp_path / "mn-home"))
+    monkeypatch.delenv("MIRROR_NEURON_HOME", raising=False)
+    monkeypatch.delenv("MN_SHARED_STORAGE_ROOT", raising=False)
+    monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
+    monkeypatch.delenv("MN_HOST_SHARED_ARTIFACT_ROOT", raising=False)
+    monkeypatch.delenv("MN_RUNTIME_SHARED_STORAGE_ROOT", raising=False)
+    monkeypatch.delenv("MN_CONTAINER_SHARED_STORAGE_ROOT", raising=False)
+    monkeypatch.delenv("MN_CONTAINER_SHARED_ARTIFACT_ROOT", raising=False)
+
+
 def _workflow_manifest_fixture():
     return {
         "apiVersion": "mn.workflow/v1",
@@ -898,9 +910,10 @@ def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_pat
     env = manifest["nodes"][0]["config"]["environment"]
     injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
     assert env["MN_RUN_ID"] == "bp-1-auto-run"
-    assert env["MN_RUNS_ROOT"] == str(tmp_path / "runs")
+    assert env["MN_RUNS_ROOT"].startswith(str(tmp_path / "shared" / "submissions" / "bp-1-auto-run-"))
+    assert env["MN_RUNS_ROOT"].endswith("/outputs/runs")
     assert injected_config["identity"]["run_id"] == "bp-1-auto-run"
-    assert injected_config["outputs"]["run_root"] == str(tmp_path / "runs")
+    assert injected_config["outputs"]["run_root"] == env["MN_RUNS_ROOT"]
     web_ui = json.loads((tmp_path / "runs" / "bp-1-auto-run" / "web_ui.json").read_text())
     assert web_ui["adapter"] == "static_html"
     assert web_ui["title"] == "Blueprint One"
@@ -1326,9 +1339,10 @@ def test_run_records_blueprint_run_id_mapping(mocker, tmp_path, monkeypatch):
     env = manifest["nodes"][0]["config"]["environment"]
     injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
     assert env["MN_RUN_ID"] == "bp-run"
-    assert env["MN_RUNS_ROOT"] == str(tmp_path / "runs")
+    assert env["MN_RUNS_ROOT"].startswith(str(tmp_path / "shared" / "submissions" / "bp-run-"))
+    assert env["MN_RUNS_ROOT"].endswith("/outputs/runs")
     assert injected_config["identity"]["run_id"] == "bp-run"
-    assert injected_config["outputs"]["run_root"] == str(tmp_path / "runs")
+    assert injected_config["outputs"]["run_root"] == env["MN_RUNS_ROOT"]
 
 def test_run_displays_live_job_type_and_follow_status(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))

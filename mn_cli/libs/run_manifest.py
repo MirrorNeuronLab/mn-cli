@@ -350,23 +350,27 @@ def stage_blueprint_support_payloads_for_manifest(
     *,
     bundle_dir: Path,
 ) -> dict[str, Any]:
-    support_root = workspace_root() / "mn-skills" / "blueprint_support_skill" / "src" / "mn_blueprint_support"
+    skills_root = workspace_root() / "mn-skills"
+    support_root = skills_root / "blueprint_support_skill" / "src" / "mn_blueprint_support"
     if not support_root.is_dir():
         return {"staged": False, "sources": []}
+    litellm_skill_src = skills_root / "litellm_communicate_skill" / "src"
 
     payload_root = bundle_dir / "payloads"
     staged_sources: list[str] = []
     config_payloads = _blueprint_config_payloads(bundle_dir)
     for source in _support_dependent_upload_sources(manifest, payload_root):
         for target_prefix in _support_staging_prefixes(payload_root, source):
-            support_prefix = _payload_join(target_prefix, "mn_blueprint_support")
-            for file_path in support_root.rglob("*"):
-                if not file_path.is_file() or "__pycache__" in file_path.parts:
-                    continue
-                relative = file_path.relative_to(support_root).as_posix()
-                payloads.setdefault(
-                    _payload_join(support_prefix, relative),
-                    file_path.read_bytes(),
+            _stage_tree_payloads(
+                payloads,
+                source_root=support_root,
+                target_prefix=_payload_join(target_prefix, "mn_blueprint_support"),
+            )
+            if litellm_skill_src.is_dir():
+                _stage_tree_payloads(
+                    payloads,
+                    source_root=litellm_skill_src,
+                    target_prefix=_payload_join(target_prefix, "litellm_communicate_skill", "src"),
                 )
         for relative, contents in config_payloads.items():
             payloads.setdefault(_payload_join(source, "config", relative), contents)
@@ -476,6 +480,22 @@ def _blueprint_config_payloads(bundle_dir: Path) -> dict[str, bytes]:
             continue
         payloads[file_path.relative_to(config_dir).as_posix()] = file_path.read_bytes()
     return payloads
+
+
+def _stage_tree_payloads(
+    payloads: dict[str, bytes],
+    *,
+    source_root: Path,
+    target_prefix: str,
+) -> None:
+    for file_path in source_root.rglob("*"):
+        if not file_path.is_file() or "__pycache__" in file_path.parts:
+            continue
+        relative = file_path.relative_to(source_root).as_posix()
+        payloads.setdefault(
+            _payload_join(target_prefix, relative),
+            file_path.read_bytes(),
+        )
 
 
 def _payload_join(*parts: str) -> str:
@@ -759,9 +779,6 @@ def add_mn_llm_aliases(environment: dict[str, Any]) -> None:
 
 def adjust_llm_environment_for_node(environment: dict[str, Any], node: dict[str, Any]) -> None:
     if environment.get("MN_LLM_PROVIDER") != "docker_model_runner":
-        return
-    config = node.get("config") if isinstance(node.get("config"), dict) else {}
-    if config.get("runner_module") == "MirrorNeuron.Runner.HostLocal":
         return
     api_base = str(environment.get("MN_LLM_API_BASE") or "")
     if "localhost:12434" in api_base or "127.0.0.1:12434" in api_base:
