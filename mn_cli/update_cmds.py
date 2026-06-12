@@ -80,7 +80,7 @@ def update(
     if _local_source_install():
         console.print(
             "[yellow]Local source install detected; release updates are skipped. "
-            "Run install_local.sh from your checkout to refresh local components.[/yellow]"
+            "Run mn-deploy/install.sh --mode local from your checkout to refresh local components.[/yellow]"
         )
         return
 
