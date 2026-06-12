@@ -18,7 +18,7 @@ from mn_cli.terminal import color_disabled
 
 config = CliConfig.from_env()
 logger = configure_logging("mn-cli", config.log_path)
-console = Console(no_color=color_disabled(config.output_mode), width=200)
+console = Console(no_color=color_disabled(config.output_mode))
 
 
 def _client_kwargs() -> dict:

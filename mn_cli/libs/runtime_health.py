@@ -5,7 +5,10 @@ import urllib.request
 from typing import Any
 
 import typer
+from rich.console import Group
+from rich.padding import Padding
 from rich.table import Table
+from rich.text import Text
 from mn_sdk import RuntimeConfig, collect_runtime_status as sdk_collect_runtime_status, health_report_from_status
 
 from mn_cli.shared import client, console
@@ -121,41 +124,63 @@ def print_status_report(report: dict[str, Any]) -> None:
     endpoints = report.get("endpoints") if isinstance(report.get("endpoints"), dict) else {}
     storage = report.get("shared_storage") if isinstance(report.get("shared_storage"), dict) else {}
 
-    table = Table(title=f"Runtime status: {report['overall']}", show_header=True, header_style="bold")
-    table.add_column("Area")
-    table.add_column("Status")
-    table.add_column("Value")
-    table.add_column("Detail")
-    table.add_row(
-        "Runtime",
-        str(report.get("overall", "")),
-        str(runtime.get("mode") or "local"),
-        str(runtime.get("mn_home") or ""),
-    )
+    overall = str(report.get("overall") or "unknown")
+    sections = [
+        Text.assemble("Runtime status: ", (overall, _status_style(overall)), overflow="fold"),
+        _status_section(
+            "Runtime",
+            overall,
+            [
+                ("mode", runtime.get("mode") or "local"),
+                ("mn_home", runtime.get("mn_home")),
+            ],
+        ),
+    ]
     for name, label, endpoint_key in (
         ("core_grpc", "Core gRPC", "core_grpc"),
         ("api", "REST API", "api"),
         ("web_ui", "Web UI", "web_ui"),
     ):
         component = components.get(name, {})
-        detail = component.get("error") or component.get("detail") or ""
-        if isinstance(detail, dict):
-            detail = json.dumps(detail, sort_keys=True)
-        table.add_row(
-            label,
-            str(component.get("status") or "unknown"),
-            str(endpoints.get(endpoint_key) or component.get("target") or ""),
-            str(detail),
+        sections.append(
+            _status_section(
+                label,
+                str(component.get("status") or "unknown"),
+                [
+                    ("endpoint", endpoints.get(endpoint_key) or component.get("target")),
+                    ("detail", component.get("error") or component.get("detail")),
+                ],
+            )
         )
-    table.add_row("Nodes", "", _format_count(nodes.get("total")), _format_counts(nodes.get("by_status")))
-    table.add_row("Active jobs", "", _format_count(jobs.get("active")), _format_counts(jobs.get("active_by_status")))
-    table.add_row(
-        "Shared storage",
-        "configured" if storage.get("configured") else "default",
-        str(storage.get("host_root") or ""),
-        str(storage.get("runtime_root") or ""),
+    sections.extend(
+        [
+            _status_section(
+                "Nodes",
+                _availability_status(nodes),
+                [
+                    ("total", _format_count(nodes.get("total"))),
+                    ("by_status", _format_counts(nodes.get("by_status"))),
+                ],
+            ),
+            _status_section(
+                "Active jobs",
+                _availability_status(jobs),
+                [
+                    ("total", _format_count(jobs.get("active"))),
+                    ("by_status", _format_counts(jobs.get("active_by_status"))),
+                ],
+            ),
+            _status_section(
+                "Shared storage",
+                "configured" if storage.get("configured") else "default",
+                [
+                    ("host_root", storage.get("host_root")),
+                    ("runtime_root", storage.get("runtime_root")),
+                ],
+            ),
+        ]
     )
-    console.print(table)
+    console.print(Group(*sections))
 
 
 def overall_status(components: list[dict[str, Any]]) -> str:
@@ -250,3 +275,50 @@ def _format_counts(value: Any) -> str:
     if not isinstance(value, dict) or not value:
         return ""
     return ", ".join(f"{key}: {count}" for key, count in sorted(value.items()))
+
+
+def _availability_status(value: dict[str, Any]) -> str:
+    if value.get("available") is False:
+        return "unavailable"
+    if value.get("available") is True:
+        return "available"
+    return "unknown"
+
+
+def _status_section(label: str, status: str, items: list[tuple[str, Any]]) -> Group:
+    section: list[Any] = [
+        Text.assemble((label, "bold"), "  ", (status, _status_style(status)), overflow="fold")
+    ]
+    for item_label, value in items:
+        value_text = _format_status_value(value)
+        if not value_text:
+            continue
+        if _needs_status_value_block(value_text):
+            section.append(Text(f"  {item_label}:", style="dim"))
+            section.append(Padding(Text(value_text, overflow="fold"), (0, 0, 0, 4)))
+        else:
+            section.append(Text.assemble(("  " + item_label + ": ", "dim"), value_text, overflow="fold"))
+    return Group(*section)
+
+
+def _format_status_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        value = json.dumps(value, sort_keys=True)
+    return str(value).strip().replace("\n", "\n  ")
+
+
+def _needs_status_value_block(value: str) -> bool:
+    return "\n" in value or len(value) > 56
+
+
+def _status_style(status: Any) -> str:
+    normalized = str(status or "").lower()
+    if normalized in {"passing", "healthy", "available", "configured"}:
+        return "green"
+    if normalized in {"warning", "default", "unknown"}:
+        return "yellow"
+    if normalized in {"critical", "unavailable"}:
+        return "red"
+    return ""

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from io import StringIO
 from pathlib import Path
 
+from rich.console import Console
 from typer.testing import CliRunner
 
 from mn_cli.main import app
@@ -179,6 +181,43 @@ def test_runtime_status_command_human_output_includes_overview(mocker):
     assert "Runtime status: warning" in result.stdout
     assert "Core gRPC" in result.stdout
     assert "localhost:55051" in result.stdout
+    assert "REST API" in result.stdout
+    assert "http://localhost:54001/api/v1" in result.stdout
+    assert "Web UI" in result.stdout
+    assert "http://localhost:55173" in result.stdout
+    assert "Nodes" in result.stdout
+    assert "healthy: 1" in result.stdout
+    assert "Active jobs" in result.stdout
+    assert "running: 1" in result.stdout
+    assert "Shared storage" in result.stdout
+    assert "/tmp/mn-shared" in result.stdout
+
+
+def test_runtime_status_human_output_wraps_long_details_for_narrow_console(mocker):
+    report = _status_report(overall="critical")
+    report["components"][0]["status"] = "critical"
+    report["components"][0]["error"] = (
+        "failed to connect to all addresses; last error: FAILED_PRECONDITION: "
+        "ipv4:192.168.4.27:55051: connect failed: addr: "
+        "ipv4:192.168.4.27:55051 error: Operation not permitted"
+    )
+    report["components"][1]["status"] = "critical"
+    report["components"][1]["error"] = "<urlopen error [Errno 1] Operation not permitted>"
+    stream = StringIO()
+    mocker.patch(
+        "mn_cli.libs.runtime_health.console",
+        Console(file=stream, force_terminal=False, no_color=True, width=80),
+    )
+
+    runtime_health.print_status_report(report)
+
+    output = stream.getvalue()
+    assert "Runtime status: critical" in output
+    assert "detail:" in output
+    assert "failed to connect" in output
+    assert "┏" not in output
+    assert "│" not in output
+    assert all(len(line) <= 80 for line in output.splitlines())
 
 
 def test_runtime_status_command_exits_nonzero_for_critical(mocker):
