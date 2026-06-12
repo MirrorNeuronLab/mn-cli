@@ -1886,9 +1886,48 @@ def _runtime_base_env(compose_runtime: bool) -> dict[str, str]:
         _remove_compose_file_env_keys(RUNTIME_COMPOSE_FILE, DEPRECATED_RUNTIME_ENV_KEYS)
     env = _read_env_file(RUNTIME_COMPOSE_ENV) if compose_runtime else {}
     env.update(os.environ)
+    env = _ensure_installed_runtime_model_env(env)
     for key in DEPRECATED_RUNTIME_ENV_KEYS:
         env.pop(key, None)
     return env
+
+def _ensure_installed_runtime_model_env(env: dict[str, str]) -> dict[str, str]:
+    if str(env.get("MN_NODE_MODELS") or "").strip() or str(env.get("MN_NODE_RUNTIME_MODELS") or "").strip():
+        return env
+
+    refs = _installed_catalog_runtime_models()
+    if refs:
+        env = dict(env)
+        env["MN_NODE_RUNTIME_MODELS"] = ",".join(refs)
+    return env
+
+def _installed_catalog_runtime_models() -> list[str]:
+    try:
+        from mn_sdk import (
+            dmr_api_list_models,
+            docker_model_match_keys,
+            docker_model_name,
+            list_model_entries,
+            load_model_catalog,
+        )
+
+        installed_models = dmr_api_list_models(timeout=3)
+        installed_keys = {
+            key
+            for model in installed_models
+            for key in docker_model_match_keys(model)
+        }
+        refs: list[str] = []
+        for entry in list_model_entries(load_model_catalog()):
+            target = docker_model_name(entry)
+            if not target:
+                continue
+            if docker_model_match_keys(target) & installed_keys:
+                refs.append(str(entry.get("id") or target))
+        return sorted(set(refs))
+    except Exception:
+        logger.debug("Could not infer installed runtime models", exc_info=True)
+        return []
 
 def _env_or_default(env: dict[str, str], key: str, default: str, legacy_default: Optional[str] = None) -> str:
     value = str(env.get(key) or "").strip()

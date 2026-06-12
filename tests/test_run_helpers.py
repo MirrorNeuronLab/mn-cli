@@ -1,6 +1,7 @@
 import json
 import importlib.util
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +11,7 @@ from mn_cli.libs.run_manifest import (
     apply_manifest_config_bindings,
     load_blueprint_config,
     prepare_manifest_for_submission,
+    stage_blueprint_support_payloads_for_manifest,
     stage_local_input_payloads_for_manifest,
 )
 
@@ -70,6 +72,140 @@ def test_prepare_manifest_for_submission_merges_runtime_env_and_metadata(tmp_pat
     assert env["MN_LLM_MODEL"] == "ollama/test"
     assert env["MN_LLM_API_KEY"] == "kept"
     assert prepared["metadata"]["mn_cli"]["blueprint_id"] == "bp"
+
+
+def test_prepare_manifest_for_submission_lowers_workflow_manifest_for_core_runtime(tmp_path):
+    bundle_dir = tmp_path / "workflow_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "config").mkdir()
+    (bundle_dir / "config" / "default.json").write_text(
+        json.dumps({"identity": {"blueprint_id": "workflow_bp"}})
+    )
+
+    manifest = {
+        "apiVersion": "mn.workflow/v1",
+        "kind": "Workflow",
+        "id": "workflow_bp",
+        "name": "Workflow BP",
+        "manifest_version": "1.0",
+        "job_name": "workflow-bp",
+        "workflow": {
+            "schema": "mn.workflow.problem_graph/v1",
+            "workflow_id": "workflow_bp_v1",
+            "entrypoint": "load_inputs",
+            "source": "load_inputs",
+            "sink": "finish",
+            "steps": [
+                {"id": "load_inputs", "run": "load_inputs"},
+                {"id": "finish", "run": "finish"},
+            ],
+            "edges": [{"id": "load_to_finish", "from": "load_inputs", "to": "finish"}],
+        },
+        "agents": {
+            "schema": "mn.agents.communication_graph/v1",
+            "entrypoints": ["ingress"],
+            "nodes": [
+                {"node_id": "ingress", "agent_type": "router", "type": "map", "config": {}},
+                {"node_id": "worker", "agent_type": "executor", "type": "generic", "config": {}},
+            ],
+            "edges": [
+                {
+                    "edge_id": "ingress_to_worker",
+                    "from_node": "ingress",
+                    "to_node": "worker",
+                    "message_type": "start",
+                }
+            ],
+        },
+        "runtime": {
+            "bindings": {
+                "load_inputs": {
+                    "workers": [{"id": "ingress", "role": "Ingress"}],
+                    "seed_inputs": {"ingress": [{"hello": "world"}]},
+                },
+                "finish": {"workers": [{"id": "worker", "role": "Worker"}]},
+            }
+        },
+    }
+
+    prepared = prepare_manifest_for_submission(bundle_dir, manifest)
+
+    assert "graph_id" not in manifest
+    assert prepared["graph_id"] == "workflow_bp_v1"
+    assert prepared["flow"]["nodes"] == prepared["agents"]["nodes"]
+    assert prepared["flow"]["edges"] == prepared["agents"]["edges"]
+    assert prepared["entrypoints"] == ["ingress"]
+    assert prepared["initial_inputs"]["ingress"] == [{"hello": "world"}]
+    assert "nodes" not in prepared
+    assert "edges" not in prepared
+
+
+def test_prepare_manifest_for_submission_lowers_legacy_agent_graph_workflow_id(tmp_path):
+    bundle_dir = tmp_path / "legacy_agent_graph"
+    bundle_dir.mkdir()
+
+    manifest = {
+        "manifest_version": "1.0",
+        "workflow_id": "legacy_agent_graph_v1",
+        "job_name": "legacy-agent-graph",
+        "agents": {
+            "entrypoints": ["video_understanding_agent"],
+            "nodes": [
+                {
+                    "node_id": "video_understanding_agent",
+                    "agent_type": "executor",
+                    "type": "generic",
+                    "config": {},
+                }
+            ],
+            "edges": [],
+        },
+        "runtime": {"models": {}},
+    }
+
+    prepared = prepare_manifest_for_submission(bundle_dir, manifest)
+
+    assert prepared["graph_id"] == "legacy_agent_graph_v1"
+    assert prepared["flow"]["nodes"] == prepared["agents"]["nodes"]
+    assert prepared["flow"]["edges"] == []
+    assert prepared["entrypoints"] == ["video_understanding_agent"]
+
+
+def test_stage_blueprint_support_payloads_for_support_dependent_hostlocal_worker(tmp_path, monkeypatch):
+    bundle_dir = tmp_path / "bundle"
+    script_dir = bundle_dir / "payloads" / "simulation_loop" / "scripts"
+    script_dir.mkdir(parents=True)
+    (script_dir / "run_blueprint.py").write_text(
+        "from mn_blueprint_support import run_blueprint_cli\n",
+        encoding="utf-8",
+    )
+    manifest = {
+        "agents": {
+            "nodes": [
+                {
+                    "node_id": "worker",
+                    "config": {
+                        "runner_module": "MirrorNeuron.Runner.HostLocal",
+                        "upload_path": "simulation_loop",
+                    },
+                }
+            ]
+        }
+    }
+    payloads = {
+        "simulation_loop/scripts/run_blueprint.py": b"from mn_blueprint_support import run_blueprint_cli\n"
+    }
+    monkeypatch.chdir(tmp_path)
+
+    summary = stage_blueprint_support_payloads_for_manifest(
+        manifest,
+        payloads,
+        bundle_dir=Path("bundle"),
+    )
+
+    assert summary == {"staged": True, "sources": ["simulation_loop"]}
+    assert "simulation_loop/mn_blueprint_support/__init__.py" in payloads
+    assert "simulation_loop/scripts/mn_blueprint_support/__init__.py" in payloads
 
 
 def test_promote_large_payloads_to_blob_refs(tmp_path, monkeypatch):

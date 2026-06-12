@@ -449,6 +449,36 @@ def test_runtime_base_env_scrubs_deprecated_artifact_auth_token(monkeypatch):
     assert "MN_ARTIFACT_AUTH_TOKEN" not in compose_env.read_text(encoding="utf-8")
     assert "MN_ARTIFACT_AUTH_TOKEN" not in compose_file.read_text(encoding="utf-8")
 
+def test_runtime_base_env_advertises_installed_runtime_models(mocker):
+    compose_env = server_cmds.RUNTIME_COMPOSE_ENV
+    compose_env.parent.mkdir(parents=True, exist_ok=True)
+    compose_env.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_NODE_MODELS=\n"
+        "MN_NODE_RUNTIME_MODELS=\n",
+        encoding="utf-8",
+    )
+    mocker.patch(
+        "mn_cli.server_cmds._installed_catalog_runtime_models",
+        return_value=["gemma4:e2b"],
+    )
+
+    env = server_cmds._runtime_base_env(True)
+
+    assert env["MN_NODE_RUNTIME_MODELS"] == "gemma4:e2b"
+
+def test_runtime_base_env_keeps_explicit_runtime_models(mocker):
+    mocker.patch(
+        "mn_cli.server_cmds._installed_catalog_runtime_models",
+        return_value=["gemma4:e2b"],
+    )
+
+    env = server_cmds._ensure_installed_runtime_model_env(
+        {"MN_NODE_RUNTIME_MODELS": "custom:model"}
+    )
+
+    assert env["MN_NODE_RUNTIME_MODELS"] == "custom:model"
+
 def test_resolve_network_token_generates_and_reuses_persistent_token(tmp_path, mocker):
     token_dir = tmp_path / "state"
     mocker.patch('mn_cli.server_cmds.DIR', token_dir)

@@ -114,6 +114,7 @@ def prepare_manifest_for_submission(
     if runtime_env:
         inject_node_environment(prepared, runtime_env)
     normalize_host_local_uploads(prepared)
+    lower_manifest_topology_for_runtime_submission(prepared)
     if metadata:
         prepared.setdefault("metadata", {}).setdefault("mn_cli", {}).update(metadata)
     return prepared
@@ -139,6 +140,137 @@ def manifest_nodes(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(nodes, list):
         return [node for node in nodes if isinstance(node, dict)]
     return []
+
+
+def lower_manifest_topology_for_runtime_submission(manifest: dict[str, Any]) -> None:
+    """Lower catalog workflow manifests into the core runtime topology shape."""
+
+    workflow_id = _submission_workflow_id(manifest)
+    agents = manifest.get("agents") if isinstance(manifest.get("agents"), dict) else {}
+    has_agent_graph = isinstance(agents.get("nodes"), list) or isinstance(agents.get("edges"), list)
+    if not (_is_workflow_submission_manifest(manifest) or (workflow_id and has_agent_graph)):
+        return
+
+    if workflow_id and not manifest.get("graph_id"):
+        manifest["graph_id"] = workflow_id
+    if not manifest.get("job_name"):
+        manifest["job_name"] = str(manifest.get("id") or workflow_id or "workflow")
+
+    flow = manifest.get("flow")
+    if not isinstance(flow, dict):
+        flow = {}
+        manifest["flow"] = flow
+
+    flow_nodes_source = flow.get("nodes")
+    agent_nodes_source = agents.get("nodes") if isinstance(agents, dict) else None
+    root_nodes_source = manifest.get("nodes")
+    nodes = _dedupe_topology_items(
+        _list_dicts(flow_nodes_source),
+        _list_dicts(agent_nodes_source),
+        _list_dicts(root_nodes_source),
+        key="node_id",
+    )
+    if nodes:
+        flow["nodes"] = nodes
+
+    flow_edges_source = flow.get("edges")
+    agent_edges_source = agents.get("edges") if isinstance(agents, dict) else None
+    root_edges_source = manifest.get("edges")
+    edges = _dedupe_topology_items(
+        _list_dicts(flow_edges_source),
+        _list_dicts(agent_edges_source),
+        _list_dicts(root_edges_source),
+        key="edge_id",
+    )
+    if edges or any(
+        isinstance(source, list)
+        for source in (flow_edges_source, agent_edges_source, root_edges_source)
+    ):
+        flow["edges"] = edges
+
+    entrypoints = _dedupe_strings(
+        _list_strings(agents.get("entrypoints")) if isinstance(agents, dict) else [],
+        _list_strings(manifest.get("entrypoints")),
+    )
+    if entrypoints:
+        manifest["entrypoints"] = entrypoints
+
+    initial_inputs = _runtime_binding_seed_inputs(manifest)
+    if initial_inputs:
+        current_inputs = manifest.get("initial_inputs")
+        if not isinstance(current_inputs, dict):
+            current_inputs = {}
+            manifest["initial_inputs"] = current_inputs
+        for node_id, inputs in initial_inputs.items():
+            current_inputs.setdefault(node_id, inputs)
+
+    manifest.pop("nodes", None)
+    manifest.pop("edges", None)
+
+
+def _is_workflow_submission_manifest(manifest: dict[str, Any]) -> bool:
+    return (
+        manifest.get("apiVersion") == "mn.workflow/v1"
+        or manifest.get("kind") == "Workflow"
+        or isinstance(manifest.get("workflow"), dict)
+    )
+
+
+def _submission_workflow_id(manifest: dict[str, Any]) -> str | None:
+    workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
+    workflow_id = workflow.get("workflow_id") if isinstance(workflow, dict) else None
+    if isinstance(workflow_id, str) and workflow_id.strip():
+        return workflow_id.strip()
+    legacy_id = manifest.get("workflow_id")
+    if isinstance(legacy_id, str) and legacy_id.strip():
+        return legacy_id.strip()
+    return None
+
+
+def _list_dicts(value: Any) -> list[dict[str, Any]]:
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _list_strings(value: Any) -> list[str]:
+    return [item for item in value if isinstance(item, str) and item.strip()] if isinstance(value, list) else []
+
+
+def _dedupe_topology_items(*groups: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
+    items_by_id: dict[str, dict[str, Any]] = {}
+    anonymous: list[dict[str, Any]] = []
+    for group in groups:
+        for item in group:
+            item_id = item.get(key)
+            if isinstance(item_id, str) and item_id:
+                items_by_id[item_id] = item
+            else:
+                anonymous.append(item)
+    return [*items_by_id.values(), *anonymous]
+
+
+def _dedupe_strings(*groups: list[str]) -> list[str]:
+    seen: set[str] = set()
+    values: list[str] = []
+    for group in groups:
+        for value in group:
+            if value in seen:
+                continue
+            seen.add(value)
+            values.append(value)
+    return values
+
+
+def _runtime_binding_seed_inputs(manifest: dict[str, Any]) -> dict[str, Any]:
+    runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
+    bindings = runtime.get("bindings") if isinstance(runtime.get("bindings"), dict) else {}
+    initial_inputs: dict[str, Any] = {}
+    for binding in bindings.values():
+        if not isinstance(binding, dict):
+            continue
+        seed_inputs = binding.get("seed_inputs", binding.get("initial_inputs"))
+        if isinstance(seed_inputs, dict):
+            initial_inputs.update(seed_inputs)
+    return initial_inputs
 
 
 def manifest_local_inputs_enabled(manifest: dict[str, Any]) -> bool:
@@ -212,6 +344,37 @@ def stage_local_input_payloads_for_manifest(
     return stage_payloads(manifest, payloads, bundle_dir=bundle_dir)
 
 
+def stage_blueprint_support_payloads_for_manifest(
+    manifest: dict[str, Any],
+    payloads: dict[str, bytes],
+    *,
+    bundle_dir: Path,
+) -> dict[str, Any]:
+    support_root = workspace_root() / "mn-skills" / "blueprint_support_skill" / "src" / "mn_blueprint_support"
+    if not support_root.is_dir():
+        return {"staged": False, "sources": []}
+
+    payload_root = bundle_dir / "payloads"
+    staged_sources: list[str] = []
+    config_payloads = _blueprint_config_payloads(bundle_dir)
+    for source in _support_dependent_upload_sources(manifest, payload_root):
+        for target_prefix in _support_staging_prefixes(payload_root, source):
+            support_prefix = _payload_join(target_prefix, "mn_blueprint_support")
+            for file_path in support_root.rglob("*"):
+                if not file_path.is_file() or "__pycache__" in file_path.parts:
+                    continue
+                relative = file_path.relative_to(support_root).as_posix()
+                payloads.setdefault(
+                    _payload_join(support_prefix, relative),
+                    file_path.read_bytes(),
+                )
+        for relative, contents in config_payloads.items():
+            payloads.setdefault(_payload_join(source, "config", relative), contents)
+        staged_sources.append(source)
+
+    return {"staged": bool(staged_sources), "sources": staged_sources}
+
+
 def render_agent_templates_for_submission(manifest: dict[str, Any]) -> None:
     nodes = manifest_nodes(manifest)
     if not nodes or not any("uses" in node for node in nodes):
@@ -226,6 +389,103 @@ def render_agent_templates_for_submission(manifest: dict[str, Any]) -> None:
     rendered = render_manifest_agent_templates(manifest)
     manifest.clear()
     manifest.update(rendered)
+
+
+def _support_dependent_upload_sources(manifest: dict[str, Any], payload_root: Path) -> list[str]:
+    sources: list[str] = []
+    for node in manifest_nodes(manifest):
+        config = node.get("config") if isinstance(node.get("config"), dict) else {}
+        if config.get("runner_module") != "MirrorNeuron.Runner.HostLocal":
+            continue
+        for source in _node_upload_sources(config):
+            if source in sources:
+                continue
+            if _payload_source_imports_blueprint_support(payload_root, source):
+                sources.append(source)
+    return sources
+
+
+def _node_upload_sources(config: dict[str, Any]) -> list[str]:
+    upload_paths = config.get("upload_paths")
+    if isinstance(upload_paths, list) and upload_paths:
+        return [
+            str(entry.get("source")).strip()
+            for entry in upload_paths
+            if isinstance(entry, dict) and str(entry.get("source") or "").strip()
+        ]
+    source = str(config.get("upload_path") or "").strip()
+    return [source] if source else []
+
+
+def _payload_source_imports_blueprint_support(payload_root: Path, source: str) -> bool:
+    source_path = (payload_root / source).resolve()
+    try:
+        source_path.relative_to(payload_root.resolve())
+    except ValueError:
+        return False
+    if not source_path.exists():
+        return False
+
+    files = [source_path] if source_path.is_file() else source_path.rglob("*.py")
+    for file_path in files:
+        try:
+            if "mn_blueprint_support" in file_path.read_text(encoding="utf-8", errors="ignore"):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _support_staging_prefixes(payload_root: Path, source: str) -> list[str]:
+    payload_root_resolved = payload_root.resolve()
+    source_path = (payload_root_resolved / source).resolve()
+    try:
+        source_path.relative_to(payload_root_resolved)
+    except ValueError:
+        return []
+    if not source_path.exists():
+        return []
+
+    prefixes: list[str] = []
+    if source_path.is_dir():
+        prefixes.append(source.strip("/"))
+
+    files = [source_path] if source_path.is_file() else source_path.rglob("*.py")
+    for file_path in files:
+        try:
+            if "mn_blueprint_support" not in file_path.read_text(encoding="utf-8", errors="ignore"):
+                continue
+            rel_parent = file_path.parent.relative_to(payload_root_resolved).as_posix()
+        except (OSError, ValueError):
+            continue
+        if rel_parent == ".":
+            rel_parent = ""
+        if rel_parent not in prefixes:
+            prefixes.append(rel_parent)
+    return prefixes
+
+
+def _blueprint_config_payloads(bundle_dir: Path) -> dict[str, bytes]:
+    config_dir = bundle_dir / "config"
+    if not config_dir.is_dir():
+        return {}
+
+    payloads: dict[str, bytes] = {}
+    for file_path in config_dir.rglob("*"):
+        if not file_path.is_file():
+            continue
+        payloads[file_path.relative_to(config_dir).as_posix()] = file_path.read_bytes()
+    return payloads
+
+
+def _payload_join(*parts: str) -> str:
+    cleaned = []
+    for part in parts:
+        value = part.strip("/")
+        if not value or value == ".":
+            continue
+        cleaned.append(value)
+    return "/".join(cleaned)
 
 
 def _shared_runs_root(env_overrides: Optional[dict[str, str]] = None) -> str:

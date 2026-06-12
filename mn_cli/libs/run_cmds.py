@@ -42,6 +42,7 @@ from mn_cli.libs.run_manifest import (
     prepare_manifest_for_submission,
     runtime_web_ui_support_payloads_for_manifest,
     run_mode_label as _run_mode_label,
+    stage_blueprint_support_payloads_for_manifest,
     stage_local_input_payloads_for_manifest,
     with_shared_run_store_config as _with_shared_run_store_config,
 )
@@ -1633,6 +1634,7 @@ def run_bundle(
                         payloads[rel_path] = f.read()
         if web_ui:
             payloads.update(runtime_web_ui_support_payloads_for_manifest(manifest_dict))
+        stage_blueprint_support_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
         stage_local_input_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
         promote_large_payloads_to_blob_refs(manifest_dict, payloads)
         manifest = json.dumps(manifest_dict)
