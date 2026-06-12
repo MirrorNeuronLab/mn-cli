@@ -226,6 +226,17 @@ def health(
 
     runtime_health(json_output=json_output, timeout=timeout, repair=repair)
 
+
+def status(
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
+    timeout: float = typer.Option(3.0, "--timeout", min=0.1, help="Per-component timeout in seconds."),
+):
+    """Report runtime endpoints, health, nodes, jobs, and shared storage"""
+    from mn_cli.libs.runtime_health import status as runtime_status
+
+    runtime_status(json_output=json_output, timeout=timeout)
+
+
 def restart_sidecars(
     api: bool = typer.Option(False, "--api", help="Restart the REST API sidecar."),
     web_ui: bool = typer.Option(False, "--web-ui", help="Restart the Web UI sidecar."),

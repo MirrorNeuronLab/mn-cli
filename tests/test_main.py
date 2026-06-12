@@ -140,6 +140,7 @@ def test_runtime_help_includes_sidecar_restart_command():
     result = runner.invoke(app, ["runtime", "--help"])
 
     assert result.exit_code == 0
+    assert "status" in result.stdout
     assert "restart-sidecars" in result.stdout
 
 

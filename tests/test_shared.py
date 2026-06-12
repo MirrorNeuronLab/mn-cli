@@ -2,9 +2,18 @@ from __future__ import annotations
 
 import importlib
 import sys
-from types import SimpleNamespace
+import types
+from pathlib import Path
 
 import pytest
+
+for parent in Path(__file__).resolve().parents:
+    sdk_path = parent / "mn-python-sdk"
+    if (sdk_path / "mn_sdk" / "runtime_config.py").exists() and str(sdk_path) not in sys.path:
+        sys.path.insert(0, str(sdk_path))
+        break
+
+from mn_sdk.runtime_config import RuntimeConfig
 
 
 @pytest.fixture(autouse=True)
@@ -25,7 +34,13 @@ def _fresh_shared(monkeypatch, tmp_path, client_class):
     monkeypatch.delenv("MN_GRPC_TARGET", raising=False)
     monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN_FILE", raising=False)
     monkeypatch.delenv("MN_GRPC_TIMEOUT_SECONDS", raising=False)
-    monkeypatch.setitem(sys.modules, "mn_sdk", SimpleNamespace(Client=client_class))
+    fake_sdk = types.ModuleType("mn_sdk")
+    fake_sdk.__path__ = []
+    fake_sdk.Client = client_class
+    runtime_config_module = types.ModuleType("mn_sdk.runtime_config")
+    runtime_config_module.RuntimeConfig = RuntimeConfig
+    monkeypatch.setitem(sys.modules, "mn_sdk", fake_sdk)
+    monkeypatch.setitem(sys.modules, "mn_sdk.runtime_config", runtime_config_module)
     return importlib.import_module("mn_cli.shared")
 
 

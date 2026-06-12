@@ -2,8 +2,17 @@ from __future__ import annotations
 
 import os
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+for parent in Path(__file__).resolve().parents:
+    sdk_path = parent / "mn-python-sdk"
+    if (sdk_path / "mn_sdk" / "runtime_config.py").exists() and str(sdk_path) not in sys.path:
+        sys.path.insert(0, str(sdk_path))
+        break
+
+from mn_sdk.runtime_config import RuntimeConfig
 
 
 @dataclass(frozen=True)
@@ -17,25 +26,12 @@ class CliConfig:
 
     @classmethod
     def from_env(cls) -> "CliConfig":
-        mn_home = _mn_home()
-        runtime_env = _read_env_file(mn_home / "docker-compose.env")
-        runtime_endpoint_target = _read_runtime_grpc_target(mn_home / "runtime-endpoints.json")
-        core_host = os.getenv("MN_CORE_HOST") or runtime_env.get("MN_CORE_HOST") or "localhost"
-        grpc_port = os.getenv("MN_GRPC_PORT") or runtime_env.get("MN_GRPC_PORT") or "55051"
+        runtime_config = RuntimeConfig.from_env()
         return cls(
-            grpc_target=os.getenv(
-                "MN_GRPC_TARGET",
-                os.getenv(
-                    "MN_CORE_GRPC_TARGET",
-                    runtime_env.get("MN_GRPC_TARGET")
-                    or runtime_endpoint_target
-                    or runtime_env.get("MN_CORE_GRPC_TARGET")
-                    or f"{core_host}:{grpc_port}",
-                ),
-            ),
-            grpc_timeout_seconds=_timeout(),
-            grpc_auth_token=_grpc_auth_token(runtime_env),
-            grpc_admin_token=_grpc_admin_token(runtime_env),
+            grpc_target=runtime_config.grpc_target,
+            grpc_timeout_seconds=runtime_config.grpc_timeout_seconds,
+            grpc_auth_token=runtime_config.grpc_auth_token,
+            grpc_admin_token=runtime_config.grpc_admin_token,
             log_path=Path(
                 os.getenv(
                     "MN_CLI_LOG_PATH",

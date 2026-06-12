@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import json
-import time
-import urllib.error
 import urllib.request
-from datetime import datetime, timezone
 from typing import Any
 
 import typer
 from rich.table import Table
+from mn_sdk import RuntimeConfig, collect_runtime_status as sdk_collect_runtime_status, health_report_from_status
 
 from mn_cli.shared import client, console
 from mn_cli.server_cmds import (
@@ -47,70 +45,49 @@ def health(
         raise typer.Exit(1)
 
 
+def status(
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
+    timeout: float = typer.Option(3.0, "--timeout", min=0.1, help="Per-component timeout in seconds."),
+) -> None:
+    """Report runtime endpoints, health, nodes, jobs, and shared storage."""
+    report = collect_runtime_status(timeout)
+    if json_output:
+        console.print_json(data=report)
+    else:
+        print_status_report(report)
+    if report["overall"] == "critical":
+        raise typer.Exit(1)
+
+
 def collect_runtime_health(timeout: float = 3.0, *, core_client: Any | None = None) -> dict[str, Any]:
+    return health_report_from_status(
+        collect_runtime_status(timeout, core_client=core_client)
+    )
+
+
+def collect_runtime_status(timeout: float = 3.0, *, core_client: Any | None = None) -> dict[str, Any]:
+    installed_web_ui = find_web_ui_dir() is not None
+    config = _runtime_config(web_ui_installed=installed_web_ui)
+    return sdk_collect_runtime_status(
+        config=config,
+        client=core_client if core_client is not None else client,
+        timeout=timeout,
+        http_opener=urllib.request.urlopen,
+        web_ui_installed=installed_web_ui,
+    )
+
+
+def _runtime_config(*, web_ui_installed: bool) -> RuntimeConfig:
     env = _runtime_base_env(runtime_compose_available())
     if runtime_compose_available():
         env = _compose_native_port_env(env)
-    installed_web_ui = find_web_ui_dir() is not None
-    snapshot = _runtime_endpoint_snapshot(env, web_ui_available=installed_web_ui)
+    snapshot = _runtime_endpoint_snapshot(env, web_ui_available=web_ui_installed)
     persisted = _read_runtime_endpoints()
-    targets = _targets(snapshot, persisted)
-
-    components = [
-        check_core_grpc(targets["core_grpc"], timeout, core_client=core_client),
-        check_http_component("api", _append_path(targets["api"], "/health"), timeout, expected_component=None),
-        check_web_ui(targets.get("web_ui"), timeout, installed_web_ui, "web_ui" in persisted),
-    ]
-    overall = overall_status(components)
-    return {
-        "overall": overall,
-        "checked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "components": components,
-    }
-
-
-def check_core_grpc(target: str, timeout: float, *, core_client: Any | None = None) -> dict[str, Any]:
-    started = time.perf_counter()
-    grpc_client = core_client if core_client is not None else client
-    try:
-        grpc_client.get_system_summary()
-        return _component("core_grpc", "passing", target, started, detail="system summary ok")
-    except Exception as exc:
-        return _component("core_grpc", "critical", target, started, error=str(exc))
-
-
-def check_web_ui(target: str | None, timeout: float, installed: bool, advertised: bool) -> dict[str, Any]:
-    if not target:
-        status = "critical" if installed or advertised else "warning"
-        detail = "endpoint missing" if installed or advertised else "web ui is not installed"
-        return _component("web_ui", status, None, time.perf_counter(), detail=detail)
-    if not installed and not advertised:
-        return _component("web_ui", "warning", target, time.perf_counter(), detail="web ui is not installed")
-    return check_http_component("web_ui", _append_path(target, "/health"), timeout, expected_component="web-ui")
-
-
-def check_http_component(name: str, target: str, timeout: float, expected_component: str | None) -> dict[str, Any]:
-    started = time.perf_counter()
-    request = urllib.request.Request(target, headers={"User-Agent": "mn-runtime-health/1.0"})
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            body = response.read(4096)
-            status_code = int(getattr(response, "status", response.getcode()))
-    except urllib.error.HTTPError as exc:
-        return _component(name, "critical", target, started, error=f"HTTP {exc.code}")
-    except Exception as exc:
-        return _component(name, "critical", target, started, error=str(exc))
-
-    payload = _json_body(body)
-    service_status = str(payload.get("status") or "").lower() if isinstance(payload, dict) else ""
-    component = str(payload.get("component") or "") if isinstance(payload, dict) else ""
-    if status_code >= 500:
-        return _component(name, "critical", target, started, error=f"HTTP {status_code}")
-    if service_status and service_status != "ok":
-        return _component(name, "critical", target, started, detail=payload)
-    if expected_component and component != expected_component:
-        return _component(name, "critical", target, started, error=f"unexpected component {component!r}")
-    return _component(name, "passing", target, started, detail=payload or f"HTTP {status_code}")
+    endpoints = dict(snapshot)
+    for key in ("api", "grpc", "web_ui"):
+        if isinstance(persisted.get(key), dict):
+            endpoints[key] = persisted[key]
+    return RuntimeConfig.from_env(runtime_env=env, runtime_endpoints=endpoints)
 
 
 def print_health_report(report: dict[str, Any]) -> None:
@@ -129,6 +106,55 @@ def print_health_report(report: dict[str, Any]) -> None:
             str(component.get("target") or ""),
             str(detail),
         )
+    console.print(table)
+
+
+def print_status_report(report: dict[str, Any]) -> None:
+    components = {
+        str(component.get("name")): component
+        for component in report.get("components", [])
+        if isinstance(component, dict)
+    }
+    nodes = report.get("nodes") if isinstance(report.get("nodes"), dict) else {}
+    jobs = report.get("jobs") if isinstance(report.get("jobs"), dict) else {}
+    runtime = report.get("runtime") if isinstance(report.get("runtime"), dict) else {}
+    endpoints = report.get("endpoints") if isinstance(report.get("endpoints"), dict) else {}
+    storage = report.get("shared_storage") if isinstance(report.get("shared_storage"), dict) else {}
+
+    table = Table(title=f"Runtime status: {report['overall']}", show_header=True, header_style="bold")
+    table.add_column("Area")
+    table.add_column("Status")
+    table.add_column("Value")
+    table.add_column("Detail")
+    table.add_row(
+        "Runtime",
+        str(report.get("overall", "")),
+        str(runtime.get("mode") or "local"),
+        str(runtime.get("mn_home") or ""),
+    )
+    for name, label, endpoint_key in (
+        ("core_grpc", "Core gRPC", "core_grpc"),
+        ("api", "REST API", "api"),
+        ("web_ui", "Web UI", "web_ui"),
+    ):
+        component = components.get(name, {})
+        detail = component.get("error") or component.get("detail") or ""
+        if isinstance(detail, dict):
+            detail = json.dumps(detail, sort_keys=True)
+        table.add_row(
+            label,
+            str(component.get("status") or "unknown"),
+            str(endpoints.get(endpoint_key) or component.get("target") or ""),
+            str(detail),
+        )
+    table.add_row("Nodes", "", _format_count(nodes.get("total")), _format_counts(nodes.get("by_status")))
+    table.add_row("Active jobs", "", _format_count(jobs.get("active")), _format_counts(jobs.get("active_by_status")))
+    table.add_row(
+        "Shared storage",
+        "configured" if storage.get("configured") else "default",
+        str(storage.get("host_root") or ""),
+        str(storage.get("runtime_root") or ""),
+    )
     console.print(table)
 
 
@@ -216,32 +242,11 @@ def _append_path(base: str | None, path: str) -> str:
     return f"{base.rstrip('/')}/{path.lstrip('/')}"
 
 
-def _component(
-    name: str,
-    status: str,
-    target: str | None,
-    started: float,
-    *,
-    detail: Any = None,
-    error: str | None = None,
-) -> dict[str, Any]:
-    component: dict[str, Any] = {
-        "name": name,
-        "status": status,
-        "target": target,
-        "duration_ms": round((time.perf_counter() - started) * 1000, 2),
-    }
-    if detail is not None:
-        component["detail"] = detail
-    if error:
-        component["error"] = error
-    return component
+def _format_count(value: Any) -> str:
+    return "unknown" if value is None else str(value)
 
 
-def _json_body(body: bytes) -> Any:
-    if not body:
-        return None
-    try:
-        return json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return None
+def _format_counts(value: Any) -> str:
+    if not isinstance(value, dict) or not value:
+        return ""
+    return ", ".join(f"{key}: {count}" for key, count in sorted(value.items()))

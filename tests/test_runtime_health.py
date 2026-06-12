@@ -152,6 +152,47 @@ def test_runtime_health_command_json_exits_nonzero_for_critical(mocker):
     assert json.loads(result.stdout)["overall"] == "critical"
 
 
+def test_runtime_status_command_json_emits_sdk_payload(mocker):
+    mocker.patch(
+        "mn_cli.libs.runtime_health.collect_runtime_status",
+        return_value=_status_report(overall="passing"),
+    )
+
+    result = runner.invoke(app, ["runtime", "status", "--json"])
+
+    assert result.exit_code == 0
+    body = json.loads(result.stdout)
+    assert body["overall"] == "passing"
+    assert body["endpoints"]["core_grpc"] == "localhost:55051"
+    assert body["shared_storage"]["host_root"] == "/tmp/mn-shared"
+
+
+def test_runtime_status_command_human_output_includes_overview(mocker):
+    mocker.patch(
+        "mn_cli.libs.runtime_health.collect_runtime_status",
+        return_value=_status_report(overall="warning"),
+    )
+
+    result = runner.invoke(app, ["runtime", "status"])
+
+    assert result.exit_code == 0
+    assert "Runtime status: warning" in result.stdout
+    assert "Core gRPC" in result.stdout
+    assert "localhost:55051" in result.stdout
+
+
+def test_runtime_status_command_exits_nonzero_for_critical(mocker):
+    mocker.patch(
+        "mn_cli.libs.runtime_health.collect_runtime_status",
+        return_value=_status_report(overall="critical"),
+    )
+
+    result = runner.invoke(app, ["runtime", "status", "--json"])
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout)["overall"] == "critical"
+
+
 def test_runtime_health_repair_rechecks_after_restart(mocker):
     reports = [
         {
@@ -226,3 +267,24 @@ class _HttpResponse:
 
     def __exit__(self, *_args):
         return False
+
+
+def _status_report(*, overall: str) -> dict:
+    return {
+        "overall": overall,
+        "checked_at": "2026-06-03T00:00:00Z",
+        "runtime": {"mode": "local", "mn_home": "/tmp/.mn"},
+        "endpoints": {
+            "core_grpc": "localhost:55051",
+            "api": "http://localhost:54001/api/v1",
+            "web_ui": "http://localhost:55173",
+        },
+        "components": [
+            {"name": "core_grpc", "status": "passing", "target": "localhost:55051", "duration_ms": 1},
+            {"name": "api", "status": "passing", "target": "http://localhost:54001/api/v1/health", "duration_ms": 1},
+            {"name": "web_ui", "status": "warning", "target": "http://localhost:55173", "duration_ms": 1, "detail": "web ui is not installed"},
+        ],
+        "nodes": {"available": True, "total": 1, "by_status": {"healthy": 1}, "items": []},
+        "jobs": {"available": True, "total": 2, "by_status": {"running": 1, "completed": 1}, "active": 1, "active_by_status": {"running": 1}},
+        "shared_storage": {"host_root": "/tmp/mn-shared", "runtime_root": "/runtime/shared", "configured": True},
+    }
