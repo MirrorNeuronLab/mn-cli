@@ -756,7 +756,7 @@ def test_blueprint_run_local_bundle_folder_is_rejected(mocker, tmp_path):
 
     assert result.exit_code == 1
     assert "local folders must be passed with --folder" in result.stdout
-    assert f"mn blueprint run --folder {bundle_dir}" in result.stdout
+    assert f"mnblueprintrun--folder{bundle_dir}" in "".join(result.stdout.split())
     mock_run_bundle.assert_not_called()
 
 

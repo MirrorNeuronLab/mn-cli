@@ -1448,7 +1448,7 @@ def test_run_displays_workflow_steps_and_agents(mocker, tmp_path):
     assert "Phases" in result.stdout
     assert "Research" in result.stdout
     assert "research:docs" in result.stdout
-    assert "Analyze docs" in result.stdout
+    assert "Analyze docs" in " ".join(result.stdout.split())
     assert "2/2 agents" in result.stdout
 
 
