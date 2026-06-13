@@ -56,6 +56,7 @@ from mn_cli.error_handler import handle_cli_error
 from mn_sdk import (
     make_validation_report,
     prepare_job_submission,
+    run_hardware_requirements_validation,
     run_input_validation,
     run_model_validation,
     run_service_validation,
@@ -595,6 +596,12 @@ def validate(
             )
             raise typer.Exit(1)
 
+        _validate_manifest_hardware_or_exit(
+            manifest,
+            output_format=output_format,
+            allow_local_fallback=True,
+        )
+
         service_result = _validate_manifest_services_or_exit(
             bundle_dir, manifest, output_format=output_format
         )
@@ -1061,6 +1068,33 @@ def _validate_manifest_inputs_or_exit(
     raise typer.Exit(1)
 
 
+def _validate_manifest_hardware_or_exit(
+    manifest: dict[str, Any],
+    *,
+    force: bool = False,
+    output_format: str = "table",
+    allow_local_fallback: bool = False,
+) -> dict[str, Any]:
+    result = run_hardware_requirements_validation(
+        manifest,
+        resource_report=lambda: _runtime_resource_report(allow_local_fallback=allow_local_fallback),
+        force=force,
+    )
+    if result.get("ok"):
+        return result
+
+    _emit_validation_report(result, output_format, title="Runtime requirements need attention")
+    raise typer.Exit(1)
+
+
+def _runtime_resource_report(*, allow_local_fallback: bool = False) -> dict[str, Any]:
+    try:
+        decoded = json.loads(client.get_resource())
+    except Exception:
+        return {} if allow_local_fallback else {"nodes": []}
+    return decoded if isinstance(decoded, dict) else ({} if allow_local_fallback else {"nodes": []})
+
+
 def _validate_manifest_services_or_exit(
     bundle_dir: Path,
     manifest: dict[str, Any],
@@ -1147,7 +1181,7 @@ def _mark_manifest_force(manifest: dict[str, Any]) -> None:
         metadata["mn_validation"] = validation
     validation["force"] = True
     validation["status"] = "skipped"
-    validation["skipped_checks"] = ["services", "models", "input_validation", "requirements"]
+    validation["skipped_checks"] = ["services", "models", "input_validation", "soft_requirements"]
 
 
 def _normalize_validation_output(output: str) -> str:
@@ -1241,145 +1275,6 @@ def _is_safe_payload_relative_path(path: str) -> bool:
         not candidate.is_absolute()
         and path not in ("", ".")
         and ".." not in candidate.parts
-    )
-
-
-def run(
-    target: Annotated[
-        Optional[str],
-        typer.Argument(
-            help="Catalog blueprint ID to run. Use --folder for local blueprint or bundle folders.",
-        ),
-    ] = None,
-    folder: Annotated[
-        Optional[str],
-        typer.Option(
-            "--folder",
-            help="Run a local blueprint or bundle folder. Local folders must use this option.",
-        ),
-    ] = None,
-    run_id: Annotated[
-        Optional[str],
-        typer.Option("--run-id", help="Use a specific shared blueprint run ID."),
-    ] = None,
-    blueprint_repo: Annotated[
-        Optional[str],
-        typer.Option(
-            "--blueprint-repo",
-            help="Use this blueprint repository URL/path instead of the default catalog.",
-        ),
-    ] = None,
-    update: Annotated[
-        bool,
-        typer.Option(
-            "--update",
-            help="Update the cached blueprint repository before running a catalog blueprint.",
-        ),
-    ] = False,
-    offline: Annotated[
-        bool,
-        typer.Option(
-            "--offline",
-            help="Use only local blueprint files; never clone, fetch, or pull.",
-        ),
-    ] = False,
-    revision: Annotated[
-        Optional[str],
-        typer.Option("--revision", help="Checkout a specific git revision before running."),
-    ] = None,
-    follow_seconds: Annotated[
-        Optional[float],
-        typer.Option(
-            "--follow-seconds",
-            help="Seconds to keep polling job events after the submit stream detaches. Defaults to MN_RUN_DETACH_LOG_SECONDS or 30.",
-        ),
-    ] = None,
-    force: Annotated[
-        bool,
-        typer.Option(
-            "--force",
-            help="Run even if blueprint input validation or runtime requirements fail.",
-        ),
-    ] = False,
-    detached: Annotated[
-        bool,
-        typer.Option(
-            "-d",
-            "--detached",
-            help="Start the blueprint run without the live workflow UI.",
-        ),
-    ] = False,
-    web_ui: Annotated[
-        bool,
-        typer.Option(
-            "--web-ui",
-            help="Start or register the blueprint Web UI for this run.",
-        ),
-    ] = False,
-    auto_schedule: Annotated[
-        bool,
-        typer.Option(
-            "--auto-schedule",
-            help="Queue the run until the cluster has the required agent resources.",
-        ),
-    ] = False,
-    schedule: Annotated[
-        Optional[str],
-        typer.Option(
-            "--schedule",
-            help="Create a schedule instead of running now. Accepts JSON, a delay like 30m, or an ISO run_at timestamp.",
-        ),
-    ] = None,
-):
-    """Run a catalog blueprint, or a local folder with --folder."""
-    if auto_schedule and schedule:
-        console.print("[red]Error: pass either --auto-schedule or --schedule, not both.[/red]")
-        raise typer.Exit(1)
-
-    if folder and target:
-        console.print("[red]Error: pass either a blueprint ID or --folder, not both.[/red]")
-        raise typer.Exit(1)
-
-    if folder:
-        _run_local_folder(
-            folder,
-            run_id=run_id,
-            follow_seconds=follow_seconds,
-            force=force,
-            detached=detached,
-            web_ui=web_ui,
-            auto_schedule=auto_schedule,
-            schedule=schedule,
-        )
-        return
-
-    if not target:
-        console.print("[red]Error: mn blueprint run expects a blueprint ID or --folder <path>.[/red]")
-        console.print("Use [bold]mn blueprint run <blueprint-id>[/bold] for catalog blueprints.")
-        console.print("Use [bold]mn blueprint run --folder <path>[/bold] for local blueprint or bundle folders.")
-        raise typer.Exit(1)
-
-    target_path = Path(target).expanduser()
-    if target_path.exists():
-        console.print("[red]Error: local folders must be passed with --folder.[/red]")
-        console.print(f"Use [bold]mn blueprint run --folder {target_path}[/bold].")
-        raise typer.Exit(1)
-
-    from mn_cli.libs.blueprint_cmds import run_catalog_blueprint
-
-    run_catalog_blueprint(
-        target,
-        run_id=run_id,
-        blueprint_repo=blueprint_repo,
-        update=update,
-        offline=offline,
-        revision=revision,
-        follow_seconds=follow_seconds,
-        force=force,
-        detached=detached,
-        web_ui=web_ui,
-        auto_schedule=auto_schedule,
-        schedule=schedule,
     )
 
 
@@ -1574,6 +1469,11 @@ def run_bundle(
             submission_metadata,
             config_overrides=config_overrides,
         )
+        _validate_manifest_hardware_or_exit(
+            manifest_dict,
+            force=force,
+            allow_local_fallback=False,
+        )
         blueprint_run_id = submission_metadata.get(
             "blueprint_run_id"
         ) or env_overrides.get("MN_RUN_ID")
@@ -1611,7 +1511,7 @@ def run_bundle(
             )
         else:
             console.print(
-                "[yellow]Validation skipped because --force was provided; service checks, model checks, input checks, and runtime requirements will be bypassed for this run.[/yellow]"
+                "[yellow]Validation skipped because --force was provided; service checks, model checks, input checks, and non-hard runtime requirements will be bypassed for this run.[/yellow]"
             )
         manifest_dict = prepare_manifest_for_submission(
             bundle_dir,

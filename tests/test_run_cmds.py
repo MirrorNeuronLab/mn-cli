@@ -674,7 +674,7 @@ def test_run_force_skips_input_validation(mocker, tmp_path, monkeypatch):
         "services",
         "models",
         "input_validation",
-        "requirements",
+        "soft_requirements",
     ]
     assert mock_submit.call_args.kwargs["force"] is True
 
