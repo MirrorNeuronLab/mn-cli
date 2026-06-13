@@ -476,6 +476,9 @@ def test_run_success(mocker, tmp_path, monkeypatch):
     payloads_dir = bundle_dir / "payloads"
     payloads_dir.mkdir()
     (payloads_dir / "test.txt").write_text("hello")
+    nested_payloads = payloads_dir / "nested"
+    nested_payloads.mkdir()
+    (nested_payloads / "input.json").write_text("{}")
     
     result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--web-ui"])
     
@@ -488,6 +491,9 @@ def test_run_success(mocker, tmp_path, monkeypatch):
     mapping = json.loads((tmp_path / "runs" / "run-bundle-auto" / "job.json").read_text())
     assert mapping["job_id"] == "job-123"
     mock_submit.assert_called_once()
+    submitted_payloads = mock_submit.call_args.args[1]
+    assert submitted_payloads["test.txt"] == b"hello"
+    assert submitted_payloads["nested/input.json"] == b"{}"
     mock_stream.assert_called_once_with("job-123", follow=True, timeout=None, heartbeat_interval_ms=5000)
 
 

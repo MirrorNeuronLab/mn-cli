@@ -7,6 +7,8 @@ import socket
 from pathlib import Path
 from typing import Any
 
+from mn_cli.runtime_state import read_env_file
+
 DEFAULT_INLINE_PAYLOAD_MAX_BYTES = 1_048_576
 DEFAULT_ARTIFACT_PORT = "55660"
 
@@ -114,17 +116,7 @@ def _host_blob_store_root(env: dict[str, str]) -> Path:
 def _runtime_env_file_values() -> dict[str, str]:
     home = Path(os.getenv("MN_HOME") or os.getenv("MIRROR_NEURON_HOME") or Path.home() / ".mn")
     env_file = home.expanduser() / "docker-compose.env"
-    values: dict[str, str] = {}
-    try:
-        for line in env_file.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            values[key.strip()] = value.strip()
-    except OSError:
-        pass
-    return values
+    return {key.strip(): value.strip() for key, value in read_env_file(env_file).items()}
 
 
 def _inline_payload_max_bytes() -> int:

@@ -39,6 +39,22 @@ def test_schedule_create_passes_cron_policy_and_payloads(mocker, tmp_path):
     assert kwargs["schedule"]["window"]["duration_ms"] == 1_800_000
 
 
+def test_schedule_create_does_not_reuse_previous_crons(mocker, tmp_path):
+    mock_create = mocker.patch(
+        "mn_cli.libs.schedule_cmds.client.create_schedule",
+        return_value=json.dumps({"schedule_id": "sched-1", "kind": "periodic"}),
+    )
+    bundle = _bundle(tmp_path)
+
+    with_cron = runner.invoke(app, ["schedule", "create", str(bundle), "--cron", "0 2 * * *"])
+    without_cron = runner.invoke(app, ["schedule", "create", str(bundle)])
+
+    assert with_cron.exit_code == 0
+    assert without_cron.exit_code == 0
+    assert mock_create.call_args_list[0].kwargs["schedule"]["crons"] == ["0 2 * * *"]
+    assert mock_create.call_args_list[1].kwargs["schedule"]["crons"] == []
+
+
 def test_trigger_create_builds_event_schedule(mocker, tmp_path):
     mock_create = mocker.patch(
         "mn_cli.libs.schedule_cmds.client.create_schedule",

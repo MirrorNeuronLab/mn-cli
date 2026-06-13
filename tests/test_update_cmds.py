@@ -1,4 +1,6 @@
 import json
+import io
+import tarfile
 
 import pytest
 from typer.testing import CliRunner
@@ -152,3 +154,47 @@ def test_python_package_updates_exclude_blueprint_support_skill(mocker):
     command = mock_run.call_args.args[0]
     assert "mirrorneuron-blueprint-support-skill[webui]" not in command
     assert "mirrorneuron-blueprint-support-skill" not in update_cmds.PYPI_PACKAGES
+
+
+def test_safe_extract_tar_extracts_valid_release_member(tmp_path):
+    tar_path = tmp_path / "core.tar.gz"
+    contents = b"ok\n"
+    with tarfile.open(tar_path, "w:gz") as archive:
+        info = tarfile.TarInfo("mirror_neuron/bin/mirror_neuron")
+        info.size = len(contents)
+        archive.addfile(info, io.BytesIO(contents))
+
+    target = tmp_path / "install"
+    with tarfile.open(tar_path) as archive:
+        update_cmds._safe_extract_tar(archive, target)
+
+    assert (target / "mirror_neuron" / "bin" / "mirror_neuron").read_bytes() == contents
+
+
+@pytest.mark.parametrize(
+    "member_name",
+    ["/tmp/escape", "mirror_neuron/../../escape"],
+)
+def test_safe_extract_tar_rejects_unsafe_member_paths(tmp_path, member_name):
+    tar_path = tmp_path / "core.tar.gz"
+    with tarfile.open(tar_path, "w:gz") as archive:
+        info = tarfile.TarInfo(member_name)
+        info.size = 1
+        archive.addfile(info, io.BytesIO(b"x"))
+
+    with tarfile.open(tar_path) as archive:
+        with pytest.raises(RuntimeError, match="unsafe path"):
+            update_cmds._safe_extract_tar(archive, tmp_path / "install")
+
+
+def test_safe_extract_tar_rejects_unsafe_symlink(tmp_path):
+    tar_path = tmp_path / "core.tar.gz"
+    with tarfile.open(tar_path, "w:gz") as archive:
+        info = tarfile.TarInfo("mirror_neuron/bin/python")
+        info.type = tarfile.SYMTYPE
+        info.linkname = "../../escape"
+        archive.addfile(info)
+
+    with tarfile.open(tar_path) as archive:
+        with pytest.raises(RuntimeError, match="unsafe symlink"):
+            update_cmds._safe_extract_tar(archive, tmp_path / "install")

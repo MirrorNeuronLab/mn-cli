@@ -39,6 +39,21 @@ def test_service_resolve_passes_tags_to_client(mocker):
     assert mock_resolve.call_args.kwargs["tags"] == ["embeddings"]
 
 
+def test_service_resolve_does_not_reuse_previous_tags(mocker):
+    mock_resolve = mocker.patch(
+        "mn_cli.libs.service_cmds.client.resolve_service",
+        return_value=json.dumps({"services": []}),
+    )
+
+    tagged = runner.invoke(app, ["service", "resolve", "vector-db", "--tag", "embeddings"])
+    untagged = runner.invoke(app, ["service", "resolve", "vector-db"])
+
+    assert tagged.exit_code == 0
+    assert untagged.exit_code == 0
+    assert mock_resolve.call_args_list[0].kwargs["tags"] == ["embeddings"]
+    assert mock_resolve.call_args_list[1].kwargs["tags"] == []
+
+
 def test_service_check_runs_local_required_service_validation(tmp_path):
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()

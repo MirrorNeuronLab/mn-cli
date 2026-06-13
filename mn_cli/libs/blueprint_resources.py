@@ -134,6 +134,36 @@ def cleanup_blueprint_resources(
     return summary
 
 
+def record_classified_path(
+    summary: dict[str, Any],
+    *,
+    path: Path,
+    action: dict[str, Any],
+    removed_key: str,
+    skipped_key: str,
+    dry_run: bool,
+    extra: dict[str, Any] | None = None,
+) -> bool:
+    if not action.get("remove") and not action.get("reason"):
+        return False
+
+    payload = {
+        "path": str(path),
+        "reason": action.get("reason"),
+        "blueprint_id": action.get("blueprint_id"),
+    }
+    if extra:
+        payload.update(extra)
+
+    if action.get("remove"):
+        remove_path(path, dry_run=dry_run)
+        summary[removed_key].append(payload)
+        return True
+
+    summary[skipped_key].append(payload)
+    return False
+
+
 def cleanup_python_envs(
     root: Path,
     *,
@@ -157,23 +187,14 @@ def cleanup_python_envs(
                 active_blueprint_ids=active_blueprint_ids,
                 include_dead=include_dead,
             )
-            if action["remove"]:
-                remove_path(child, dry_run=dry_run)
-                summary["python_removed"].append(
-                    {
-                        "path": str(child),
-                        "reason": action["reason"],
-                        "blueprint_id": action.get("blueprint_id"),
-                    }
-                )
-            elif action["reason"]:
-                summary["python_skipped"].append(
-                    {
-                        "path": str(child),
-                        "reason": action["reason"],
-                        "blueprint_id": action.get("blueprint_id"),
-                    }
-                )
+            record_classified_path(
+                summary,
+                path=child,
+                action=action,
+                removed_key="python_removed",
+                skipped_key="python_skipped",
+                dry_run=dry_run,
+            )
         except Exception as exc:
             summary["errors"].append(f"failed to inspect python resource {child}: {exc}")
 
@@ -565,25 +586,15 @@ def cleanup_generated_bundles(
                 active_blueprint_ids=active_blueprint_ids,
                 include_dead=include_dead,
             )
-            if action["remove"]:
-                remove_path(child, dry_run=dry_run)
-                summary["generated_removed"].append(
-                    {
-                        "path": str(child),
-                        "reason": action["reason"],
-                        "blueprint_id": action.get("blueprint_id"),
-                        "run_id": child.name,
-                    }
-                )
-            elif action["reason"]:
-                summary["generated_skipped"].append(
-                    {
-                        "path": str(child),
-                        "reason": action["reason"],
-                        "blueprint_id": action.get("blueprint_id"),
-                        "run_id": child.name,
-                    }
-                )
+            record_classified_path(
+                summary,
+                path=child,
+                action=action,
+                removed_key="generated_removed",
+                skipped_key="generated_skipped",
+                dry_run=dry_run,
+                extra={"run_id": child.name},
+            )
         except Exception as exc:
             summary["errors"].append(f"failed to inspect generated blueprint bundle {child}: {exc}")
 
@@ -644,23 +655,14 @@ def cleanup_bundle_cache(
                 active_blueprint_ids=active_blueprint_ids,
                 include_dead=include_dead,
             )
-            if action["remove"]:
-                remove_path(child, dry_run=dry_run)
-                summary["bundle_removed"].append(
-                    {
-                        "path": str(child),
-                        "reason": action["reason"],
-                        "blueprint_id": action.get("blueprint_id"),
-                    }
-                )
-            elif action["reason"]:
-                summary["bundle_skipped"].append(
-                    {
-                        "path": str(child),
-                        "reason": action["reason"],
-                        "blueprint_id": action.get("blueprint_id"),
-                    }
-                )
+            record_classified_path(
+                summary,
+                path=child,
+                action=action,
+                removed_key="bundle_removed",
+                skipped_key="bundle_skipped",
+                dry_run=dry_run,
+            )
         except Exception as exc:
             summary["errors"].append(f"failed to inspect bundle cache resource {child}: {exc}")
 

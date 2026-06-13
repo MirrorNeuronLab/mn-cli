@@ -1,10 +1,10 @@
 import json
-from pathlib import Path
 from typing import Optional
 
 import typer
 
 from mn_cli.error_handler import handle_cli_error
+from mn_cli.libs.bundles import read_bundle
 from mn_cli.libs.ui import print_success_confirmation
 from mn_cli.shared import client, console
 
@@ -165,22 +165,6 @@ def _print_deployment_confirmation(
         details=detail_items,
         next_steps=next_steps,
     )
-
-
-def read_bundle(path: str) -> tuple[str, dict[str, bytes]]:
-    root = Path(path).expanduser()
-    manifest_path = root / "manifest.json" if root.is_dir() else root
-
-    manifest_json = manifest_path.read_text(encoding="utf-8")
-    payloads: dict[str, bytes] = {}
-
-    payloads_dir = root / "payloads" if root.is_dir() else manifest_path.parent / "payloads"
-    if payloads_dir.is_dir():
-        for payload_path in payloads_dir.rglob("*"):
-            if payload_path.is_file():
-                payloads[str(payload_path.relative_to(payloads_dir))] = payload_path.read_bytes()
-
-    return manifest_json, payloads
 
 
 def update_policy(

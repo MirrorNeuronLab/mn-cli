@@ -49,7 +49,8 @@ from mn_cli.libs.blueprint_resources import (
 )
 from mn_cli.libs.ui import print_confirmed, print_success_confirmation
 from mn_cli.shared import console, logger
-from mn_cli.libs.run_cmds import _run_local_folder, run_bundle as _run_bundle
+from mn_cli.libs.blueprint_models import BlueprintModelOps, blueprint_model_dependency_summary
+from mn_cli.libs.run_cmds import run_bundle as _run_bundle
 from mn_cli.libs.run_manifest import load_blueprint_config as _load_blueprint_config
 from mn_cli.libs.model_cmds import (
     install_model_entry as _install_model_entry,
@@ -564,6 +565,58 @@ def run_local_blueprint_folder(
     )
 
 
+def _run_local_folder(
+    folder: str,
+    *,
+    run_id: Optional[str],
+    follow_seconds: Optional[float],
+    force: bool,
+    detached: bool = False,
+    web_ui: bool = False,
+    auto_schedule: bool = False,
+    schedule: Optional[str] = None,
+) -> None:
+    bundle_dir = Path(folder).expanduser()
+    manifest = _load_manifest_for_local_route(bundle_dir)
+    if manifest is not None and _is_python_source_blueprint(manifest):
+        run_local_blueprint_folder(
+            str(bundle_dir),
+            run_id=run_id,
+            follow_seconds=follow_seconds,
+            force=force,
+            detached=detached,
+            web_ui=web_ui,
+            auto_schedule=auto_schedule,
+            schedule=schedule,
+        )
+        return
+
+    env_overrides = {"MN_RUN_ID": run_id} if run_id else None
+    submission_metadata = {"blueprint_run_id": run_id} if run_id else None
+    _run_bundle(
+        str(bundle_dir),
+        follow_seconds=follow_seconds,
+        env_overrides=env_overrides,
+        submission_metadata=submission_metadata,
+        force=force,
+        detached=detached,
+        web_ui=web_ui,
+        auto_schedule=auto_schedule,
+        schedule=schedule,
+    )
+
+
+def _load_manifest_for_local_route(bundle_dir: Path) -> dict[str, Any] | None:
+    manifest_file = bundle_dir / "manifest.json"
+    if not manifest_file.exists():
+        return None
+    try:
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return manifest if isinstance(manifest, dict) else None
+
+
 @blueprint_app.command("run")
 def blueprint_run(
     ctx: typer.Context,
@@ -811,85 +864,27 @@ def _install_blueprint_model_dependencies(
     install_source: str,
     force: bool,
 ) -> dict[str, Any]:
-    catalog = _load_model_catalog()
-    requirements = _required_blueprint_models(manifest, config, catalog=catalog)
-    ledger = _load_model_ownership()
-    results: list[dict[str, Any]] = []
-    errors: list[str] = []
-    for requirement in requirements:
-        model_ref = str(requirement.get("model") or "")
-        try:
-            entry = _resolve_model_entry(model_ref, catalog=catalog)
-        except KeyError as exc:
-            message = f"{requirement.get('path')}: unknown runtime model {model_ref!r}"
-            results.append({"model": model_ref, "status": "failed", "error": message})
-            errors.append(message)
-            continue
-
-        docker_model = _docker_model_name(entry)
-        provider = str(entry.get("provider") or "docker_model_runner")
-        backend = str(requirement.get("backend") or entry.get("backend") or "auto")
-        base_result = {
-            "id": entry.get("id"),
-            "model": docker_model,
-            "provider": provider,
-            "backend": backend,
-            "path": requirement.get("path"),
-        }
-        if _cluster_provided_model(requirement):
-            results.append({**base_result, "status": "cluster_provided"})
-            continue
-
-        if provider != "docker_model_runner":
-            _record_model_owner(
-                entry,
-                blueprint_id=blueprint_id,
-                blueprint_revision=blueprint_revision,
-                install_source=install_source,
-                backend=backend,
-            )
-            results.append({**base_result, "status": "service_required"})
-            continue
-
-        preexisting_record = ledger.get("models", {}).get(docker_model)
-        try:
-            installed = _model_installed(docker_model)
-        except Exception:
-            installed = False
-        try:
-            if installed:
-                _record_model_owner(
-                    entry,
-                    blueprint_id=blueprint_id,
-                    blueprint_revision=blueprint_revision,
-                    install_source=install_source,
-                    backend=backend,
-                    preexisting_manual=not isinstance(preexisting_record, dict),
-                )
-                results.append({**base_result, "status": "already_installed"})
-                continue
-            install_result = _install_model_entry(entry, backend=backend, context_size=requirement.get("context_size"), force=force)
-            compatibility = install_result.get("compatibility") or {}
-            _record_model_owner(
-                entry,
-                blueprint_id=blueprint_id,
-                blueprint_revision=blueprint_revision,
-                install_source=install_source,
-                backend=str(compatibility.get("backend") or backend),
-            )
-            results.append({**base_result, "status": "installed", "compatibility": compatibility})
-        except Exception as exc:
-            message = str(exc)
-            results.append({**base_result, "status": "failed", "error": message})
-            errors.append(message)
-    summary = {
-        "blueprint_id": blueprint_id,
-        "bundle_root": str(bundle_root),
-        "models": results,
-        "errors": errors,
-        "ok": not errors,
-    }
-    if errors:
+    summary = blueprint_model_dependency_summary(
+        blueprint_id=blueprint_id,
+        blueprint_revision=blueprint_revision,
+        bundle_root=bundle_root,
+        manifest=manifest,
+        config=config,
+        install_source=install_source,
+        force=force,
+        ops=BlueprintModelOps(
+            load_model_catalog=_load_model_catalog,
+            required_blueprint_models=_required_blueprint_models,
+            load_model_ownership=_load_model_ownership,
+            resolve_model_entry=_resolve_model_entry,
+            docker_model_name=_docker_model_name,
+            cluster_provided_model=_cluster_provided_model,
+            record_model_owner=_record_model_owner,
+            model_installed=_model_installed,
+            install_model_entry=_install_model_entry,
+        ),
+    )
+    if summary["errors"]:
         _print_model_install_summary(summary)
         raise typer.Exit(1)
     return summary

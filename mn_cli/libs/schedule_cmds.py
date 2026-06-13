@@ -78,7 +78,7 @@ def _print_result(
 @schedule_app.command(name="create")
 def create_schedule(
     bundle: str,
-    cron: list[str] = typer.Option([], "--cron", help="Five-field cron expression. Repeat for multiple schedules."),
+    cron: Optional[list[str]] = typer.Option(None, "--cron", help="Five-field cron expression. Repeat for multiple schedules."),
     name: str = typer.Option("", "--name", help="Schedule name."),
     timezone_name: str = typer.Option("", "--timezone", help="IANA timezone label stored on the schedule."),
     missed_policy: str = typer.Option("skip", "--missed-policy", help="skip, catchup_one, or catchup_all."),

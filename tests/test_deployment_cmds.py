@@ -2,6 +2,7 @@ import json
 
 from typer.testing import CliRunner
 
+from mn_cli.libs.deployment_cmds import read_bundle
 from mn_cli.main import app
 
 runner = CliRunner()
@@ -49,6 +50,19 @@ def test_deploy_command_passes_policy_and_payloads(mocker, tmp_path):
     assert kwargs["update_policy"]["canary"] == 1
     assert kwargs["update_policy"]["max_parallel"] == 2
     assert kwargs["update_policy"]["auto_revert"] is True
+
+
+def test_read_bundle_uses_posix_payload_paths(tmp_path):
+    bundle = tmp_path / "bundle"
+    nested = bundle / "payloads" / "nested"
+    nested.mkdir(parents=True)
+    (bundle / "manifest.json").write_text('{"graph_id": "agent-api"}', encoding="utf-8")
+    (nested / "input.json").write_bytes(b"{}")
+
+    manifest_json, payloads = read_bundle(str(bundle))
+
+    assert manifest_json == '{"graph_id": "agent-api"}'
+    assert payloads == {"nested/input.json": b"{}"}
 
 
 def test_deployment_promote_command(mocker):

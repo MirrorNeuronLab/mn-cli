@@ -11,6 +11,7 @@ from rich.table import Table
 from rich.text import Text
 from mn_sdk import RuntimeConfig, collect_runtime_status as sdk_collect_runtime_status, health_report_from_status
 
+from mn_cli.runtime_state import read_json_file
 from mn_cli.shared import client, console
 from mn_cli.server_cmds import (
     RUNTIME_ENDPOINTS_FILE,
@@ -254,10 +255,7 @@ def _targets(snapshot: dict[str, Any], persisted: dict[str, Any]) -> dict[str, s
 
 
 def _read_runtime_endpoints() -> dict[str, Any]:
-    try:
-        data = json.loads(RUNTIME_ENDPOINTS_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+    data = read_json_file(RUNTIME_ENDPOINTS_FILE)
     return data if isinstance(data, dict) else {}
 
 

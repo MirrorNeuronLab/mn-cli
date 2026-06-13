@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -10,6 +12,7 @@ import time
 import urllib.request
 from importlib import metadata
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Optional
 
 import typer
@@ -351,6 +354,46 @@ def _download(url: str, target: Path) -> None:
         target.write_bytes(response.read())
 
 
+def _safe_extract_tar(archive: tarfile.TarFile, target: Path) -> None:
+    target.mkdir(parents=True, exist_ok=True)
+    for member in archive.getmembers():
+        _validate_tar_member(member)
+    archive.extractall(target, filter=tarfile.fully_trusted_filter)
+
+
+def _validate_tar_member(member: tarfile.TarInfo) -> None:
+    if not _safe_archive_path(member.name):
+        raise RuntimeError(f"Core release archive contains an unsafe path: {member.name!r}")
+
+    if member.ischr() or member.isblk() or member.isfifo():
+        raise RuntimeError(f"Core release archive contains an unsupported special file: {member.name!r}")
+
+    if member.issym():
+        link_target = _normalized_symlink_target(member.name, member.linkname)
+        if not _safe_archive_path(member.linkname) or not _safe_archive_path(link_target):
+            raise RuntimeError(
+                f"Core release archive contains an unsafe symlink: {member.name!r} -> {member.linkname!r}"
+            )
+    elif member.islnk() and not _safe_archive_path(member.linkname):
+        raise RuntimeError(
+            f"Core release archive contains an unsafe hard link: {member.name!r} -> {member.linkname!r}"
+        )
+
+
+def _safe_archive_path(name: str) -> bool:
+    if not isinstance(name, str) or not name:
+        return False
+    path = PurePosixPath(name)
+    return not path.is_absolute() and ".." not in path.parts
+
+
+def _normalized_symlink_target(member_name: str, link_name: str) -> str:
+    if PurePosixPath(link_name).is_absolute():
+        return link_name
+    parent = PurePosixPath(member_name).parent
+    return posixpath.normpath(str(parent / link_name))
+
+
 def _update_core() -> None:
     console.print("=> Updating MirrorNeuron core from GitHub Release...")
     release = _github_latest_release()
@@ -370,13 +413,13 @@ def _update_core() -> None:
                 if child.name in {".pids", ".logs", ".update-check.json"}:
                     continue
                 if child.is_dir():
-                    subprocess.run(["rm", "-rf", str(child)], check=True)
+                    shutil.rmtree(child)
                 else:
                     child.unlink()
         DIR.mkdir(parents=True, exist_ok=True)
 
         with tarfile.open(tarball) as archive:
-            archive.extractall(DIR)
+            _safe_extract_tar(archive, DIR)
 
         subprocess.run(["cp", "-R", str(DIR / "mirror_neuron"), str(context_dir)], check=True)
         (context_dir / "Dockerfile").write_text(

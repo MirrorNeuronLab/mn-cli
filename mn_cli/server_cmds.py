@@ -21,6 +21,13 @@ from rich.table import Table
 from mn_cli.config import CliConfig
 from mn_cli.libs.ui import print_confirmed, print_success_confirmation
 from mn_cli.logging_config import configure_logging
+from mn_cli.runtime_state import (
+    mn_home as _runtime_mn_home,
+    read_env_file as _runtime_read_env_file,
+    remove_env_file_keys as _runtime_remove_env_file_keys,
+    write_env_file_values as _runtime_write_env_file_values,
+    write_private_text,
+)
 
 console = Console()
 logger = configure_logging("mn-cli", CliConfig.from_env().log_path)
@@ -47,8 +54,7 @@ def _erl_aflags_needs_update(value: Optional[str], dist_port: str | int) -> bool
     )
 
 def _mn_home() -> Path:
-    configured_home = os.getenv("MN_HOME") or os.getenv("MIRROR_NEURON_HOME")
-    return Path(configured_home).expanduser() if configured_home else Path.home() / ".mn"
+    return _runtime_mn_home()
 
 
 DIR = _mn_home()
@@ -672,13 +678,7 @@ def _resolve_mn_cookie() -> str:
 
     DIR.mkdir(parents=True, exist_ok=True)
     generated_cookie = secrets.token_hex(32)
-    fd = os.open(cookie_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(f"{generated_cookie}\n")
-    try:
-        cookie_file.chmod(0o600)
-    except OSError:
-        logger.debug("Failed to chmod Erlang cookie file %s", cookie_file, exc_info=True)
+    write_private_text(cookie_file, f"{generated_cookie}\n")
     return generated_cookie
 
 def _resolve_grpc_auth_token() -> str:
@@ -724,14 +724,7 @@ def _write_grpc_token_file(token_file: Path, token: str, label: str) -> None:
     token = str(token or "").strip()
     if not token:
         return
-    token_file.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(token_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(f"{token}\n")
-    try:
-        token_file.chmod(0o600)
-    except OSError:
-        logger.debug("Failed to chmod %s token file %s", label, token_file, exc_info=True)
+    write_private_text(token_file, f"{token}\n")
 
 def _ensure_runtime_grpc_tokens(env: dict[str, str], *, persist_compose: bool = False) -> dict[str, str]:
     resolved = dict(env)
@@ -826,13 +819,7 @@ def _refresh_network_token() -> str:
 
 def _write_network_token(token: str) -> None:
     DIR.mkdir(parents=True, exist_ok=True)
-    fd = os.open(NETWORK_TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(f"{token}\n")
-    try:
-        NETWORK_TOKEN_FILE.chmod(0o600)
-    except OSError:
-        logger.debug("Failed to chmod network token file %s", NETWORK_TOKEN_FILE, exc_info=True)
+    write_private_text(NETWORK_TOKEN_FILE, f"{token}\n")
 
 def _derive_network_secret(token: str, label: str) -> str:
     material = f"mirror-neuron:{label}:{token}".encode("utf-8")
@@ -857,13 +844,7 @@ def _normalize_node_alias(value: object) -> str:
 def _write_node_alias(alias: str) -> None:
     DIR.mkdir(parents=True, exist_ok=True)
     alias_file = _node_alias_file()
-    fd = os.open(alias_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(f"{alias}\n")
-    try:
-        alias_file.chmod(0o600)
-    except OSError:
-        logger.debug("Failed to chmod node alias file %s", alias_file, exc_info=True)
+    write_private_text(alias_file, f"{alias}\n")
 
 def _configured_node_alias(env: Optional[dict[str, str]] = None) -> str:
     values = env or {}
@@ -1781,78 +1762,13 @@ def runtime_compose_available() -> bool:
     return RUNTIME_COMPOSE_FILE.exists() and RUNTIME_COMPOSE_ENV.exists()
 
 def _read_env_file(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return values
-
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, value = stripped.split("=", 1)
-        values[key] = value
-    return values
+    return _runtime_read_env_file(path)
 
 def _write_env_file_values(path: Path, updates: dict[str, str]) -> None:
-    try:
-        original_lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        original_lines = []
-
-    lines: list[str] = []
-    seen: set[str] = set()
-    for line in original_lines:
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            key, _ = stripped.split("=", 1)
-            if key in updates:
-                lines.append(f"{key}={updates[key]}")
-                seen.add(key)
-                continue
-        lines.append(line)
-
-    for key, value in updates.items():
-        if key not in seen:
-            lines.append(f"{key}={value}")
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    try:
-        path.chmod(0o600)
-    except OSError:
-        logger.debug("Failed to chmod env file %s", path, exc_info=True)
+    _runtime_write_env_file_values(path, updates)
 
 def _remove_env_file_keys(path: Path, keys: set[str]) -> None:
-    if not keys:
-        return
-
-    try:
-        original_lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return
-
-    lines: list[str] = []
-    changed = False
-    for line in original_lines:
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            key, _ = stripped.split("=", 1)
-            if key in keys:
-                changed = True
-                continue
-        lines.append(line)
-
-    if not changed:
-        return
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-    try:
-        path.chmod(0o600)
-    except OSError:
-        logger.debug("Failed to chmod env file %s", path, exc_info=True)
+    _runtime_remove_env_file_keys(path, keys)
 
 def _remove_compose_file_env_keys(path: Path, keys: set[str]) -> None:
     if not keys:
@@ -3064,6 +2980,136 @@ def _start_web_ui_if_installed(runtime_env: Optional[dict[str, str]] = None) -> 
         )
     return True
 
+def _build_core_docker_run_command(
+    env: dict[str, str],
+    *,
+    requested_docker_mode: str,
+    network_name: str,
+    node_alias: str,
+) -> list[str]:
+    cmd = ["docker", "run", "-d", "--name", "mirror-neuron-core"]
+
+    cmd.extend(["-e", f"MN_NODE_NAME={env['MN_NODE_NAME']}"])
+    cmd.extend(["-e", f"MN_COOKIE={env['MN_COOKIE']}"])
+    cmd.extend(["-e", f"MN_GRPC_AUTH_TOKEN={env['MN_GRPC_AUTH_TOKEN']}"])
+    cmd.extend(["-e", f"{GRPC_AUTH_TOKEN_FILE_ENV}={env[GRPC_AUTH_TOKEN_FILE_ENV]}"])
+    cmd.extend(["-e", f"{GRPC_ADMIN_TOKEN_ENV}={env[GRPC_ADMIN_TOKEN_ENV]}"])
+    cmd.extend(["-e", f"{GRPC_ADMIN_TOKEN_FILE_ENV}={env[GRPC_ADMIN_TOKEN_FILE_ENV]}"])
+    cmd.extend(["-e", f"MN_NETWORK_JOIN_TOKEN={env['MN_NETWORK_JOIN_TOKEN']}"])
+    cmd.extend(["-e", f"MN_NETWORK_ADVERTISE_HOST={env['MN_NETWORK_ADVERTISE_HOST']}"])
+    if env.get("MN_MODEL_SERVICE_NODE_NAME"):
+        cmd.extend(["-e", f"MN_MODEL_SERVICE_NODE_NAME={env['MN_MODEL_SERVICE_NODE_NAME']}"])
+    cmd.extend(["-e", f"MN_NETWORK_REDIS_HOST={env['MN_NETWORK_REDIS_HOST']}"])
+    cmd.extend(["-e", f"MN_NETWORK_REDIS_PORT={env['MN_NETWORK_REDIS_PORT']}"])
+    cmd.extend(["-e", f"MN_ARTIFACT_ENABLED={env['MN_ARTIFACT_ENABLED']}"])
+    cmd.extend(["-e", f"MN_ARTIFACT_BIND_HOST={env['MN_ARTIFACT_BIND_HOST']}"])
+    cmd.extend(["-e", f"MN_ARTIFACT_PORT={env['MN_ARTIFACT_PORT']}"])
+    cmd.extend(["-e", f"MN_ARTIFACT_ADVERTISE_URL={env['MN_ARTIFACT_ADVERTISE_URL']}"])
+    cmd.extend(["-e", f"MN_CLUSTER_NODES={env['MN_CLUSTER_NODES']}"])
+    if env.get("MN_NODE_ALIAS"):
+        cmd.extend(["-e", f"MN_NODE_ALIAS={env['MN_NODE_ALIAS']}"])
+    if env.get("MN_DOCKER_NETWORK_MODE"):
+        cmd.extend(["-e", f"MN_DOCKER_NETWORK_MODE={env['MN_DOCKER_NETWORK_MODE']}"])
+    if env.get("MN_DOCKER_NETWORK_NAME"):
+        cmd.extend(["-e", f"MN_DOCKER_NETWORK_NAME={env['MN_DOCKER_NETWORK_NAME']}"])
+    cmd.extend(["-e", f"MN_NODE_ROLE={env['MN_NODE_ROLE']}"])
+    cmd.extend(["-e", f"MN_NODE_DISPLAY_NAME={env['MN_NODE_DISPLAY_NAME']}"])
+    if env.get("MN_NODE_CPU_MODEL"):
+        cmd.extend(["-e", f"MN_NODE_CPU_MODEL={env['MN_NODE_CPU_MODEL']}"])
+    cmd.extend(["-e", f"MN_NODE_GPU_COUNT={env['MN_NODE_GPU_COUNT']}"])
+    for gpu_env_key in (
+        "MN_NODE_GPU_VENDOR",
+        "MN_NODE_GPU_DRIVER",
+        "MN_NODE_GPU_TYPE",
+        "MN_NODE_GPU_NAME",
+        "MN_NODE_GPU_API_VERSION",
+        "MN_NODE_GPU_DRIVER_VERSION",
+    ):
+        if env.get(gpu_env_key):
+            cmd.extend(["-e", f"{gpu_env_key}={env[gpu_env_key]}"])
+    cmd.extend(["-e", f"MN_GRPC_PORT={env['MN_GRPC_PORT']}"])
+    cmd.extend(["-e", f"MN_DIST_PORT={env['MN_DIST_PORT']}"])
+    cmd.extend(["-e", f"MN_RUNS_ROOT={env.get('MN_CONTAINER_RUNS_ROOT', DEFAULT_CONTAINER_RUNS_ROOT)}"])
+    cmd.extend(["-e", f"MN_SHARED_STORAGE_ROOT={env.get('MN_RUNTIME_SHARED_STORAGE_ROOT', DEFAULT_RUNTIME_SHARED_STORAGE_ROOT)}"])
+    cmd.extend(["-e", f"MN_RUNTIME_SHARED_STORAGE_ROOT={env.get('MN_RUNTIME_SHARED_STORAGE_ROOT', DEFAULT_RUNTIME_SHARED_STORAGE_ROOT)}"])
+    cmd.extend(["-e", f"ERL_AFLAGS={env['ERL_AFLAGS']}"])
+
+    core_publish_host = _docker_publish_host(env["MN_CORE_HOST"])
+    system_name = os.uname().sysname
+    if requested_docker_mode != "disabled" and node_alias:
+        cmd.extend(_docker_network_run_args(requested_docker_mode, network_name, node_alias))
+
+    if system_name == "Darwin":
+        cmd.extend(["-p", f"{core_publish_host}:{env['MN_GRPC_PORT']}:{env['MN_GRPC_PORT']}"])
+        cmd.extend([
+            "-p",
+            f"{env['MN_ARTIFACT_PUBLISH_HOST']}:{env['MN_ARTIFACT_PORT']}:{env['MN_ARTIFACT_PORT']}",
+        ])
+        if requested_docker_mode == "disabled":
+            epmd_publish_host = _docker_publish_host(env["MN_EPMD_HOST"])
+            dist_publish_host = _docker_publish_host(env["MN_DIST_HOST"])
+            cmd.extend(["-p", f"{epmd_publish_host}:{env['MN_EPMD_PORT']}:4369"])
+            cmd.extend(["-p", f"{dist_publish_host}:{env['MN_DIST_PORT']}:{env['MN_DIST_PORT']}"])
+        cmd.extend(["-e", f"MN_REDIS_URL={env.get('MN_REDIS_URL', 'redis://host.docker.internal:6379/0')}"])
+        cmd.extend(["-e", "MN_EXECUTOR_MAX_CONCURRENCY=50"])
+    else:
+        if requested_docker_mode == "disabled":
+            cmd.extend(["--network", "host"])
+        cmd.extend(["-e", "MN_EXECUTOR_MAX_CONCURRENCY=50"])
+        if env.get("MN_REDIS_URL"):
+            cmd.extend(["-e", f"MN_REDIS_URL={env['MN_REDIS_URL']}"])
+
+    if system_name == "Darwin":
+        cmd.extend(["-e", "MN_CORE_HOST=0.0.0.0"])
+    else:
+        cmd.extend(["-e", f"MN_CORE_HOST={env['MN_CORE_HOST']}"])
+        cmd.extend(["-e", f"MN_REDIS_HOST={env['MN_REDIS_HOST']}"])
+        cmd.extend(["-e", f"ERL_EPMD_ADDRESS={env['MN_EPMD_HOST']}"])
+
+    for env_name in [
+        "SLACK_BOT_TOKEN",
+        "SLACK_DEFAULT_CHANNEL",
+        "SLACK_API_BASE_URL",
+        "MN_SLACK_BOT_TOKEN",
+        "MN_SLACK_DEFAULT_CHANNEL",
+        "MN_SLACK_API_BASE_URL",
+    ]:
+        if os.getenv(env_name):
+            cmd.extend(["-e", env_name])
+
+    openshell_container_config_dir = Path(
+        os.getenv(
+            "OPENSHELL_CONTAINER_CONFIG_DIR",
+            str(Path.home() / ".config" / "openshell-mirror-neuron"),
+        )
+    )
+    openshell_config_dir = openshell_container_config_dir
+    if not (openshell_config_dir / "gateways" / "openshell").is_dir():
+        openshell_config_dir = Path.home() / ".config" / "openshell"
+    if (openshell_config_dir / "gateways" / "openshell").is_dir():
+        cmd.extend(["-v", f"{openshell_config_dir}:/root/.config/openshell:ro"])
+        cmd.extend(["-v", f"{openshell_config_dir}:/opt/mirror_neuron/.config/openshell:ro"])
+
+    host_home_dir = str(env.get("MN_HOST_HOME_DIR") or env.get("MN_HOST_MN_DIR") or DIR)
+    host_artifacts_dir = str(env.get("MN_HOST_ARTIFACTS_DIR") or Path(host_home_dir).expanduser() / "runs")
+    container_runs_root = str(env.get("MN_CONTAINER_RUNS_ROOT") or DEFAULT_CONTAINER_RUNS_ROOT)
+    host_blob_store_dir = str(env.get("MN_HOST_BLOB_STORE_DIR") or Path(host_home_dir).expanduser() / "blobs")
+    container_blob_store_root = str(env.get("MN_CONTAINER_BLOB_STORE_ROOT") or DEFAULT_CONTAINER_BLOB_STORE_ROOT)
+    host_shared_storage_root = str(env.get("MN_SHARED_STORAGE_ROOT") or env.get("MN_HOST_SHARED_STORAGE_ROOT") or Path(host_home_dir).expanduser() / "shared")
+    runtime_shared_storage_root = str(env.get("MN_RUNTIME_SHARED_STORAGE_ROOT") or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT)
+    cmd.extend(["-v", f"{host_home_dir}:/root/.mn"])
+    cmd.extend(["-v", f"{host_home_dir}:/opt/mirror_neuron/.mn"])
+    cmd.extend(["-v", f"{host_artifacts_dir}:{container_runs_root}"])
+    cmd.extend(["-v", f"{host_artifacts_dir}:/opt/mirror_neuron/.mn/runs"])
+    cmd.extend(["-v", f"{host_blob_store_dir}:{container_blob_store_root}"])
+    cmd.extend(["-v", f"{host_blob_store_dir}:/opt/mirror_neuron/.mn/blobs"])
+    cmd.extend(["-v", f"{host_shared_storage_root}:{runtime_shared_storage_root}"])
+    cmd.extend(["-v", f"{host_shared_storage_root}:/opt/mirror_neuron/.mn/shared"])
+    cmd.extend(["-e", f"MN_BLOB_STORE_ROOT={container_blob_store_root}"])
+
+    cmd.append("mirror-neuron-core:latest")
+    return cmd
+
 def _start_server(
     ip: str = None,
     *,
@@ -3392,127 +3438,12 @@ def _start_server(
         logger.info("Starting MirrorNeuron Core Docker container")
         subprocess.run(["docker", "rm", "-f", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
-        cmd = ["docker", "run", "-d", "--name", "mirror-neuron-core"]
-
-        cmd.extend(["-e", f"MN_NODE_NAME={env['MN_NODE_NAME']}"])
-        cmd.extend(["-e", f"MN_COOKIE={env['MN_COOKIE']}"])
-        cmd.extend(["-e", f"MN_GRPC_AUTH_TOKEN={env['MN_GRPC_AUTH_TOKEN']}"])
-        cmd.extend(["-e", f"{GRPC_AUTH_TOKEN_FILE_ENV}={env[GRPC_AUTH_TOKEN_FILE_ENV]}"])
-        cmd.extend(["-e", f"{GRPC_ADMIN_TOKEN_ENV}={env[GRPC_ADMIN_TOKEN_ENV]}"])
-        cmd.extend(["-e", f"{GRPC_ADMIN_TOKEN_FILE_ENV}={env[GRPC_ADMIN_TOKEN_FILE_ENV]}"])
-        cmd.extend(["-e", f"MN_NETWORK_JOIN_TOKEN={env['MN_NETWORK_JOIN_TOKEN']}"])
-        cmd.extend(["-e", f"MN_NETWORK_ADVERTISE_HOST={env['MN_NETWORK_ADVERTISE_HOST']}"])
-        if env.get("MN_MODEL_SERVICE_NODE_NAME"):
-            cmd.extend(["-e", f"MN_MODEL_SERVICE_NODE_NAME={env['MN_MODEL_SERVICE_NODE_NAME']}"])
-        cmd.extend(["-e", f"MN_NETWORK_REDIS_HOST={env['MN_NETWORK_REDIS_HOST']}"])
-        cmd.extend(["-e", f"MN_NETWORK_REDIS_PORT={env['MN_NETWORK_REDIS_PORT']}"])
-        cmd.extend(["-e", f"MN_ARTIFACT_ENABLED={env['MN_ARTIFACT_ENABLED']}"])
-        cmd.extend(["-e", f"MN_ARTIFACT_BIND_HOST={env['MN_ARTIFACT_BIND_HOST']}"])
-        cmd.extend(["-e", f"MN_ARTIFACT_PORT={env['MN_ARTIFACT_PORT']}"])
-        cmd.extend(["-e", f"MN_ARTIFACT_ADVERTISE_URL={env['MN_ARTIFACT_ADVERTISE_URL']}"])
-        cmd.extend(["-e", f"MN_CLUSTER_NODES={env['MN_CLUSTER_NODES']}"])
-        if env.get("MN_NODE_ALIAS"):
-            cmd.extend(["-e", f"MN_NODE_ALIAS={env['MN_NODE_ALIAS']}"])
-        if env.get("MN_DOCKER_NETWORK_MODE"):
-            cmd.extend(["-e", f"MN_DOCKER_NETWORK_MODE={env['MN_DOCKER_NETWORK_MODE']}"])
-        if env.get("MN_DOCKER_NETWORK_NAME"):
-            cmd.extend(["-e", f"MN_DOCKER_NETWORK_NAME={env['MN_DOCKER_NETWORK_NAME']}"])
-        cmd.extend(["-e", f"MN_NODE_ROLE={env['MN_NODE_ROLE']}"])
-        cmd.extend(["-e", f"MN_NODE_DISPLAY_NAME={env['MN_NODE_DISPLAY_NAME']}"])
-        if env.get("MN_NODE_CPU_MODEL"):
-            cmd.extend(["-e", f"MN_NODE_CPU_MODEL={env['MN_NODE_CPU_MODEL']}"])
-        cmd.extend(["-e", f"MN_NODE_GPU_COUNT={env['MN_NODE_GPU_COUNT']}"])
-        for gpu_env_key in (
-            "MN_NODE_GPU_VENDOR",
-            "MN_NODE_GPU_DRIVER",
-            "MN_NODE_GPU_TYPE",
-            "MN_NODE_GPU_NAME",
-            "MN_NODE_GPU_API_VERSION",
-            "MN_NODE_GPU_DRIVER_VERSION",
-        ):
-            if env.get(gpu_env_key):
-                cmd.extend(["-e", f"{gpu_env_key}={env[gpu_env_key]}"])
-        cmd.extend(["-e", f"MN_GRPC_PORT={env['MN_GRPC_PORT']}"])
-        cmd.extend(["-e", f"MN_DIST_PORT={env['MN_DIST_PORT']}"])
-        cmd.extend(["-e", f"MN_RUNS_ROOT={env.get('MN_CONTAINER_RUNS_ROOT', DEFAULT_CONTAINER_RUNS_ROOT)}"])
-        cmd.extend(["-e", f"MN_SHARED_STORAGE_ROOT={env.get('MN_RUNTIME_SHARED_STORAGE_ROOT', DEFAULT_RUNTIME_SHARED_STORAGE_ROOT)}"])
-        cmd.extend(["-e", f"MN_RUNTIME_SHARED_STORAGE_ROOT={env.get('MN_RUNTIME_SHARED_STORAGE_ROOT', DEFAULT_RUNTIME_SHARED_STORAGE_ROOT)}"])
-        cmd.extend(["-e", f"ERL_AFLAGS={env['ERL_AFLAGS']}"])
-
-        core_publish_host = _docker_publish_host(env["MN_CORE_HOST"])
-        system_name = os.uname().sysname
-        if requested_docker_mode != "disabled" and node_alias:
-            cmd.extend(_docker_network_run_args(requested_docker_mode, network_name, node_alias))
-
-        if system_name == "Darwin":
-            cmd.extend(["-p", f"{core_publish_host}:{env['MN_GRPC_PORT']}:{env['MN_GRPC_PORT']}"])
-            cmd.extend([
-                "-p",
-                f"{env['MN_ARTIFACT_PUBLISH_HOST']}:{env['MN_ARTIFACT_PORT']}:{env['MN_ARTIFACT_PORT']}",
-            ])
-            if requested_docker_mode == "disabled":
-                epmd_publish_host = _docker_publish_host(env["MN_EPMD_HOST"])
-                dist_publish_host = _docker_publish_host(env["MN_DIST_HOST"])
-                cmd.extend(["-p", f"{epmd_publish_host}:{env['MN_EPMD_PORT']}:4369"])
-                cmd.extend(["-p", f"{dist_publish_host}:{env['MN_DIST_PORT']}:{env['MN_DIST_PORT']}"])
-            cmd.extend(["-e", f"MN_REDIS_URL={env.get('MN_REDIS_URL', 'redis://host.docker.internal:6379/0')}"])
-            cmd.extend(["-e", "MN_EXECUTOR_MAX_CONCURRENCY=50"])
-        else:
-            if requested_docker_mode == "disabled":
-                cmd.extend(["--network", "host"])
-            cmd.extend(["-e", "MN_EXECUTOR_MAX_CONCURRENCY=50"])
-            if env.get("MN_REDIS_URL"):
-                cmd.extend(["-e", f"MN_REDIS_URL={env['MN_REDIS_URL']}"])
-
-        if system_name == "Darwin":
-            cmd.extend(["-e", "MN_CORE_HOST=0.0.0.0"])
-        else:
-            cmd.extend(["-e", f"MN_CORE_HOST={env['MN_CORE_HOST']}"])
-            cmd.extend(["-e", f"MN_REDIS_HOST={env['MN_REDIS_HOST']}"])
-            cmd.extend(["-e", f"ERL_EPMD_ADDRESS={env['MN_EPMD_HOST']}"])
-
-        for env_name in [
-            "SLACK_BOT_TOKEN",
-            "SLACK_DEFAULT_CHANNEL",
-            "SLACK_API_BASE_URL",
-            "MN_SLACK_BOT_TOKEN",
-            "MN_SLACK_DEFAULT_CHANNEL",
-            "MN_SLACK_API_BASE_URL",
-        ]:
-            if os.getenv(env_name):
-                cmd.extend(["-e", env_name])
-
-        openshell_container_config_dir = Path(
-            os.getenv(
-                "OPENSHELL_CONTAINER_CONFIG_DIR",
-                str(Path.home() / ".config" / "openshell-mirror-neuron"),
-            )
+        cmd = _build_core_docker_run_command(
+            env,
+            requested_docker_mode=requested_docker_mode,
+            network_name=network_name,
+            node_alias=node_alias,
         )
-        openshell_config_dir = openshell_container_config_dir
-        if not (openshell_config_dir / "gateways" / "openshell").is_dir():
-            openshell_config_dir = Path.home() / ".config" / "openshell"
-        if (openshell_config_dir / "gateways" / "openshell").is_dir():
-            cmd.extend(["-v", f"{openshell_config_dir}:/root/.config/openshell:ro"])
-            cmd.extend(["-v", f"{openshell_config_dir}:/opt/mirror_neuron/.config/openshell:ro"])
-
-        host_home_dir = str(env.get("MN_HOST_HOME_DIR") or env.get("MN_HOST_MN_DIR") or DIR)
-        host_artifacts_dir = str(env.get("MN_HOST_ARTIFACTS_DIR") or Path(host_home_dir).expanduser() / "runs")
-        container_runs_root = str(env.get("MN_CONTAINER_RUNS_ROOT") or DEFAULT_CONTAINER_RUNS_ROOT)
-        host_blob_store_dir = str(env.get("MN_HOST_BLOB_STORE_DIR") or Path(host_home_dir).expanduser() / "blobs")
-        container_blob_store_root = str(env.get("MN_CONTAINER_BLOB_STORE_ROOT") or DEFAULT_CONTAINER_BLOB_STORE_ROOT)
-        host_shared_storage_root = str(env.get("MN_SHARED_STORAGE_ROOT") or env.get("MN_HOST_SHARED_STORAGE_ROOT") or Path(host_home_dir).expanduser() / "shared")
-        runtime_shared_storage_root = str(env.get("MN_RUNTIME_SHARED_STORAGE_ROOT") or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT)
-        cmd.extend(["-v", f"{host_home_dir}:/root/.mn"])
-        cmd.extend(["-v", f"{host_home_dir}:/opt/mirror_neuron/.mn"])
-        cmd.extend(["-v", f"{host_artifacts_dir}:{container_runs_root}"])
-        cmd.extend(["-v", f"{host_artifacts_dir}:/opt/mirror_neuron/.mn/runs"])
-        cmd.extend(["-v", f"{host_blob_store_dir}:{container_blob_store_root}"])
-        cmd.extend(["-v", f"{host_blob_store_dir}:/opt/mirror_neuron/.mn/blobs"])
-        cmd.extend(["-v", f"{host_shared_storage_root}:{runtime_shared_storage_root}"])
-        cmd.extend(["-v", f"{host_shared_storage_root}:/opt/mirror_neuron/.mn/shared"])
-        cmd.extend(["-e", f"MN_BLOB_STORE_ROOT={container_blob_store_root}"])
-
-        cmd.append("mirror-neuron-core:latest")
 
         try:
             subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)

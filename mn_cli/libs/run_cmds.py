@@ -22,6 +22,7 @@ from mn_cli.libs.ui import (
     print_confirmed,
     print_success_confirmation,
 )
+from mn_cli.libs.bundles import load_bundle_payloads
 from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress
 from mn_cli.libs.run_logs import (
     JobLogWriter,
@@ -958,65 +959,6 @@ def _is_safe_payload_relative_path(path: str) -> bool:
     )
 
 
-def _run_local_folder(
-    folder: str,
-    *,
-    run_id: Optional[str],
-    follow_seconds: Optional[float],
-    force: bool,
-    detached: bool = False,
-    web_ui: bool = False,
-    auto_schedule: bool = False,
-    schedule: Optional[str] = None,
-) -> None:
-    bundle_dir = Path(folder).expanduser()
-    manifest = _load_manifest_for_local_run(bundle_dir)
-    if manifest is not None and _is_python_source_manifest(manifest):
-        from mn_cli.libs.blueprint_cmds import run_local_blueprint_folder
-
-        run_local_blueprint_folder(
-            str(bundle_dir),
-            run_id=run_id,
-            follow_seconds=follow_seconds,
-            force=force,
-            detached=detached,
-            web_ui=web_ui,
-            auto_schedule=auto_schedule,
-            schedule=schedule,
-        )
-        return
-
-    env_overrides = {"MN_RUN_ID": run_id} if run_id else None
-    submission_metadata = {"blueprint_run_id": run_id} if run_id else None
-    run_bundle(
-        str(bundle_dir),
-        follow_seconds=follow_seconds,
-        env_overrides=env_overrides,
-        submission_metadata=submission_metadata,
-        force=force,
-        detached=detached,
-        web_ui=web_ui,
-        auto_schedule=auto_schedule,
-        schedule=schedule,
-    )
-
-
-def _load_manifest_for_local_run(bundle_dir: Path) -> Optional[dict[str, Any]]:
-    manifest_file = bundle_dir / "manifest.json"
-    if not manifest_file.exists():
-        return None
-    try:
-        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    return manifest if isinstance(manifest, dict) else None
-
-
-def _is_python_source_manifest(manifest: dict[str, Any]) -> bool:
-    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
-    return metadata.get("python_source_mode") is True or bool(metadata.get("python_workflow"))
-
-
 def _run_schedule_attrs(*, auto_schedule: bool, schedule: Optional[str]) -> Optional[dict[str, Any]]:
     if auto_schedule and schedule:
         console.print("[red]Error: pass either --auto-schedule or --schedule, not both.[/red]")
@@ -1069,6 +1011,115 @@ def _duration_ms_for_schedule(value: str) -> int:
     return int(float(raw) * 1000)
 
 
+def _load_bundle_manifest(bundle_path: str) -> tuple[Path, Path, dict[str, Any]]:
+    bundle_dir = Path(bundle_path)
+    if not bundle_dir.is_dir():
+        console.print(
+            f"[red]Error: '{bundle_path}' is not a directory. Expected a bundle folder.[/red]"
+        )
+        raise typer.Exit(1)
+
+    manifest_file = bundle_dir / "manifest.json"
+    if not manifest_file.exists():
+        console.print(
+            f"[red]Error: manifest.json not found in '{bundle_path}'[/red]"
+        )
+        raise typer.Exit(1)
+
+    with open(manifest_file, "r") as f:
+        manifest_dict = json.load(f)
+    return bundle_dir, manifest_file, manifest_dict
+
+
+def _configure_bundle_if_required(
+    bundle_dir: Path,
+    manifest_file: Path,
+    manifest_dict: dict[str, Any],
+) -> dict[str, Any]:
+    if manifest_dict.get("require_config") is not True:
+        return manifest_dict
+
+    config_script = bundle_dir / "config.py"
+    if not config_script.exists():
+        console.print(
+            "[red]Bundle requires configuration, but config.py was not found.[/red]"
+        )
+        raise typer.Exit(1)
+
+    console.print(
+        f"[yellow]Bundle requires configuration. Auto-running {config_script.name}...[/yellow]"
+    )
+    res = subprocess.run(
+        [sys.executable, config_script.name], cwd=bundle_dir
+    )
+    if res.returncode != 0:
+        console.print(
+            "[red]Configuration failed or cancelled. Aborting run.[/red]"
+        )
+        raise typer.Exit(1)
+
+    with open(manifest_file, "r") as f:
+        return json.load(f)
+
+
+def _stage_bundle_payloads(
+    bundle_dir: Path,
+    manifest_dict: dict[str, Any],
+    *,
+    web_ui: bool,
+) -> dict[str, bytes]:
+    payloads = load_bundle_payloads(bundle_dir)
+    if web_ui:
+        payloads.update(runtime_web_ui_support_payloads_for_manifest(manifest_dict))
+    stage_blueprint_support_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
+    return payloads
+
+
+def _create_schedule_for_bundle(
+    bundle_dir: Path,
+    manifest_dict: dict[str, Any],
+    payloads: dict[str, bytes],
+    schedule_attrs: dict[str, Any],
+) -> None:
+    stage_local_input_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
+    promote_large_payloads_to_blob_refs(manifest_dict, payloads)
+    manifest = json.dumps(manifest_dict)
+    result_json = client.create_schedule(
+        manifest,
+        payloads,
+        schedule=schedule_attrs,
+        source={"cli": "run", "bundle": bundle_dir.name},
+    )
+    result = json.loads(result_json)
+    print_success_confirmation(
+        console,
+        "Schedule create",
+        status=result.get("status"),
+        details=[
+            ("Schedule ID", result.get("schedule_id") or result.get("id")),
+            ("Kind", result.get("kind") or schedule_attrs.get("kind")),
+            ("Bundle", bundle_dir),
+        ],
+        next_steps="mn schedule list",
+    )
+
+
+def _cleanup_pre_launch_artifacts(
+    process: subprocess.Popen[Any] | None,
+    run_dir: Path | None,
+    *,
+    reason: str,
+) -> None:
+    _terminate_pre_launch_process(process, reason=reason)
+    if run_dir is not None:
+        cleanup_blueprint_host_hooks(
+            run_dir,
+            dry_run=False,
+            summary={"process_removed": [], "process_skipped": [], "errors": []},
+            reason=reason,
+        )
+
+
 def run_bundle(
     bundle_path: str,
     *,
@@ -1097,50 +1148,13 @@ def run_bundle(
         config_overrides = dict(config_overrides or {})
         submitted_config_overrides = config_overrides
         submission_metadata = dict(submission_metadata or {})
-        bundle_dir = Path(bundle_path)
+        bundle_dir, manifest_file, manifest_dict = _load_bundle_manifest(bundle_path)
         submitted_bundle_dir = bundle_dir
-        if not bundle_dir.is_dir():
-            console.print(
-                f"[red]Error: '{bundle_path}' is not a directory. Expected a bundle folder.[/red]"
-            )
-            raise typer.Exit(1)
-
-        manifest_file = bundle_dir / "manifest.json"
-        if not manifest_file.exists():
-            console.print(
-                f"[red]Error: manifest.json not found in '{bundle_path}'[/red]"
-            )
-            raise typer.Exit(1)
-
-        with open(manifest_file, "r") as f:
-            manifest_dict = json.load(f)
-
-        if manifest_dict.get("require_config") is True:
-            config_script = bundle_dir / "config.py"
-            if config_script.exists():
-                import subprocess
-                import sys
-
-                console.print(
-                    f"[yellow]Bundle requires configuration. Auto-running {config_script.name}...[/yellow]"
-                )
-                res = subprocess.run(
-                    [sys.executable, config_script.name], cwd=bundle_dir
-                )
-                if res.returncode != 0:
-                    console.print(
-                        "[red]Configuration failed or cancelled. Aborting run.[/red]"
-                    )
-                    raise typer.Exit(1)
-
-                # Reload manifest after configuration
-                with open(manifest_file, "r") as f:
-                    manifest_dict = json.load(f)
-            else:
-                console.print(
-                    "[red]Bundle requires configuration, but config.py was not found.[/red]"
-                )
-                raise typer.Exit(1)
+        manifest_dict = _configure_bundle_if_required(
+            bundle_dir,
+            manifest_file,
+            manifest_dict,
+        )
 
         _ensure_local_run_store_identity(
             bundle_dir,
@@ -1205,41 +1219,16 @@ def run_bundle(
             _mark_manifest_force(manifest_dict)
         _prepare_openshell_custom_images(bundle_dir, manifest_dict)
 
-        payloads = {}
-        payloads_dir = bundle_dir / "payloads"
-        if payloads_dir.is_dir():
-            for filepath in payloads_dir.rglob("*"):
-                if filepath.is_file():
-                    rel_path = filepath.relative_to(payloads_dir).as_posix()
-                    with open(filepath, "rb") as f:
-                        payloads[rel_path] = f.read()
-        if web_ui:
-            payloads.update(runtime_web_ui_support_payloads_for_manifest(manifest_dict))
-        stage_blueprint_support_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
+        payloads = _stage_bundle_payloads(bundle_dir, manifest_dict, web_ui=web_ui)
 
         schedule_attrs = _run_schedule_attrs(auto_schedule=auto_schedule, schedule=schedule)
         if schedule_attrs is not None:
-            stage_local_input_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
-            promote_large_payloads_to_blob_refs(manifest_dict, payloads)
-            manifest = json.dumps(manifest_dict)
             submitted_manifest = manifest_dict
-            result_json = client.create_schedule(
-                manifest,
+            _create_schedule_for_bundle(
+                bundle_dir,
+                manifest_dict,
                 payloads,
-                schedule=schedule_attrs,
-                source={"cli": "run", "bundle": bundle_dir.name},
-            )
-            result = json.loads(result_json)
-            print_success_confirmation(
-                console,
-                "Schedule create",
-                status=result.get("status"),
-                details=[
-                    ("Schedule ID", result.get("schedule_id") or result.get("id")),
-                    ("Kind", result.get("kind") or schedule_attrs.get("kind")),
-                    ("Bundle", bundle_dir),
-                ],
-                next_steps="mn schedule list",
+                schedule_attrs,
             )
             return
 
@@ -1346,14 +1335,11 @@ def run_bundle(
                     reason=f"job_{final_status}",
                 )
     except typer.Exit:
-        _terminate_pre_launch_process(pre_launch_process, reason="launch_failed")
-        if pre_launch_run_dir is not None:
-            cleanup_blueprint_host_hooks(
-                pre_launch_run_dir,
-                dry_run=False,
-                summary={"process_removed": [], "process_skipped": [], "errors": []},
-                reason="launch_failed",
-            )
+        _cleanup_pre_launch_artifacts(
+            pre_launch_process,
+            pre_launch_run_dir,
+            reason="launch_failed",
+        )
         raise
     except (KeyboardInterrupt, EOFError):
         if submitted_job_id:
@@ -1392,24 +1378,18 @@ def run_bundle(
                 )
             )
             return
-        _terminate_pre_launch_process(pre_launch_process, reason="launch_interrupted")
-        if pre_launch_run_dir is not None:
-            cleanup_blueprint_host_hooks(
-                pre_launch_run_dir,
-                dry_run=False,
-                summary={"process_removed": [], "process_skipped": [], "errors": []},
-                reason="launch_interrupted",
-            )
+        _cleanup_pre_launch_artifacts(
+            pre_launch_process,
+            pre_launch_run_dir,
+            reason="launch_interrupted",
+        )
         raise typer.Exit(130)
     except Exception as e:
-        _terminate_pre_launch_process(pre_launch_process, reason="launch_failed")
-        if pre_launch_run_dir is not None:
-            cleanup_blueprint_host_hooks(
-                pre_launch_run_dir,
-                dry_run=False,
-                summary={"process_removed": [], "process_skipped": [], "errors": []},
-                reason="launch_failed",
-            )
+        _cleanup_pre_launch_artifacts(
+            pre_launch_process,
+            pre_launch_run_dir,
+            reason="launch_failed",
+        )
         handle_cli_error(e, console, "run bundle")
         raise typer.Exit(1)
 

@@ -45,7 +45,7 @@ def list_services(
 @service_app.command(name="resolve")
 def resolve_service(
     name: str,
-    tag: Annotated[list[str], typer.Option("--tag", help="Require a service tag.")] = [],
+    tag: Annotated[Optional[list[str]], typer.Option("--tag", help="Require a service tag.")] = None,
     node: Annotated[Optional[str], typer.Option("--node", help="Filter by node name.")] = None,
     all_statuses: Annotated[bool, typer.Option("--all", help="Return warning and critical services too.")] = False,
 ):
@@ -53,7 +53,7 @@ def resolve_service(
     try:
         response = client.resolve_service(
             name,
-            tags=tag,
+            tags=tag or [],
             node=node,
             passing_only=not all_statuses,
         )
