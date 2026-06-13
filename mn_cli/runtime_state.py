@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -18,10 +19,10 @@ def read_env_file(path: Path) -> dict[str, str]:
         return values
 
     for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
+        parsed = _parse_env_assignment(line)
+        if parsed is None:
             continue
-        key, value = stripped.split("=", 1)
+        key, value = parsed
         values[key] = value
     return values
 
@@ -35,9 +36,9 @@ def write_env_file_values(path: Path, updates: dict[str, str]) -> None:
     lines: list[str] = []
     seen: set[str] = set()
     for line in original_lines:
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            key, _ = stripped.split("=", 1)
+        parsed = _parse_env_assignment(line)
+        if parsed is not None:
+            key, _ = parsed
             if key in updates:
                 lines.append(f"{key}={updates[key]}")
                 seen.add(key)
@@ -65,9 +66,9 @@ def remove_env_file_keys(path: Path, keys: set[str]) -> bool:
     lines: list[str] = []
     changed = False
     for line in original_lines:
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            key, _ = stripped.split("=", 1)
+        parsed = _parse_env_assignment(line)
+        if parsed is not None:
+            key, _ = parsed
             if key in keys:
                 changed = True
                 continue
@@ -80,6 +81,13 @@ def remove_env_file_keys(path: Path, keys: set[str]) -> bool:
     path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
     chmod_private(path)
     return True
+
+
+def _parse_env_assignment(line: str) -> tuple[str, str] | None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in stripped:
+        return None
+    return stripped.split("=", 1)
 
 
 def read_configured_token_file(env_name: str) -> str:
@@ -120,9 +128,12 @@ def chmod_private(path: Path) -> None:
 
 
 def read_json_file(path: Path) -> Any:
-    import json
-
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def read_json_object(path: Path) -> dict[str, Any]:
+    data = read_json_file(path)
+    return data if isinstance(data, dict) else {}

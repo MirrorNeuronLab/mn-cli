@@ -1,6 +1,9 @@
 # Environments
 .env
+.env.*
+!.env.example
 .venv
+.venv/
 env/
 venv/
 ENV/
@@ -30,5 +33,18 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyre/
+.hypothesis/
+.tox/
+.nox/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
+
+# Local editor and OS files
+.DS_Store
+.idea/
+.vscode/

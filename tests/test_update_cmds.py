@@ -82,6 +82,25 @@ def test_update_skips_release_flow_for_local_source_install(mocker, tmp_path):
     mock_get_updates.assert_not_called()
 
 
+def test_local_source_install_ignores_invalid_metadata_but_detects_source_tree():
+    update_cmds.INSTALL_METADATA_FILE.parent.mkdir(parents=True)
+    update_cmds.INSTALL_METADATA_FILE.write_text("{", encoding="utf-8")
+
+    assert update_cmds._local_source_install() is False
+
+    (update_cmds.DIR / "core-source").mkdir()
+    assert update_cmds._local_source_install() is True
+
+
+def test_check_due_treats_invalid_or_non_numeric_check_file_as_due():
+    update_cmds.CHECK_FILE.parent.mkdir(parents=True)
+    update_cmds.CHECK_FILE.write_text("{", encoding="utf-8")
+    assert update_cmds._check_due() is True
+
+    update_cmds.CHECK_FILE.write_text(json.dumps({"checked_at": "not-a-time"}), encoding="utf-8")
+    assert update_cmds._check_due() is True
+
+
 def test_update_yes_stops_updates_and_restarts(mocker, capsys):
     updates = [
         {
@@ -152,8 +171,25 @@ def test_python_package_updates_exclude_blueprint_support_skill(mocker):
     update_cmds._update_python_packages()
 
     command = mock_run.call_args.args[0]
+    assert command[-len(update_cmds.PYPI_PACKAGES):] == update_cmds.PYPI_PACKAGES
     assert "mirrorneuron-blueprint-support-skill[webui]" not in command
     assert "mirrorneuron-blueprint-support-skill" not in update_cmds.PYPI_PACKAGES
+
+
+def test_web_ui_update_uses_configured_package_name(mocker, tmp_path):
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+    mocker.patch("mn_cli.update_cmds.WEB_UI_DIRS", [tmp_path])
+    mock_run = mocker.patch("mn_cli.update_cmds.subprocess.run")
+
+    update_cmds._update_web_ui()
+
+    assert mock_run.call_args.args[0] == [
+        "npm",
+        "--prefix",
+        str(tmp_path),
+        "install",
+        f"{update_cmds.NPM_PACKAGE}@latest",
+    ]
 
 
 def test_safe_extract_tar_extracts_valid_release_member(tmp_path):
@@ -169,6 +205,43 @@ def test_safe_extract_tar_extracts_valid_release_member(tmp_path):
         update_cmds._safe_extract_tar(archive, target)
 
     assert (target / "mirror_neuron" / "bin" / "mirror_neuron").read_bytes() == contents
+
+
+def test_prepare_core_docker_context_copies_release_and_writes_dockerfile(tmp_path):
+    install_dir = tmp_path / "install"
+    core_bin = install_dir / "mirror_neuron" / "bin"
+    core_bin.mkdir(parents=True)
+    (core_bin / "mirror_neuron").write_text("run\n", encoding="utf-8")
+    context_dir = tmp_path / "context"
+    context_dir.mkdir()
+
+    update_cmds._prepare_core_docker_context(context_dir, install_dir)
+
+    copied_binary = context_dir / "mirror_neuron" / "bin" / "mirror_neuron"
+    assert copied_binary.read_text(encoding="utf-8") == "run\n"
+    dockerfile = (context_dir / "Dockerfile").read_text(encoding="utf-8")
+    assert "COPY mirror_neuron /opt/mirror_neuron" in dockerfile
+    assert 'CMD ["bin/mirror_neuron", "foreground"]' in dockerfile
+
+
+def test_clear_core_install_dir_preserves_runtime_state(tmp_path):
+    install_dir = tmp_path / "install"
+    (install_dir / "mirror_neuron").mkdir(parents=True)
+    (install_dir / "mirror_neuron" / "old").write_text("old\n", encoding="utf-8")
+    (install_dir / "stale.txt").write_text("stale\n", encoding="utf-8")
+    for preserved_name in update_cmds.CORE_INSTALL_PRESERVE_NAMES:
+        preserved = install_dir / preserved_name
+        if "." in preserved_name[1:]:
+            preserved.write_text("keep\n", encoding="utf-8")
+        else:
+            preserved.mkdir()
+
+    update_cmds._clear_core_install_dir(install_dir)
+
+    assert not (install_dir / "mirror_neuron").exists()
+    assert not (install_dir / "stale.txt").exists()
+    for preserved_name in update_cmds.CORE_INSTALL_PRESERVE_NAMES:
+        assert (install_dir / preserved_name).exists()
 
 
 @pytest.mark.parametrize(

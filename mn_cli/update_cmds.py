@@ -19,6 +19,7 @@ import typer
 from rich.console import Console
 
 from mn_cli.libs.ui import print_confirmed, print_success_confirmation
+from mn_cli.runtime_state import read_json_object
 from mn_cli.server_cmds import DIR, WEB_UI_DIRS, _start_server
 
 console = Console()
@@ -34,6 +35,48 @@ PYPI_PACKAGES = [
 ]
 NPM_PACKAGE = "mirrorneuron-web-ui"
 CORE_REPO = os.getenv("MN_CORE_REPO", "MirrorNeuronLab/MirrorNeuron")
+CORE_INSTALL_PRESERVE_NAMES = frozenset({".pids", ".logs", ".update-check.json"})
+CORE_DOCKERFILE = """FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+    bash \\
+    ca-certificates \\
+    curl \\
+    libgcc-s1 \\
+    libstdc++6 \\
+    libssl3 \\
+    ncurses-bin \\
+    openssl \\
+    procps \\
+    && rm -rf /var/lib/apt/lists/*
+
+ARG OPENSHELL_VERSION=v0.0.47
+RUN set -eux; \\
+    arch="$(dpkg --print-architecture)"; \\
+    case "$arch" in \\
+      arm64) openshell_target="aarch64-unknown-linux-musl"; openshell_sha="a6aa05593aa5bd6936bbb87fa3958510c1a6d82ef11b8ed8498e884de50847c0" ;; \\
+      amd64) openshell_target="x86_64-unknown-linux-musl"; openshell_sha="75ea23c19c23a931ac34b274f719c60dd20c6f788f2a4551862ec17572d84c17" ;; \\
+      *) echo "unsupported architecture for OpenShell: $arch" >&2; exit 1 ;; \\
+    esac; \\
+    curl -fLsS -o /tmp/openshell.tar.gz \\
+      "https://github.com/NVIDIA/OpenShell/releases/download/${OPENSHELL_VERSION}/openshell-${openshell_target}.tar.gz"; \\
+    echo "${openshell_sha}  /tmp/openshell.tar.gz" | sha256sum -c -; \\
+    tar -xzf /tmp/openshell.tar.gz -C /usr/local/bin openshell; \\
+    chmod 0755 /usr/local/bin/openshell; \\
+    rm -f /tmp/openshell.tar.gz; \\
+    openshell --version
+
+ARG CORE_RELEASE_TAG
+LABEL org.opencontainers.image.version="${CORE_RELEASE_TAG}"
+
+WORKDIR /opt/mirror_neuron
+COPY mirror_neuron /opt/mirror_neuron
+
+ENV HOME=/opt/mirror_neuron
+EXPOSE 55051 4369 54370
+
+CMD ["bin/mirror_neuron", "foreground"]
+"""
 
 
 def maybe_prompt_for_update(command_name: Optional[str] = None) -> None:
@@ -202,10 +245,10 @@ def _print_updates(updates: list[dict[str, str]]) -> None:
 
 
 def _check_due() -> bool:
+    data = read_json_object(CHECK_FILE)
     try:
-        data = json.loads(CHECK_FILE.read_text())
         checked_at = float(data.get("checked_at", 0))
-    except Exception:
+    except (TypeError, ValueError):
         return True
     return time.time() - checked_at >= CHECK_INTERVAL_SECONDS
 
@@ -215,11 +258,7 @@ def _record_check() -> None:
     CHECK_FILE.write_text(json.dumps({"checked_at": time.time()}))
 
 def _local_source_install() -> bool:
-    try:
-        data = json.loads(INSTALL_METADATA_FILE.read_text())
-    except Exception:
-        data = {}
-
+    data = read_json_object(INSTALL_METADATA_FILE)
     if data.get("install_type") == "local_source":
         return True
 
@@ -283,10 +322,7 @@ def _github_latest_release() -> dict:
 
 
 def _installed_core_tag() -> str | None:
-    try:
-        data = json.loads(INSTALL_METADATA_FILE.read_text())
-    except Exception:
-        return None
+    data = read_json_object(INSTALL_METADATA_FILE)
     return data.get("core_release_tag")
 
 
@@ -314,9 +350,7 @@ def _update_python_packages() -> None:
             "pip",
             "install",
             "--upgrade",
-            "mirrorneuron-python-sdk",
-            "mirrorneuron-cli",
-            "mirrorneuron-api",
+            *PYPI_PACKAGES,
         ],
         check=True,
     )
@@ -332,7 +366,7 @@ def _update_web_ui() -> None:
                     "--prefix",
                     str(web_ui_dir),
                     "install",
-                    "mirrorneuron-web-ui@latest",
+                    f"{NPM_PACKAGE}@latest",
                 ],
                 check=True,
             )
@@ -394,6 +428,23 @@ def _normalized_symlink_target(member_name: str, link_name: str) -> str:
     return posixpath.normpath(str(parent / link_name))
 
 
+def _prepare_core_docker_context(context_dir: Path, install_dir: Path) -> None:
+    shutil.copytree(install_dir / "mirror_neuron", context_dir / "mirror_neuron")
+    (context_dir / "Dockerfile").write_text(CORE_DOCKERFILE, encoding="utf-8")
+
+
+def _clear_core_install_dir(install_dir: Path) -> None:
+    if install_dir.exists():
+        for child in install_dir.iterdir():
+            if child.name in CORE_INSTALL_PRESERVE_NAMES:
+                continue
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+    install_dir.mkdir(parents=True, exist_ok=True)
+
+
 def _update_core() -> None:
     console.print("=> Updating MirrorNeuron core from GitHub Release...")
     release = _github_latest_release()
@@ -408,63 +459,12 @@ def _update_core() -> None:
         context_dir.mkdir()
 
         _download(asset_url, tarball)
-        if DIR.exists():
-            for child in DIR.iterdir():
-                if child.name in {".pids", ".logs", ".update-check.json"}:
-                    continue
-                if child.is_dir():
-                    shutil.rmtree(child)
-                else:
-                    child.unlink()
-        DIR.mkdir(parents=True, exist_ok=True)
+        _clear_core_install_dir(DIR)
 
         with tarfile.open(tarball) as archive:
             _safe_extract_tar(archive, DIR)
 
-        subprocess.run(["cp", "-R", str(DIR / "mirror_neuron"), str(context_dir)], check=True)
-        (context_dir / "Dockerfile").write_text(
-            """FROM debian:bookworm-slim
-
-RUN apt-get update && apt-get install -y --no-install-recommends \\
-    bash \\
-    ca-certificates \\
-    curl \\
-    libgcc-s1 \\
-    libstdc++6 \\
-    libssl3 \\
-    ncurses-bin \\
-    openssl \\
-    procps \\
-    && rm -rf /var/lib/apt/lists/*
-
-ARG OPENSHELL_VERSION=v0.0.47
-RUN set -eux; \\
-    arch="$(dpkg --print-architecture)"; \\
-    case "$arch" in \\
-      arm64) openshell_target="aarch64-unknown-linux-musl"; openshell_sha="a6aa05593aa5bd6936bbb87fa3958510c1a6d82ef11b8ed8498e884de50847c0" ;; \\
-      amd64) openshell_target="x86_64-unknown-linux-musl"; openshell_sha="75ea23c19c23a931ac34b274f719c60dd20c6f788f2a4551862ec17572d84c17" ;; \\
-      *) echo "unsupported architecture for OpenShell: $arch" >&2; exit 1 ;; \\
-    esac; \\
-    curl -fLsS -o /tmp/openshell.tar.gz \\
-      "https://github.com/NVIDIA/OpenShell/releases/download/${OPENSHELL_VERSION}/openshell-${openshell_target}.tar.gz"; \\
-    echo "${openshell_sha}  /tmp/openshell.tar.gz" | sha256sum -c -; \\
-    tar -xzf /tmp/openshell.tar.gz -C /usr/local/bin openshell; \\
-    chmod 0755 /usr/local/bin/openshell; \\
-    rm -f /tmp/openshell.tar.gz; \\
-    openshell --version
-
-ARG CORE_RELEASE_TAG
-LABEL org.opencontainers.image.version="${CORE_RELEASE_TAG}"
-
-WORKDIR /opt/mirror_neuron
-COPY mirror_neuron /opt/mirror_neuron
-
-ENV HOME=/opt/mirror_neuron
-EXPOSE 55051 4369 54370
-
-CMD ["bin/mirror_neuron", "foreground"]
-"""
-        )
+        _prepare_core_docker_context(context_dir, DIR)
         subprocess.run(
             [
                 "docker",
