@@ -20,7 +20,7 @@ Examples:
   mn runtime health --json
 
 Notes:
-  Runtime connection is read from MN_GRPC_TARGET, MN_CORE_GRPC_TARGET, or ~/.mn/runtime-endpoints.json.
+  Runtime connection is read from MN_GRPC_TARGET or ~/.mn/runtime-endpoints.json.
   Set NO_COLOR=1 or MN_CLI_OUTPUT=plain for plain terminal output.
 """
 JOB_HELP = """Submit, inspect, control, and recover workflow jobs.

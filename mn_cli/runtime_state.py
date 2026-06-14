@@ -7,7 +7,7 @@ from typing import Any
 
 
 def mn_home() -> Path:
-    configured_home = os.getenv("MN_HOME") or os.getenv("MIRROR_NEURON_HOME")
+    configured_home = os.getenv("MN_HOME")
     return Path(configured_home).expanduser() if configured_home else Path.home() / ".mn"
 
 

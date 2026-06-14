@@ -26,7 +26,6 @@ from mn_cli.libs.blueprint_observability import (
 )
 from mn_cli.libs.blueprint_repository import (
     BLUEPRINT_REPO_CONTEXT_KEY,
-    DEFAULT_BLUEPRINT_REPO,
     BlueprintIndexError,
     blueprint_cache_dir_for_repo as _blueprint_cache_dir_for_repo,
     blueprint_storage_dir_for_source as _blueprint_storage_dir_for_source,
@@ -39,6 +38,7 @@ from mn_cli.libs.blueprint_repository import (
     git_pull as _git_pull,
     git_revision as _git_revision,
     load_blueprint_index as _load_blueprint_index,
+    resolved_blueprint_source as _resolved_blueprint_source,
 )
 from mn_cli.libs.blueprint_resources import (
     cleanup_blueprint_resources as _cleanup_blueprint_resources,
@@ -82,8 +82,6 @@ _PATCH_COMPAT = (subprocess, _git_checkout, _git_fetch)
 def _inject_local_blueprint_support_path() -> None:
     repo_root = Path(
         os.getenv("MN_WORKSPACE_ROOT")
-        or os.getenv("MIRROR_NEURON_WORKSPACE")
-        or os.getenv("OTTERDESK_MIRROR_NEURON_WORKSPACE")
         or Path(__file__).resolve().parents[3]
     ).expanduser()
     candidate = repo_root / "mn-skills" / "blueprint_support_skill" / "src"
@@ -423,7 +421,7 @@ def _print_resource_summary(summary: dict[str, Any]) -> None:
 def blueprint_list(ctx: typer.Context):
     """List all available blueprints from the local storage shared with mn staff"""
     blueprint_repo = _context_blueprint_repo(ctx)
-    if blueprint_repo:
+    try:
         storage_dir = Path(
             _ensure_blueprint_source(
                 source=None,
@@ -433,12 +431,10 @@ def blueprint_list(ctx: typer.Context):
                 revision=None,
             )
         )
-        index_path = storage_dir / "index.json"
-    else:
-        index_path = Path(os.path.expanduser("~/.mn/blueprints/index.json"))
-        if not index_path.exists():
-            console.print("[yellow]Blueprint storage not initialized. Run 'mn blueprint run <name>' to initialize.[/yellow]")
-            return
+    except ValueError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
+    index_path = storage_dir / "index.json"
     try:
         blueprints = _load_blueprint_index(index_path)
         table = Table("ID", "Name", "Job Name", "Description")
@@ -453,8 +449,7 @@ def blueprint_list(ctx: typer.Context):
     except BlueprintIndexError as e:
         logger.exception("Error reading blueprint index")
         console.print(f"[red]Error reading blueprints index: {e}[/red]")
-        if blueprint_repo:
-            raise typer.Exit(1)
+        raise typer.Exit(1)
 
 def run_catalog_blueprint(
     blueprint_name: str,
@@ -474,13 +469,17 @@ def run_catalog_blueprint(
 ) -> None:
     """Run a catalog blueprint by name through the shared blueprint runner."""
     _reject_local_blueprint_path(blueprint_name)
-    storage_dir = _ensure_blueprint_source(
-        source=source,
-        blueprint_repo=blueprint_repo,
-        update=update,
-        offline=offline,
-        revision=revision,
-    )
+    try:
+        storage_dir = _ensure_blueprint_source(
+            source=source,
+            blueprint_repo=blueprint_repo,
+            update=update,
+            offline=offline,
+            revision=revision,
+        )
+    except ValueError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
     
     index_path = Path(storage_dir) / "index.json"
     try:
@@ -776,11 +775,17 @@ def blueprint_install(
         return
 
     blueprint_repo = _context_blueprint_repo(ctx)
-    repo_source = source or blueprint_repo or DEFAULT_BLUEPRINT_REPO
+    try:
+        repo_source, uses_default_repo = _resolved_blueprint_source(source=source, blueprint_repo=blueprint_repo)
+    except ValueError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
     storage_dir = (
         _blueprint_cache_dir_for_repo(repo_source)
         if source is None and blueprint_repo
         else _default_blueprint_storage_dir()
+        if uses_default_repo
+        else _blueprint_storage_dir_for_source(repo_source)
     )
     if storage_dir.exists() and not force:
         console.print(f"[yellow]Blueprint storage already exists at {storage_dir}. Use --force to replace it.[/yellow]")
@@ -812,20 +817,28 @@ def _install_catalog_blueprint_with_models(
     force: bool,
 ) -> None:
     blueprint_repo = _context_blueprint_repo(ctx)
-    storage_dir = Path(
-        _ensure_blueprint_source(
-            source=source,
-            blueprint_repo=blueprint_repo,
-            update=False,
-            offline=False,
-            revision=revision,
+    try:
+        storage_dir = Path(
+            _ensure_blueprint_source(
+                source=source,
+                blueprint_repo=blueprint_repo,
+                update=False,
+                offline=False,
+                revision=revision,
+            )
         )
-    )
+    except ValueError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
     entry = _blueprint_entry_from_storage(storage_dir, blueprint_id)
     bundle_root = _blueprint_bundle_root_from_entry(storage_dir, entry)
     manifest = _read_json_object(bundle_root / "manifest.json")
     config = _load_blueprint_config(bundle_root)
-    install_source = source or blueprint_repo or DEFAULT_BLUEPRINT_REPO
+    try:
+        install_source, _uses_default_repo = _resolved_blueprint_source(source=source, blueprint_repo=blueprint_repo)
+    except ValueError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
     model_summary = _install_blueprint_model_dependencies(
         blueprint_id=blueprint_id,
         blueprint_revision=revision or _git_revision(storage_dir),
@@ -1150,7 +1163,12 @@ def blueprint_update(
     elif blueprint_repo:
         storage_dir = _blueprint_storage_dir_for_source(blueprint_repo)
     else:
-        storage_dir = _default_blueprint_storage_dir()
+        try:
+            repo_source, uses_default_repo = _resolved_blueprint_source(source=None, blueprint_repo=None)
+        except ValueError as exc:
+            console.print(f"[red]Error: {exc}[/red]")
+            raise typer.Exit(1)
+        storage_dir = _default_blueprint_storage_dir() if uses_default_repo else _blueprint_storage_dir_for_source(repo_source)
     if not storage_dir.exists():
         console.print(f"[red]Blueprint storage not found at {storage_dir}. Run 'mn blueprint install' first.[/red]")
         raise typer.Exit(1)
@@ -1287,7 +1305,8 @@ def _resolve_blueprint_storage_for_cleanup(ctx: typer.Context, source: Optional[
     blueprint_repo = _context_blueprint_repo(ctx)
     if blueprint_repo:
         return _blueprint_storage_dir_for_source(blueprint_repo)
-    return _default_blueprint_storage_dir()
+    repo_source, uses_default_repo = _resolved_blueprint_source(source=None, blueprint_repo=None)
+    return _default_blueprint_storage_dir() if uses_default_repo else _blueprint_storage_dir_for_source(repo_source)
 
 
 def _blueprint_ids_from_storage(storage_dir: Path) -> set[str]:

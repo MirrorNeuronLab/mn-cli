@@ -60,6 +60,9 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_NODE_GPU_API_VERSION", raising=False)
     monkeypatch.delenv("MN_NODE_GPU_DRIVER_VERSION", raising=False)
     monkeypatch.delenv("MN_NODE_ALIAS", raising=False)
+    monkeypatch.delenv("MN_BLUEPRINT_SOURCE", raising=False)
+    monkeypatch.delenv("MN_BLUEPRINT_REPO", raising=False)
+    monkeypatch.delenv("MN_BLUEPRINT_LOCAL", raising=False)
     monkeypatch.delenv("MN_DOCKER_NETWORK_MODE", raising=False)
     monkeypatch.delenv("MN_DOCKER_NETWORK_NAME", raising=False)
     monkeypatch.delenv("MN_NETWORK_JOIN_TOKEN", raising=False)
@@ -1453,14 +1456,16 @@ def test_compose_native_settings_persists_runtime_blueprint_env(mocker, tmp_path
 
     env = server_cmds._ensure_compose_native_port_settings(
         {
-            "MN_BLUEPRINT_REPO": "/opt/mn/blueprints",
-            "MN_DEV_LOCAL_BLUEPRINT_REPO": "/work/mn/otterdesk-blueprints",
+            "MN_BLUEPRINT_SOURCE": "local",
+            "MN_BLUEPRINT_REPO": "https://github.com/MirrorNeuronLab/mn-blueprints.git",
+            "MN_BLUEPRINT_LOCAL": "/work/mn/otterdesk-blueprints",
             "MN_RUNS_ROOT": "/opt/mn/runs",
         }
     )
 
-    assert env["MN_BLUEPRINT_REPO"] == "/opt/mn/blueprints"
-    assert env["MN_DEV_LOCAL_BLUEPRINT_REPO"] == "/work/mn/otterdesk-blueprints"
+    assert env["MN_BLUEPRINT_SOURCE"] == "local"
+    assert env["MN_BLUEPRINT_REPO"] == "https://github.com/MirrorNeuronLab/mn-blueprints.git"
+    assert env["MN_BLUEPRINT_LOCAL"] == "/work/mn/otterdesk-blueprints"
     assert env["MN_RUNS_ROOT"] == "/opt/mn/runs"
     assert env["MN_HOST_ARTIFACTS_DIR"] == "/opt/mn/runs"
     assert env["MN_CONTAINER_RUNS_ROOT"] == "/root/.mn/runs"
@@ -1470,8 +1475,9 @@ def test_compose_native_settings_persists_runtime_blueprint_env(mocker, tmp_path
     assert env["MN_BLUEPRINT_WEB_UI_PORT_END"] == "61049"
     assert env["MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE"] == "prepublished"
     compose_env_text = compose_env.read_text()
-    assert "MN_BLUEPRINT_REPO=/opt/mn/blueprints" in compose_env_text
-    assert "MN_DEV_LOCAL_BLUEPRINT_REPO=/work/mn/otterdesk-blueprints" in compose_env_text
+    assert "MN_BLUEPRINT_SOURCE=local" in compose_env_text
+    assert "MN_BLUEPRINT_REPO=https://github.com/MirrorNeuronLab/mn-blueprints.git" in compose_env_text
+    assert "MN_BLUEPRINT_LOCAL=/work/mn/otterdesk-blueprints" in compose_env_text
     assert "MN_HOST_ARTIFACTS_DIR=/opt/mn/runs" in compose_env_text
     assert "MN_RUNS_ROOT=/opt/mn/runs" in compose_env_text
     assert "MN_CONTAINER_RUNS_ROOT=/root/.mn/runs" in compose_env_text
@@ -1488,8 +1494,9 @@ def test_compose_native_settings_defaults_runtime_blueprint_repo(mocker, tmp_pat
 
     env = server_cmds._ensure_compose_native_port_settings({})
 
-    assert env["MN_DEFAULT_BLUEPRINT_REPO"] == "https://github.com/MirrorNeuronLab/mn-blueprints.git"
+    assert env["MN_BLUEPRINT_SOURCE"] == "github"
     assert env["MN_BLUEPRINT_REPO"] == "https://github.com/MirrorNeuronLab/mn-blueprints.git"
+    assert env["MN_BLUEPRINT_LOCAL"] == ""
     assert env["MN_HOST_ARTIFACTS_DIR"].endswith(".mirror_neuron/runs")
     assert env["MN_RUNS_ROOT"].endswith(".mirror_neuron/runs")
     assert env["MN_CONTAINER_RUNS_ROOT"] == "/root/.mn/runs"
@@ -1497,8 +1504,9 @@ def test_compose_native_settings_defaults_runtime_blueprint_repo(mocker, tmp_pat
     assert env["MN_BLUEPRINT_WEB_UI_PORT_END"] == "61049"
     assert env["MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE"] == "prepublished"
     compose_env_text = compose_env.read_text()
-    assert "MN_DEFAULT_BLUEPRINT_REPO=https://github.com/MirrorNeuronLab/mn-blueprints.git" in compose_env_text
+    assert "MN_BLUEPRINT_SOURCE=github" in compose_env_text
     assert "MN_BLUEPRINT_REPO=https://github.com/MirrorNeuronLab/mn-blueprints.git" in compose_env_text
+    assert "MN_BLUEPRINT_LOCAL=" in compose_env_text
     assert "MN_HOST_ARTIFACTS_DIR=" in compose_env_text
     assert "MN_RUNS_ROOT=" in compose_env_text
     assert "MN_CONTAINER_RUNS_ROOT=/root/.mn/runs" in compose_env_text
@@ -2006,7 +2014,6 @@ def test_runtime_endpoint_snapshot_uses_advertised_grpc_host_for_cluster_binds()
             "MN_NETWORK_ADVERTISE_HOST": "192.168.4.173",
             "MN_GRPC_BIND_HOST": "0.0.0.0",
             "MN_GRPC_PORT": "55051",
-            "MN_CORE_GRPC_TARGET": "localhost:55051",
         },
         web_ui_available=False,
     )
@@ -2020,8 +2027,9 @@ def test_start_server_success(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', ())
     redis_password = _derive_network_secret("join-token", "redis")
     monkeypatch.setenv("MN_API_PORT", "54111")
-    monkeypatch.setenv("MN_BLUEPRINT_REPO", "/opt/mn/blueprints")
-    monkeypatch.setenv("MN_DEV_LOCAL_BLUEPRINT_REPO", "/work/mn/otterdesk-blueprints")
+    monkeypatch.setenv("MN_BLUEPRINT_SOURCE", "local")
+    monkeypatch.setenv("MN_BLUEPRINT_REPO", "https://github.com/MirrorNeuronLab/mn-blueprints.git")
+    monkeypatch.setenv("MN_BLUEPRINT_LOCAL", "/work/mn/otterdesk-blueprints")
     monkeypatch.setenv("MN_RUNS_ROOT", "/opt/mn/runs")
     
     def mock_run(cmd, **kwargs):
@@ -2065,8 +2073,9 @@ def test_start_server_success(mocker, tmp_path, monkeypatch):
     assert (tmp_path / "api-watchdog.pid").exists()
     assert (tmp_path / "api-watchdog.pid").read_text() == "9999"
     api_env = mock_popen.call_args.kwargs["env"]
-    assert api_env["MN_BLUEPRINT_REPO"] == "/opt/mn/blueprints"
-    assert api_env["MN_DEV_LOCAL_BLUEPRINT_REPO"] == "/work/mn/otterdesk-blueprints"
+    assert api_env["MN_BLUEPRINT_SOURCE"] == "local"
+    assert api_env["MN_BLUEPRINT_REPO"] == "https://github.com/MirrorNeuronLab/mn-blueprints.git"
+    assert api_env["MN_BLUEPRINT_LOCAL"] == "/work/mn/otterdesk-blueprints"
     assert api_env["MN_RUNS_ROOT"] == "/opt/mn/runs"
     assert api_env["MN_HOST_ARTIFACTS_DIR"] == "/opt/mn/runs"
     assert api_env["MN_CONTAINER_RUNS_ROOT"] == "/root/.mn/runs"
@@ -2485,7 +2494,6 @@ def test_print_service_endpoints_defaults_to_localhost(mocker, monkeypatch):
     mocker.patch('mn_cli.server_cmds.console', Console(file=output, force_terminal=False, width=120))
     for name in (
         "MN_GRPC_TARGET",
-        "MN_CORE_GRPC_TARGET",
         "MN_CORE_HOST",
         "MN_API_HOST",
         "MN_REDIS_HOST",

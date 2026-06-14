@@ -10,10 +10,11 @@ from typing import Any, Optional
 
 import typer
 
+from mn_sdk.blueprint_source import DEFAULT_BLUEPRINT_REPO, resolve_blueprint_source_config
+
 from mn_cli.shared import console, logger
 
 
-DEFAULT_BLUEPRINT_REPO = "https://github.com/MirrorNeuronLab/mn-blueprints.git"
 DEFAULT_BLUEPRINT_STORAGE = "~/.mn/blueprints"
 CUSTOM_BLUEPRINT_STORAGE_ROOT = "~/.mn/blueprint_repos"
 BLUEPRINT_REPO_CONTEXT_KEY = "blueprint_repo"
@@ -55,6 +56,19 @@ def blueprint_cache_dir_for_repo(repo: str) -> Path:
     return custom_blueprint_storage_dir(repo)
 
 
+def resolved_blueprint_source(
+    *,
+    source: Optional[str],
+    blueprint_repo: Optional[str],
+) -> tuple[str, bool]:
+    if source:
+        return source, False
+    if blueprint_repo:
+        return blueprint_repo, blueprint_repo == DEFAULT_BLUEPRINT_REPO
+    config = resolve_blueprint_source_config()
+    return config.active_location, config.source == "github" and config.repo == DEFAULT_BLUEPRINT_REPO
+
+
 def load_blueprint_index(index_path: Path, *, require_paths: bool = False) -> list[dict[str, Any]]:
     if not index_path.exists():
         raise BlueprintIndexError(f"index.json not found in blueprint storage at {index_path.parent}")
@@ -88,17 +102,11 @@ def ensure_blueprint_source(
     offline: bool,
     revision: Optional[str],
 ) -> str:
-    if source:
-        repo_source = source
-        storage_dir = blueprint_storage_dir_for_source(source)
-        uses_default_repo = False
-    else:
-        repo_source = blueprint_repo or DEFAULT_BLUEPRINT_REPO
-        uses_default_repo = repo_source == DEFAULT_BLUEPRINT_REPO and blueprint_repo is None
-        storage_dir = blueprint_storage_dir_for_source(
-            repo_source,
-            use_default_cache=uses_default_repo,
-        )
+    repo_source, uses_default_repo = resolved_blueprint_source(source=source, blueprint_repo=blueprint_repo)
+    storage_dir = blueprint_storage_dir_for_source(
+        repo_source,
+        use_default_cache=uses_default_repo,
+    )
 
     if not storage_dir.exists():
         if offline:

@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 import typer
 from rich.console import Console
 from rich.table import Table
+from mn_sdk.blueprint_source import DEFAULT_BLUEPRINT_REPO
 from mn_cli.config import CliConfig
 from mn_cli.libs.ui import print_confirmed, print_success_confirmation
 from mn_cli.logging_config import configure_logging
@@ -134,7 +135,6 @@ DEFAULT_WEB_UI_PORT = "55173"
 DEFAULT_WEB_UI_RESTART_DELAY_SECONDS = "2"
 DEFAULT_OPENSHELL_GATEWAY_PORT = "58080"
 DEFAULT_ARTIFACT_PORT = "55660"
-DEFAULT_BLUEPRINT_REPO = "https://github.com/MirrorNeuronLab/mn-blueprints.git"
 DEFAULT_BLUEPRINT_WEB_UI_BIND_HOST = "0.0.0.0"
 DEFAULT_BLUEPRINT_WEB_UI_PUBLIC_HOST = "localhost"
 DEFAULT_BLUEPRINT_WEB_UI_PORT_START = "61000"
@@ -1875,7 +1875,11 @@ def _cluster_endpoint_host(env: dict[str, str], host: str) -> str:
     return _native_endpoint_host(normalized)
 
 def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
-    default_repo = str(env.get("MN_DEFAULT_BLUEPRINT_REPO") or os.getenv("MN_DEFAULT_BLUEPRINT_REPO") or DEFAULT_BLUEPRINT_REPO).strip()
+    blueprint_source = str(env.get("MN_BLUEPRINT_SOURCE") or os.getenv("MN_BLUEPRINT_SOURCE") or "github").strip().lower()
+    if blueprint_source not in {"github", "local"}:
+        blueprint_source = "github"
+    blueprint_repo = str(env.get("MN_BLUEPRINT_REPO") or os.getenv("MN_BLUEPRINT_REPO") or DEFAULT_BLUEPRINT_REPO).strip()
+    blueprint_local = str(env.get("MN_BLUEPRINT_LOCAL") or os.getenv("MN_BLUEPRINT_LOCAL") or "").strip()
     host_home_dir = str(
         env.get("MN_HOST_HOME_DIR")
         or env.get("MN_HOST_MN_DIR")
@@ -1923,8 +1927,9 @@ def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
         or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT
     ).strip()
     updates: dict[str, str] = {
-        "MN_DEFAULT_BLUEPRINT_REPO": default_repo,
-        "MN_BLUEPRINT_REPO": str(env.get("MN_BLUEPRINT_REPO") or "").strip() or default_repo,
+        "MN_BLUEPRINT_SOURCE": blueprint_source,
+        "MN_BLUEPRINT_REPO": blueprint_repo,
+        "MN_BLUEPRINT_LOCAL": blueprint_local,
         "MN_HOST_ARTIFACTS_DIR": host_artifacts_dir,
         "MN_HOST_BLOB_STORE_DIR": host_blob_store_dir,
         "MN_SHARED_STORAGE_ROOT": host_shared_storage_root,
@@ -1953,10 +1958,6 @@ def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
             env.get("MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE") or DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE
         ).strip(),
     }
-    for key in ("MN_DEV_LOCAL_BLUEPRINT_REPO", "DEV_LOCAL_BLUEPRINT_REPO"):
-        value = str(env.get(key) or "").strip()
-        if value:
-            updates[key] = value
     return updates
 
 def _ensure_host_artifacts_dir(env: dict[str, str]) -> None:
@@ -1982,12 +1983,7 @@ def _runtime_endpoint_snapshot(env: dict[str, str], web_ui_available: bool = Fal
     grpc_port = _valid_port_text(str(env.get("MN_GRPC_PORT") or DEFAULT_GRPC_PORT), DEFAULT_GRPC_PORT)
     grpc_target = str(env.get("MN_GRPC_TARGET") or "").strip()
     if not grpc_target:
-        core_grpc_target = str(env.get("MN_CORE_GRPC_TARGET") or "").strip()
-        target_host, target_port = _host_port_from_target(core_grpc_target, grpc_host, grpc_port)
-        if core_grpc_target and _cluster_endpoint_host(env, target_host) == target_host:
-            grpc_target = core_grpc_target
-        else:
-            grpc_target = f"{grpc_host}:{target_port}"
+        grpc_target = f"{grpc_host}:{grpc_port}"
     snapshot: dict[str, object] = {
         "version": 1,
         "updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -2064,14 +2060,14 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
         f"https://127.0.0.1:{LEGACY_OPENSHELL_GATEWAY_PORT}"
     ):
         openshell_endpoint = f"http://{_native_endpoint_host(openshell_bind_host)}:{openshell_port}"
-    core_grpc_target = adjusted.get("MN_CORE_GRPC_TARGET") or f"localhost:{grpc_port}"
-    if not os.getenv("MN_CORE_GRPC_TARGET", "").strip() and core_grpc_target == f"localhost:{LEGACY_GRPC_PORT}":
-        core_grpc_target = f"localhost:{grpc_port}"
+    grpc_target = adjusted.get("MN_GRPC_TARGET") or f"localhost:{grpc_port}"
+    if not os.getenv("MN_GRPC_TARGET", "").strip() and grpc_target == f"localhost:{LEGACY_GRPC_PORT}":
+        grpc_target = f"localhost:{grpc_port}"
 
     updates = {
         "MN_GRPC_BIND_HOST": adjusted.get("MN_GRPC_BIND_HOST") or "127.0.0.1",
         "MN_GRPC_PORT": grpc_port,
-        "MN_CORE_GRPC_TARGET": core_grpc_target,
+        "MN_GRPC_TARGET": grpc_target,
         "MN_API_HOST": adjusted.get("MN_API_HOST") or DEFAULT_HOST,
         "MN_API_PORT": api_port,
         "MN_DIST_PORT": dist_port,
@@ -2814,10 +2810,7 @@ def _native_service_endpoints(ip: Optional[str] = None, web_ui_available: bool =
     else:
         core_host = runtime_env.get("MN_CORE_HOST") or _core_host()
         grpc_host, grpc_port = _host_port_from_target(
-            runtime_env.get(
-                "MN_GRPC_TARGET",
-                runtime_env.get("MN_CORE_GRPC_TARGET", f"{core_host}:{DEFAULT_GRPC_PORT}"),
-            ),
+            runtime_env.get("MN_GRPC_TARGET", f"{core_host}:{DEFAULT_GRPC_PORT}"),
             core_host,
             runtime_env.get("MN_GRPC_PORT", DEFAULT_GRPC_PORT),
         )
@@ -3295,7 +3288,7 @@ def _start_server(
     env.setdefault("MN_BLUEPRINT_WEB_UI_PORT_START", DEFAULT_BLUEPRINT_WEB_UI_PORT_START)
     env.setdefault("MN_BLUEPRINT_WEB_UI_PORT_END", DEFAULT_BLUEPRINT_WEB_UI_PORT_END)
     env.setdefault("MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE", DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE)
-    env.setdefault("MN_CORE_GRPC_TARGET", f"localhost:{env.get('MN_GRPC_PORT', DEFAULT_GRPC_PORT)}")
+    env.setdefault("MN_GRPC_TARGET", f"localhost:{env.get('MN_GRPC_PORT', DEFAULT_GRPC_PORT)}")
     env["MN_NETWORK_JOIN_TOKEN"] = network_token
     env["MN_NETWORK_ADVERTISE_HOST"] = advertised_host
     env["MN_NETWORK_REDIS_HOST"] = seed_redis_host

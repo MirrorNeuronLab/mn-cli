@@ -114,7 +114,7 @@ def _host_blob_store_root(env: dict[str, str]) -> Path:
 
 
 def _runtime_env_file_values() -> dict[str, str]:
-    home = Path(os.getenv("MN_HOME") or os.getenv("MIRROR_NEURON_HOME") or Path.home() / ".mn")
+    home = Path(os.getenv("MN_HOME") or Path.home() / ".mn")
     env_file = home.expanduser() / "docker-compose.env"
     return {key.strip(): value.strip() for key, value in read_env_file(env_file).items()}
 

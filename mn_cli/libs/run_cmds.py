@@ -2414,8 +2414,6 @@ def _launch_blueprint_web_ui_command(
 def _inject_local_blueprint_support_pythonpath(env: dict[str, str]) -> None:
     repo_root = Path(
         os.getenv("MN_WORKSPACE_ROOT")
-        or os.getenv("MIRROR_NEURON_WORKSPACE")
-        or os.getenv("OTTERDESK_MIRROR_NEURON_WORKSPACE")
         or Path(__file__).resolve().parents[3]
     ).expanduser()
     support_src = repo_root / "mn-skills" / "blueprint_support_skill" / "src"

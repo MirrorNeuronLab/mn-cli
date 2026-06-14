@@ -22,8 +22,6 @@ def _inject_local_blueprint_support_path() -> None:
 def workspace_root() -> Path:
     for name in (
         "MN_WORKSPACE_ROOT",
-        "MIRROR_NEURON_WORKSPACE",
-        "OTTERDESK_MIRROR_NEURON_WORKSPACE",
     ):
         value = os.getenv(name)
         if value:
@@ -38,14 +36,11 @@ def runtime_path_environment() -> dict[str, str]:
     ).expanduser()
     membrane_sdk_path = Path(
         os.getenv("MN_MEMBRANE_SDK_PATH")
-        or os.getenv("MN_CONTEXT_PYTHON_SDK_PATH")
         or membrane_project_path / "mn-context-engine-python-sdk" / "src"
     ).expanduser()
     skills_root = Path(os.getenv("MN_SKILLS_ROOT") or root / "mn-skills").expanduser()
     env = {
         "MN_WORKSPACE_ROOT": str(root),
-        "MIRROR_NEURON_WORKSPACE": str(root),
-        "OTTERDESK_MIRROR_NEURON_WORKSPACE": str(root),
         "MN_MEMBRANE_PROJECT_PATH": str(membrane_project_path),
         "MN_MEMBRANE_SDK_PATH": str(membrane_sdk_path),
         "MN_SKILLS_ROOT": str(skills_root),

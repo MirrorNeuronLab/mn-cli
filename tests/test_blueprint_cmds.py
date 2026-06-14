@@ -15,6 +15,20 @@ requires_blueprint_support = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(autouse=True)
+def isolated_blueprint_source_env(monkeypatch, tmp_path):
+    monkeypatch.delenv("MN_BLUEPRINT_SOURCE", raising=False)
+    monkeypatch.delenv("MN_BLUEPRINT_REPO", raising=False)
+    monkeypatch.delenv("MN_BLUEPRINT_LOCAL", raising=False)
+    monkeypatch.setenv("MN_HOME", str(tmp_path / ".mn"))
+
+
+def _use_local_blueprint_source(monkeypatch, catalog_dir: Path) -> None:
+    monkeypatch.setenv("MN_BLUEPRINT_SOURCE", "local")
+    monkeypatch.setenv("MN_BLUEPRINT_LOCAL", str(catalog_dir))
+    monkeypatch.delenv("MN_BLUEPRINT_REPO", raising=False)
+
+
 def _write_python_resource(path: Path, blueprint_id: str) -> None:
     (path / "bin").mkdir(parents=True, exist_ok=True)
     (path / "bin" / "python").write_text("")
@@ -223,29 +237,27 @@ def test_blueprint_model_dependency_cluster_provided_skips_local_install(
     assert load_model_ownership()["models"] == {}
 
 
-def test_blueprint_list_not_initialized(mocker, tmp_path):
-    mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', return_value=str(tmp_path / "index.json"))
+def test_blueprint_list_not_initialized(monkeypatch, tmp_path):
+    _use_local_blueprint_source(monkeypatch, tmp_path)
     result = runner.invoke(app, ["blueprint", "list"])
-    assert result.exit_code == 0
-    assert "Blueprint storage not initialized" in result.stdout
+    assert result.exit_code == 1
+    assert "MN_BLUEPRINT_LOCAL must point to a blueprint catalog with index.json" in result.stdout
 
-def test_blueprint_list_success(mocker, tmp_path):
+def test_blueprint_list_success(monkeypatch, tmp_path):
     index_file = tmp_path / "index.json"
     index_file.write_text(json.dumps([{"id": "bp-1", "name": "Blueprint 1"}]))
-    
-    mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', return_value=str(index_file))
+    _use_local_blueprint_source(monkeypatch, tmp_path)
     result = runner.invoke(app, ["blueprint", "list"])
     assert result.exit_code == 0
     assert "bp-1" in result.stdout
     assert "Blueprint 1" in result.stdout
 
-def test_blueprint_list_error(mocker, tmp_path):
+def test_blueprint_list_error(monkeypatch, tmp_path):
     index_file = tmp_path / "index.json"
     index_file.write_text("invalid json")
-    
-    mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', return_value=str(index_file))
+    _use_local_blueprint_source(monkeypatch, tmp_path)
     result = runner.invoke(app, ["blueprint", "list"])
-    assert result.exit_code == 0
+    assert result.exit_code == 1
     assert "Error reading blueprints index" in result.stdout
 
 
@@ -343,6 +355,21 @@ def test_blueprint_list_blueprint_repo_reads_custom_index(mocker, tmp_path):
     assert result.exit_code == 0
     assert "private-bp" in result.stdout
     assert "Private Blueprint" in result.stdout
+
+
+def test_blueprint_list_uses_standard_env_local_source(tmp_path, monkeypatch):
+    repo = tmp_path / "blueprints"
+    repo.mkdir()
+    (repo / "index.json").write_text(json.dumps([{"id": "env-bp", "name": "Env Blueprint"}]))
+    monkeypatch.setenv("MN_BLUEPRINT_SOURCE", "local")
+    monkeypatch.setenv("MN_BLUEPRINT_LOCAL", str(repo))
+    monkeypatch.delenv("MN_BLUEPRINT_REPO", raising=False)
+
+    result = runner.invoke(app, ["blueprint", "list"])
+
+    assert result.exit_code == 0
+    assert "env-bp" in result.stdout
+    assert "Env Blueprint" in result.stdout
 
 
 def test_blueprint_run_init_success(mocker, tmp_path):
@@ -634,6 +661,25 @@ def test_blueprint_run_blueprint_repo_uses_repo_specific_cache(mocker, tmp_path)
     assert "Initializing blueprint storage for" in result.stdout
     mock_run_bundle.assert_called_once()
     assert mock_run_bundle.call_args.args[0] == str(storage_dir / "bp-1-dir")
+
+
+def test_blueprint_run_uses_standard_env_local_source(mocker, tmp_path, monkeypatch):
+    repo = tmp_path / "blueprints"
+    repo.mkdir()
+    (repo / "index.json").write_text(json.dumps([{"id": "bp-1", "path": "bp-1-dir"}]))
+    bp_dir = repo / "bp-1-dir"
+    bp_dir.mkdir()
+    (bp_dir / "manifest.json").write_text("{}")
+    monkeypatch.setenv("MN_BLUEPRINT_SOURCE", "local")
+    monkeypatch.setenv("MN_BLUEPRINT_LOCAL", str(repo))
+    monkeypatch.delenv("MN_BLUEPRINT_REPO", raising=False)
+    mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
+
+    result = runner.invoke(app, ["blueprint", "run", "bp-1"])
+
+    assert result.exit_code == 0
+    mock_run_bundle.assert_called_once()
+    assert mock_run_bundle.call_args.args[0] == str(bp_dir)
 
 
 def test_blueprint_run_blueprint_repo_missing_index_errors(mocker, tmp_path):

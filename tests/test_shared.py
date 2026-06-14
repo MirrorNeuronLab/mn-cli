@@ -25,10 +25,8 @@ def restore_shared_module():
 def _fresh_shared(monkeypatch, tmp_path, client_class):
     sys.modules.pop("mn_cli.shared", None)
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("MN_CORE_GRPC_TARGET", raising=False)
     monkeypatch.delenv("MN_CORE_HOST", raising=False)
     monkeypatch.delenv("MN_HOME", raising=False)
-    monkeypatch.delenv("MIRROR_NEURON_HOME", raising=False)
     monkeypatch.delenv("MN_GRPC_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("MN_GRPC_AUTH_TOKEN_FILE", raising=False)
     monkeypatch.delenv("MN_GRPC_TARGET", raising=False)
@@ -108,7 +106,7 @@ def test_shared_client_reads_runtime_env_target_and_tokens(monkeypatch, tmp_path
         "\n".join(
             [
                 "MN_GRPC_PORT=55111",
-                "MN_CORE_GRPC_TARGET=127.0.0.1:55111",
+                "MN_GRPC_TARGET=127.0.0.1:55111",
                 "MN_GRPC_AUTH_TOKEN=auth-from-state",
                 "MN_GRPC_ADMIN_TOKEN=admin-from-state",
             ]
@@ -147,7 +145,7 @@ def test_shared_client_prefers_runtime_endpoint_over_stale_core_target(monkeypat
     state_dir = tmp_path / ".mn"
     state_dir.mkdir()
     (state_dir / "docker-compose.env").write_text(
-        "MN_CORE_GRPC_TARGET=localhost:55051\n"
+        "MN_GRPC_TARGET=localhost:55051\n"
         "MN_GRPC_AUTH_TOKEN=auth-from-state\n",
         encoding="utf-8",
     )
