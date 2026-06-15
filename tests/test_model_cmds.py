@@ -96,6 +96,34 @@ def test_model_install_pulls_and_runs_compatible_model(mocker):
     assert ["docker", "model", "run", "--detach", "--context-size", "8192", "ai/gemma4:E2B"] in calls
 
 
+def test_model_install_streams_pull_progress(mocker):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[:4] == ["docker", "model", "status", "--json"]:
+            return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
+        if command[:4] == ["docker", "model", "run", "--help"]:
+            return _completed(command, stdout="Options:\n")
+        return _completed(command)
+
+    mocker.patch("subprocess.run", side_effect=fake_run)
+    mocker.patch(
+        "mn_sdk.model_runtime.detect_host_hardware",
+        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+    )
+
+    result = runner.invoke(app, ["model", "install", "gemma4:e2b"])
+
+    assert result.exit_code == 0
+    pull_kwargs = [
+        kwargs
+        for command, kwargs in calls
+        if command == ["docker", "model", "pull", "ai/gemma4:E2B"]
+    ][0]
+    assert pull_kwargs["capture_output"] is False
+
+
 def test_model_install_persists_manual_ownership_record(mocker):
     def fake_run(command, **kwargs):
         if command[:4] == ["docker", "model", "status", "--json"]:

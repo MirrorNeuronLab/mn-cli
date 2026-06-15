@@ -157,7 +157,7 @@ def update_model(
                 raise typer.Exit(1)
             _ensure_docker_model_cli()
             _ensure_runner(compatibility.backend, compatibility.accelerator)
-            _docker(["model", "pull", target], timeout=900)
+            _docker(["model", "pull", target], timeout=900, stream=True)
             _docker(["model", "run", "--detach", target], timeout=300)
             print_success_confirmation(
                 console,
@@ -248,7 +248,7 @@ def install_model_entry(
     target = docker_model_name(entry)
     if _docker_model_cli_available():
         _ensure_runner(compatibility.backend, compatibility.accelerator)
-        _docker(["model", "pull", target], timeout=900)
+        _docker(["model", "pull", target], timeout=900, stream=True)
         run_command = ["model", "run", "--detach"]
         resolved_context = context_size or entry.get("context_size")
         if resolved_context and _docker_model_run_supports_context_size():
@@ -505,10 +505,17 @@ def _docker(
     *,
     check: bool = True,
     timeout: float = 120,
+    stream: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     command = ["docker", *args]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+        result = subprocess.run(
+            command,
+            capture_output=not stream,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
     except FileNotFoundError as exc:
         result = subprocess.CompletedProcess(command, 127, "", str(exc))
     if check and result.returncode != 0:
