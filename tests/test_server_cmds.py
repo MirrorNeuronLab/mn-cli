@@ -482,6 +482,45 @@ def test_runtime_base_env_keeps_explicit_runtime_models(mocker):
 
     assert env["MN_NODE_RUNTIME_MODELS"] == "custom:model"
 
+def test_record_runtime_model_install_writes_compose_model_override():
+    server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
+    server_cmds.RUNTIME_COMPOSE_ENV.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_NODE_RUNTIME_MODELS=\n",
+        encoding="utf-8",
+    )
+
+    path = server_cmds.record_runtime_model_install(
+        {
+            "id": "gemma4:e2b",
+            "model": "ai/gemma4:E2B",
+            "aliases": ["default", "gemma4"],
+        }
+    )
+
+    env = server_cmds._read_env_file(server_cmds.RUNTIME_COMPOSE_ENV)
+    assert env["MN_NODE_RUNTIME_MODELS"] == "gemma4:e2b"
+    assert env["MN_LLM_MODEL_RUNNER_MODEL"] == "ai/gemma4:E2B"
+    assert path == server_cmds._runtime_compose_models_override_file()
+    override = path.read_text(encoding="utf-8")
+    assert "mirror-neuron-core:" in override
+    assert "endpoint_var: MN_DOCKER_MODEL_RUNNER_API_BASE" in override
+    assert "model_var: MN_DOCKER_MODEL_RUNNER_MODEL" in override
+    assert 'model: "${MN_LLM_MODEL_RUNNER_MODEL:-ai/gemma4:E2B}"' in override
+
+def test_runtime_compose_cmd_includes_models_override():
+    server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
+    server_cmds.RUNTIME_COMPOSE_ENV.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n", encoding="utf-8")
+    server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
+    models_override = server_cmds._runtime_compose_models_override_file()
+    models_override.write_text("services: {}\n", encoding="utf-8")
+
+    command = runtime_compose_cmd("up", "-d")
+
+    assert "-f" in command
+    assert str(models_override) in command
+    assert command[-2:] == ["up", "-d"]
+
 def test_resolve_network_token_generates_and_reuses_persistent_token(tmp_path, mocker):
     token_dir = tmp_path / "state"
     mocker.patch('mn_cli.server_cmds.DIR', token_dir)

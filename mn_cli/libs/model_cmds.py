@@ -118,6 +118,7 @@ def install_model(
         compatibility = result["compatibility"]
         target = result["docker_model"]
         record_manual_model_install(entry, backend=compatibility["backend"])
+        _record_runtime_model_install(entry)
         print_success_confirmation(
             console,
             "Model install",
@@ -159,6 +160,7 @@ def update_model(
             _ensure_runner(compatibility.backend, compatibility.accelerator)
             _docker(["model", "pull", target], timeout=900, stream=True)
             _docker(["model", "run", "--detach", target], timeout=300)
+            _record_runtime_model_install(entry)
             print_success_confirmation(
                 console,
                 "Model update",
@@ -284,6 +286,15 @@ def installed_model_names() -> set[str]:
 
 def model_installed(model: str) -> bool:
     return _model_installed(model)
+
+
+def _record_runtime_model_install(entry: dict[str, Any]) -> None:
+    try:
+        from mn_cli.server_cmds import record_runtime_model_install
+
+        record_runtime_model_install(entry)
+    except Exception as exc:
+        console.print(f"[yellow]Warning: could not update runtime model Compose wiring: {exc}[/yellow]")
 
 
 def _entry_payload(

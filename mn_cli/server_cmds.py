@@ -76,6 +76,8 @@ VENV_DIR = Path.home() / ".local" / "share" / "mn_venv"
 RUNTIME_COMPOSE_FILE = DIR / "docker-compose.yml"
 RUNTIME_COMPOSE_ENV = DIR / "docker-compose.env"
 RUNTIME_ENDPOINTS_FILE = DIR / "runtime-endpoints.json"
+RUNTIME_MODELS_OVERRIDE_FILE = "docker-compose.models.yml"
+DEFAULT_LLM_MODEL_RUNNER_MODEL = "ai/gemma4:E2B"
 def _unique_paths(paths: list[Path]) -> tuple[Path, ...]:
     unique: list[Path] = []
     seen: set[str] = set()
@@ -1846,6 +1848,74 @@ def _installed_catalog_runtime_models() -> list[str]:
         logger.debug("Could not infer installed runtime models", exc_info=True)
         return []
 
+def record_runtime_model_install(entry: dict[str, Any]) -> Optional[Path]:
+    docker_model = str(entry.get("model") or entry.get("docker_model") or "").strip()
+    if not docker_model:
+        return None
+
+    model_id = str(entry.get("id") or docker_model).strip()
+    existing = _read_env_file(RUNTIME_COMPOSE_ENV) if RUNTIME_COMPOSE_ENV.exists() else {}
+    refs = _split_env_list(existing.get("MN_NODE_RUNTIME_MODELS"))
+    if model_id and model_id.lower() not in {ref.lower() for ref in refs}:
+        refs.append(model_id)
+
+    updates = {"MN_NODE_RUNTIME_MODELS": ",".join(refs)}
+    if _is_default_llm_model(entry) or not str(existing.get("MN_LLM_MODEL_RUNNER_MODEL") or "").strip():
+        updates["MN_LLM_MODEL_RUNNER_MODEL"] = docker_model
+
+    RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
+    _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
+    return _write_runtime_compose_models_override(docker_model)
+
+def _runtime_compose_models_override_file() -> Path:
+    return RUNTIME_COMPOSE_FILE.parent / RUNTIME_MODELS_OVERRIDE_FILE
+
+def _write_runtime_compose_models_override(default_model: str = DEFAULT_LLM_MODEL_RUNNER_MODEL) -> Path:
+    path = _runtime_compose_models_override_file()
+    model = _yaml_double_quote_value(default_model or DEFAULT_LLM_MODEL_RUNNER_MODEL)
+    override = f"""services:
+  mirror-neuron-core:
+    models:
+      llm-runtime-model:
+        endpoint_var: MN_DOCKER_MODEL_RUNNER_API_BASE
+        model_var: MN_DOCKER_MODEL_RUNNER_MODEL
+
+models:
+  llm-runtime-model:
+    model: "${{MN_LLM_MODEL_RUNNER_MODEL:-{model}}}"
+"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(override, encoding="utf-8")
+    return path
+
+def _is_default_llm_model(entry: dict[str, Any]) -> bool:
+    values = [
+        entry.get("id"),
+        entry.get("model"),
+        entry.get("docker_model"),
+        entry.get("api_model"),
+        *list(entry.get("aliases") or []),
+    ]
+    normalized = {str(value or "").strip().lower() for value in values if str(value or "").strip()}
+    return bool(
+        normalized
+        & {
+            "default",
+            "gemma4",
+            "gemma4:e2b",
+            "gemma4-e2b",
+            "gemme4",
+            "gemme4:e2b",
+            DEFAULT_LLM_MODEL_RUNNER_MODEL.lower(),
+        }
+    )
+
+def _split_env_list(value: object) -> list[str]:
+    return [part.strip() for part in str(value or "").split(",") if part.strip()]
+
+def _yaml_double_quote_value(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
 def _env_or_default(env: dict[str, str], key: str, default: str, legacy_default: Optional[str] = None) -> str:
     value = str(env.get(key) or "").strip()
     if os.getenv(key, "").strip():
@@ -2384,6 +2454,9 @@ def runtime_compose_cmd(*args: str) -> list[str]:
     cluster_override = _runtime_compose_cluster_override_file()
     if cluster_override.exists():
         cmd.extend(["-f", str(cluster_override)])
+    models_override = _runtime_compose_models_override_file()
+    if models_override.exists():
+        cmd.extend(["-f", str(models_override)])
     cmd.extend(args)
     return cmd
 
