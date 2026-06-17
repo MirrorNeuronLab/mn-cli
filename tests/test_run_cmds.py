@@ -853,6 +853,177 @@ def test_run_injects_blueprint_config_scenario_and_run_id(mocker, tmp_path):
     assert env["MN_LLM_API_BASE"] == "http://old"
 
 
+def test_run_injects_user_home_output_environment(mocker, tmp_path, monkeypatch):
+    home_dir = tmp_path / "home"
+    output_home = tmp_path / "outputs-home"
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("MN_OUTPUT_HOME", str(output_home))
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_completed"})
+    ])
+
+    bundle_dir = tmp_path / "run_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "environment": {}
+                },
+            }
+        ]
+    }))
+
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+
+    assert result.exit_code == 0
+    manifest = json.loads(mock_submit.call_args.args[0])
+    env = manifest["nodes"][0]["config"]["environment"]
+    assert env["MN_OUTPUT_HOME"] == str(output_home)
+    assert env["MN_USER_HOME"] == str(home_dir)
+    assert env["OTTERDESK_USER_HOME"] == str(home_dir)
+
+
+def test_run_materializes_vc_final_artifact_outputs(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    output_dir = tmp_path / "vc-output"
+    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({
+            "type": "job_completed",
+            "result": {
+                "final_artifact": {
+                    "type": "vc_early_heuristic_analysis_reports",
+                    "executive_summary": "VC Assistant prepared score-only reports.",
+                    "company_reports": [
+                        {
+                            "company_name": "Aurora AI",
+                            "company_slug": "aurora-ai",
+                            "composite_score": 71.5,
+                            "confidence": 0.74,
+                            "method_count": 1,
+                            "methods": {
+                                "berkus_method": {
+                                    "status": "scored",
+                                    "score": 70,
+                                    "evidence_refs": ["pitch_summary.txt"],
+                                    "evidence_summary": {
+                                        "status_reason": "Berkus method score is grounded in prototype and team evidence."
+                                    },
+                                    "missing_evidence": []
+                                }
+                            }
+                        }
+                    ],
+                    "action_ledger": {"budget": 100, "used": 24, "remaining": 76}
+                }
+            }
+        })
+    ])
+
+    bundle_dir = tmp_path / "run_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "environment": {}
+                },
+            }
+        ]
+    }))
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(json.dumps({
+        "identity": {"blueprint_id": "vc_assistant", "name": "VC Assistant"},
+        "inputs": {"payload": {"output_folder": str(output_dir)}},
+        "outputs": {"folder_path": str(output_dir)}
+    }))
+
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+
+    assert result.exit_code == 0
+    assert "Materialized blueprint outputs" in result.stdout
+    assert json.loads((output_dir / "company_index.json").read_text())["companies"][0]["company_slug"] == "aurora-ai"
+    assert "Berkus method score" in (output_dir / "aurora-ai" / "analysis.md").read_text()
+    assert json.loads((output_dir / "final_artifact.json").read_text())["action_ledger"]["budget"] == 100
+
+
+def test_run_materializes_deeply_nested_hostlocal_vc_artifact(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    output_dir = tmp_path / "vc-output"
+    final_artifact = {
+        "type": "vc_early_heuristic_analysis_reports",
+        "executive_summary": "VC Assistant prepared nested HostLocal reports.",
+        "company_reports": [
+            {
+                "company_name": "Boreal Robotics",
+                "company_slug": "boreal-robotics",
+                "composite_score": 63,
+                "confidence": 0.62,
+                "method_count": 1,
+                "methods": {
+                    "cost_to_duplicate_method": {
+                        "status": "scored",
+                        "score": 65,
+                        "evidence_refs": ["company_brief.txt"],
+                        "evidence_summary": {
+                            "status_reason": "Replacement cost reflects prototype hardware and sensor dataset evidence."
+                        },
+                        "missing_evidence": [],
+                    }
+                },
+            }
+        ],
+        "action_ledger": {"budget": 100, "used": 21, "remaining": 79},
+    }
+    nested_result = {"sandbox": {"logs": json.dumps({"final_artifact": final_artifact})}}
+    for index in range(25):
+        nested_result = {
+            "agent_id": f"agent-{index}",
+            "input": nested_result,
+            "sandbox": {"logs": json.dumps({"status": "completed"})},
+        }
+
+    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({
+            "type": "job_completed",
+            "result": {"last_message": nested_result},
+        })
+    ])
+
+    bundle_dir = tmp_path / "run_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "environment": {}
+                },
+            }
+        ]
+    }))
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(json.dumps({
+        "identity": {"blueprint_id": "vc_assistant", "name": "VC Assistant"},
+        "outputs": {"folder_path": str(output_dir)}
+    }))
+
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+
+    assert result.exit_code == 0
+    assert "Materialized blueprint outputs" in result.stdout
+    assert json.loads((output_dir / "company_index.json").read_text())["companies"][0]["company_slug"] == "boreal-robotics"
+    assert "Replacement cost reflects prototype" in (output_dir / "boreal-robotics" / "analysis.md").read_text()
+    assert json.loads((output_dir / "final_artifact.json").read_text())["action_ledger"]["used"] == 21
+
+
 def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-auto")

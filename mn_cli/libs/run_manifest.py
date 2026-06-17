@@ -8,6 +8,7 @@ from typing import Any, Optional
 from mn_sdk import DOCKER_MODEL_RUNNER_CONTAINER_API_BASE, resolve_llm_environment
 
 DEFAULT_RUNS_ROOT = "~/.mn/runs"
+USER_HOME_ENV_KEYS = ("MN_OUTPUT_HOME", "MN_USER_HOME", "OTTERDESK_USER_HOME")
 
 
 def _inject_local_blueprint_support_path() -> None:
@@ -56,6 +57,21 @@ def runtime_path_environment() -> dict[str, str]:
         resolved_python_paths.append(existing_pythonpath)
     if resolved_python_paths:
         env["PYTHONPATH"] = os.pathsep.join(resolved_python_paths)
+    env.update(user_home_environment())
+    return env
+
+
+def user_home_environment() -> dict[str, str]:
+    home = str(Path.home())
+    env: dict[str, str] = {}
+    for key in USER_HOME_ENV_KEYS:
+        value = os.getenv(key)
+        if value:
+            env[key] = str(Path(value).expanduser())
+    if home:
+        env.setdefault("MN_USER_HOME", home)
+        env.setdefault("MN_OUTPUT_HOME", home)
+        env.setdefault("OTTERDESK_USER_HOME", home)
     return env
 
 
