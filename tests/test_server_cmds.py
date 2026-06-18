@@ -295,6 +295,31 @@ def test_runtime_blueprint_env_updates_prefers_host_home_dir(tmp_path):
     assert updates["MN_HOST_ARTIFACTS_DIR"] == str(host_home / "runs")
     assert updates["MN_RUNS_ROOT"] == str(host_home / "runs")
 
+def test_runtime_blueprint_env_updates_prefers_host_shared_storage_root(tmp_path):
+    host_shared = tmp_path / "host-shared"
+
+    updates = _runtime_blueprint_env_updates(
+        {
+            "MN_HOST_SHARED_STORAGE_ROOT": str(host_shared),
+            "MN_SHARED_STORAGE_ROOT": "/root/.mn/shared",
+            "MN_RUNTIME_SHARED_STORAGE_ROOT": "/root/.mn/shared",
+        }
+    )
+
+    assert updates["MN_HOST_SHARED_STORAGE_ROOT"] == str(host_shared)
+    assert updates["MN_SHARED_STORAGE_ROOT"] == str(host_shared)
+    assert updates["MN_RUNTIME_SHARED_STORAGE_ROOT"] == "/root/.mn/shared"
+
+def test_deploy_compose_passes_host_shared_storage_to_core():
+    compose_path = Path(__file__).resolve().parents[2] / "mn-deploy" / "docker-compose.yml"
+    if not compose_path.exists():
+        pytest.skip("mn-deploy checkout is not available")
+
+    compose_text = compose_path.read_text(encoding="utf-8")
+
+    assert "MN_HOST_SHARED_STORAGE_ROOT:" in compose_text
+    assert "${MN_HOST_SHARED_STORAGE_ROOT:-${MN_SHARED_STORAGE_ROOT:-" in compose_text
+
 def test_runtime_blueprint_env_updates_ignores_legacy_host_mn_dir(tmp_path):
     legacy_home = tmp_path / "legacy-mn-home"
 
@@ -2154,6 +2179,9 @@ def test_start_server_darwin(mocker, tmp_path):
 def test_start_server_passes_slack_env_to_docker(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
     mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', ())
+    host_shared = tmp_path / "host-shared"
+    monkeypatch.setenv("MN_HOST_SHARED_STORAGE_ROOT", str(host_shared))
+    monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", "/root/.mn/shared")
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
     monkeypatch.setenv("SLACK_DEFAULT_CHANNEL", "#claw")
 
@@ -2197,11 +2225,17 @@ def test_start_server_passes_slack_env_to_docker(mocker, tmp_path, monkeypatch):
     assert admin_env != "MN_GRPC_ADMIN_TOKEN="
     assert admin_file_env == "MN_GRPC_ADMIN_TOKEN_FILE=/root/.mn/grpc_admin.token"
     assert runs_root_env == "MN_RUNS_ROOT=/root/.mn/runs"
+    assert ["-e", f"MN_HOST_SHARED_STORAGE_ROOT={host_shared}"] == docker_run[
+        docker_run.index(f"MN_HOST_SHARED_STORAGE_ROOT={host_shared}") - 1 : docker_run.index(f"MN_HOST_SHARED_STORAGE_ROOT={host_shared}") + 1
+    ]
     assert ["-v", f"{server_cmds.DIR}:/root/.mn"] == docker_run[
         docker_run.index(f"{server_cmds.DIR}:/root/.mn") - 1 : docker_run.index(f"{server_cmds.DIR}:/root/.mn") + 1
     ]
     assert ["-v", f"{server_cmds.DIR / 'runs'}:/root/.mn/runs"] == docker_run[
         docker_run.index(f"{server_cmds.DIR / 'runs'}:/root/.mn/runs") - 1 : docker_run.index(f"{server_cmds.DIR / 'runs'}:/root/.mn/runs") + 1
+    ]
+    assert ["-v", f"{host_shared}:/root/.mn/shared"] == docker_run[
+        docker_run.index(f"{host_shared}:/root/.mn/shared") - 1 : docker_run.index(f"{host_shared}:/root/.mn/shared") + 1
     ]
     assert ["-e", "SLACK_BOT_TOKEN"] == docker_run[
         docker_run.index("SLACK_BOT_TOKEN") - 1 : docker_run.index("SLACK_BOT_TOKEN") + 1

@@ -1962,10 +1962,10 @@ def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
     if not host_blob_store_dir:
         host_blob_store_dir = str(Path(host_home_dir).expanduser() / "blobs")
     host_shared_storage_root = str(
-        env.get("MN_SHARED_STORAGE_ROOT")
-        or env.get("MN_HOST_SHARED_STORAGE_ROOT")
-        or os.getenv("MN_SHARED_STORAGE_ROOT")
+        env.get("MN_HOST_SHARED_STORAGE_ROOT")
+        or env.get("MN_SHARED_STORAGE_ROOT")
         or os.getenv("MN_HOST_SHARED_STORAGE_ROOT")
+        or os.getenv("MN_SHARED_STORAGE_ROOT")
         or ""
     ).strip()
     if not host_shared_storage_root:
@@ -3148,7 +3148,7 @@ def _build_core_docker_run_command(
     container_runs_root = str(env.get("MN_CONTAINER_RUNS_ROOT") or DEFAULT_CONTAINER_RUNS_ROOT)
     host_blob_store_dir = str(env.get("MN_HOST_BLOB_STORE_DIR") or Path(host_home_dir).expanduser() / "blobs")
     container_blob_store_root = str(env.get("MN_CONTAINER_BLOB_STORE_ROOT") or DEFAULT_CONTAINER_BLOB_STORE_ROOT)
-    host_shared_storage_root = str(env.get("MN_SHARED_STORAGE_ROOT") or env.get("MN_HOST_SHARED_STORAGE_ROOT") or Path(host_home_dir).expanduser() / "shared")
+    host_shared_storage_root = str(env.get("MN_HOST_SHARED_STORAGE_ROOT") or env.get("MN_SHARED_STORAGE_ROOT") or Path(host_home_dir).expanduser() / "shared")
     runtime_shared_storage_root = str(env.get("MN_RUNTIME_SHARED_STORAGE_ROOT") or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT)
     cmd.extend(["-e", f"MN_HOST_SHARED_STORAGE_ROOT={host_shared_storage_root}"])
     cmd.extend(["-v", f"{host_home_dir}:/root/.mn"])
