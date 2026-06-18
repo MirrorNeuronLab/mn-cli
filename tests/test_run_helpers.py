@@ -380,6 +380,19 @@ def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_h
             {"name": "docker-model-runner", "model": "gemma4:e2b"},
             {"name": "vector-db"},
         ],
+        "runtime": {
+            "models": {
+                "primary": {"model": "default"},
+                "service_model": {"provider": "nvidia_service", "model": "remote/model"},
+            },
+            "bindings": {
+                "startup_folder_watcher": {
+                    "workers": [
+                        {"id": "startup_folder_watcher", "model": "default"},
+                    ]
+                }
+            },
+        },
         "nodes": [
             {
                 "node_id": "startup_folder_watcher",
@@ -399,6 +412,8 @@ def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_h
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
 
     assert prepared["required_services"] == [{"name": "vector-db"}]
+    assert prepared["runtime"]["models"] == {"service_model": {"provider": "nvidia_service", "model": "remote/model"}}
+    assert "model" not in prepared["runtime"]["bindings"]["startup_folder_watcher"]["workers"][0]
     assert prepared["nodes"][0]["requires_services"] == [{"name": "redis"}]
     env = prepared["nodes"][0]["config"]["environment"]
     assert env["MN_LLM_PROVIDER"] == "docker_model_runner"

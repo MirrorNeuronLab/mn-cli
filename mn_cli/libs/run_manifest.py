@@ -816,6 +816,8 @@ def strip_docker_model_runner_placement_requirements(manifest: dict[str, Any]) -
         return
 
     _strip_service_list_field(manifest, "required_services")
+    _strip_docker_model_runner_runtime_models(manifest)
+    _strip_runtime_binding_worker_models(manifest)
     for node in _service_requirement_nodes(manifest):
         _strip_service_list_field(node, "requires_services")
         _strip_service_list_field(node, "services")
@@ -868,6 +870,40 @@ def _strip_service_list_field(target: dict[str, Any], field: str) -> None:
         return
     if _is_docker_model_runner_service(value):
         target.pop(field, None)
+
+
+def _strip_docker_model_runner_runtime_models(manifest: dict[str, Any]) -> None:
+    runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else None
+    models = runtime.get("models") if isinstance(runtime, dict) and isinstance(runtime.get("models"), dict) else None
+    if not isinstance(models, dict):
+        return
+    retained = {
+        name: model
+        for name, model in models.items()
+        if not isinstance(model, dict)
+        or str(model.get("provider") or model.get("mode") or "").strip().lower()
+        not in {"", "docker_model_runner", "docker-model-runner", "dmr"}
+    }
+    if retained:
+        runtime["models"] = retained
+    else:
+        runtime.pop("models", None)
+
+
+def _strip_runtime_binding_worker_models(manifest: dict[str, Any]) -> None:
+    runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else None
+    bindings = runtime.get("bindings") if isinstance(runtime, dict) and isinstance(runtime.get("bindings"), dict) else None
+    if not isinstance(bindings, dict):
+        return
+    for binding in bindings.values():
+        if not isinstance(binding, dict):
+            continue
+        workers = binding.get("workers")
+        if not isinstance(workers, list):
+            continue
+        for worker in workers:
+            if isinstance(worker, dict):
+                worker.pop("model", None)
 
 
 def _is_docker_model_runner_service(service: Any) -> bool:
