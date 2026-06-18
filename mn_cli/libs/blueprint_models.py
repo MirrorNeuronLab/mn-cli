@@ -16,6 +16,7 @@ class BlueprintModelOps:
     record_model_owner: Callable[..., Any]
     model_installed: Callable[[str], bool]
     install_model_entry: Callable[..., dict[str, Any]]
+    notify_model_install_start: Callable[[dict[str, Any]], Any] | None = None
 
 
 def blueprint_model_dependency_summary(
@@ -86,6 +87,8 @@ def blueprint_model_dependency_summary(
                 )
                 results.append({**base_result, "status": "already_installed"})
                 continue
+            if ops.notify_model_install_start is not None:
+                ops.notify_model_install_start(base_result)
             install_result = ops.install_model_entry(
                 entry,
                 backend=backend,

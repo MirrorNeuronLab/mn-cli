@@ -1060,12 +1060,33 @@ def _validate_manifest_models_or_exit(
             if value is not None
         }
     )
-    result = run_model_validation(bundle_dir, manifest, config=config, env=env)
+    validation_manifest = _manifest_for_model_validation(manifest, config)
+    result = run_model_validation(bundle_dir, validation_manifest, config=config, env=env)
     if result.get("ok"):
         return result
 
     _emit_validation_report(result, output_format, title="Model validation failed")
     raise typer.Exit(1)
+
+
+def _manifest_for_model_validation(manifest: dict[str, Any], config: dict[str, Any] | None) -> dict[str, Any]:
+    llm = config.get("llm") if isinstance(config, dict) and isinstance(config.get("llm"), dict) else {}
+    mode = str(llm.get("mode") or "").strip().lower()
+    provider = str(llm.get("provider") or "").strip().lower()
+    if mode != "fake" and provider != "fake":
+        return manifest
+    filtered = json.loads(json.dumps(manifest))
+    runtime = filtered.get("runtime") if isinstance(filtered.get("runtime"), dict) else None
+    models = runtime.get("models") if isinstance(runtime, dict) and isinstance(runtime.get("models"), dict) else None
+    if isinstance(models, dict):
+        runtime["models"] = {
+            name: entry
+            for name, entry in models.items()
+            if not isinstance(entry, dict)
+            or str(entry.get("provider") or entry.get("mode") or "").strip().lower()
+            not in {"", "docker_model_runner", "docker-model-runner", "dmr"}
+        }
+    return filtered
 
 
 def _mark_manifest_force(manifest: dict[str, Any]) -> None:

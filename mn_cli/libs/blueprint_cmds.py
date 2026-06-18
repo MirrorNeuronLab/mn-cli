@@ -1,4 +1,5 @@
 import os
+import copy
 import json
 import shutil
 import subprocess
@@ -171,6 +172,7 @@ def _run_resolved_blueprint(
     web_ui: bool = False,
     auto_schedule: bool = False,
     schedule: Optional[str] = None,
+    fake_llm: bool = False,
 ) -> None:
     shared_run_id = run_id or _make_blueprint_run_id(blueprint_id)
     _print_blueprint_run_phase(1, 4, "Prepare blueprint bundle")
@@ -178,12 +180,17 @@ def _run_resolved_blueprint(
     _print_blueprint_run_phase(2, 4, "Review launch config")
     config_overrides = _collect_init_config_review_overrides(bundle_path, manifest)
     config = _load_blueprint_config(bundle_path, config_overrides=config_overrides)
+    if fake_llm:
+        fake_overrides = _fake_llm_config_overrides(config or {})
+        config_overrides = _deep_merge(config_overrides or {}, fake_overrides)
+        config = _deep_merge(config or {}, fake_overrides)
+    model_manifest = _fake_llm_manifest_for_model_dependencies(manifest) if fake_llm else manifest
     _print_blueprint_run_phase(3, 4, "Ensure runtime models")
     model_summary = _install_blueprint_model_dependencies(
         blueprint_id=blueprint_id,
         blueprint_revision=revision,
         bundle_root=bundle_path,
-        manifest=manifest,
+        manifest=model_manifest,
         config=config or {},
         install_source=source_label,
         force=force,
@@ -208,12 +215,14 @@ def _run_resolved_blueprint(
             "MN_RUN_ID": shared_run_id,
             "MN_BLUEPRINT_ID": blueprint_id,
             "MN_BLUEPRINT_REVISION": revision or "",
+            **_fake_llm_env_overrides(fake_llm),
         },
         submission_metadata={
             "blueprint_id": blueprint_id,
             "blueprint_run_id": shared_run_id,
             "blueprint_revision": revision,
             "blueprint_source": source_label,
+            "fake_llm": fake_llm,
         },
         config_overrides=config_overrides,
         force=force,
@@ -221,6 +230,75 @@ def _run_resolved_blueprint(
         web_ui=web_ui,
         auto_schedule=auto_schedule,
         schedule=schedule,
+    )
+
+
+def _fake_llm_env_overrides(enabled: bool) -> dict[str, str]:
+    if not enabled:
+        return {}
+    return {
+        "MN_BLUEPRINT_LLM_MODE": "fake",
+        "MN_LLM_PROVIDER": "fake",
+        "MN_LLM_MODEL": "fake-deterministic-blueprint-agent",
+    }
+
+
+def _fake_llm_config_overrides(config: dict[str, Any]) -> dict[str, Any]:
+    llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
+    configs = llm.get("configs") if isinstance(llm.get("configs"), dict) else {}
+    config_names = list(configs) or [str(llm.get("default_config") or "primary")]
+    fake_config = {
+        "provider": "fake",
+        "mode": "fake",
+        "model": "fake-deterministic-blueprint-agent",
+        "runtime_model": None,
+        "mock_mode": "fake",
+        "api_base": "",
+    }
+    return {
+        "llm": {
+            "enabled": True,
+            "mode": "fake",
+            "provider": "fake",
+            "model": "fake-deterministic-blueprint-agent",
+            "runtime_model": None,
+            "mock_mode": "fake",
+            "require_live": False,
+            "quick_test_uses_fake": True,
+            "configs": {name: dict(fake_config) for name in config_names},
+        }
+    }
+
+
+def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    merged = copy.deepcopy(base)
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def _fake_llm_manifest_for_model_dependencies(manifest: dict[str, Any]) -> dict[str, Any]:
+    runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
+    models = runtime.get("models") if isinstance(runtime.get("models"), dict) else {}
+    model_names = list(models) or ["primary"]
+    fake_model = {
+        "provider": "fake",
+        "mode": "fake",
+        "model": "fake-deterministic-blueprint-agent",
+        "runtime_model": "fake-deterministic-blueprint-agent",
+    }
+    return _deep_merge(
+        manifest,
+        {
+            "runtime": {"models": {name: dict(fake_model) for name in model_names}},
+            "llm": {
+                "require_live": False,
+                "model": "fake-deterministic-blueprint-agent",
+            },
+        },
     )
 
 
@@ -466,6 +544,7 @@ def run_catalog_blueprint(
     web_ui: bool = False,
     auto_schedule: bool = False,
     schedule: Optional[str] = None,
+    fake_llm: bool = False,
 ) -> None:
     """Run a catalog blueprint by name through the shared blueprint runner."""
     _reject_local_blueprint_path(blueprint_name)
@@ -518,6 +597,7 @@ def run_catalog_blueprint(
         web_ui=web_ui,
         auto_schedule=auto_schedule,
         schedule=schedule,
+        fake_llm=fake_llm,
     )
 
 
@@ -531,6 +611,7 @@ def run_local_blueprint_folder(
     web_ui: bool = False,
     auto_schedule: bool = False,
     schedule: Optional[str] = None,
+    fake_llm: bool = False,
 ) -> None:
     """Run a local Python source blueprint folder through the shared blueprint runner."""
     blueprint_dir = Path(folder).expanduser()
@@ -561,6 +642,7 @@ def run_local_blueprint_folder(
         web_ui=web_ui,
         auto_schedule=auto_schedule,
         schedule=schedule,
+        fake_llm=fake_llm,
     )
 
 
@@ -574,6 +656,7 @@ def _run_local_folder(
     web_ui: bool = False,
     auto_schedule: bool = False,
     schedule: Optional[str] = None,
+    fake_llm: bool = False,
 ) -> None:
     bundle_dir = Path(folder).expanduser()
     manifest = _load_manifest_for_local_route(bundle_dir)
@@ -587,16 +670,21 @@ def _run_local_folder(
             web_ui=web_ui,
             auto_schedule=auto_schedule,
             schedule=schedule,
+            fake_llm=fake_llm,
         )
         return
 
-    env_overrides = {"MN_RUN_ID": run_id} if run_id else None
-    submission_metadata = {"blueprint_run_id": run_id} if run_id else None
+    env_overrides = {"MN_RUN_ID": run_id} if run_id else {}
+    env_overrides.update(_fake_llm_env_overrides(fake_llm))
+    submission_metadata = {"blueprint_run_id": run_id} if run_id else {}
+    if fake_llm:
+        submission_metadata["fake_llm"] = True
     _run_bundle(
         str(bundle_dir),
         follow_seconds=follow_seconds,
-        env_overrides=env_overrides,
-        submission_metadata=submission_metadata,
+        env_overrides=env_overrides or None,
+        submission_metadata=submission_metadata or None,
+        config_overrides=_fake_llm_config_overrides(_load_blueprint_config(bundle_dir) or {}) if fake_llm else None,
         force=force,
         detached=detached,
         web_ui=web_ui,
@@ -704,6 +792,13 @@ def blueprint_run(
             help="Create a schedule instead of running now. Accepts JSON, a delay like 30m, or an ISO run_at timestamp.",
         ),
     ] = None,
+    fake_llm: Annotated[
+        bool,
+        typer.Option(
+            "--fake-llm",
+            help="Replace blueprint LLM configuration with the deterministic fake LLM for this run.",
+        ),
+    ] = False,
 ):
     """Run a catalog blueprint, or a local folder with --folder."""
     if auto_schedule and schedule:
@@ -724,6 +819,7 @@ def blueprint_run(
             web_ui=web_ui,
             auto_schedule=auto_schedule,
             schedule=schedule,
+            fake_llm=fake_llm,
         )
         return
 
@@ -752,6 +848,7 @@ def blueprint_run(
         web_ui=web_ui,
         auto_schedule=auto_schedule,
         schedule=schedule,
+        fake_llm=fake_llm,
     )
 
 
@@ -895,12 +992,24 @@ def _install_blueprint_model_dependencies(
             record_model_owner=_record_model_owner,
             model_installed=_model_installed,
             install_model_entry=_install_model_entry,
+            notify_model_install_start=_print_model_install_start,
         ),
     )
     if summary["errors"]:
         _print_model_install_summary(summary)
         raise typer.Exit(1)
     return summary
+
+
+def _print_model_install_start(model: dict[str, Any]) -> None:
+    label = str(model.get("id") or model.get("model") or "runtime model")
+    docker_model = str(model.get("model") or "")
+    backend = str(model.get("backend") or "auto")
+    detail = f"{label} ({docker_model})" if docker_model and docker_model != label else label
+    console.print(
+        f"[yellow]Runtime model {detail} is not installed. "
+        f"Installing with backend {backend}; this may take a few minutes the first time.[/yellow]"
+    )
 
 
 def _print_model_install_summary(summary: dict[str, Any]) -> None:

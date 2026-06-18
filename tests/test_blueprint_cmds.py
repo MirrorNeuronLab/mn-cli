@@ -99,6 +99,7 @@ def test_blueprint_model_dependency_records_already_installed_manual_owner(
     mocker,
     tmp_path,
     monkeypatch,
+    capsys,
 ):
     monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
     model_id = "custom-runtime:default"
@@ -126,12 +127,55 @@ def test_blueprint_model_dependency_records_already_installed_manual_owner(
     record = load_model_ownership()["models"][docker_model]
     assert record["manual"] is True
     assert record["owners"]["bp-owned"]["blueprint_revision"] == "rev-1"
+    assert "this may take a few minutes" not in capsys.readouterr().out
+
+
+def test_blueprint_model_dependency_installs_missing_model_with_feedback(
+    mocker,
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
+    model_id = "custom-runtime:default"
+    docker_model = "custom/runtime:latest"
+    mocker.patch(
+        "mn_cli.libs.blueprint_cmds._load_model_catalog",
+        return_value=_single_model_catalog(model_id, docker_model),
+    )
+    mocker.patch("mn_cli.libs.blueprint_cmds._model_installed", return_value=False)
+    install_model = mocker.patch(
+        "mn_cli.libs.blueprint_cmds._install_model_entry",
+        return_value={
+            "entry": {"id": model_id, "model": docker_model},
+            "docker_model": docker_model,
+            "compatibility": {"backend": "llama.cpp"},
+        },
+    )
+
+    summary = blueprint_cmds._install_blueprint_model_dependencies(
+        blueprint_id="bp-owned",
+        blueprint_revision="rev-1",
+        bundle_root=tmp_path / "bundle",
+        manifest=_runtime_model_manifest(model_id),
+        config={},
+        install_source="test-source",
+        force=False,
+    )
+
+    install_model.assert_called_once()
+    assert summary["ok"] is True
+    assert summary["models"][0]["status"] == "installed"
+    output = capsys.readouterr().out
+    assert "Runtime model custom-runtime:default (custom/runtime:latest) is not installed." in output
+    assert "this may take a few minutes the first time" in output
 
 
 def test_blueprint_model_dependency_install_failure_does_not_record_owner(
     mocker,
     tmp_path,
     monkeypatch,
+    capsys,
 ):
     monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
     model_id = "custom-runtime:default"
@@ -159,12 +203,15 @@ def test_blueprint_model_dependency_install_failure_does_not_record_owner(
 
     assert raised.value.exit_code == 1
     assert load_model_ownership()["models"] == {}
+    output = capsys.readouterr().out
+    assert "this may take a few minutes the first time" in output
 
 
 def test_blueprint_model_dependency_service_model_records_owner_without_docker_install(
     mocker,
     tmp_path,
     monkeypatch,
+    capsys,
 ):
     monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
     model_id = "voice-asr:default"
@@ -200,12 +247,14 @@ def test_blueprint_model_dependency_service_model_records_owner_without_docker_i
     assert record["backend"] == "vllm"
     assert record["manual"] is False
     assert record["owners"]["bp-service"]["blueprint_revision"] == "rev-2"
+    assert "this may take a few minutes" not in capsys.readouterr().out
 
 
 def test_blueprint_model_dependency_cluster_provided_skips_local_install(
     mocker,
     tmp_path,
     monkeypatch,
+    capsys,
 ):
     monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
     model_id = "video-vlm:default"
@@ -235,6 +284,7 @@ def test_blueprint_model_dependency_cluster_provided_skips_local_install(
     assert summary["ok"] is True
     assert summary["models"][0]["status"] == "cluster_provided"
     assert load_model_ownership()["models"] == {}
+    assert "this may take a few minutes" not in capsys.readouterr().out
 
 
 def test_blueprint_list_not_initialized(monkeypatch, tmp_path):
@@ -680,6 +730,61 @@ def test_blueprint_run_uses_standard_env_local_source(mocker, tmp_path, monkeypa
     assert result.exit_code == 0
     mock_run_bundle.assert_called_once()
     assert mock_run_bundle.call_args.args[0] == str(bp_dir)
+
+
+def test_blueprint_run_fake_llm_flag_overrides_local_bundle(mocker, tmp_path):
+    bp_dir = tmp_path / "bundle"
+    bp_dir.mkdir()
+    (bp_dir / "manifest.json").write_text(json.dumps({"runtime": {"models": {"primary": {"model": "default"}}}}))
+    config_dir = bp_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps(
+            {
+                "llm": {
+                    "enabled": True,
+                    "mode": "live",
+                    "model": "default",
+                    "default_config": "primary",
+                    "configs": {
+                        "primary": {
+                            "provider": "docker_model_runner",
+                            "model": "default",
+                            "api_base": "http://host.docker.internal:12434/engines/v1",
+                        }
+                    },
+                }
+            }
+        )
+    )
+    mock_run_bundle = mocker.patch("mn_cli.libs.blueprint_cmds._run_bundle")
+
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bp_dir), "--fake-llm"])
+
+    assert result.exit_code == 0
+    mock_run_bundle.assert_called_once()
+    kwargs = mock_run_bundle.call_args.kwargs
+    assert kwargs["env_overrides"]["MN_BLUEPRINT_LLM_MODE"] == "fake"
+    assert kwargs["env_overrides"]["MN_LLM_PROVIDER"] == "fake"
+    assert kwargs["env_overrides"]["MN_LLM_MODEL"] == "fake-deterministic-blueprint-agent"
+    assert kwargs["submission_metadata"]["fake_llm"] is True
+    overrides = kwargs["config_overrides"]
+    assert overrides["llm"]["mode"] == "fake"
+    assert overrides["llm"]["require_live"] is False
+    assert overrides["llm"]["runtime_model"] is None
+    assert overrides["llm"]["configs"]["primary"]["provider"] == "fake"
+    assert overrides["llm"]["configs"]["primary"]["model"] == "fake-deterministic-blueprint-agent"
+    assert overrides["llm"]["configs"]["primary"]["runtime_model"] is None
+
+
+def test_fake_llm_manifest_override_skips_live_runtime_model_requirement():
+    manifest = {"runtime": {"models": {"primary": {"model": "default"}}}, "llm": {"require_live": True, "model": "default"}}
+
+    override = blueprint_cmds._fake_llm_manifest_for_model_dependencies(manifest)
+
+    assert override["llm"]["require_live"] is False
+    assert override["runtime"]["models"]["primary"]["provider"] == "fake"
+    assert override["runtime"]["models"]["primary"]["model"] == "fake-deterministic-blueprint-agent"
 
 
 def test_blueprint_run_blueprint_repo_missing_index_errors(mocker, tmp_path):

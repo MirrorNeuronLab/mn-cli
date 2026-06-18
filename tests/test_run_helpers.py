@@ -46,6 +46,7 @@ def test_prepare_manifest_for_submission_merges_runtime_env_and_metadata(tmp_pat
                     "environment": {
                         "LITELLM_MODEL": "ollama/test",
                         "MN_LLM_API_KEY": "kept",
+                        "MN_BLUEPRINT_CONFIG_JSON": json.dumps({"identity": {"blueprint_id": "stale"}}),
                     }
                 },
             }
@@ -347,6 +348,61 @@ def test_prepare_manifest_injects_docker_model_runner_llm_env_by_node_runtime(tm
     assert sandbox_env["MN_LLM_API_BASE"] == "http://model-runner.docker.internal/engines/v1"
     assert host_env["MN_LLM_CONTEXT_SIZE"] == "4096"
     assert host_env["MN_LLM_MAX_TOKENS"] == "800"
+
+
+def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_http_llm(tmp_path):
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps(
+            {
+                "llm": {
+                    "enabled": True,
+                    "default_config": "primary",
+                    "configs": {
+                        "primary": {
+                            "provider": "docker_model_runner",
+                            "mode": "openai_compatible",
+                            "runtime_model": "gemma4:e2b",
+                            "model": "gemma4:e2b",
+                            "api_base": "http://host.docker.internal:12434/engines/v1",
+                            "backend": "llama.cpp",
+                        }
+                    },
+                }
+            }
+        )
+    )
+    manifest = {
+        "required_services": [
+            {"name": "docker-model-runner", "model": "gemma4:e2b"},
+            {"name": "vector-db"},
+        ],
+        "nodes": [
+            {
+                "node_id": "startup_folder_watcher",
+                "requires_services": [
+                    {
+                        "name": "docker-model-runner",
+                        "model": "gemma4:e2b",
+                        "resources": {"gpu": {"min_vram_mb": 8192}},
+                    },
+                    {"name": "redis"},
+                ],
+                "config": {"environment": {}},
+            }
+        ],
+    }
+
+    prepared = prepare_manifest_for_submission(bundle_dir, manifest)
+
+    assert prepared["required_services"] == [{"name": "vector-db"}]
+    assert prepared["nodes"][0]["requires_services"] == [{"name": "redis"}]
+    env = prepared["nodes"][0]["config"]["environment"]
+    assert env["MN_LLM_PROVIDER"] == "docker_model_runner"
+    assert env["MN_LLM_API_BASE"] == "http://host.docker.internal:12434/engines/v1"
 
 
 def test_prepare_manifest_model_only_llm_config_does_not_request_scheduler_model(tmp_path):

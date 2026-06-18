@@ -35,6 +35,23 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.delenv("MN_CONTAINER_SHARED_ARTIFACT_ROOT", raising=False)
 
 
+def test_manifest_for_model_validation_filters_dmr_models_for_fake_llm():
+    manifest = {
+        "runtime": {
+            "models": {
+                "primary": {"model": "default"},
+                "secondary": {"provider": "docker_model_runner", "model": "gemma4:e2b"},
+                "external": {"provider": "nvidia_service", "model": "service-model"},
+            }
+        }
+    }
+
+    filtered = run_cmds._manifest_for_model_validation(manifest, {"llm": {"mode": "fake"}})
+
+    assert set(filtered["runtime"]["models"]) == {"external"}
+    assert set(manifest["runtime"]["models"]) == {"primary", "secondary", "external"}
+
+
 def _workflow_manifest_fixture():
     return {
         "apiVersion": "mn.workflow/v1",

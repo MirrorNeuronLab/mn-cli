@@ -43,6 +43,8 @@ def test_model_list_prints_builtin_catalog_json():
     payload = json.loads(result.stdout)
     assert payload["models"][0]["id"] == "gemma4:e2b"
     assert payload["models"][0]["model"] == "ai/gemma4:E2B"
+    assert payload["models"][0]["default"] is True
+    assert payload["models"][0]["status"] == "default"
 
 
 def test_model_show_resolves_gemme_alias():
@@ -52,6 +54,8 @@ def test_model_show_resolves_gemme_alias():
     payload = json.loads(result.stdout)
     assert payload["id"] == "gemma4:e2b"
     assert payload["model"] == "ai/gemma4:E2B"
+    assert payload["default"] is True
+    assert payload["status"] == "default"
 
 
 def test_model_show_does_not_require_docker_binary(mocker):

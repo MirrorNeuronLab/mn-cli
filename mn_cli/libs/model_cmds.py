@@ -305,6 +305,7 @@ def _entry_payload(
 ) -> dict[str, Any]:
     docker_model = docker_model_name(entry)
     owner_payload = model_ownership_metadata(docker_model, installed=installed, ledger=ownership)
+    is_default = str(entry.get("id") or "") == DEFAULT_MODEL_ID
     return {
         "id": entry.get("id"),
         "name": entry.get("name"),
@@ -316,6 +317,8 @@ def _entry_payload(
         "context_size": entry.get("context_size"),
         "requirements": entry.get("requirements") or {},
         "installed": installed,
+        "default": is_default,
+        "status": "default" if is_default else "",
         **owner_payload,
     }
 
@@ -326,6 +329,7 @@ def _print_model_table(models: list[dict[str, Any]]) -> None:
     table.add_column("Model")
     table.add_column("Backend")
     table.add_column("Installed")
+    table.add_column("Status")
     table.add_column("Owners")
     for model in models:
         table.add_row(
@@ -333,6 +337,7 @@ def _print_model_table(models: list[dict[str, Any]]) -> None:
             str(model.get("model") or ""),
             str(model.get("backend") or ""),
             "yes" if model.get("installed") else "no",
+            str(model.get("status") or ""),
             str(model.get("owner_count") or 0),
         )
     console.print(table)
@@ -343,6 +348,8 @@ def _print_model_detail(payload: dict[str, Any]) -> None:
     console.print(f"  Model: {payload.get('model')}")
     console.print(f"  Backend: {payload.get('backend')}")
     console.print(f"  Installed: {'yes' if payload.get('installed') else 'no'}")
+    if payload.get("default"):
+        console.print("  Status: default")
     console.print(f"  Owners: {payload.get('owner_count', 0)}")
     requirements = payload.get("requirements") or {}
     if requirements:

@@ -98,6 +98,7 @@ def prepare_manifest_for_submission(
         config = with_shared_run_store_config(config, str(run_id), runs_root)
     if config is not None:
         apply_manifest_config_bindings(prepared, config)
+        refresh_embedded_blueprint_config(prepared, config)
     if enable_runtime_web_ui and run_id and config is not None and blueprint_web_ui_enabled(config):
         inject_runtime_web_ui_service_for_submission(
             prepared,
@@ -124,6 +125,7 @@ def prepare_manifest_for_submission(
     )
     if runtime_env:
         inject_node_environment(prepared, runtime_env)
+        strip_docker_model_runner_placement_requirements(prepared)
     normalize_host_local_uploads(prepared)
     lower_manifest_topology_for_runtime_submission(prepared)
     if metadata:
@@ -592,6 +594,19 @@ def apply_manifest_config_bindings(
         set_manifest_path(manifest, manifest_path, value)
 
 
+def refresh_embedded_blueprint_config(manifest: dict[str, Any], config: dict[str, Any]) -> None:
+    encoded = json.dumps(config, sort_keys=True)
+    for node in manifest_nodes(manifest):
+        node_config = node.get("config")
+        if not isinstance(node_config, dict):
+            continue
+        environment = node_config.get("environment")
+        if not isinstance(environment, dict):
+            continue
+        if "MN_BLUEPRINT_CONFIG_JSON" in environment:
+            environment["MN_BLUEPRINT_CONFIG_JSON"] = encoded
+
+
 def config_to_environment(config: dict[str, Any]) -> dict[str, str]:
     env: dict[str, str] = {}
     docker_model_env = resolve_llm_environment(config)
@@ -794,6 +809,72 @@ def adjust_llm_environment_for_node(environment: dict[str, Any], node: dict[str,
     api_base = str(environment.get("MN_LLM_API_BASE") or "")
     if "localhost:12434" in api_base or "127.0.0.1:12434" in api_base:
         environment["MN_LLM_API_BASE"] = DOCKER_MODEL_RUNNER_CONTAINER_API_BASE
+
+
+def strip_docker_model_runner_placement_requirements(manifest: dict[str, Any]) -> None:
+    if not _manifest_uses_docker_model_runner_http_endpoint(manifest):
+        return
+
+    _strip_service_list_field(manifest, "required_services")
+    for node in _service_requirement_nodes(manifest):
+        _strip_service_list_field(node, "requires_services")
+        _strip_service_list_field(node, "services")
+
+
+def _manifest_uses_docker_model_runner_http_endpoint(manifest: dict[str, Any]) -> bool:
+    for node in _service_requirement_nodes(manifest):
+        config = node.get("config") if isinstance(node.get("config"), dict) else {}
+        environment = config.get("environment") if isinstance(config.get("environment"), dict) else {}
+        provider = str(environment.get("MN_LLM_PROVIDER") or "").strip().lower()
+        api_base = str(environment.get("MN_LLM_API_BASE") or "").strip().lower()
+        if provider == "docker_model_runner" and (
+            api_base.startswith("http://") or api_base.startswith("https://")
+        ):
+            return True
+    return False
+
+
+def _service_requirement_nodes(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    groups: list[Any] = [manifest.get("nodes")]
+    for section_name in ("agents", "flow"):
+        section = manifest.get(section_name)
+        if isinstance(section, dict):
+            groups.append(section.get("nodes"))
+
+    nodes: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+        for item in group:
+            if not isinstance(item, dict):
+                continue
+            marker = id(item)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            nodes.append(item)
+    return nodes
+
+
+def _strip_service_list_field(target: dict[str, Any], field: str) -> None:
+    value = target.get(field)
+    if isinstance(value, list):
+        retained = [service for service in value if not _is_docker_model_runner_service(service)]
+        if retained:
+            target[field] = retained
+        else:
+            target.pop(field, None)
+        return
+    if _is_docker_model_runner_service(value):
+        target.pop(field, None)
+
+
+def _is_docker_model_runner_service(service: Any) -> bool:
+    if not isinstance(service, dict):
+        return False
+    name = str(service.get("name") or service.get("service") or "").strip().lower()
+    return name in {"docker-model-runner", "docker_model_runner"}
 
 
 def normalize_host_local_uploads(manifest: dict[str, Any]) -> None:
