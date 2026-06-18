@@ -71,6 +71,7 @@ from mn_sdk import (
     validate_service_spec_issues,
     workflow_progress_snapshot,
 )
+from mn_sdk.runtime_config import default_runs_root
 
 FINAL_STATUSES = {"completed", "failed", "cancelled"}
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -1987,9 +1988,8 @@ def _write_blueprint_job_mapping(
 
 
 def _blueprint_run_dir(blueprint_run_id: str, env_overrides: dict[str, str]) -> Path:
-    runs_root = Path(
-        env_overrides.get("MN_RUNS_ROOT") or os.getenv("MN_RUNS_ROOT") or "~/.mn/runs"
-    ).expanduser()
+    configured = env_overrides.get("MN_RUNS_ROOT")
+    runs_root = Path(configured).expanduser() if configured else default_runs_root()
     return runs_root / blueprint_run_id
 
 
@@ -2244,9 +2244,8 @@ def _write_local_web_ui_handle(
     identity = (
         config.get("identity") if isinstance(config.get("identity"), dict) else {}
     )
-    runs_root = Path(
-        env_overrides.get("MN_RUNS_ROOT") or os.getenv("MN_RUNS_ROOT") or "~/.mn/runs"
-    ).expanduser()
+    configured = env_overrides.get("MN_RUNS_ROOT")
+    runs_root = Path(configured).expanduser() if configured else default_runs_root()
     run_dir = runs_root / blueprint_run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 

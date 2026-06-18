@@ -12,6 +12,8 @@ from typing import Any
 
 import typer
 
+from mn_sdk.runtime_config import default_runs_root
+
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.blueprint_observability import make_blueprint_run_id
 from mn_cli.libs.ui import print_success_confirmation
@@ -238,7 +240,7 @@ def _job_from_get_job_payload(payload: Any) -> dict[str, Any]:
 
 
 def _runs_root() -> Path:
-    return Path(os.getenv("MN_RUNS_ROOT") or "~/.mn/runs").expanduser()
+    return default_runs_root()
 
 
 def _load_run_record(run_id: str) -> dict[str, Any] | None:

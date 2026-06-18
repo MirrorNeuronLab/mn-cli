@@ -7,6 +7,8 @@ import socket
 from pathlib import Path
 from typing import Any
 
+from mn_sdk.runtime_config import resolve_mn_home
+
 from mn_cli.runtime_state import read_env_file
 
 DEFAULT_INLINE_PAYLOAD_MAX_BYTES = 1_048_576
@@ -110,12 +112,11 @@ def _host_blob_store_root(env: dict[str, str]) -> Path:
     )
     if configured:
         return Path(configured).expanduser()
-    return Path.home() / ".mn" / "blobs"
+    return resolve_mn_home() / "blobs"
 
 
 def _runtime_env_file_values() -> dict[str, str]:
-    home = Path(os.getenv("MN_HOME") or Path.home() / ".mn")
-    env_file = home.expanduser() / "docker-compose.env"
+    env_file = resolve_mn_home() / "docker-compose.env"
     return {key.strip(): value.strip() for key, value in read_env_file(env_file).items()}
 
 

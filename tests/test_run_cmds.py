@@ -29,10 +29,8 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.setenv("MN_HOME", str(tmp_path / "mn-home"))
     monkeypatch.delenv("MN_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
-    monkeypatch.delenv("MN_HOST_SHARED_ARTIFACT_ROOT", raising=False)
     monkeypatch.delenv("MN_RUNTIME_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_CONTAINER_SHARED_STORAGE_ROOT", raising=False)
-    monkeypatch.delenv("MN_CONTAINER_SHARED_ARTIFACT_ROOT", raising=False)
 
 
 def test_manifest_for_model_validation_filters_dmr_models_for_fake_llm():
@@ -596,7 +594,7 @@ def test_run_shows_runtime_web_ui_url_in_submit_and_detach_panels(
                 "identity": {"blueprint_id": "bp_web_ui", "name": "Blueprint Web UI"},
                 "outputs": {
                     "adapter": "local_run_store",
-                    "run_root": "~/.mn/runs",
+                    "run_root": "$MN_HOME/runs",
                     "write_run_store": True,
                 },
                 "web_ui": {
@@ -1072,7 +1070,7 @@ def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_pat
     config_dir.mkdir()
     (config_dir / "default.json").write_text(json.dumps({
         "identity": {"blueprint_id": "bp-1", "name": "Blueprint One"},
-        "outputs": {"adapter": "local_run_store", "run_root": "~/.mn/runs", "write_run_store": True},
+        "outputs": {"adapter": "local_run_store", "run_root": "$MN_HOME/runs", "write_run_store": True},
         "web_ui": {
             "enabled": True,
             "kind": "static_html",

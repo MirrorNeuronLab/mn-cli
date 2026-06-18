@@ -136,9 +136,9 @@ def test_stop_matching_sidecar_processes_kills_pgrep_matches(mocker):
         server_cmds.subprocess,
         "check_output",
         return_value=(
-            "111 /Users/homer/.local/share/mn_venv/bin/python3.11 -c\n"
+            "111 /tmp/home/.local/share/mn_venv/bin/python3.11 -c\n"
             "script body with mn-api later\n"
-            "222 /Users/homer/.local/share/mn_venv/bin/python3.11 /Users/homer/.local/share/mn_venv/bin/mn-api\n"
+            "222 /tmp/home/.local/share/mn_venv/bin/python3.11 /tmp/home/.local/share/mn_venv/bin/mn-api\n"
             "not-a-pid noise mn-api\n"
         ),
     )

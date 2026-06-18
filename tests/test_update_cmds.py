@@ -14,14 +14,14 @@ runner = CliRunner()
 
 @pytest.fixture(autouse=True)
 def isolated_install_state(mocker, tmp_path):
-    mocker.patch("mn_cli.update_cmds.DIR", tmp_path / ".mirror_neuron")
+    mocker.patch("mn_cli.update_cmds.DIR", tmp_path / ".mn")
     mocker.patch(
         "mn_cli.update_cmds.INSTALL_METADATA_FILE",
-        tmp_path / ".mirror_neuron" / "install_metadata.json",
+        tmp_path / ".mn" / "install_metadata.json",
     )
     mocker.patch(
         "mn_cli.update_cmds.CHECK_FILE",
-        tmp_path / ".mirror_neuron" / ".update-check.json",
+        tmp_path / ".mn" / ".update-check.json",
     )
 
 

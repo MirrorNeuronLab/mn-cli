@@ -6,8 +6,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from mn_sdk import DOCKER_MODEL_RUNNER_CONTAINER_API_BASE, resolve_llm_environment
-
-DEFAULT_RUNS_ROOT = "~/.mn/runs"
+from mn_sdk.runtime_config import default_runs_root
 USER_HOME_ENV_KEYS = ("MN_OUTPUT_HOME", "MN_USER_HOME", "OTTERDESK_USER_HOME")
 
 
@@ -522,13 +521,8 @@ def _payload_join(*parts: str) -> str:
 
 
 def _shared_runs_root(env_overrides: Optional[dict[str, str]] = None) -> str:
-    return str(
-        Path(
-            (env_overrides or {}).get("MN_RUNS_ROOT")
-            or os.getenv("MN_RUNS_ROOT")
-            or DEFAULT_RUNS_ROOT
-        ).expanduser()
-    )
+    configured = (env_overrides or {}).get("MN_RUNS_ROOT")
+    return str(Path(configured).expanduser() if configured else default_runs_root())
 
 
 def with_shared_run_store_config(

@@ -58,6 +58,7 @@ from mn_cli.libs.model_cmds import (
     model_installed as _model_installed,
     remove_model_ref as _remove_model_ref,
 )
+from mn_sdk.runtime_config import resolve_mn_home
 from mn_sdk import (
     cluster_provided_model as _cluster_provided_model,
     docker_model_name as _docker_model_name,
@@ -1131,7 +1132,8 @@ def _read_json_object(path: Path) -> dict[str, Any]:
 
 
 def _blueprint_installs_dir() -> Path:
-    return Path(os.path.expanduser(os.getenv("MN_BLUEPRINT_INSTALLS_DIR", "~/.mn/blueprint_installs")))
+    configured = os.getenv("MN_BLUEPRINT_INSTALLS_DIR")
+    return Path(configured).expanduser() if configured else resolve_mn_home() / "blueprint_installs"
 
 
 def _record_blueprint_install(
@@ -1511,7 +1513,7 @@ def blueprint_monitor(
     follow: bool = typer.Option(False, "--follow", "-f", help="Refresh the run table until interrupted."),
     blueprint_id: Optional[str] = typer.Option(None, "--blueprint-id", help="Only show runs for one blueprint ID."),
     max_runs: int = typer.Option(20, "--max-runs", help="Maximum number of runs to display."),
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default ~/.mn/runs directory."),
+    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
     interval: float = typer.Option(2.0, "--interval", help="Refresh interval in seconds when --follow is enabled."),
 ):
     """Show recent blueprint runs from the shared run store."""
@@ -1533,7 +1535,7 @@ def blueprint_tail(
     run_id: str,
     lines: int = typer.Option(20, "--lines", "-n", help="Number of events to show."),
     follow: bool = typer.Option(False, "--follow", "-f", help="Continue printing new events until interrupted."),
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default ~/.mn/runs directory."),
+    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
     interval: float = typer.Option(1.0, "--interval", help="Polling interval in seconds when --follow is enabled."),
 ):
     """Print the event stream for one blueprint run."""
@@ -1578,7 +1580,7 @@ def blueprint_logs(
     lines: int = typer.Option(50, "--lines", "-n", help="Number of log records to show."),
     level: Optional[str] = typer.Option(None, "--level", help="Minimum log level to show."),
     follow: bool = typer.Option(False, "--follow", "-f", help="Continue printing new logs until interrupted."),
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default ~/.mn/runs directory."),
+    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
     interval: float = typer.Option(1.0, "--interval", help="Polling interval in seconds when --follow is enabled."),
 ):
     """Print structured logs for one blueprint run."""
@@ -1620,7 +1622,7 @@ def blueprint_stream(
     lines: int = typer.Option(100, "--lines", "-n", help="Number of stream records to show."),
     level: Optional[str] = typer.Option(None, "--level", help="Minimum log level when logs are included."),
     follow: bool = typer.Option(False, "--follow", "-f", help="Continue printing new stream records until interrupted."),
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default ~/.mn/runs directory."),
+    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
     interval: float = typer.Option(1.0, "--interval", help="Polling interval in seconds when --follow is enabled."),
 ):
     """Print merged blueprint events, logs, human events, and resource samples."""
@@ -1665,7 +1667,7 @@ def blueprint_resources(
     bucket: str = typer.Option("1h", "--bucket", help="Aggregation bucket, for example 1h."),
     live: bool = typer.Option(False, "--live", help="Refresh resource usage until interrupted."),
     interval: float = typer.Option(5.0, "--interval", help="Live refresh interval in seconds."),
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default ~/.mn/runs directory."),
+    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
 ):
     """Show CPU, GPU, memory, and LLM token usage for one blueprint run."""
     _load_run_or_exit(run_id, runs_root)
@@ -1692,7 +1694,7 @@ def blueprint_human_command(
     decision: Optional[str] = typer.Option(None, "--decision", help="Decision for respond."),
     notes: str = typer.Option("", "--notes", help="Optional reviewer notes."),
     reviewer: str = typer.Option("cli", "--reviewer", help="Reviewer identity label."),
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default ~/.mn/runs directory."),
+    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
 ):
     """Inspect and respond to human collaboration events."""
     args = args or []
@@ -1731,7 +1733,7 @@ def blueprint_human(
     ctx: typer.Context,
     run_id: Optional[str] = typer.Argument(None, help="Blueprint run ID."),
     pending: bool = typer.Option(False, "--pending", help="Show only pending human input requests."),
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default ~/.mn/runs directory."),
+    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
 ):
     """Show human collaboration events for one blueprint run."""
     if ctx.invoked_subcommand is not None:
@@ -1759,7 +1761,7 @@ def blueprint_human_respond(
     decision: str = typer.Option(..., "--decision", help="Decision value, such as approve, revise, or reject."),
     notes: str = typer.Option("", "--notes", help="Optional reviewer notes."),
     reviewer: str = typer.Option("cli", "--reviewer", help="Reviewer identity label."),
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default ~/.mn/runs directory."),
+    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
 ):
     """Record a response to a human input request."""
     _load_run_or_exit(run_id, runs_root)
@@ -1788,7 +1790,7 @@ def blueprint_human_ack(
     run_id: str,
     notice_id: str,
     reviewer: str = typer.Option("cli", "--reviewer", help="Reviewer identity label."),
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default ~/.mn/runs directory."),
+    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
 ):
     """Acknowledge a human notice."""
     _load_run_or_exit(run_id, runs_root)
@@ -1805,7 +1807,7 @@ def blueprint_human_ack(
 def blueprint_compare(
     run_a: str,
     run_b: str,
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default ~/.mn/runs directory."),
+    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
 ):
     """Compare two blueprint runs from the shared run store."""
     record_a = _load_run_or_exit(run_a, runs_root, include_observability=True)
@@ -1835,7 +1837,7 @@ def blueprint_compare(
 def blueprint_export(
     run_id: str,
     output_format: str = typer.Option("json", "--format", "-f", help="Export format: json, markdown, or html."),
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default ~/.mn/runs directory."),
+    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
 ):
     """Export one blueprint run as JSON, Markdown, or static HTML."""
     record = _load_run_or_exit(run_id, runs_root, include_observability=True)

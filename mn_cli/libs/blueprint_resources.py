@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from mn_sdk.runtime_config import default_runs_root as runtime_default_runs_root, resolve_mn_home
+
 
 RESOURCE_METADATA_FILE = ".mn-blueprint-resource.json"
 DEFAULT_TEMP_DIR = "/tmp/mirror_neuron"
@@ -38,11 +40,14 @@ def default_python_envs_dir() -> Path:
 
 
 def default_runs_root() -> Path:
-    return Path(os.getenv("MN_RUNS_ROOT") or "~/.mn/runs").expanduser()
+    return runtime_default_runs_root()
 
 
 def default_generated_bundles_dir() -> Path:
-    return Path(os.getenv("MN_GENERATED_BLUEPRINT_BUNDLES_DIR") or "~/.mn/generated_blueprint_bundles").expanduser()
+    configured = os.getenv("MN_GENERATED_BLUEPRINT_BUNDLES_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    return resolve_mn_home() / "generated_blueprint_bundles"
 
 
 def default_bundle_cache_dir() -> Path:

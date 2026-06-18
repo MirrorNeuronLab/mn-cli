@@ -8,7 +8,7 @@ from mn_cli.sdk_path import add_local_sdk_path
 
 add_local_sdk_path("runtime_config.py")
 
-from mn_sdk.runtime_config import RuntimeConfig
+from mn_sdk.runtime_config import RuntimeConfig, default_logs_root
 
 
 @dataclass(frozen=True)
@@ -17,7 +17,7 @@ class CliConfig:
     grpc_timeout_seconds: float | None = 10.0
     grpc_auth_token: str = ""
     grpc_admin_token: str = ""
-    log_path: Path = Path.home() / ".mn" / "logs" / "cli.log"
+    log_path: Path = default_logs_root() / "cli.log"
     output_mode: str = "rich"
 
     @classmethod
@@ -31,7 +31,7 @@ class CliConfig:
             log_path=Path(
                 os.getenv(
                     "MN_CLI_LOG_PATH",
-                    str(Path.home() / ".mn" / "logs" / "cli.log"),
+                    str(default_logs_root() / "cli.log"),
                 )
             ).expanduser(),
             output_mode=os.getenv("MN_CLI_OUTPUT", "rich"),

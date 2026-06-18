@@ -98,11 +98,7 @@ def read_configured_token_file(env_name: str) -> str:
 
 
 def read_token_file(name: str) -> str:
-    for token_file in (mn_home() / name, Path.home() / ".mirror_neuron" / name):
-        token = read_text_stripped(token_file)
-        if token:
-            return token
-    return ""
+    return read_text_stripped(mn_home() / name)
 
 
 def read_text_stripped(path: Path) -> str:

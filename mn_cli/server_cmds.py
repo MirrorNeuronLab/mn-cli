@@ -35,7 +35,6 @@ logger = configure_logging("mn-cli", CliConfig.from_env().log_path)
 GRPC_ADMIN_TOKEN_ENV = "MN_GRPC_ADMIN_TOKEN"
 GRPC_AUTH_TOKEN_FILE_ENV = "MN_GRPC_AUTH_TOKEN_FILE"
 GRPC_ADMIN_TOKEN_FILE_ENV = "MN_GRPC_ADMIN_TOKEN_FILE"
-LEGACY_GRPC_ADMIN_TOKEN_ENV = "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN"
 
 def _erl_aflags(dist_port: str | int) -> str:
     return (
@@ -59,7 +58,6 @@ def _mn_home() -> Path:
 
 
 DIR = _mn_home()
-DEFAULT_DIR = Path.home() / ".mn"
 PID_DIR = DIR / "pids"
 LOG_DIR = DIR / "logs"
 BEAM_PID_FILE = PID_DIR / "beam.pid"
@@ -118,8 +116,6 @@ def _web_ui_dirs() -> tuple[Path, ...]:
     paths = [
         DIR / "webui",
         DIR / "web-ui-source",
-        DEFAULT_DIR / "webui",
-        DEFAULT_DIR / "web-ui-source",
     ]
     source_web_ui_dir = _source_checkout_web_ui_dir()
     if source_web_ui_dir is not None:
@@ -166,7 +162,13 @@ COMPOSE_REDIS_CONTAINER = "mirror-neuron-redis"
 NETWORK_CORE_CONTAINER = "mirror-neuron-network-core"
 NETWORK_REDIS_CONTAINER = "mirror-neuron-network-redis"
 RUNTIME_CLUSTER_OVERRIDE_FILE = "docker-compose.cluster.yml"
-DEPRECATED_RUNTIME_ENV_KEYS = {"MN_ARTIFACT_AUTH_TOKEN"}
+DEPRECATED_RUNTIME_ENV_KEYS = {
+    "MN_ARTIFACT_AUTH_TOKEN",
+    "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN",
+    "MN_HOST_MN_DIR",
+    "MN_HOST_SHARED_ARTIFACT_ROOT",
+    "MN_CONTAINER_SHARED_ARTIFACT_ROOT",
+}
 
 
 def _openshell_config_dir() -> Path:
@@ -702,10 +704,7 @@ def _resolve_grpc_auth_token() -> str:
     return generated_token
 
 def _resolve_grpc_admin_token() -> str:
-    env_token = (
-        os.getenv(GRPC_ADMIN_TOKEN_ENV, "").strip()
-        or os.getenv(LEGACY_GRPC_ADMIN_TOKEN_ENV, "").strip()
-    )
+    env_token = os.getenv(GRPC_ADMIN_TOKEN_ENV, "").strip()
     if env_token:
         return env_token
 
@@ -732,8 +731,6 @@ def _ensure_runtime_grpc_tokens(env: dict[str, str], *, persist_compose: bool = 
     resolved = dict(env)
     if not str(resolved.get("MN_GRPC_AUTH_TOKEN") or "").strip():
         resolved["MN_GRPC_AUTH_TOKEN"] = _resolve_grpc_auth_token()
-    if not str(resolved.get(GRPC_ADMIN_TOKEN_ENV) or "").strip():
-        resolved[GRPC_ADMIN_TOKEN_ENV] = str(resolved.get(LEGACY_GRPC_ADMIN_TOKEN_ENV) or "").strip()
     if not str(resolved.get(GRPC_ADMIN_TOKEN_ENV) or "").strip():
         resolved[GRPC_ADMIN_TOKEN_ENV] = _resolve_grpc_admin_token()
     if not str(resolved.get(GRPC_AUTH_TOKEN_FILE_ENV) or "").strip():
@@ -776,8 +773,6 @@ def _runtime_grpc_tokens_from_running_container() -> dict[str, str]:
     for container_name in (LOCAL_CORE_CONTAINER, NETWORK_CORE_CONTAINER):
         auth_token = _docker_container_env_value(container_name, "MN_GRPC_AUTH_TOKEN")
         admin_token = _docker_container_env_value(container_name, GRPC_ADMIN_TOKEN_ENV)
-        if not admin_token:
-            admin_token = _docker_container_env_value(container_name, LEGACY_GRPC_ADMIN_TOKEN_ENV)
         if auth_token:
             tokens["MN_GRPC_AUTH_TOKEN"] = auth_token
         if admin_token:
@@ -1952,9 +1947,7 @@ def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
     blueprint_local = str(env.get("MN_BLUEPRINT_LOCAL") or os.getenv("MN_BLUEPRINT_LOCAL") or "").strip()
     host_home_dir = str(
         env.get("MN_HOST_HOME_DIR")
-        or env.get("MN_HOST_MN_DIR")
         or os.getenv("MN_HOST_HOME_DIR")
-        or os.getenv("MN_HOST_MN_DIR")
         or DIR
     ).strip()
     configured_runs_root = str(env.get("MN_RUNS_ROOT") or os.getenv("MN_RUNS_ROOT") or "").strip()
@@ -1971,10 +1964,8 @@ def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
     host_shared_storage_root = str(
         env.get("MN_SHARED_STORAGE_ROOT")
         or env.get("MN_HOST_SHARED_STORAGE_ROOT")
-        or env.get("MN_HOST_SHARED_ARTIFACT_ROOT")
         or os.getenv("MN_SHARED_STORAGE_ROOT")
         or os.getenv("MN_HOST_SHARED_STORAGE_ROOT")
-        or os.getenv("MN_HOST_SHARED_ARTIFACT_ROOT")
         or ""
     ).strip()
     if not host_shared_storage_root:
@@ -1990,10 +1981,8 @@ def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
     runtime_shared_storage_root = str(
         env.get("MN_RUNTIME_SHARED_STORAGE_ROOT")
         or env.get("MN_CONTAINER_SHARED_STORAGE_ROOT")
-        or env.get("MN_CONTAINER_SHARED_ARTIFACT_ROOT")
         or os.getenv("MN_RUNTIME_SHARED_STORAGE_ROOT")
         or os.getenv("MN_CONTAINER_SHARED_STORAGE_ROOT")
-        or os.getenv("MN_CONTAINER_SHARED_ARTIFACT_ROOT")
         or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT
     ).strip()
     updates: dict[str, str] = {
@@ -2004,13 +1993,11 @@ def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
         "MN_HOST_BLOB_STORE_DIR": host_blob_store_dir,
         "MN_SHARED_STORAGE_ROOT": host_shared_storage_root,
         "MN_HOST_SHARED_STORAGE_ROOT": host_shared_storage_root,
-        "MN_HOST_SHARED_ARTIFACT_ROOT": host_shared_storage_root,
         "MN_RUNS_ROOT": configured_runs_root or host_artifacts_dir,
         "MN_CONTAINER_RUNS_ROOT": container_runs_root,
         "MN_CONTAINER_BLOB_STORE_ROOT": container_blob_store_root,
         "MN_RUNTIME_SHARED_STORAGE_ROOT": runtime_shared_storage_root,
         "MN_CONTAINER_SHARED_STORAGE_ROOT": runtime_shared_storage_root,
-        "MN_CONTAINER_SHARED_ARTIFACT_ROOT": runtime_shared_storage_root,
         "MN_BLOB_STORE_ROOT": container_blob_store_root,
         "MN_BLUEPRINT_WEB_UI_BIND_HOST": str(
             env.get("MN_BLUEPRINT_WEB_UI_BIND_HOST") or DEFAULT_BLUEPRINT_WEB_UI_BIND_HOST
@@ -2469,8 +2456,8 @@ def web_ui_pid_files() -> tuple[tuple[Path, str], ...]:
     paths = [
         (WEB_UI_WATCHDOG_PID_FILE, "Web UI watchdog"),
         (WEB_UI_PID_FILE, "Web UI"),
-        (DEFAULT_DIR / "pids" / "web-ui-watchdog.pid", "Web UI watchdog"),
-        (DEFAULT_DIR / "pids" / "web-ui.pid", "Web UI"),
+        (DIR / "pids" / "web-ui-watchdog.pid", "Web UI watchdog"),
+        (DIR / "pids" / "web-ui.pid", "Web UI"),
         (legacy_pid_dir / "web-ui-watchdog.pid", "Web UI watchdog"),
         (legacy_pid_dir / "web-ui.pid", "Web UI"),
     ]
@@ -2489,8 +2476,8 @@ def api_pid_files() -> tuple[tuple[Path, str], ...]:
     paths = [
         (API_WATCHDOG_PID_FILE, "REST API watchdog"),
         (API_PID_FILE, "REST API"),
-        (DEFAULT_DIR / "pids" / "api-watchdog.pid", "REST API watchdog"),
-        (DEFAULT_DIR / "pids" / "api.pid", "REST API"),
+        (DIR / "pids" / "api-watchdog.pid", "REST API watchdog"),
+        (DIR / "pids" / "api.pid", "REST API"),
         (legacy_pid_dir / "api-watchdog.pid", "REST API watchdog"),
         (legacy_pid_dir / "api.pid", "REST API"),
     ]
@@ -3156,7 +3143,7 @@ def _build_core_docker_run_command(
         cmd.extend(["-v", f"{openshell_config_dir}:/root/.config/openshell:ro"])
         cmd.extend(["-v", f"{openshell_config_dir}:/opt/mirror_neuron/.config/openshell:ro"])
 
-    host_home_dir = str(env.get("MN_HOST_HOME_DIR") or env.get("MN_HOST_MN_DIR") or DIR)
+    host_home_dir = str(env.get("MN_HOST_HOME_DIR") or DIR)
     host_artifacts_dir = str(env.get("MN_HOST_ARTIFACTS_DIR") or Path(host_home_dir).expanduser() / "runs")
     container_runs_root = str(env.get("MN_CONTAINER_RUNS_ROOT") or DEFAULT_CONTAINER_RUNS_ROOT)
     host_blob_store_dir = str(env.get("MN_HOST_BLOB_STORE_DIR") or Path(host_home_dir).expanduser() / "blobs")

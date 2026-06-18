@@ -47,7 +47,6 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN", raising=False)
     monkeypatch.delenv("MN_GRPC_AUTH_TOKEN_FILE", raising=False)
     monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN_FILE", raising=False)
-    monkeypatch.delenv("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN", raising=False)
     monkeypatch.delenv("MN_ARTIFACT_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("MN_NODE_GPU", raising=False)
     monkeypatch.delenv("MN_NODE_GPU_COUNT", raising=False)
@@ -66,7 +65,7 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_DOCKER_NETWORK_MODE", raising=False)
     monkeypatch.delenv("MN_DOCKER_NETWORK_NAME", raising=False)
     monkeypatch.delenv("MN_NETWORK_JOIN_TOKEN", raising=False)
-    state_dir = tmp_path / ".mirror_neuron"
+    state_dir = tmp_path / ".mn"
     log_dir = state_dir / ".logs"
     pid_dir = state_dir / ".pids"
     mocker.patch('mn_cli.server_cmds.DIR', state_dir)
@@ -296,13 +295,13 @@ def test_runtime_blueprint_env_updates_prefers_host_home_dir(tmp_path):
     assert updates["MN_HOST_ARTIFACTS_DIR"] == str(host_home / "runs")
     assert updates["MN_RUNS_ROOT"] == str(host_home / "runs")
 
-def test_runtime_blueprint_env_updates_accepts_legacy_host_mn_dir(tmp_path):
+def test_runtime_blueprint_env_updates_ignores_legacy_host_mn_dir(tmp_path):
     legacy_home = tmp_path / "legacy-mn-home"
 
     updates = _runtime_blueprint_env_updates({"MN_HOST_MN_DIR": str(legacy_home)})
 
-    assert updates["MN_HOST_ARTIFACTS_DIR"] == str(legacy_home / "runs")
-    assert updates["MN_RUNS_ROOT"] == str(legacy_home / "runs")
+    assert updates["MN_HOST_ARTIFACTS_DIR"] == str(server_cmds.DIR / "runs")
+    assert updates["MN_RUNS_ROOT"] == str(server_cmds.DIR / "runs")
 
 def test_resolve_grpc_admin_token_generates_persistent_token(tmp_path, mocker):
     token_dir = tmp_path / "state"
@@ -320,10 +319,10 @@ def test_resolve_grpc_admin_token_prefers_env(monkeypatch):
 
     assert _resolve_grpc_admin_token() == "admin-token"
 
-def test_resolve_grpc_admin_token_accepts_legacy_env(monkeypatch):
+def test_resolve_grpc_admin_token_ignores_legacy_env(monkeypatch):
     monkeypatch.setenv("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN", "legacy-admin-token")
 
-    assert _resolve_grpc_admin_token() == "legacy-admin-token"
+    assert _resolve_grpc_admin_token() != "legacy-admin-token"
 
 def test_start_server_persists_env_grpc_tokens_for_later_cli_process(mocker, monkeypatch):
     monkeypatch.setenv("MN_GRPC_AUTH_TOKEN", "runtime-auth-token")
@@ -365,7 +364,7 @@ def test_start_server_refreshes_token_files_from_compose_runtime_env(mocker, tmp
         "COMPOSE_PROJECT_NAME=mirror-neuron\n"
         "MN_DOCKER_NETWORK_MODE=disabled\n"
         "MN_GRPC_AUTH_TOKEN=compose-auth-token\n"
-        "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN=compose-admin-token\n"
+        "MN_GRPC_ADMIN_TOKEN=compose-admin-token\n"
     )
     server_cmds.DIR.mkdir(parents=True, exist_ok=True)
     (server_cmds.DIR / "grpc_auth.token").write_text("stale-auth-token\n")
@@ -1536,8 +1535,8 @@ def test_compose_native_settings_defaults_runtime_blueprint_repo(mocker, tmp_pat
     assert env["MN_BLUEPRINT_SOURCE"] == "github"
     assert env["MN_BLUEPRINT_REPO"] == "https://github.com/MirrorNeuronLab/mn-blueprints.git"
     assert env["MN_BLUEPRINT_LOCAL"] == ""
-    assert env["MN_HOST_ARTIFACTS_DIR"].endswith(".mirror_neuron/runs")
-    assert env["MN_RUNS_ROOT"].endswith(".mirror_neuron/runs")
+    assert env["MN_HOST_ARTIFACTS_DIR"].endswith(".mn/runs")
+    assert env["MN_RUNS_ROOT"].endswith(".mn/runs")
     assert env["MN_CONTAINER_RUNS_ROOT"] == "/root/.mn/runs"
     assert env["MN_BLUEPRINT_WEB_UI_PORT_START"] == "61000"
     assert env["MN_BLUEPRINT_WEB_UI_PORT_END"] == "61049"
@@ -2239,22 +2238,16 @@ def test_detach_local_docker_node_ignores_remote_alias(mocker, tmp_path):
 def test_default_web_ui_dirs_use_nested_install_path():
     assert ORIGINAL_WEB_UI_DIRS[0].name == "webui"
     assert ORIGINAL_WEB_UI_DIRS[1] == ORIGINAL_WEB_UI_DIRS[0].parent / "web-ui-source"
-    assert Path.home() / ".mn" / "webui" in ORIGINAL_WEB_UI_DIRS
-    assert Path.home() / ".mn" / "web-ui-source" in ORIGINAL_WEB_UI_DIRS
 
-def test_web_ui_dirs_include_default_install_when_runtime_home_is_custom(mocker, tmp_path):
+def test_web_ui_dirs_use_runtime_home_only_when_runtime_home_is_custom(mocker, tmp_path):
     custom_home = tmp_path / "custom-home"
-    default_home = tmp_path / "default-home"
 
     mocker.patch("mn_cli.server_cmds.DIR", custom_home)
-    mocker.patch("mn_cli.server_cmds.DEFAULT_DIR", default_home)
     mocker.patch("mn_cli.server_cmds._source_checkout_web_ui_dir", return_value=None)
 
     assert server_cmds._web_ui_dirs() == (
         custom_home / "webui",
         custom_home / "web-ui-source",
-        default_home / "webui",
-        default_home / "web-ui-source",
     )
 
 def test_find_web_ui_dir_uses_default_install_when_runtime_home_has_no_webui(tmp_path, mocker):

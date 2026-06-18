@@ -13,6 +13,8 @@ from mn_cli.libs.ui import print_confirmed, print_success_confirmation
 
 import typer
 
+from mn_sdk.runtime_config import default_runs_root
+
 
 def submit(
     manifest_path: Annotated[
@@ -150,7 +152,7 @@ def _cleanup_cancelled_job_web_ui(job_id: str) -> None:
     if not run_id:
         return
 
-    run_dir = Path(os.getenv("MN_RUNS_ROOT") or "~/.mn/runs").expanduser() / run_id
+    run_dir = default_runs_root() / run_id
     if not run_dir.is_dir():
         return
 
@@ -189,7 +191,7 @@ def _blueprint_run_id_for_job(job_id: str) -> str | None:
 
 
 def _blueprint_run_id_from_run_store(job_id: str) -> str | None:
-    runs_root = Path(os.getenv("MN_RUNS_ROOT") or "~/.mn/runs").expanduser()
+    runs_root = default_runs_root()
     if not runs_root.is_dir():
         return None
     for job_file in runs_root.glob("*/job.json"):

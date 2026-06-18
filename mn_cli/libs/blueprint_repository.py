@@ -11,12 +11,13 @@ from typing import Any, Optional
 import typer
 
 from mn_sdk.blueprint_source import DEFAULT_BLUEPRINT_REPO, resolve_blueprint_source_config
+from mn_sdk.runtime_config import resolve_mn_home
 
 from mn_cli.shared import console, logger
 
 
-DEFAULT_BLUEPRINT_STORAGE = "~/.mn/blueprints"
-CUSTOM_BLUEPRINT_STORAGE_ROOT = "~/.mn/blueprint_repos"
+DEFAULT_BLUEPRINT_STORAGE_NAME = "blueprints"
+CUSTOM_BLUEPRINT_STORAGE_ROOT_NAME = "blueprint_repos"
 BLUEPRINT_REPO_CONTEXT_KEY = "blueprint_repo"
 
 
@@ -32,7 +33,7 @@ def context_blueprint_repo(ctx: typer.Context) -> Optional[str]:
 
 
 def default_blueprint_storage_dir() -> Path:
-    return Path(os.path.expanduser(DEFAULT_BLUEPRINT_STORAGE))
+    return resolve_mn_home() / DEFAULT_BLUEPRINT_STORAGE_NAME
 
 
 def custom_blueprint_storage_dir(repo: str) -> Path:
@@ -40,7 +41,7 @@ def custom_blueprint_storage_dir(repo: str) -> Path:
     name = normalized.removesuffix(".git").split("/")[-1] or "blueprints"
     name = re.sub(r"[^A-Za-z0-9_.-]+", "-", name).strip("-._") or "blueprints"
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
-    return Path(os.path.expanduser(CUSTOM_BLUEPRINT_STORAGE_ROOT)) / f"{name}-{digest}"
+    return resolve_mn_home() / CUSTOM_BLUEPRINT_STORAGE_ROOT_NAME / f"{name}-{digest}"
 
 
 def blueprint_storage_dir_for_source(source: str, *, use_default_cache: bool = False) -> Path:
