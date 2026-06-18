@@ -966,7 +966,9 @@ def test_run_materializes_vc_final_artifact_outputs(mocker, tmp_path, monkeypatc
                             }
                         }
                     ],
-                    "action_ledger": {"budget": 100, "used": 24, "remaining": 76}
+                    "action_ledger": {"budget": 100, "used": 24, "remaining": 76},
+                    "artifact_quality": {"status": "warning", "passes_required_gate": True},
+                    "run_health": {"status": "warning", "warning_count": 1, "failure_count": 0},
                 }
             }
         })
@@ -999,6 +1001,9 @@ def test_run_materializes_vc_final_artifact_outputs(mocker, tmp_path, monkeypatc
     assert json.loads((output_dir / "company_index.json").read_text())["companies"][0]["company_slug"] == "aurora-ai"
     assert "Berkus method score" in (output_dir / "aurora-ai" / "analysis.md").read_text()
     assert json.loads((output_dir / "final_artifact.json").read_text())["action_ledger"]["budget"] == 100
+    assert json.loads((output_dir / "action_ledger.json").read_text())["used"] == 24
+    assert json.loads((output_dir / "artifact_quality.json").read_text())["status"] == "warning"
+    assert json.loads((output_dir / "run_health.json").read_text())["warning_count"] == 1
 
 
 def test_run_materializes_deeply_nested_hostlocal_vc_artifact(mocker, tmp_path, monkeypatch):
@@ -1028,6 +1033,8 @@ def test_run_materializes_deeply_nested_hostlocal_vc_artifact(mocker, tmp_path, 
             }
         ],
         "action_ledger": {"budget": 100, "used": 21, "remaining": 79},
+        "artifact_quality": {"status": "ok", "passes_required_gate": True},
+        "run_health": {"status": "ok", "warning_count": 0, "failure_count": 0},
     }
     nested_result = {"sandbox": {"logs": json.dumps({"final_artifact": final_artifact})}}
     for index in range(25):
@@ -1071,6 +1078,9 @@ def test_run_materializes_deeply_nested_hostlocal_vc_artifact(mocker, tmp_path, 
     assert json.loads((output_dir / "company_index.json").read_text())["companies"][0]["company_slug"] == "boreal-robotics"
     assert "Replacement cost reflects prototype" in (output_dir / "boreal-robotics" / "analysis.md").read_text()
     assert json.loads((output_dir / "final_artifact.json").read_text())["action_ledger"]["used"] == 21
+    assert json.loads((output_dir / "action_ledger.json").read_text())["used"] == 21
+    assert json.loads((output_dir / "artifact_quality.json").read_text())["status"] == "ok"
+    assert json.loads((output_dir / "run_health.json").read_text())["status"] == "ok"
 
 
 def test_extract_final_artifact_from_prefixed_worker_logs():

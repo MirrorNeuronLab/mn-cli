@@ -319,6 +319,17 @@ def _write_vc_final_artifact_outputs(final_artifact: dict[str, Any], output_fold
         {"kind": "final_artifact_json", "path": str(output_folder / "final_artifact.json")},
         {"kind": "company_index_json", "path": str(output_folder / "company_index.json")},
     ])
+    diagnostic_artifacts = [
+        ("action_ledger", "action_ledger_json", "action_ledger.json"),
+        ("artifact_quality", "artifact_quality_json", "artifact_quality.json"),
+        ("run_health", "run_health_json", "run_health.json"),
+    ]
+    for artifact_key, kind, filename in diagnostic_artifacts:
+        artifact_value = final_artifact.get(artifact_key)
+        if isinstance(artifact_value, dict):
+            artifact_path = output_folder / filename
+            _write_json(artifact_path, artifact_value)
+            output_files.append({"kind": kind, "path": str(artifact_path)})
     index_lines = ["# VC Assistant Company Index", ""]
     for company in company_index["companies"]:
         index_lines.append(
