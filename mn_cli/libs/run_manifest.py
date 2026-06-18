@@ -7,7 +7,25 @@ from typing import Any, Optional
 
 from mn_sdk import DOCKER_MODEL_RUNNER_CONTAINER_API_BASE, resolve_llm_environment
 from mn_sdk.runtime_config import default_runs_root
+from mn_cli.libs.skill_runtime import (
+    prepare_skill_runtime_for_manifest,
+    stage_skill_runtime_payloads_for_manifest,
+)
 USER_HOME_ENV_KEYS = ("MN_OUTPUT_HOME", "MN_USER_HOME", "OTTERDESK_USER_HOME")
+UPLOAD_SOURCE_EXCLUDED_DIRS = {
+    ".git",
+    ".hg",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+}
 
 
 def _inject_local_blueprint_support_path() -> None:
@@ -97,6 +115,12 @@ def prepare_manifest_for_submission(
         config = with_shared_run_store_config(config, str(run_id), runs_root)
     if config is not None:
         apply_manifest_config_bindings(prepared, config)
+        prepare_skill_runtime_for_manifest(
+            prepared,
+            config,
+            bundle_dir=bundle_dir,
+            workspace_root=workspace_root(),
+        )
         refresh_embedded_blueprint_config(prepared, config)
     if enable_runtime_web_ui and run_id and config is not None and blueprint_web_ui_enabled(config):
         inject_runtime_web_ui_service_for_submission(
@@ -391,6 +415,48 @@ def stage_blueprint_support_payloads_for_manifest(
     return {"staged": bool(staged_sources), "sources": staged_sources}
 
 
+def stage_skill_runtime_support_payloads_for_manifest(
+    manifest: dict[str, Any],
+    payloads: dict[str, bytes],
+    *,
+    bundle_dir: Path,
+) -> dict[str, Any]:
+    return stage_skill_runtime_payloads_for_manifest(
+        manifest,
+        payloads,
+        bundle_dir=bundle_dir,
+    )
+
+
+def stage_upload_path_payloads_for_manifest(
+    manifest: dict[str, Any],
+    payloads: dict[str, bytes],
+    *,
+    bundle_dir: Path,
+) -> dict[str, Any]:
+    staged_sources: list[str] = []
+    seen: set[str] = set()
+    for source in _manifest_upload_sources(manifest):
+        if source in seen:
+            continue
+        seen.add(source)
+        if not _safe_upload_source(source):
+            continue
+        if _payload_source_present(payloads, source):
+            continue
+        source_path = (bundle_dir / source).resolve()
+        try:
+            source_path.relative_to(bundle_dir.resolve())
+        except ValueError:
+            continue
+        if not source_path.exists():
+            continue
+        file_count = _add_upload_source_to_payloads(source_path, source, payloads)
+        if file_count:
+            staged_sources.append(source)
+    return {"staged": bool(staged_sources), "sources": staged_sources}
+
+
 def render_agent_templates_for_submission(manifest: dict[str, Any]) -> None:
     nodes = manifest_nodes(manifest)
     if not nodes or not any("uses" in node for node in nodes):
@@ -405,6 +471,16 @@ def render_agent_templates_for_submission(manifest: dict[str, Any]) -> None:
     rendered = render_manifest_agent_templates(manifest)
     manifest.clear()
     manifest.update(rendered)
+
+
+def _manifest_upload_sources(manifest: dict[str, Any]) -> list[str]:
+    sources: list[str] = []
+    for node in manifest_nodes(manifest):
+        config = node.get("config") if isinstance(node.get("config"), dict) else {}
+        for source in _node_upload_sources(config):
+            if source and source not in sources:
+                sources.append(source)
+    return sources
 
 
 def _support_dependent_upload_sources(manifest: dict[str, Any], payload_root: Path) -> list[str]:
@@ -449,6 +525,56 @@ def _payload_source_imports_blueprint_support(payload_root: Path, source: str) -
                 return True
         except OSError:
             continue
+    return False
+
+
+def _safe_upload_source(source: str) -> bool:
+    candidate = Path(source)
+    return (
+        source not in {"", "."}
+        and not candidate.is_absolute()
+        and ".." not in candidate.parts
+        and candidate.parts[:1] != ("payloads",)
+    )
+
+
+def _payload_source_present(payloads: dict[str, bytes], source: str) -> bool:
+    prefix = source.rstrip("/") + "/"
+    return source in payloads or any(key.startswith(prefix) for key in payloads)
+
+
+def _add_upload_source_to_payloads(source_path: Path, payload_prefix: str, payloads: dict[str, bytes]) -> int:
+    if source_path.is_file():
+        payloads[payload_prefix] = source_path.read_bytes()
+        return 1
+    if not source_path.is_dir():
+        return 0
+    count = 0
+    source_root = source_path.resolve()
+    for file_path in sorted(source_root.rglob("*")):
+        if _excluded_upload_source_path(file_path, source_root) or file_path.is_symlink():
+            continue
+        if not file_path.is_file():
+            continue
+        resolved = file_path.resolve()
+        try:
+            resolved.relative_to(source_root)
+        except ValueError:
+            continue
+        relative = file_path.relative_to(source_root).as_posix()
+        payloads[f"{payload_prefix.rstrip('/')}/{relative}"] = file_path.read_bytes()
+        count += 1
+    return count
+
+
+def _excluded_upload_source_path(path: Path, source_root: Path) -> bool:
+    try:
+        relative = path.relative_to(source_root)
+    except ValueError:
+        return False
+    for part in relative.parts:
+        if part in UPLOAD_SOURCE_EXCLUDED_DIRS or part.endswith(".egg-info"):
+            return True
     return False
 
 
@@ -560,11 +686,59 @@ def blueprint_runtime_environment(
         docker_model_env = resolve_llm_environment(config)
         if docker_model_env:
             env.update(docker_model_env)
+        if _config_uses_docker_worker_skill_runtime(config):
+            env.update(_docker_worker_runtime_service_environment())
 
     scenario_path = bundle_dir / "scenario.json"
     if scenario_path.exists():
         env["MN_BLUEPRINT_SCENARIO_JSON"] = scenario_path.read_text(encoding="utf-8")
     return env
+
+
+def _config_uses_docker_worker_skill_runtime(config: dict[str, Any]) -> bool:
+    runtime = config.get("skill_runtime") if isinstance(config.get("skill_runtime"), dict) else {}
+    if runtime.get("driver") == "docker_worker":
+        return True
+    for section_name in ("input_skills", "output_skills"):
+        section = config.get(section_name) if isinstance(config.get(section_name), dict) else {}
+        for entry in section.values():
+            if not isinstance(entry, dict):
+                continue
+            runtime = entry.get("runtime") if isinstance(entry.get("runtime"), dict) else {}
+            if runtime.get("driver") == "docker_worker":
+                return True
+    return False
+
+
+def _docker_worker_runtime_service_environment() -> dict[str, str]:
+    values = _runtime_compose_env_values()
+    redis_url = os.getenv("MN_REDIS_URL") or values.get("MN_REDIS_URL")
+    network = os.getenv("MN_DOCKER_WORKER_NETWORK") or values.get("MN_DOCKER_NETWORK_NAME")
+    env: dict[str, str] = {}
+    if redis_url:
+        env.setdefault("MN_REDIS_URL", redis_url)
+        env.setdefault("MN_RAG_REDIS_URL", redis_url)
+        env.setdefault("MN_BLUEPRINT_RAG_REDIS_URL", redis_url)
+    if network:
+        env.setdefault("MN_DOCKER_WORKER_NETWORK", network)
+    env.setdefault("MN_CONTEXT_ADDR", os.getenv("MN_CONTEXT_ADDR") or "mirror-neuron-context-engine:50052")
+    return env
+
+
+def _runtime_compose_env_values() -> dict[str, str]:
+    path = Path(os.getenv("MN_HOME") or Path.home() / ".mn") / "docker-compose.env"
+    values: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return values
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
 
 
 def apply_manifest_config_bindings(

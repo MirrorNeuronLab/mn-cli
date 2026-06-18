@@ -9,6 +9,7 @@ from rich.table import Table
 from mn_cli.shared import console, client, config, logger
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.blueprint_resources import cleanup_blueprint_host_hooks, cleanup_web_ui_process
+from mn_cli.libs.blueprint_observability import load_observability_tools
 from mn_cli.libs.ui import print_confirmed, print_success_confirmation
 
 import typer
@@ -58,6 +59,7 @@ def status(
     try:
         job_json = client.get_job(job_id)
         job = json.loads(job_json)
+        _attach_resource_usage(job_id, job)
         console.print_json(data=job)
     except Exception as e:
         handle_cli_error(e, console, 'status')
@@ -188,6 +190,37 @@ def _blueprint_run_id_for_job(job_id: str) -> str | None:
     mn_cli_metadata = metadata.get("mn_cli") if isinstance(metadata, dict) else {}
     run_id = mn_cli_metadata.get("blueprint_run_id") if isinstance(mn_cli_metadata, dict) else None
     return run_id if isinstance(run_id, str) and run_id else None
+
+
+def _attach_resource_usage(job_id: str, job: dict[str, object]) -> None:
+    if "resource_usage" in job:
+        return
+    run_id = _run_id_from_job_payload(job) or _blueprint_run_id_from_run_store(job_id)
+    if not run_id:
+        return
+    try:
+        read_run_resources = load_observability_tools()["read_run_resources"]
+        resource_usage = read_run_resources(run_id, runs_root=default_runs_root())
+    except Exception:
+        return
+    if isinstance(resource_usage, dict):
+        job["resource_usage"] = resource_usage
+        summary = job.get("summary")
+        if isinstance(summary, dict):
+            summary.setdefault("resource_usage", resource_usage)
+
+
+def _run_id_from_job_payload(value: object) -> str | None:
+    if isinstance(value, dict):
+        for key in ("run_id", "runId"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate:
+                return candidate
+        for key in ("job", "summary", "metadata", "manifest", "payload"):
+            candidate = _run_id_from_job_payload(value.get(key))
+            if candidate:
+                return candidate
+    return None
 
 
 def _blueprint_run_id_from_run_store(job_id: str) -> str | None:

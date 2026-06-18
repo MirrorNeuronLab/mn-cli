@@ -1,4 +1,5 @@
 from importlib import metadata
+import json
 
 import pytest
 from typer.testing import CliRunner
@@ -134,6 +135,32 @@ def test_command_help_includes_argument_description_and_examples():
     assert "Path to a workflow manifest JSON file." in result.stdout
     assert "Examples:" in result.stdout
     assert "mn job submit ./manifest.json" in result.stdout
+
+
+def test_job_status_includes_resource_usage_when_run_data_is_available(mocker, tmp_path):
+    mocker.patch(
+        "mn_cli.libs.job_cmds.client.get_job",
+        return_value=json.dumps({"job": {"job_id": "job-1", "run_id": "run-1", "status": "running"}}),
+    )
+    mocker.patch("mn_cli.libs.job_cmds.default_runs_root", return_value=tmp_path)
+    mocker.patch(
+        "mn_cli.libs.job_cmds.load_observability_tools",
+        return_value={
+            "read_run_resources": lambda run_id, runs_root=None: {
+                "run_id": run_id,
+                "llm": {"input_tokens": 12, "output_tokens": 4, "total_tokens": 16, "calls": 1},
+                "buckets": [],
+            }
+        },
+    )
+
+    result = runner.invoke(app, ["job", "status", "job-1"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["resource_usage"]["llm"]["input_tokens"] == 12
+    assert payload["resource_usage"]["llm"]["output_tokens"] == 4
+    assert payload["resource_usage"]["llm"]["total_tokens"] == 16
 
 
 def test_runtime_help_includes_sidecar_restart_command():

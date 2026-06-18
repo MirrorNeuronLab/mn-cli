@@ -12,13 +12,56 @@ from mn_cli.libs.run_manifest import (
     load_blueprint_config,
     prepare_manifest_for_submission,
     stage_blueprint_support_payloads_for_manifest,
+    stage_skill_runtime_support_payloads_for_manifest,
     stage_local_input_payloads_for_manifest,
+    stage_upload_path_payloads_for_manifest,
 )
 
 requires_blueprint_support = pytest.mark.skipif(
     importlib.util.find_spec("mn_blueprint_support") is None,
     reason="mn_blueprint_support is not installed",
 )
+
+
+def _write_skill_pyproject(
+    skills_root: Path,
+    folder: str,
+    package: str,
+    *,
+    runtime: bool = False,
+) -> None:
+    skill_dir = skills_root / folder
+    skill_dir.mkdir(parents=True)
+    runtime_block = ""
+    if runtime:
+        runtime_block = """
+[tool.mirrorneuron.skill]
+id = "w3m_browser_skill"
+package = "mirrorneuron-w3m-browser-skill"
+
+[tool.mirrorneuron.skill.runtime]
+driver = "docker_worker"
+install_scope = "shared_job_container"
+base_image = "debian:bookworm-slim"
+verify_commands = ["command -v w3m", "python3 -c 'import mn_w3m_browser_skill'"]
+
+[[tool.mirrorneuron.skill.runtime.system_packages]]
+manager = "apt"
+packages = ["ca-certificates", "python3", "python3-pip", "python3-venv", "w3m"]
+"""
+    skill_dir.joinpath("pyproject.toml").write_text(
+        f"""
+[project]
+name = "{package}"
+version = "0.0.0"
+dependencies = []
+{runtime_block}
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+""",
+        encoding="utf-8",
+    )
 
 
 def test_prepare_manifest_for_submission_merges_runtime_env_and_metadata(tmp_path):
@@ -73,6 +116,253 @@ def test_prepare_manifest_for_submission_merges_runtime_env_and_metadata(tmp_pat
     assert env["MN_LLM_MODEL"] == "ollama/test"
     assert env["MN_LLM_API_KEY"] == "kept"
     assert prepared["metadata"]["mn_cli"]["blueprint_id"] == "bp"
+
+
+def test_prepare_manifest_auto_patches_skill_binary_deps_to_dockerworker(tmp_path, monkeypatch):
+    bundle_dir = tmp_path / "bundle"
+    skills_root = tmp_path / "mn-skills"
+    bundle_dir.mkdir()
+    (bundle_dir / "config").mkdir()
+    worker_dir = bundle_dir / "payloads" / "worker"
+    worker_dir.mkdir(parents=True)
+    (worker_dir / "requirements.txt").write_text(
+        "--index-url https://packages.example/simple/\n"
+        "mirrorneuron-w3m-browser-skill\n"
+        "example-external>=1\n",
+        encoding="utf-8",
+    )
+    _write_skill_pyproject(
+        skills_root,
+        "w3m_browser_skill",
+        "mirrorneuron-w3m-browser-skill",
+        runtime=True,
+    )
+    _write_skill_pyproject(
+        skills_root,
+        "blueprint_support_skill",
+        "mirrorneuron-blueprint-support-skill",
+    )
+    monkeypatch.setenv("MN_SKILLS_ROOT", str(skills_root))
+
+    (bundle_dir / "config" / "default.json").write_text(
+        json.dumps(
+            {
+                "identity": {"blueprint_id": "binary_bp"},
+                "python_dependencies": {
+                    "requirements": "worker/requirements.txt",
+                    "packages": [
+                        "mirrorneuron-blueprint-support-skill",
+                        "mirrorneuron-w3m-browser-skill",
+                        "example-external>=1",
+                    ],
+                },
+                "input_skills": {
+                    "w3m_browser": {
+                        "skill": "w3m_browser_skill",
+                        "package": "mirrorneuron-w3m-browser-skill",
+                        "install_policy": "python_environment_pip",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = {
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.HostLocal",
+                    "upload_path": "worker",
+                    "upload_as": "worker",
+                    "workdir": "/sandbox/job/worker",
+                    "command": ["python3.11", "run.py"],
+                    "python_environment": {"requirements": "worker/requirements.txt"},
+                    "environment": {},
+                },
+            }
+        ]
+    }
+
+    prepared = prepare_manifest_for_submission(bundle_dir, manifest)
+
+    node_config = prepared["nodes"][0]["config"]
+    runtime = prepared["metadata"]["mn_skill_runtime"]
+    assert node_config["runner_module"] == "MirrorNeuron.Runner.DockerWorker"
+    assert node_config["workdir"] == "/mn/job/worker"
+    assert node_config["docker_worker_image"] == "__mn_skill_runtime/docker_worker"
+    assert node_config["shared_container"] is True
+    assert node_config["reuse_shared_container"] is True
+    assert "python_environment" not in node_config
+    assert {"source": "__mn_skill_runtime", "target": "__mn_skill_runtime"} in node_config["upload_paths"]
+    assert any(item["source"] == "w3m_browser_skill" for item in node_config["build_context_upload_paths"])
+    assert runtime["generated"] is True
+    assert "w3m" in runtime["system_packages"]["apt"]
+    assert runtime["patched_nodes"] == ["worker"]
+
+    payloads: dict[str, bytes] = {}
+    staged = stage_skill_runtime_support_payloads_for_manifest(
+        prepared,
+        payloads,
+        bundle_dir=bundle_dir,
+    )
+
+    assert staged["staged"] is True
+    dockerfile = payloads["__mn_skill_runtime/docker_worker/Dockerfile"].decode()
+    requirements = payloads["__mn_skill_runtime/docker_worker/requirements.txt"].decode()
+    assert "apt-get install" in dockerfile
+    assert "w3m" in dockerfile
+    assert "COPY build_context/w3m_browser_skill" in dockerfile
+    assert "command -v w3m" in dockerfile
+    assert "mirrorneuron-w3m-browser-skill" not in requirements
+    assert "mirrorneuron-blueprint-support-skill" not in requirements
+    assert "example-external>=1" in requirements
+
+
+def test_prepare_manifest_skill_runtime_node_scope_patches_only_selected_nodes(tmp_path, monkeypatch):
+    bundle_dir = tmp_path / "bundle"
+    skills_root = tmp_path / "mn-skills"
+    bundle_dir.mkdir()
+    (bundle_dir / "config").mkdir()
+    _write_skill_pyproject(
+        skills_root,
+        "w3m_browser_skill",
+        "mirrorneuron-w3m-browser-skill",
+        runtime=True,
+    )
+    monkeypatch.setenv("MN_SKILLS_ROOT", str(skills_root))
+    (bundle_dir / "config" / "default.json").write_text(
+        json.dumps(
+            {
+                "identity": {"blueprint_id": "scoped_bp"},
+                "skill_runtime": {
+                    "auto_patch": True,
+                    "node_scope": "public_research_workers",
+                    "node_scopes": {"public_research_workers": ["research_worker"]},
+                },
+                "input_skills": {
+                    "w3m_browser": {
+                        "skill": "w3m_browser_skill",
+                        "package": "mirrorneuron-w3m-browser-skill",
+                        "install_policy": "python_environment_pip",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = {
+        "agents": {
+            "nodes": [
+                {
+                    "node_id": "research_worker",
+                    "config": {
+                        "runner_module": "MirrorNeuron.Runner.HostLocal",
+                        "command": ["python3", "research.py"],
+                        "environment": {},
+                    },
+                },
+                {
+                    "node_id": "local_worker",
+                    "config": {
+                        "runner_module": "MirrorNeuron.Runner.HostLocal",
+                        "command": ["python3", "local.py"],
+                        "environment": {},
+                    },
+                },
+            ]
+        }
+    }
+
+    prepared = prepare_manifest_for_submission(bundle_dir, manifest)
+    nodes = {node["node_id"]: node for node in prepared["agents"]["nodes"]}
+
+    assert nodes["research_worker"]["config"]["runner_module"] == "MirrorNeuron.Runner.DockerWorker"
+    assert nodes["local_worker"]["config"]["runner_module"] == "MirrorNeuron.Runner.HostLocal"
+    assert prepared["metadata"]["mn_skill_runtime"]["patched_nodes"] == ["research_worker"]
+
+
+def test_stage_upload_path_payloads_stages_top_level_blueprint_sources(tmp_path):
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    payload_dir = bundle_dir / "payloads" / "worker"
+    payload_dir.mkdir(parents=True)
+    (payload_dir / "run.py").write_text("print('hi')\n", encoding="utf-8")
+    sample_dir = bundle_dir / "examples" / "sample_inputs" / "company"
+    sample_dir.mkdir(parents=True)
+    (sample_dir / "brief.txt").write_text("sample evidence\n", encoding="utf-8")
+    cache_dir = sample_dir / "__pycache__"
+    cache_dir.mkdir()
+    (cache_dir / "brief.pyc").write_bytes(b"cache")
+
+    manifest = {
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "upload_paths": [
+                        {"source": "worker", "target": "worker"},
+                        {"source": "examples/sample_inputs", "target": "vc_assistant/examples/sample_inputs"},
+                    ]
+                },
+            }
+        ]
+    }
+    payloads = {"worker/run.py": b"print('hi')\n"}
+
+    staged = stage_upload_path_payloads_for_manifest(manifest, payloads, bundle_dir=bundle_dir)
+
+    assert staged == {"staged": True, "sources": ["examples/sample_inputs"]}
+    assert payloads["examples/sample_inputs/company/brief.txt"] == b"sample evidence\n"
+    assert "examples/sample_inputs/company/__pycache__/brief.pyc" not in payloads
+
+
+def test_prepare_manifest_leaves_manual_docker_worker_skill_policy_alone(tmp_path, monkeypatch):
+    bundle_dir = tmp_path / "bundle"
+    skills_root = tmp_path / "mn-skills"
+    bundle_dir.mkdir()
+    (bundle_dir / "config").mkdir()
+    _write_skill_pyproject(
+        skills_root,
+        "w3m_browser_skill",
+        "mirrorneuron-w3m-browser-skill",
+        runtime=True,
+    )
+    monkeypatch.setenv("MN_SKILLS_ROOT", str(skills_root))
+    (bundle_dir / "config" / "default.json").write_text(
+        json.dumps(
+            {
+                "identity": {"blueprint_id": "manual_bp"},
+                "input_skills": {
+                    "w3m_browser": {
+                        "skill": "w3m_browser_skill",
+                        "package": "mirrorneuron-w3m-browser-skill",
+                        "install_policy": "docker_worker_image",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = {
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.HostLocal",
+                    "command": ["python3.11", "run.py"],
+                    "environment": {},
+                },
+            }
+        ]
+    }
+
+    prepared = prepare_manifest_for_submission(bundle_dir, manifest)
+
+    assert prepared["nodes"][0]["config"]["runner_module"] == "MirrorNeuron.Runner.HostLocal"
+    assert "mn_skill_runtime" not in prepared.get("metadata", {})
 
 
 def test_prepare_manifest_for_submission_lowers_workflow_manifest_for_core_runtime(tmp_path):

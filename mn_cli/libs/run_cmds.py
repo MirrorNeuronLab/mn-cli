@@ -42,9 +42,12 @@ from mn_cli.libs.run_manifest import (
     runtime_web_ui_support_payloads_for_manifest,
     run_mode_label as _run_mode_label,
     stage_blueprint_support_payloads_for_manifest,
+    stage_skill_runtime_support_payloads_for_manifest,
     stage_local_input_payloads_for_manifest,
+    stage_upload_path_payloads_for_manifest,
     with_shared_run_store_config as _with_shared_run_store_config,
 )
+from mn_cli.libs.skill_runtime import validate_skill_runtime_requirements
 from mn_cli.libs.workflow_validation import (
     _is_workflow_manifest,
     _manifest_workflow_id,
@@ -805,6 +808,19 @@ def validate(
             )
             raise typer.Exit(1)
 
+        skill_runtime_errors = validate_skill_runtime_requirements(bundle_dir, manifest)
+        if skill_runtime_errors:
+            report = make_validation_report(
+                [
+                    _legacy_validation_issue(error, source="manifest")
+                    for error in skill_runtime_errors
+                ]
+            )
+            _emit_validation_report(
+                report, output_format, title="Manifest validation failed"
+            )
+            raise typer.Exit(1)
+
         manifest_spec_issues = (
             validate_service_spec_issues(manifest)
             + validate_requirements_spec_issues(manifest)
@@ -1308,9 +1324,11 @@ def _stage_bundle_payloads(
     web_ui: bool,
 ) -> dict[str, bytes]:
     payloads = load_bundle_payloads(bundle_dir)
+    stage_upload_path_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
     if web_ui:
         payloads.update(runtime_web_ui_support_payloads_for_manifest(manifest_dict))
     stage_blueprint_support_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
+    stage_skill_runtime_support_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
     return payloads
 
 

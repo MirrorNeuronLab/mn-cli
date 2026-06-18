@@ -358,6 +358,40 @@ def test_validate_rejects_invalid_python_environment(tmp_path):
     assert "python_environment.packages must be a list of non-empty strings" in result.stdout
 
 
+def test_validate_rejects_missing_explicit_skill_runtime_dockerfile(tmp_path):
+    bundle_dir = tmp_path / "bad_skill_runtime_bundle"
+    (bundle_dir / "payloads").mkdir(parents=True)
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "manifest_version": "1.0",
+        "graph_id": "test_graph",
+        "job_name": "test_job",
+        "entrypoints": ["worker"],
+        "metadata": {
+            "mn_skill_runtime": {
+                "enabled": True,
+                "driver": "docker_worker",
+                "build_context": "worker/docker_worker",
+                "generated": False,
+            }
+        },
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.DockerWorker",
+                    "docker_worker_image": "worker/docker_worker",
+                    "image": "example/worker:local",
+                },
+            }
+        ],
+    }))
+
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
+
+    assert result.exit_code == 1
+    assert "mn_skill_runtime Dockerfile not found" in result.stdout
+
+
 def test_validate_runs_manifest_input_validation(tmp_path):
     bundle_dir = tmp_path / "validated_inputs"
     bundle_dir.mkdir()
