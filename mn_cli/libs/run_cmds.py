@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -156,12 +157,13 @@ def _extract_final_artifact(value: Any, depth: int = 0) -> Optional[dict[str, An
         return None
     if isinstance(value, str):
         text = value.strip()
-        if not text or text[0] not in "{[":
+        if not text:
             return None
-        try:
-            return _extract_final_artifact(json.loads(text), depth + 1)
-        except Exception:
-            return None
+        for decoded in _json_values_from_text(text):
+            found = _extract_final_artifact(decoded, depth + 1)
+            if found:
+                return found
+        return None
     if isinstance(value, list):
         for item in value:
             found = _extract_final_artifact(item, depth + 1)
@@ -184,6 +186,22 @@ def _extract_final_artifact(value: Any, depth: int = 0) -> Optional[dict[str, An
         if found:
             return found
     return None
+
+
+def _json_values_from_text(text: str) -> list[Any]:
+    decoder = json.JSONDecoder()
+    values: list[Any] = []
+    starts = [0] if text and text[0] in "{[" else []
+    starts.extend(index for index, char in enumerate(text) if char in "{[" and index != 0)
+    for start in starts[:50]:
+        try:
+            value, _end = decoder.raw_decode(text[start:])
+        except Exception:
+            continue
+        values.append(value)
+        if values:
+            break
+    return values
 
 
 def _manifest_config(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -356,6 +374,71 @@ def _materialize_completed_blueprint_outputs(log_dir: Path, manifest: dict[str, 
             console.print(f"[green]Materialized blueprint outputs:[/green] {output_folder}")
     except Exception:
         logger.exception("Failed to materialize blueprint outputs to %s", output_folder)
+
+
+def _materialize_shared_storage_outputs(storage: dict[str, Any]) -> bool:
+    if not isinstance(storage, dict):
+        return False
+    copied_any = False
+    for spec in storage.get("output_copy") or []:
+        if not isinstance(spec, dict):
+            continue
+        source_path = spec.get("source_path") or spec.get("source")
+        target_path = spec.get("target_path") or spec.get("target")
+        if not isinstance(source_path, str) or not isinstance(target_path, str):
+            continue
+        source = _host_shared_path_for_runtime_path(storage, source_path)
+        target = Path(target_path).expanduser()
+        if source is None or not source.exists():
+            continue
+        try:
+            copied = _copy_output_path_to_host(source, target)
+        except Exception:
+            logger.exception("Failed to copy shared storage output %s to %s", source, target)
+            copied = False
+        if copied:
+            copied_any = True
+            console.print(f"[green]Materialized shared outputs:[/green] {target}")
+    return copied_any
+
+
+def _host_shared_path_for_runtime_path(storage: dict[str, Any], runtime_path: str) -> Optional[Path]:
+    host_root = storage.get("host_root")
+    runtime_root = storage.get("runtime_root")
+    if not isinstance(host_root, str) or not isinstance(runtime_root, str):
+        return None
+    normalized_runtime_root = runtime_root.rstrip("/")
+    normalized_runtime_path = runtime_path.rstrip("/")
+    if normalized_runtime_path == normalized_runtime_root:
+        return Path(host_root).expanduser()
+    prefix = normalized_runtime_root + "/"
+    if not normalized_runtime_path.startswith(prefix):
+        return None
+    return Path(host_root).expanduser() / normalized_runtime_path[len(prefix) :]
+
+
+def _copy_output_path_to_host(source: Path, target: Path) -> bool:
+    if source.is_dir():
+        entries = list(source.iterdir())
+        if not entries:
+            return False
+        target.mkdir(parents=True, exist_ok=True)
+        for entry in entries:
+            _copy_path_to_host(entry, target / entry.name)
+        return True
+    if source.is_file():
+        target.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target / source.name)
+        return True
+    return False
+
+
+def _copy_path_to_host(source: Path, target: Path) -> None:
+    if source.is_dir():
+        shutil.copytree(source, target, dirs_exist_ok=True)
+    elif source.is_file():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
 
 
 def _stream_and_format_events(
@@ -1571,7 +1654,9 @@ def run_bundle(
             manifest=manifest_dict,
         )
         if final_status in FINAL_STATUSES:
-            _materialize_completed_blueprint_outputs(log_writer.log_dir, manifest_dict)
+            materialized_shared = _materialize_shared_storage_outputs(prepared_submission.metadata)
+            if not materialized_shared:
+                _materialize_completed_blueprint_outputs(log_writer.log_dir, manifest_dict)
         if blueprint_run_dir is not None:
             if web_ui:
                 _start_background_event_relay_if_needed(

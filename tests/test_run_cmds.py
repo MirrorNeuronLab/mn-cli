@@ -1073,6 +1073,50 @@ def test_run_materializes_deeply_nested_hostlocal_vc_artifact(mocker, tmp_path, 
     assert json.loads((output_dir / "final_artifact.json").read_text())["action_ledger"]["used"] == 21
 
 
+def test_extract_final_artifact_from_prefixed_worker_logs():
+    final_artifact = {
+        "type": "vc_early_heuristic_analysis_reports",
+        "company_reports": [{"company_name": "Aurora AI"}],
+    }
+
+    result = {
+        "sandbox": {
+            "logs": "VC Assistant DockerWorker skill and context imports are available\n"
+            + json.dumps({"status": "completed", "final_artifact": final_artifact})
+        }
+    }
+
+    assert run_cmds._extract_final_artifact(result) == final_artifact
+
+
+def test_materialize_shared_storage_outputs_copies_host_runtime_path(tmp_path):
+    host_root = tmp_path / "shared"
+    source = host_root / "submissions" / "sub-1" / "outputs" / "user"
+    source.mkdir(parents=True)
+    (source / "final_artifact.json").write_text('{"ok": true}\n', encoding="utf-8")
+    (source / "company" / "analysis.md").parent.mkdir()
+    (source / "company" / "analysis.md").write_text("# Company\n", encoding="utf-8")
+
+    target = tmp_path / "Downloads" / "vc_assistant"
+    copied = run_cmds._materialize_shared_storage_outputs(
+        {
+            "host_root": str(host_root),
+            "runtime_root": "/runtime/shared",
+            "output_copy": [
+                {
+                    "source_path": "/runtime/shared/submissions/sub-1/outputs/user",
+                    "target_path": str(target),
+                    "kind": "directory",
+                }
+            ],
+        }
+    )
+
+    assert copied is True
+    assert json.loads((target / "final_artifact.json").read_text())["ok"] is True
+    assert (target / "company" / "analysis.md").read_text() == "# Company\n"
+
+
 def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-auto")

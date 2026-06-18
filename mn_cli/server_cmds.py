@@ -3150,6 +3150,7 @@ def _build_core_docker_run_command(
     container_blob_store_root = str(env.get("MN_CONTAINER_BLOB_STORE_ROOT") or DEFAULT_CONTAINER_BLOB_STORE_ROOT)
     host_shared_storage_root = str(env.get("MN_SHARED_STORAGE_ROOT") or env.get("MN_HOST_SHARED_STORAGE_ROOT") or Path(host_home_dir).expanduser() / "shared")
     runtime_shared_storage_root = str(env.get("MN_RUNTIME_SHARED_STORAGE_ROOT") or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT)
+    cmd.extend(["-e", f"MN_HOST_SHARED_STORAGE_ROOT={host_shared_storage_root}"])
     cmd.extend(["-v", f"{host_home_dir}:/root/.mn"])
     cmd.extend(["-v", f"{host_home_dir}:/opt/mirror_neuron/.mn"])
     cmd.extend(["-v", f"{host_artifacts_dir}:{container_runs_root}"])
