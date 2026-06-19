@@ -65,6 +65,7 @@ API_PID_FILE = PID_DIR / "api.pid"
 API_WATCHDOG_PID_FILE = PID_DIR / "api-watchdog.pid"
 WEB_UI_PID_FILE = PID_DIR / "web-ui.pid"
 WEB_UI_WATCHDOG_PID_FILE = PID_DIR / "web-ui-watchdog.pid"
+API_TOKEN_FILE = DIR / "api.token"
 BEAM_LOG = LOG_DIR / "beam.log"
 API_LOG = LOG_DIR / "api.log"
 API_WATCHDOG_LOG = LOG_DIR / "api-watchdog.log"
@@ -726,6 +727,33 @@ def _write_grpc_token_file(token_file: Path, token: str, label: str) -> None:
     if not token:
         return
     write_private_text(token_file, f"{token}\n")
+
+def _resolve_api_token() -> str:
+    env_token = os.getenv("MN_API_TOKEN", "").strip()
+    if env_token:
+        write_private_text(API_TOKEN_FILE, f"{env_token}\n")
+        return env_token
+    try:
+        existing_token = API_TOKEN_FILE.read_text(encoding="utf-8").strip()
+        if existing_token:
+            return existing_token
+    except OSError:
+        pass
+    generated_token = secrets.token_hex(32)
+    write_private_text(API_TOKEN_FILE, f"{generated_token}\n")
+    return generated_token
+
+def _ensure_runtime_api_token(env: dict[str, str], *, persist_compose: bool = False) -> dict[str, str]:
+    resolved = dict(env)
+    if str(resolved.get("MN_ENV") or "").strip().lower() != "prod":
+        return resolved
+    if not str(resolved.get("MN_API_TOKEN") or "").strip():
+        resolved["MN_API_TOKEN"] = _resolve_api_token()
+    else:
+        write_private_text(API_TOKEN_FILE, f"{resolved['MN_API_TOKEN'].strip()}\n")
+    if persist_compose and runtime_compose_available():
+        _write_env_file_values(RUNTIME_COMPOSE_ENV, {"MN_API_TOKEN": resolved["MN_API_TOKEN"]})
+    return resolved
 
 def _ensure_runtime_grpc_tokens(env: dict[str, str], *, persist_compose: bool = False) -> dict[str, str]:
     resolved = dict(env)
@@ -2065,6 +2093,80 @@ def _runtime_endpoint_snapshot(env: dict[str, str], web_ui_available: bool = Fal
         }
     return snapshot
 
+def _read_runtime_api_health(api_host: str, api_port: str, *, timeout_seconds: float = 2.0) -> Optional[dict[str, Any]]:
+    url = _api_http_url(api_host, api_port, "/api/v1/health")
+    try:
+        with urllib.request.urlopen(url, timeout=timeout_seconds) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            return payload if isinstance(payload, dict) else None
+    except Exception:
+        return None
+
+def _is_url_like(value: str) -> bool:
+    normalized = str(value or "").strip()
+    if re.fullmatch(r"[\w.-]+@[\w.-]+:[^\s]+", normalized):
+        return True
+    try:
+        parsed = urlparse(normalized)
+    except Exception:
+        return False
+    return parsed.scheme in {"http", "https", "ssh", "git"} and bool(parsed.netloc)
+
+def _normalize_blueprint_location(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    if _is_url_like(normalized):
+        if re.fullmatch(r"[\w.-]+@[\w.-]+:[^\s]+", normalized):
+            host, _, repo_path = normalized.partition(":")
+            return f"{host.lower()}:{repo_path.rstrip('/').removesuffix('.git')}"
+        parsed = urlparse(normalized)
+        repo_path = parsed.path.rstrip("/").removesuffix(".git")
+        return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{repo_path}"
+    return str(Path(normalized).expanduser().resolve())
+
+def _same_blueprint_location(active: str, expected: str) -> bool:
+    active_normalized = _normalize_blueprint_location(active)
+    expected_normalized = _normalize_blueprint_location(expected)
+    return bool(active_normalized and expected_normalized and active_normalized == expected_normalized)
+
+def _same_runtime_path(active: str, expected: str) -> bool:
+    active_path = str(active or "").strip()
+    expected_path = str(expected or "").strip()
+    if not active_path or not expected_path:
+        return False
+    try:
+        return Path(active_path).expanduser().resolve() == Path(expected_path).expanduser().resolve()
+    except OSError:
+        return active_path == expected_path
+
+def _expected_blueprint_location(env: dict[str, str]) -> str:
+    source = str(env.get("MN_BLUEPRINT_SOURCE") or "github").strip().lower()
+    if source == "local":
+        return str(env.get("MN_BLUEPRINT_LOCAL") or "").strip()
+    return str(env.get("MN_BLUEPRINT_REPO") or DEFAULT_BLUEPRINT_REPO).strip()
+
+def _runtime_api_config_mismatches(env: dict[str, str], health: Optional[dict[str, Any]]) -> list[tuple[str, str, str]]:
+    if not health:
+        return []
+    mismatches: list[tuple[str, str, str]] = []
+    expected_blueprint = _expected_blueprint_location(env)
+    active_blueprint = str(
+        health.get("active_blueprint_location")
+        or health.get("activeBlueprintLocation")
+        or health.get("blueprint_repo")
+        or health.get("blueprintRepo")
+        or ""
+    ).strip()
+    if active_blueprint and expected_blueprint and not _same_blueprint_location(active_blueprint, expected_blueprint):
+        mismatches.append(("blueprint repo", active_blueprint, expected_blueprint))
+
+    expected_runs_root = str(env.get("MN_RUNS_ROOT") or env.get("MN_HOST_ARTIFACTS_DIR") or "").strip()
+    active_runs_root = str(health.get("runs_root") or health.get("runsRoot") or "").strip()
+    if active_runs_root and expected_runs_root and not _same_runtime_path(active_runs_root, expected_runs_root):
+        mismatches.append(("runs root", active_runs_root, expected_runs_root))
+    return mismatches
+
 def _write_runtime_endpoints_file(env: dict[str, str], web_ui_available: bool = False) -> dict[str, object]:
     snapshot = _runtime_endpoint_snapshot(env, web_ui_available=web_ui_available)
     RUNTIME_ENDPOINTS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -2704,7 +2806,12 @@ def _start_api_watchdog(env: dict[str, str]) -> subprocess.Popen:
             start_new_session=True,
         )
 
-def _start_api_if_installed(runtime_env: Optional[dict[str, str]] = None) -> bool:
+def _start_api_if_installed(
+    runtime_env: Optional[dict[str, str]] = None,
+    *,
+    restart_running: bool = False,
+    restart_reason: str = "",
+) -> bool:
     if _api_command() is None:
         console.print("[yellow]=> Warning: mn-api not found, skipping.[/yellow]")
         return False
@@ -2723,12 +2830,16 @@ def _start_api_if_installed(runtime_env: Optional[dict[str, str]] = None) -> boo
     watchdog_status = check_status(API_WATCHDOG_PID_FILE)
     child_status = check_status(API_PID_FILE)
     if watchdog_status == 0:
-        if _wait_for_api(api_host, api_port, timeout_seconds=5.0):
+        if _wait_for_api(api_host, api_port, timeout_seconds=5.0) and not restart_running:
             console.print("[yellow]=> REST API watchdog is already running, skipping.[/yellow]")
             return True
+        if restart_running:
+            detail = f" ({restart_reason})" if restart_reason else ""
+            console.print(f"[yellow]=> REST API watchdog is already running; restarting it{detail}.[/yellow]")
+        else:
+            console.print("[yellow]=> REST API watchdog is running, but the API is not responding; restarting it.[/yellow]")
         try:
             watchdog_pid = int(API_WATCHDOG_PID_FILE.read_text().strip())
-            console.print("[yellow]=> REST API watchdog is running, but the API is not responding; restarting it.[/yellow]")
             kill_tree(watchdog_pid)
             time.sleep(1)
         except (ValueError, OSError):
@@ -3187,6 +3298,7 @@ def _start_server(
             if value:
                 env[key] = value
         env = _ensure_runtime_grpc_tokens(env, persist_compose=compose_runtime)
+        env = _ensure_runtime_api_token(env, persist_compose=compose_runtime)
         if compose_runtime:
             env = _ensure_compose_native_port_settings(env)
             if not _docker_container_running("mirror-neuron-core"):
@@ -3201,7 +3313,21 @@ def _start_server(
         env.setdefault("MN_API_PORT", DEFAULT_API_PORT)
         env.setdefault("MN_WEB_UI_HOST", _web_ui_host())
         env.setdefault("MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT)
-        _start_api_if_installed(env)
+        api_host = str(env.get("MN_API_HOST") or DEFAULT_HOST)
+        api_port = _valid_port_text(str(env.get("MN_API_PORT") or DEFAULT_API_PORT), DEFAULT_API_PORT)
+        api_health = _read_runtime_api_health(api_host, api_port)
+        api_mismatches = _runtime_api_config_mismatches(env, api_health)
+        if api_mismatches:
+            mismatch_details = ", ".join(
+                f"{key} {active or '(unset)'} -> {expected or '(unset)'}"
+                for key, active, expected in api_mismatches
+            )
+            console.print(f"[yellow]=> REST API runtime config changed; restarting API ({mismatch_details}).[/yellow]")
+        _start_api_if_installed(
+            env,
+            restart_running=bool(api_mismatches),
+            restart_reason="runtime config changed",
+        )
         web_ui_available = _start_web_ui_if_installed(env)
         endpoint_snapshot = _write_runtime_endpoints_file(env, web_ui_available=web_ui_available)
         console.print(f"   Runtime endpoints: {RUNTIME_ENDPOINTS_FILE}")
@@ -3266,6 +3392,7 @@ def _start_server(
     if join_handshake:
         _validate_remote_redis_details(join_handshake, ip, network_token)
         env.update(_grpc_tokens_from_handshake(join_handshake))
+    env = _ensure_runtime_api_token(env, persist_compose=compose_runtime)
     reconnecting_joined_node = bool(compose_runtime and not ip and _persisted_join_profile(env))
     if compose_runtime:
         env = _ensure_compose_native_port_settings(env)

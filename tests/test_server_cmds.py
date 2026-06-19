@@ -47,6 +47,7 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN", raising=False)
     monkeypatch.delenv("MN_GRPC_AUTH_TOKEN_FILE", raising=False)
     monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("MN_API_TOKEN", raising=False)
     monkeypatch.delenv("MN_ARTIFACT_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("MN_NODE_GPU", raising=False)
     monkeypatch.delenv("MN_NODE_GPU_COUNT", raising=False)
@@ -74,6 +75,7 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.BEAM_PID_FILE', pid_dir / "beam.pid")
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', pid_dir / "api.pid")
     mocker.patch('mn_cli.server_cmds.API_WATCHDOG_PID_FILE', pid_dir / "api-watchdog.pid")
+    mocker.patch('mn_cli.server_cmds.API_TOKEN_FILE', state_dir / "api.token")
     mocker.patch('mn_cli.server_cmds.WEB_UI_PID_FILE', pid_dir / "web-ui.pid")
     mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_PID_FILE', pid_dir / "web-ui-watchdog.pid")
     mocker.patch('mn_cli.server_cmds.BEAM_LOG', log_dir / "beam.log")
@@ -348,6 +350,30 @@ def test_resolve_grpc_admin_token_ignores_legacy_env(monkeypatch):
     monkeypatch.setenv("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN", "legacy-admin-token")
 
     assert _resolve_grpc_admin_token() != "legacy-admin-token"
+
+def test_runtime_api_token_is_generated_for_prod_and_persisted(mocker):
+    mocker.patch("mn_cli.server_cmds.secrets.token_hex", return_value="generated-api-token")
+
+    env = server_cmds._ensure_runtime_api_token({"MN_ENV": "prod"})
+
+    assert env["MN_API_TOKEN"] == "generated-api-token"
+    assert server_cmds.API_TOKEN_FILE.read_text().strip() == "generated-api-token"
+    assert server_cmds.API_TOKEN_FILE.stat().st_mode & 0o777 == 0o600
+    assert server_cmds._ensure_runtime_api_token({"MN_ENV": "prod"})["MN_API_TOKEN"] == "generated-api-token"
+
+def test_runtime_api_token_prefers_env_and_persists_compose(mocker, monkeypatch):
+    monkeypatch.setenv("MN_API_TOKEN", "explicit-api-token")
+    compose_file = server_cmds.RUNTIME_COMPOSE_FILE
+    compose_env = server_cmds.RUNTIME_COMPOSE_ENV
+    compose_file.parent.mkdir(parents=True, exist_ok=True)
+    compose_file.write_text("services: {}\n", encoding="utf-8")
+    compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n", encoding="utf-8")
+
+    env = server_cmds._ensure_runtime_api_token({"MN_ENV": "prod"}, persist_compose=True)
+
+    assert env["MN_API_TOKEN"] == "explicit-api-token"
+    assert server_cmds.API_TOKEN_FILE.read_text().strip() == "explicit-api-token"
+    assert "MN_API_TOKEN=explicit-api-token" in compose_env.read_text()
 
 def test_start_server_persists_env_grpc_tokens_for_later_cli_process(mocker, monkeypatch):
     monkeypatch.setenv("MN_GRPC_AUTH_TOKEN", "runtime-auth-token")
@@ -1245,6 +1271,7 @@ def test_start_server_already_running(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
     (tmp_path / "api.pid").write_text("1234")
     mocker.patch('mn_cli.server_cmds.os.kill') # check_status returns 0
+    mocker.patch('mn_cli.server_cmds._read_runtime_api_health', return_value=None)
 
     mock_container_tokens = mocker.patch(
         'mn_cli.server_cmds._runtime_grpc_tokens_from_running_container',
@@ -1265,6 +1292,54 @@ def test_start_server_already_running(mocker, tmp_path):
     mock_start_web.assert_called_once()
     mock_write_endpoints.assert_called_once()
     mock_print_endpoints.assert_called_once_with(None, True)
+
+def test_start_server_restarts_existing_api_when_runtime_blueprint_env_changes(mocker, tmp_path, monkeypatch):
+    mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
+    (tmp_path / "api.pid").write_text("1234")
+    mocker.patch('mn_cli.server_cmds.os.kill') # check_status returns 0
+
+    compose_file = server_cmds.RUNTIME_COMPOSE_FILE
+    compose_env = server_cmds.RUNTIME_COMPOSE_ENV
+    compose_file.parent.mkdir(parents=True, exist_ok=True)
+    compose_file.write_text("services: {}\n", encoding="utf-8")
+    compose_env.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_BLUEPRINT_SOURCE=github\n"
+        "MN_BLUEPRINT_REPO=https://github.com/MirrorNeuronLab/mn-blueprints.git\n"
+        "MN_RUNS_ROOT=/tmp/mn-runs\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MN_BLUEPRINT_SOURCE", "github")
+    monkeypatch.setenv("MN_BLUEPRINT_REPO", "https://github.com/MirrorNeuronLab/otterdesk-blueprints")
+    monkeypatch.setenv("MN_RUNS_ROOT", "/tmp/otterdesk-runs")
+    mocker.patch('mn_cli.server_cmds._runtime_grpc_tokens_from_running_container', return_value={})
+    mocker.patch('mn_cli.server_cmds._docker_container_running', return_value=True)
+    mocker.patch(
+        'mn_cli.server_cmds._read_runtime_api_health',
+        return_value={
+            "status": "ok",
+            "blueprint_source": "github",
+            "blueprint_repo": "https://github.com/MirrorNeuronLab/mn-blueprints.git",
+            "active_blueprint_location": "https://github.com/MirrorNeuronLab/mn-blueprints.git",
+            "runs_root": "/tmp/mn-runs",
+        },
+    )
+    start_api = mocker.patch('mn_cli.server_cmds._start_api_if_installed')
+    mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed', return_value=False)
+    mocker.patch('mn_cli.server_cmds._write_runtime_endpoints_file', return_value={"api": {}})
+    mocker.patch('mn_cli.server_cmds._print_service_endpoints')
+
+    _start_server()
+
+    start_api.assert_called_once()
+    api_env = start_api.call_args.args[0]
+    assert start_api.call_args.kwargs["restart_running"] is True
+    assert start_api.call_args.kwargs["restart_reason"] == "runtime config changed"
+    assert api_env["MN_BLUEPRINT_REPO"] == "https://github.com/MirrorNeuronLab/otterdesk-blueprints"
+    assert api_env["MN_RUNS_ROOT"] == "/tmp/otterdesk-runs"
+    compose_text = compose_env.read_text()
+    assert "MN_BLUEPRINT_REPO=https://github.com/MirrorNeuronLab/otterdesk-blueprints" in compose_text
+    assert "MN_RUNS_ROOT=/tmp/otterdesk-runs" in compose_text
 
 def test_start_server_join_compose_imports_primary_grpc_tokens(mocker, tmp_path):
     compose_file = server_cmds.RUNTIME_COMPOSE_FILE
@@ -2374,6 +2449,43 @@ def test_start_api_restarts_untracked_healthy_instance_under_watchdog(mocker, tm
     stop_matching.assert_called_once_with("mn-api", "REST API")
     mock_popen.assert_called_once()
     assert mock_wait.call_args_list == [
+        call("localhost", "54001", timeout_seconds=1.0),
+        call("localhost", "54001", timeout_seconds=10.0),
+    ]
+
+def test_start_api_restarts_running_watchdog_when_requested(mocker, tmp_path):
+    api_bin = tmp_path / "mn_venv" / "bin" / "mn-api"
+    api_bin.parent.mkdir(parents=True)
+    api_bin.write_text("#!/bin/sh\n")
+    api_pid = tmp_path / "api.pid"
+    watchdog_pid = tmp_path / "api-watchdog.pid"
+    api_pid.write_text("1234")
+    watchdog_pid.write_text("5678")
+
+    mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path / "mn_venv")
+    mocker.patch('mn_cli.server_cmds.API_PID_FILE', api_pid)
+    mocker.patch('mn_cli.server_cmds.API_WATCHDOG_PID_FILE', watchdog_pid)
+    mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
+    mocker.patch('mn_cli.server_cmds.API_WATCHDOG_LOG', tmp_path / "api-watchdog.log")
+    mocker.patch('mn_cli.server_cmds.os.kill') # check_status returns running
+    mocker.patch('mn_cli.server_cmds.time.sleep')
+    kill = mocker.patch('mn_cli.server_cmds.kill_tree')
+    mock_wait = mocker.patch('mn_cli.server_cmds._wait_for_api', side_effect=[True, True, True])
+    stop_matching = mocker.patch('mn_cli.server_cmds.stop_matching_sidecar_processes', return_value=False)
+    mock_popen = mocker.patch('mn_cli.server_cmds.subprocess.Popen')
+    mock_popen.return_value.pid = 54001
+
+    assert _start_api_if_installed(
+        {"MN_API_HOST": "localhost", "MN_API_PORT": "54001"},
+        restart_running=True,
+        restart_reason="runtime config changed",
+    ) is True
+
+    assert kill.call_args_list == [call(5678)]
+    stop_matching.assert_called_once_with("mn-api", "REST API")
+    mock_popen.assert_called_once()
+    assert mock_wait.call_args_list == [
+        call("localhost", "54001", timeout_seconds=5.0),
         call("localhost", "54001", timeout_seconds=1.0),
         call("localhost", "54001", timeout_seconds=10.0),
     ]
