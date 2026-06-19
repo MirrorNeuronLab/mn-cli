@@ -53,6 +53,39 @@ def _erl_aflags_needs_update(value: Optional[str], dist_port: str | int) -> bool
         or f"inet_dist_listen_max {dist_port}" not in text
     )
 
+def _distributed_core_command() -> list[str]:
+    command = (
+        "if [ -x \"bin/mirror_neuron\" ]; then "
+        "if [ -n \"${MN_NODE_NAME:-}\" ]; then "
+        "if [ -z \"${MN_COOKIE:-}\" ] || [ \"${MN_COOKIE:-}\" = \"mirrorneuron\" ]; then "
+        "echo \"MN_COOKIE must be set to a non-default secret when MN_NODE_NAME enables distributed Erlang\" >&2; exit 1; "
+        "fi; "
+        "unset ERL_EPMD_ADDRESS; "
+        "epmd_bin=\"$(find erts-* -path '*/bin/epmd' -type f | head -n 1)\"; "
+        "if [ -n \"$epmd_bin\" ]; then \"$epmd_bin\" -daemon; else epmd -daemon; fi; "
+        "export RELEASE_DISTRIBUTION=name; "
+        "export RELEASE_NODE=\"$MN_NODE_NAME\"; "
+        "export RELEASE_COOKIE=\"$MN_COOKIE\"; "
+        "else "
+        "export RELEASE_DISTRIBUTION=none; "
+        "fi; "
+        "exec bin/mirror_neuron start; "
+        "fi; "
+        "if [ -n \"${MN_NODE_NAME:-}\" ]; then "
+        "if [ -z \"${MN_COOKIE:-}\" ] || [ \"${MN_COOKIE:-}\" = \"mirrorneuron\" ]; then "
+        "echo \"MN_COOKIE must be set to a non-default secret when MN_NODE_NAME enables distributed Erlang\" >&2; exit 1; "
+        "fi; "
+        "dist_port=\"${MN_DIST_PORT:-4370}\"; "
+        "unset ERL_EPMD_ADDRESS; "
+        "epmd -daemon; "
+        "exec elixir --name \"$MN_NODE_NAME\" --cookie \"$MN_COOKIE\" --erl "
+        "\"-kernel inet_dist_listen_min ${dist_port} inet_dist_listen_max ${dist_port}\" -S mix run --no-halt; "
+        "else "
+        "exec mix run --no-halt; "
+        "fi"
+    )
+    return ["sh", "-c", command]
+
 def _mn_home() -> Path:
     return _runtime_mn_home()
 
@@ -1287,6 +1320,7 @@ def _start_network_core(
         *port_args,
         *env_args,
         "mirror-neuron-core:latest",
+        *_distributed_core_command(),
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
 
@@ -3272,7 +3306,7 @@ def _build_core_docker_run_command(
     cmd.extend(["-v", f"{host_shared_storage_root}:/opt/mirror_neuron/.mn/shared"])
     cmd.extend(["-e", f"MN_BLOB_STORE_ROOT={container_blob_store_root}"])
 
-    cmd.append("mirror-neuron-core:latest")
+    cmd.extend(["mirror-neuron-core:latest", *_distributed_core_command()])
     return cmd
 
 def _start_server(

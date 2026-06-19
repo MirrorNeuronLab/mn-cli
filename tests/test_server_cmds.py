@@ -723,6 +723,10 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     assert any(cmd[:4] == ["docker", "run", "-d", "--name"] and cmd[4] == "mirror-neuron-network-redis" for cmd in commands)
     core_run = next(cmd for cmd in commands if len(cmd) > 4 and cmd[:4] == ["docker", "run", "-d", "--name"] and cmd[4] == "mirror-neuron-network-core")
     assert "mirror-neuron-core:latest" in core_run
+    image_index = core_run.index("mirror-neuron-core:latest")
+    assert core_run[image_index + 1 : image_index + 3] == ["sh", "-c"]
+    assert "epmd_bin=" in core_run[image_index + 3]
+    assert "RELEASE_DISTRIBUTION=name" in core_run[image_index + 3]
     assert "redis:7" not in core_run
     assert core_run.count("-p") == 1
     assert "0.0.0.0:50055:50055" in core_run
@@ -2284,6 +2288,10 @@ def test_start_server_passes_slack_env_to_docker(mocker, tmp_path, monkeypatch):
     _start_server()
 
     docker_run = next(cmd for cmd in commands if cmd[:3] == ["docker", "run", "-d"])
+    image_index = docker_run.index("mirror-neuron-core:latest")
+    assert docker_run[image_index + 1 : image_index + 3] == ["sh", "-c"]
+    assert "epmd_bin=" in docker_run[image_index + 3]
+    assert "RELEASE_DISTRIBUTION=name" in docker_run[image_index + 3]
     cookie_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_COOKIE="))
     auth_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_GRPC_AUTH_TOKEN="))
     auth_file_env = next(
