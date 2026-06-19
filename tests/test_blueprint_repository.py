@@ -7,13 +7,13 @@ from mn_cli.libs import blueprint_repository as repo
 
 
 def test_custom_blueprint_storage_dir_is_sanitized_and_stable(monkeypatch, tmp_path):
-    monkeypatch.setattr(repo.os.path, "expanduser", lambda path: str(tmp_path) if path == repo.CUSTOM_BLUEPRINT_STORAGE_ROOT else path)
+    monkeypatch.setenv("MN_HOME", str(tmp_path))
 
     first = repo.custom_blueprint_storage_dir("https://example.test/acme/customer blueprints.git")
     second = repo.custom_blueprint_storage_dir("https://example.test/acme/customer blueprints.git/")
 
     assert first == second
-    assert first.parent == tmp_path
+    assert first.parent == tmp_path / "blueprint_repos"
     assert first.name.startswith("customer-blueprints-")
 
 
@@ -34,7 +34,10 @@ def test_load_blueprint_index_rejects_non_object_entries(tmp_path):
 
 
 def test_ensure_blueprint_source_offline_missing_cache_exits(monkeypatch, tmp_path):
-    monkeypatch.setattr(repo.os.path, "expanduser", lambda _path: str(tmp_path / "blueprints"))
+    monkeypatch.delenv("MN_BLUEPRINT_SOURCE", raising=False)
+    monkeypatch.delenv("MN_BLUEPRINT_REPO", raising=False)
+    monkeypatch.delenv("MN_BLUEPRINT_LOCAL", raising=False)
+    monkeypatch.setenv("MN_HOME", str(tmp_path / ".mn"))
 
     with pytest.raises(typer.Exit):
         repo.ensure_blueprint_source(

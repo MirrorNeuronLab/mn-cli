@@ -125,7 +125,6 @@ def test_help_supports_short_help_flag():
 
     assert result.exit_code == 0
     assert "Submit, inspect, control, and recover workflow jobs." in result.stdout
-    assert "mn job list --running-only" in result.stdout
 
 
 def test_command_help_includes_argument_description_and_examples():

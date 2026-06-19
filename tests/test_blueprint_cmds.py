@@ -20,7 +20,17 @@ def isolated_blueprint_source_env(monkeypatch, tmp_path):
     monkeypatch.delenv("MN_BLUEPRINT_SOURCE", raising=False)
     monkeypatch.delenv("MN_BLUEPRINT_REPO", raising=False)
     monkeypatch.delenv("MN_BLUEPRINT_LOCAL", raising=False)
-    monkeypatch.setenv("MN_HOME", str(tmp_path / ".mn"))
+    mn_home = tmp_path / ".mn"
+    mn_home.mkdir()
+    monkeypatch.setenv("MN_HOME", str(mn_home))
+
+
+def _default_blueprint_storage(tmp_path: Path) -> Path:
+    return tmp_path / ".mn" / "blueprints"
+
+
+def _custom_blueprint_cache_root(tmp_path: Path) -> Path:
+    return tmp_path / ".mn" / "blueprint_repos"
 
 
 def _use_local_blueprint_source(monkeypatch, catalog_dir: Path) -> None:
@@ -378,7 +388,7 @@ def test_blueprint_observability_commands_read_shared_run_store(tmp_path):
 
 def test_blueprint_list_blueprint_repo_reads_custom_index(mocker, tmp_path):
     repo_url = "https://github.com/MirrorNeuronLab/customer-blueprints"
-    custom_cache_root = tmp_path / "blueprint_repos"
+    custom_cache_root = _custom_blueprint_cache_root(tmp_path)
 
     def fake_expanduser(path):
         if path == "~/.mn/blueprint_repos":
@@ -423,7 +433,7 @@ def test_blueprint_list_uses_standard_env_local_source(tmp_path, monkeypatch):
 
 
 def test_blueprint_run_init_success(mocker, tmp_path):
-    storage_dir = tmp_path / "blueprints"
+    storage_dir = _default_blueprint_storage(tmp_path)
     mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', return_value=str(storage_dir))
     
     # Mock subprocess clone
@@ -454,7 +464,7 @@ def test_blueprint_run_init_success(mocker, tmp_path):
 
 
 def test_blueprint_run_detached_catalog_name_passes_through(mocker, tmp_path):
-    storage_dir = tmp_path / "blueprints"
+    storage_dir = _default_blueprint_storage(tmp_path)
     storage_dir.mkdir()
     mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', return_value=str(storage_dir))
     mock_run = mocker.patch('mn_cli.libs.blueprint_cmds.subprocess.run')
@@ -474,7 +484,7 @@ def test_blueprint_run_detached_catalog_name_passes_through(mocker, tmp_path):
 
 
 def test_blueprint_run_update_success(mocker, tmp_path):
-    storage_dir = tmp_path / "blueprints"
+    storage_dir = _default_blueprint_storage(tmp_path)
     storage_dir.mkdir()
     
     mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', return_value=str(storage_dir))
@@ -501,7 +511,7 @@ def test_blueprint_run_update_success(mocker, tmp_path):
 
 
 def test_blueprint_run_update_flag_pulls_cache(mocker, tmp_path):
-    storage_dir = tmp_path / "blueprints"
+    storage_dir = _default_blueprint_storage(tmp_path)
     storage_dir.mkdir()
     mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', return_value=str(storage_dir))
     mock_run = mocker.patch('mn_cli.libs.blueprint_cmds.subprocess.run')
@@ -523,7 +533,7 @@ def test_blueprint_run_update_flag_pulls_cache(mocker, tmp_path):
 
 
 def test_blueprint_update_cleans_resources_for_removed_blueprints(mocker, tmp_path, monkeypatch):
-    storage_dir = tmp_path / "blueprints"
+    storage_dir = _default_blueprint_storage(tmp_path)
     storage_dir.mkdir()
     env_root = tmp_path / "python_envs"
     runs_root = tmp_path / "runs"
@@ -582,7 +592,7 @@ def test_blueprint_update_cleans_resources_for_removed_blueprints(mocker, tmp_pa
 
 
 def test_blueprint_cleanup_removes_dead_and_stale_resources(mocker, tmp_path, monkeypatch):
-    storage_dir = tmp_path / "blueprints"
+    storage_dir = _default_blueprint_storage(tmp_path)
     storage_dir.mkdir()
     (storage_dir / "index.json").write_text(json.dumps([{"id": "bp-active", "path": "bp-active"}]))
     env_root = tmp_path / "python_envs"
@@ -642,7 +652,7 @@ def test_blueprint_cleanup_removes_dead_and_stale_resources(mocker, tmp_path, mo
 
 
 def test_blueprint_uninstall_removes_storage_and_owned_resources(mocker, tmp_path, monkeypatch):
-    storage_dir = tmp_path / "blueprints"
+    storage_dir = _default_blueprint_storage(tmp_path)
     storage_dir.mkdir()
     (storage_dir / "index.json").write_text(json.dumps([{"id": "bp-old", "path": "bp-old"}]))
     env_root = tmp_path / "python_envs"
@@ -674,8 +684,8 @@ def test_blueprint_uninstall_removes_storage_and_owned_resources(mocker, tmp_pat
 
 def test_blueprint_run_blueprint_repo_uses_repo_specific_cache(mocker, tmp_path):
     repo_url = "https://github.com/MirrorNeuronLab/customer-blueprints"
-    custom_cache_root = tmp_path / "blueprint_repos"
-    default_storage = tmp_path / "default-blueprints"
+    custom_cache_root = _custom_blueprint_cache_root(tmp_path)
+    default_storage = _default_blueprint_storage(tmp_path)
 
     def fake_expanduser(path):
         if path == "~/.mn/blueprint_repos":
@@ -789,7 +799,7 @@ def test_fake_llm_manifest_override_skips_live_runtime_model_requirement():
 
 def test_blueprint_run_blueprint_repo_missing_index_errors(mocker, tmp_path):
     repo_url = "https://github.com/MirrorNeuronLab/customer-blueprints"
-    custom_cache_root = tmp_path / "blueprint_repos"
+    custom_cache_root = _custom_blueprint_cache_root(tmp_path)
 
     def fake_expanduser(path):
         if path == "~/.mn/blueprint_repos":
@@ -817,7 +827,7 @@ def test_blueprint_run_blueprint_repo_missing_index_errors(mocker, tmp_path):
 
 def test_blueprint_run_blueprint_repo_malformed_index_errors(mocker, tmp_path):
     repo_url = "https://github.com/MirrorNeuronLab/customer-blueprints"
-    custom_cache_root = tmp_path / "blueprint_repos"
+    custom_cache_root = _custom_blueprint_cache_root(tmp_path)
 
     def fake_expanduser(path):
         if path == "~/.mn/blueprint_repos":
@@ -846,7 +856,7 @@ def test_blueprint_run_blueprint_repo_malformed_index_errors(mocker, tmp_path):
 
 
 def test_blueprint_run_generates_python_source_bundle(mocker, tmp_path, monkeypatch):
-    storage_dir = tmp_path / "blueprints"
+    storage_dir = _default_blueprint_storage(tmp_path)
     generated_root = tmp_path / "generated"
     storage_dir.mkdir()
     monkeypatch.setenv("MN_GENERATED_BLUEPRINT_BUNDLES_DIR", str(generated_root))
@@ -1025,7 +1035,7 @@ def test_root_run_command_is_removed():
 
 
 def test_blueprint_run_init_fail(mocker, tmp_path):
-    storage_dir = tmp_path / "blueprints"
+    storage_dir = _default_blueprint_storage(tmp_path)
     mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', return_value=str(storage_dir))
     
     # Mock subprocess clone
@@ -1038,7 +1048,7 @@ def test_blueprint_run_init_fail(mocker, tmp_path):
     assert "Failed to clone blueprint repository" in result.stdout
 
 def test_blueprint_run_no_index(mocker, tmp_path):
-    storage_dir = tmp_path / "blueprints"
+    storage_dir = _default_blueprint_storage(tmp_path)
     storage_dir.mkdir()
     mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', return_value=str(storage_dir))
     
@@ -1050,7 +1060,7 @@ def test_blueprint_run_no_index(mocker, tmp_path):
     assert "index.json not found" in result.stdout
 
 def test_blueprint_run_invalid_index(mocker, tmp_path):
-    storage_dir = tmp_path / "blueprints"
+    storage_dir = _default_blueprint_storage(tmp_path)
     storage_dir.mkdir()
     mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', return_value=str(storage_dir))
     
@@ -1065,7 +1075,7 @@ def test_blueprint_run_invalid_index(mocker, tmp_path):
     assert "Error parsing index.json" in result.stdout
 
 def test_blueprint_run_not_found(mocker, tmp_path):
-    storage_dir = tmp_path / "blueprints"
+    storage_dir = _default_blueprint_storage(tmp_path)
     storage_dir.mkdir()
     mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', return_value=str(storage_dir))
     
@@ -1080,7 +1090,7 @@ def test_blueprint_run_not_found(mocker, tmp_path):
     assert "not found in index" in result.stdout
 
 def test_blueprint_run_no_manifest(mocker, tmp_path):
-    storage_dir = tmp_path / "blueprints"
+    storage_dir = _default_blueprint_storage(tmp_path)
     storage_dir.mkdir()
     mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', return_value=str(storage_dir))
     
@@ -1098,7 +1108,7 @@ def test_blueprint_run_no_manifest(mocker, tmp_path):
     assert result.exit_code == 1
     assert "missing manifest.json" in result.stdout
 def test_blueprint_run_update_fail(mocker, tmp_path):
-    storage_dir = tmp_path / "blueprints"
+    storage_dir = _default_blueprint_storage(tmp_path)
     storage_dir.mkdir()
     
     mocker.patch('mn_cli.libs.blueprint_cmds.os.path.expanduser', return_value=str(storage_dir))

@@ -15,6 +15,7 @@ from mn_cli.libs.run_manifest import (
     stage_skill_runtime_support_payloads_for_manifest,
     stage_local_input_payloads_for_manifest,
     stage_upload_path_payloads_for_manifest,
+    workspace_root,
 )
 
 requires_blueprint_support = pytest.mark.skipif(
@@ -463,6 +464,9 @@ def test_prepare_manifest_for_submission_lowers_legacy_agent_graph_workflow_id(t
 
 
 def test_stage_blueprint_support_payloads_for_support_dependent_hostlocal_worker(tmp_path, monkeypatch):
+    if not (workspace_root() / "mn-skills" / "blueprint_support_skill" / "src").is_dir():
+        pytest.skip("blueprint support skill source is not checked out")
+
     bundle_dir = tmp_path / "bundle"
     script_dir = bundle_dir / "payloads" / "simulation_loop" / "scripts"
     config_dir = bundle_dir / "config"
