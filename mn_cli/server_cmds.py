@@ -177,6 +177,7 @@ DEFAULT_CONTAINER_BLOB_STORE_ROOT = "/root/.mn/blobs"
 DEFAULT_RUNTIME_SHARED_STORAGE_ROOT = "/root/.mn/shared"
 DEFAULT_CONTAINER_GRPC_AUTH_TOKEN_FILE = "/root/.mn/grpc_auth.token"
 DEFAULT_CONTAINER_GRPC_ADMIN_TOKEN_FILE = "/root/.mn/grpc_admin.token"
+DEFAULT_REDIS_IMAGE = "redis:8"
 LEGACY_GRPC_PORT = "50051"
 LEGACY_API_PORT = "4001"
 LEGACY_EPMD_PORT = "4369"
@@ -1228,6 +1229,9 @@ def _network_core_env(
             "MN_NODE_ROLE": "runtime",
             "MN_CLUSTER_NODES": cluster_nodes,
             "MN_REDIS_URL": redis_url,
+            "MN_HOST_SHARED_STORAGE_ROOT": str(DIR / "shared"),
+            "MN_SHARED_STORAGE_ROOT": DEFAULT_RUNTIME_SHARED_STORAGE_ROOT,
+            "MN_RUNTIME_SHARED_STORAGE_ROOT": DEFAULT_RUNTIME_SHARED_STORAGE_ROOT,
             "MN_DIST_PORT": str(dist_port),
             "MN_COOKIE": _derive_network_secret(token, "cookie"),
             "MN_GRPC_AUTH_TOKEN": _resolve_grpc_auth_token(),
@@ -1245,6 +1249,50 @@ def _docker_env_args(env: dict[str, str]) -> list[str]:
     for key in sorted(env):
         if key.startswith("MN_") or key in {"ERL_AFLAGS", "ERL_EPMD_ADDRESS", "ERL_EPMD_PORT"}:
             args.extend(["-e", f"{key}={env[key]}"])
+    return args
+
+def _network_redis_image() -> str:
+    return os.getenv("MN_REDIS_IMAGE", "").strip() or DEFAULT_REDIS_IMAGE
+
+def _docker_host_socket() -> Optional[Path]:
+    candidates = [
+        os.getenv("DOCKER_HOST_SOCKET", "").strip(),
+        "/var/run/docker.sock",
+        str(Path.home() / ".docker" / "run" / "docker.sock"),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate).expanduser()
+        if path.exists():
+            return path
+    return None
+
+def _network_core_bind_args() -> list[str]:
+    args: list[str] = []
+    shared_dir = DIR / "shared"
+    shared_dir.mkdir(parents=True, exist_ok=True)
+
+    for host_path, container_path in (
+        (DIR, "/root/.mn"),
+        (DIR, "/opt/mirror_neuron/.mn"),
+        (DIR, str(DIR)),
+        (shared_dir, "/root/.mn/shared"),
+        (shared_dir, "/opt/mirror_neuron/.mn/shared"),
+    ):
+        args.extend(["-v", f"{host_path}:{container_path}:rw"])
+
+    args.extend(_docker_worker_bind_args())
+    return args
+
+def _docker_worker_bind_args() -> list[str]:
+    args: list[str] = []
+    socket_path = _docker_host_socket()
+    if socket_path is not None:
+        args.extend(["-v", f"{socket_path}:/var/run/docker.sock:rw"])
+        docker_cli = shutil.which("docker") if sys.platform.startswith("linux") else None
+        if docker_cli:
+            args.extend(["-v", f"{docker_cli}:/usr/local/bin/docker:ro"])
     return args
 
 def _start_network_redis(
@@ -1271,7 +1319,7 @@ def _start_network_redis(
         *_docker_network_run_args(docker_network_mode, docker_network_name, redis_alias),
         "-v",
         f"{data_dir}:/data",
-        "redis:7",
+        _network_redis_image(),
         "redis-server",
         "--appendonly",
         "yes",
@@ -1318,6 +1366,7 @@ def _start_network_core(
         NETWORK_CORE_CONTAINER,
         *_docker_network_run_args(docker_network_mode, docker_network_name, node_alias),
         *port_args,
+        *_network_core_bind_args(),
         *env_args,
         "mirror-neuron-core:latest",
         *_distributed_core_command(),
@@ -1563,6 +1612,8 @@ def _start_network_seed(
         redis_public_port = selected_redis_port or REDIS_CONTAINER_PORT
 
     _ensure_network_docker_network(container_network_mode, network_name)
+    if container_network_mode == "disabled" and _docker_host_socket() is not None:
+        _ensure_docker_network("bridge", network_name)
     if not external_redis_url:
         console.print("=> Starting network Redis...")
         _start_network_redis(
@@ -1670,6 +1721,8 @@ def _join_network(
         console.print("Check that the local MirrorNeuron core is running, and that the remote host and token are correct.")
         console.print(f"[dim]{exc}[/dim]")
         raise typer.Exit(1) from exc
+    if runtime_compose_available():
+        _persist_compose_cluster_node(remote_node)
     details: list[tuple[str, str]] = [("Node", remote_node)]
     if runtime_compose_available() or os.getenv("MN_REDIS_URL", "").strip():
         replication = _configure_worker_redis_replica(seed_host, handshake, token)
@@ -1686,6 +1739,17 @@ def _join_network(
         next_steps=("mn node list", "mn resource list"),
     )
     return handshake
+
+def _persist_compose_cluster_node(node_name: str) -> None:
+    node_name = str(node_name or "").strip()
+    if not node_name:
+        return
+
+    env = _read_env_file(RUNTIME_COMPOSE_ENV)
+    nodes = _split_env_list(env.get("MN_CLUSTER_NODES"))
+    if node_name not in nodes:
+        nodes.append(node_name)
+        _write_env_file_values(RUNTIME_COMPOSE_ENV, {"MN_CLUSTER_NODES": ",".join(nodes)})
 
 def _ensure_local_cluster_runtime_for_join(
     *,
@@ -2535,15 +2599,6 @@ def _configure_worker_redis_replica(
             worker_redis_host,
             worker_redis_port,
             worker_password,
-            "CONFIG",
-            "SET",
-            "requirepass",
-            primary_password,
-        )
-        _redis_command(
-            worker_redis_host,
-            worker_redis_port,
-            primary_password,
             "REPLICAOF",
             primary_host,
             str(primary_port),
@@ -3304,6 +3359,7 @@ def _build_core_docker_run_command(
     cmd.extend(["-v", f"{host_blob_store_dir}:/opt/mirror_neuron/.mn/blobs"])
     cmd.extend(["-v", f"{host_shared_storage_root}:{runtime_shared_storage_root}"])
     cmd.extend(["-v", f"{host_shared_storage_root}:/opt/mirror_neuron/.mn/shared"])
+    cmd.extend(_docker_worker_bind_args())
     cmd.extend(["-e", f"MN_BLOB_STORE_ROOT={container_blob_store_root}"])
 
     cmd.extend(["mirror-neuron-core:latest", *_distributed_core_command()])

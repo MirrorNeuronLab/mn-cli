@@ -221,6 +221,8 @@ def test_prepare_core_docker_context_copies_release_and_writes_dockerfile(tmp_pa
     assert copied_binary.read_text(encoding="utf-8") == "run\n"
     dockerfile = (context_dir / "Dockerfile").read_text(encoding="utf-8")
     assert "COPY mirror_neuron /opt/mirror_neuron" in dockerfile
+    assert "ARG DOCKER_CLI_VERSION=29.2.1" in dockerfile
+    assert "download.docker.com/linux/static/stable" in dockerfile
     assert 'CMD ["bin/mirror_neuron", "foreground"]' in dockerfile
 
 

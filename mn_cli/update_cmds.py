@@ -50,6 +50,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
     procps \\
     && rm -rf /var/lib/apt/lists/*
 
+ARG DOCKER_CLI_VERSION=29.2.1
+RUN set -eux; \\
+    arch="$(dpkg --print-architecture)"; \\
+    case "$arch" in \\
+      arm64) docker_target="aarch64" ;; \\
+      amd64) docker_target="x86_64" ;; \\
+      *) echo "unsupported architecture for Docker CLI: $arch" >&2; exit 1 ;; \\
+    esac; \\
+    curl -fLsS -o /tmp/docker-cli.tgz \\
+      "https://download.docker.com/linux/static/stable/${docker_target}/docker-${DOCKER_CLI_VERSION}.tgz"; \\
+    tar -xzf /tmp/docker-cli.tgz -C /tmp docker/docker; \\
+    install -m 0755 /tmp/docker/docker /usr/local/bin/docker; \\
+    rm -rf /tmp/docker /tmp/docker-cli.tgz; \\
+    docker --version
+
 ARG OPENSHELL_VERSION=v0.0.47
 RUN set -eux; \\
     arch="$(dpkg --print-architecture)"; \\
