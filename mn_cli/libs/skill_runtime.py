@@ -8,6 +8,8 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from mn_sdk.runtime_modules import default_registered_modules_root
+
 
 HOST_LOCAL_RUNNER = "MirrorNeuron.Runner.HostLocal"
 DOCKER_WORKER_RUNNER = "MirrorNeuron.Runner.DockerWorker"
@@ -601,7 +603,7 @@ def _skills_root(runtime_config: dict[str, Any], workspace_root: Path) -> Path:
     configured = runtime_config.get("skills_root") or os.getenv("MN_SKILLS_ROOT")
     if configured:
         return Path(str(configured)).expanduser()
-    return workspace_root / "mn-skills"
+    return default_registered_modules_root(workspace_root=workspace_root)
 
 
 def _runtime_metadata(manifest: dict[str, Any]) -> dict[str, Any]:

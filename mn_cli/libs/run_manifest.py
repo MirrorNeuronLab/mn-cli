@@ -6,6 +6,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 from mn_sdk import DOCKER_MODEL_RUNNER_CONTAINER_API_BASE, resolve_llm_environment
+from mn_sdk.runtime_modules import (
+    default_registered_modules_root,
+    ensure_runtime_modules_for_manifest,
+)
 from mn_sdk.runtime_config import default_runs_root
 from mn_cli.libs.skill_runtime import (
     prepare_skill_runtime_for_manifest,
@@ -31,8 +35,7 @@ UPLOAD_SOURCE_EXCLUDED_DIRS = {
 def _inject_local_blueprint_support_path() -> None:
     import sys
 
-    repo_root = workspace_root()
-    candidate = repo_root / "mn-skills" / "blueprint_support_skill" / "src"
+    candidate = Path(runtime_path_environment()["MN_SKILLS_ROOT"]) / "blueprint_support_skill" / "src"
     if candidate.is_dir() and str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
@@ -49,6 +52,7 @@ def workspace_root() -> Path:
 
 def runtime_path_environment() -> dict[str, str]:
     root = workspace_root()
+    runtime_modules_root = default_registered_modules_root(workspace_root=root)
     membrane_project_path = Path(
         os.getenv("MN_MEMBRANE_PROJECT_PATH") or root / "Membrane"
     ).expanduser()
@@ -56,7 +60,7 @@ def runtime_path_environment() -> dict[str, str]:
         os.getenv("MN_MEMBRANE_SDK_PATH")
         or membrane_project_path / "mn-context-engine-python-sdk" / "src"
     ).expanduser()
-    skills_root = Path(os.getenv("MN_SKILLS_ROOT") or root / "mn-skills").expanduser()
+    skills_root = Path(os.getenv("MN_SKILLS_ROOT") or runtime_modules_root).expanduser()
     env = {
         "MN_WORKSPACE_ROOT": str(root),
         "MN_MEMBRANE_PROJECT_PATH": str(membrane_project_path),
@@ -102,6 +106,7 @@ def prepare_manifest_for_submission(
     enable_runtime_web_ui: bool = True,
 ) -> dict[str, Any]:
     prepared = json.loads(json.dumps(manifest_dict))
+    ensure_runtime_modules_for_manifest(prepared, workspace_root=workspace_root())
     render_agent_templates_for_submission(prepared)
     metadata = dict(submission_metadata or {})
     run_id = (
@@ -115,6 +120,7 @@ def prepare_manifest_for_submission(
         config = with_shared_run_store_config(config, str(run_id), runs_root)
     if config is not None:
         apply_manifest_config_bindings(prepared, config)
+        ensure_runtime_modules_for_manifest(prepared, config, workspace_root=workspace_root())
         prepare_skill_runtime_for_manifest(
             prepared,
             config,
@@ -336,6 +342,7 @@ def inject_runtime_web_ui_service_for_submission(
     runs_root: str,
     env_overrides: Optional[dict[str, str]] = None,
 ) -> dict[str, Any] | None:
+    ensure_runtime_modules_for_manifest(manifest, config, workspace_root=workspace_root())
     _inject_local_blueprint_support_path()
     try:
         from mn_blueprint_support import inject_runtime_web_ui_service
@@ -354,6 +361,7 @@ def inject_runtime_web_ui_service_for_submission(
 
 
 def runtime_web_ui_support_payloads_for_manifest(manifest: dict[str, Any]) -> dict[str, bytes]:
+    ensure_runtime_modules_for_manifest(manifest, workspace_root=workspace_root())
     _inject_local_blueprint_support_path()
     try:
         from mn_blueprint_support import runtime_web_ui_service_from_manifest, runtime_web_ui_support_payloads
@@ -370,6 +378,7 @@ def stage_local_input_payloads_for_manifest(
     *,
     bundle_dir: Path,
 ) -> dict[str, Any]:
+    ensure_runtime_modules_for_manifest(manifest, workspace_root=workspace_root())
     _inject_local_blueprint_support_path()
     try:
         from mn_blueprint_support import stage_local_input_payloads_for_manifest as stage_payloads
@@ -386,7 +395,7 @@ def stage_blueprint_support_payloads_for_manifest(
     *,
     bundle_dir: Path,
 ) -> dict[str, Any]:
-    skills_root = workspace_root() / "mn-skills"
+    skills_root = Path(runtime_path_environment()["MN_SKILLS_ROOT"])
     support_root = skills_root / "blueprint_support_skill" / "src" / "mn_blueprint_support"
     if not support_root.is_dir():
         return {"staged": False, "sources": []}
@@ -461,6 +470,7 @@ def render_agent_templates_for_submission(manifest: dict[str, Any]) -> None:
     nodes = manifest_nodes(manifest)
     if not nodes or not any("uses" in node for node in nodes):
         return
+    ensure_runtime_modules_for_manifest(manifest, workspace_root=workspace_root())
     _inject_local_blueprint_support_path()
     try:
         from mn_blueprint_support import render_manifest_agent_templates
