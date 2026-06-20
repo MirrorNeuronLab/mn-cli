@@ -1,47 +1,33 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-import sys
 import time
 from typing import Any, Callable, Optional
 
 import typer
+from mn_sdk.blueprint_support import make_run_id
+from mn_sdk.blueprint_support.observability import (
+    acknowledge_human_notice,
+    list_pending_human_requests,
+    list_runs,
+    load_run,
+    read_human_events,
+    read_run_events,
+    read_run_logs,
+    read_run_resources,
+    read_run_stream_records,
+    record_human_response,
+)
+from mn_sdk.blueprint_support.web_ui import write_static_run_report
 
 from mn_cli.shared import console
 
 
 def load_observability_api() -> tuple[Callable[..., list[dict[str, Any]]], Callable[..., dict[str, Any]], Callable[..., list[dict[str, Any]]]]:
-    _ensure_blueprint_support_path()
-    try:
-        from mn_blueprint_support.observability import list_runs, load_run, read_run_events
-    except ModuleNotFoundError:
-        console.print(
-            "[red]Blueprint observability support is unavailable. "
-            "Install the blueprint support package or run from the monorepo checkout.[/red]"
-        )
-        raise typer.Exit(1)
     return list_runs, load_run, read_run_events
 
 
 def load_observability_tools() -> dict[str, Callable[..., Any]]:
-    _ensure_blueprint_support_path()
-    try:
-        from mn_blueprint_support.observability import (
-            acknowledge_human_notice,
-            list_pending_human_requests,
-            read_human_events,
-            read_run_logs,
-            read_run_resources,
-            read_run_stream_records,
-            record_human_response,
-        )
-    except ModuleNotFoundError:
-        console.print(
-            "[red]Blueprint observability support is unavailable. "
-            "Install the blueprint support package or run from the monorepo checkout.[/red]"
-        )
-        raise typer.Exit(1)
     return {
         "acknowledge_human_notice": acknowledge_human_notice,
         "list_pending_human_requests": list_pending_human_requests,
@@ -53,28 +39,12 @@ def load_observability_tools() -> dict[str, Callable[..., Any]]:
     }
 
 
-def _ensure_blueprint_support_path() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    support_src = repo_root / "mn-skills" / "blueprint_support_skill" / "src"
-    if support_src.exists() and str(support_src) not in sys.path:
-        sys.path.insert(0, str(support_src))
-
-
 def load_web_ui_api() -> Callable[..., Any]:
-    load_observability_api()
-    try:
-        from mn_blueprint_support.web_ui import write_static_run_report
-    except ModuleNotFoundError:
-        console.print("[red]Blueprint web UI support is unavailable.[/red]")
-        raise typer.Exit(1)
     return write_static_run_report
 
 
 def make_blueprint_run_id(blueprint_id: str) -> str:
     try:
-        load_observability_api()
-        from mn_blueprint_support import make_run_id
-
         return make_run_id(blueprint_id)
     except Exception:
         import uuid

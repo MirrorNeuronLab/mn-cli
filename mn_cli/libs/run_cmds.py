@@ -2451,7 +2451,7 @@ def _start_background_event_relay_if_needed(
     command = [
         sys.executable,
         "-m",
-        "mn_blueprint_support.event_relay",
+        "mn_sdk.blueprint_support.event_relay",
         "--job-id",
         job_id,
         "--run-dir",
@@ -2464,7 +2464,6 @@ def _start_background_event_relay_if_needed(
 
     env = os.environ.copy()
     env["MN_RUN_EVENT_RELAY_CHILD"] = "1"
-    _inject_local_blueprint_support_pythonpath(env)
     with open(log_path, "a", encoding="utf-8") as relay_log:
         process = subprocess.Popen(
             command,
@@ -2598,7 +2597,7 @@ def _web_ui_registration_module(
 
     adapter = str(output.get("adapter") or web_ui.get("kind") or "").lower()
     if adapter == "gradio" and output.get("auto_generate", True) is not False:
-        return "mn_blueprint_support.gradio_dashboard"
+        return "mn_sdk.blueprint_support.gradio_dashboard"
     return None
 
 
@@ -2762,21 +2761,6 @@ def _launch_blueprint_web_ui_command(
         logger.exception(
             "Failed to launch blueprint web UI for run_id=%s", blueprint_run_id
         )
-
-
-def _inject_local_blueprint_support_pythonpath(env: dict[str, str]) -> None:
-    repo_root = Path(
-        os.getenv("MN_WORKSPACE_ROOT")
-        or Path(__file__).resolve().parents[3]
-    ).expanduser()
-    support_src = repo_root / "mn-skills" / "blueprint_support_skill" / "src"
-    if not support_src.is_dir():
-        return
-    current = env.get("PYTHONPATH")
-    paths = [str(support_src)]
-    if current:
-        paths.append(current)
-    env["PYTHONPATH"] = os.pathsep.join(paths)
 
 
 def _web_ui_bind_host(output: dict[str, Any], env_overrides: dict[str, str]) -> str:

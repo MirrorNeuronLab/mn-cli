@@ -10,6 +10,13 @@ from mn_sdk.runtime_modules import (
     default_registered_modules_root,
     ensure_runtime_modules_for_manifest,
 )
+from mn_sdk.blueprint_support import (
+    inject_runtime_web_ui_service,
+    render_manifest_agent_templates,
+    runtime_web_ui_service_from_manifest,
+    runtime_web_ui_support_payloads,
+    stage_local_input_payloads_for_manifest as stage_sdk_local_input_payloads,
+)
 from mn_sdk.runtime_config import default_runs_root
 from mn_cli.libs.skill_runtime import (
     prepare_skill_runtime_for_manifest,
@@ -30,14 +37,6 @@ UPLOAD_SOURCE_EXCLUDED_DIRS = {
     "node_modules",
     "venv",
 }
-
-
-def _inject_local_blueprint_support_path() -> None:
-    import sys
-
-    candidate = Path(runtime_path_environment()["MN_SKILLS_ROOT"]) / "blueprint_support_skill" / "src"
-    if candidate.is_dir() and str(candidate) not in sys.path:
-        sys.path.insert(0, str(candidate))
 
 
 def workspace_root() -> Path:
@@ -68,7 +67,6 @@ def runtime_path_environment() -> dict[str, str]:
         "MN_SKILLS_ROOT": str(skills_root),
     }
     python_paths = [
-        skills_root / "blueprint_support_skill" / "src",
         skills_root / "llm_ocr_skill" / "src",
         skills_root / "pdf_extract_skill" / "src",
     ]
@@ -343,13 +341,6 @@ def inject_runtime_web_ui_service_for_submission(
     env_overrides: Optional[dict[str, str]] = None,
 ) -> dict[str, Any] | None:
     ensure_runtime_modules_for_manifest(manifest, config, workspace_root=workspace_root())
-    _inject_local_blueprint_support_path()
-    try:
-        from mn_blueprint_support import inject_runtime_web_ui_service
-    except ImportError as exc:
-        raise RuntimeError(
-            "Blueprint web UI service injection requires mn_blueprint_support."
-        ) from exc
     return inject_runtime_web_ui_service(
         manifest,
         bundle_dir=bundle_dir,
@@ -362,11 +353,6 @@ def inject_runtime_web_ui_service_for_submission(
 
 def runtime_web_ui_support_payloads_for_manifest(manifest: dict[str, Any]) -> dict[str, bytes]:
     ensure_runtime_modules_for_manifest(manifest, workspace_root=workspace_root())
-    _inject_local_blueprint_support_path()
-    try:
-        from mn_blueprint_support import runtime_web_ui_service_from_manifest, runtime_web_ui_support_payloads
-    except ImportError:
-        return {}
     if not runtime_web_ui_service_from_manifest(manifest):
         return {}
     return runtime_web_ui_support_payloads()
@@ -379,14 +365,12 @@ def stage_local_input_payloads_for_manifest(
     bundle_dir: Path,
 ) -> dict[str, Any]:
     ensure_runtime_modules_for_manifest(manifest, workspace_root=workspace_root())
-    _inject_local_blueprint_support_path()
     try:
-        from mn_blueprint_support import stage_local_input_payloads_for_manifest as stage_payloads
-    except ImportError as exc:
+        return stage_sdk_local_input_payloads(manifest, payloads, bundle_dir=bundle_dir)
+    except RuntimeError:
         if not manifest_local_inputs_enabled(manifest):
             return {}
-        raise RuntimeError("Local blueprint input staging requires mn_blueprint_support.") from exc
-    return stage_payloads(manifest, payloads, bundle_dir=bundle_dir)
+        raise
 
 
 def stage_blueprint_support_payloads_for_manifest(
@@ -471,13 +455,6 @@ def render_agent_templates_for_submission(manifest: dict[str, Any]) -> None:
     if not nodes or not any("uses" in node for node in nodes):
         return
     ensure_runtime_modules_for_manifest(manifest, workspace_root=workspace_root())
-    _inject_local_blueprint_support_path()
-    try:
-        from mn_blueprint_support import render_manifest_agent_templates
-    except ImportError as exc:
-        raise RuntimeError(
-            "Manifest uses agent templates, but mn_blueprint_support is not installed."
-        ) from exc
     rendered = render_manifest_agent_templates(manifest)
     manifest.clear()
     manifest.update(rendered)

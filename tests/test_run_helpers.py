@@ -1,5 +1,4 @@
 import json
-import importlib.util
 import uuid
 from pathlib import Path
 
@@ -17,12 +16,6 @@ from mn_cli.libs.run_manifest import (
     stage_upload_path_payloads_for_manifest,
     workspace_root,
 )
-
-requires_blueprint_support = pytest.mark.skipif(
-    importlib.util.find_spec("mn_blueprint_support") is None,
-    reason="mn_blueprint_support is not installed",
-)
-
 
 def _write_skill_pyproject(
     skills_root: Path,
@@ -742,7 +735,6 @@ def test_prepare_manifest_model_only_llm_config_does_not_request_scheduler_model
     assert "MN_LLM_RUNTIME_MODEL" not in env
 
 
-@requires_blueprint_support
 def test_prepare_manifest_for_submission_injects_flow_nodes_and_scheduler_binding(tmp_path):
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
@@ -808,7 +800,6 @@ def test_prepare_manifest_for_submission_injects_flow_nodes_and_scheduler_bindin
     assert "nodes" not in prepared
 
 
-@requires_blueprint_support
 def test_flow_node_local_video_inputs_promote_to_blob_refs(tmp_path, monkeypatch):
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
@@ -872,7 +863,6 @@ def test_flow_node_local_video_inputs_promote_to_blob_refs(tmp_path, monkeypatch
     assert ref["locations"][0]["node"] == "mirror_neuron@node-a"
 
 
-@requires_blueprint_support
 def test_stage_local_input_payloads_after_manifest_preparation(tmp_path):
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
@@ -928,7 +918,6 @@ def test_stage_local_input_payloads_after_manifest_preparation(tmp_path):
     assert summary["folders"][0]["file_count"] == 1
 
 
-@requires_blueprint_support
 def test_prepare_manifest_for_submission_renders_agent_templates(tmp_path, monkeypatch):
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()

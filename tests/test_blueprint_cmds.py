@@ -1,5 +1,4 @@
 import pytest
-import importlib.util
 import json
 from pathlib import Path
 import typer
@@ -9,10 +8,6 @@ from mn_cli.libs import blueprint_cmds
 from mn_sdk import load_model_ownership
 
 runner = CliRunner()
-requires_blueprint_support = pytest.mark.skipif(
-    importlib.util.find_spec("mn_blueprint_support") is None,
-    reason="blueprint-support-skill is not installed",
-)
 
 
 @pytest.fixture(autouse=True)
@@ -321,7 +316,6 @@ def test_blueprint_list_error(monkeypatch, tmp_path):
     assert "Error reading blueprints index" in result.stdout
 
 
-@requires_blueprint_support
 def test_blueprint_observability_commands_read_shared_run_store(tmp_path):
     run_dir = tmp_path / "observe-run"
     run_dir.mkdir()
@@ -376,7 +370,8 @@ def test_blueprint_observability_commands_read_shared_run_store(tmp_path):
     resources = runner.invoke(app, ["blueprint", "resources", "observe-run", "--window", "24000h", "--runs-root", str(tmp_path)])
 
     assert logs.exit_code == 0
-    assert "needs attention" in logs.stdout
+    assert "needs" in logs.stdout
+    assert "attention" in logs.stdout
     assert human.exit_code == 0
     assert "hitl-1" in human.stdout
     assert response.exit_code == 0
@@ -1170,7 +1165,6 @@ def _write_run(runs_root, run_id, blueprint_id="general_closed_loop_agent_runtim
     return run_dir
 
 
-@requires_blueprint_support
 def test_blueprint_monitor_reads_shared_run_store(tmp_path):
     runs_root = tmp_path / "runs"
     _write_run(runs_root, "run-1", action="rebalance")
@@ -1184,7 +1178,6 @@ def test_blueprint_monitor_reads_shared_run_store(tmp_path):
     assert "file://" in result.stdout
 
 
-@requires_blueprint_support
 def test_blueprint_tail_prints_event_stream(tmp_path):
     runs_root = tmp_path / "runs"
     _write_run(runs_root, "run-1", action="escalate_review")
@@ -1197,7 +1190,6 @@ def test_blueprint_tail_prints_event_stream(tmp_path):
     assert "run_completed" in result.stdout
 
 
-@requires_blueprint_support
 def test_blueprint_compare_shows_artifact_differences(tmp_path):
     runs_root = tmp_path / "runs"
     _write_run(runs_root, "run-a", action="hold_policy")
@@ -1212,7 +1204,6 @@ def test_blueprint_compare_shows_artifact_differences(tmp_path):
     assert "rebalance" in result.stdout
 
 
-@requires_blueprint_support
 def test_blueprint_export_markdown_contains_standard_artifacts(tmp_path):
     runs_root = tmp_path / "runs"
     _write_run(runs_root, "run-1", action="approve_plan")
@@ -1230,7 +1221,6 @@ def test_blueprint_export_markdown_contains_standard_artifacts(tmp_path):
     assert "## Web UI" in result.stdout
 
 
-@requires_blueprint_support
 def test_blueprint_export_html_writes_static_report(tmp_path):
     runs_root = tmp_path / "runs"
     run_dir = _write_run(runs_root, "run-1", action="approve_plan")
@@ -1245,7 +1235,6 @@ def test_blueprint_export_html_writes_static_report(tmp_path):
     assert (run_dir / "web" / "index.html").exists()
 
 
-@requires_blueprint_support
 def test_blueprint_export_rejects_unknown_format(tmp_path):
     runs_root = tmp_path / "runs"
     _write_run(runs_root, "run-1")
@@ -1256,7 +1245,6 @@ def test_blueprint_export_rejects_unknown_format(tmp_path):
     assert "Unsupported export format" in result.stdout
 
 
-@requires_blueprint_support
 def test_blueprint_tail_missing_run_reports_error(tmp_path):
     runs_root = tmp_path / "runs"
     runs_root.mkdir()

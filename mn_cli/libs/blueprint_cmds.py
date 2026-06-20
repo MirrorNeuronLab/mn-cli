@@ -3,7 +3,6 @@ import copy
 import json
 import shutil
 import subprocess
-import sys
 import time
 from pathlib import Path
 from typing import Annotated, Any, Optional
@@ -59,6 +58,9 @@ from mn_cli.libs.model_cmds import (
     remove_model_ref as _remove_model_ref,
 )
 from mn_sdk.runtime_config import resolve_mn_home
+from mn_sdk.blueprint_support.python_workflow_bundle import (
+    generate_python_workflow_bundle_from_blueprint_dir,
+)
 from mn_sdk import (
     cluster_provided_model as _cluster_provided_model,
     docker_model_name as _docker_model_name,
@@ -79,16 +81,6 @@ human_app = typer.Typer(
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 _PATCH_COMPAT = (subprocess, _git_checkout, _git_fetch)
-
-
-def _inject_local_blueprint_support_path() -> None:
-    repo_root = Path(
-        os.getenv("MN_WORKSPACE_ROOT")
-        or Path(__file__).resolve().parents[3]
-    ).expanduser()
-    candidate = repo_root / "mn-skills" / "blueprint_support_skill" / "src"
-    if candidate.is_dir() and str(candidate) not in sys.path:
-        sys.path.insert(0, str(candidate))
 
 
 @blueprint_app.callback()
@@ -147,11 +139,6 @@ def _prepare_blueprint_bundle_for_run(
 
 def _generate_python_source_bundle(blueprint_dir: Path, output_dir: Path) -> Path:
     _load_observability_api()
-    _inject_local_blueprint_support_path()
-    from mn_blueprint_support.python_workflow_bundle import (
-        generate_python_workflow_bundle_from_blueprint_dir,
-    )
-
     return generate_python_workflow_bundle_from_blueprint_dir(
         blueprint_dir,
         output_dir,

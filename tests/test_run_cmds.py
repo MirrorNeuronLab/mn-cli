@@ -1,5 +1,4 @@
 import json
-import importlib.util
 import logging
 import os
 import re
@@ -13,15 +12,10 @@ from typer.testing import CliRunner
 from rich.console import Console
 from mn_cli.main import app
 from mn_cli.libs import run_cmds
-from mn_cli.libs import run_manifest as run_manifest_lib
 from mn_cli.libs.ui import JobMonitorState, generate_live_layout
 from mn_cli.libs.run_manifest import prepare_manifest_for_submission
 
 runner = CliRunner()
-requires_blueprint_support = pytest.mark.skipif(
-    importlib.util.find_spec("mn_blueprint_support") is None,
-    reason="mn_blueprint_support is not installed",
-)
 
 
 @pytest.fixture(autouse=True)
@@ -569,7 +563,6 @@ def test_run_auto_schedule_creates_resource_wait_schedule(mocker, tmp_path, monk
     assert mock_create_schedule.call_args.kwargs["schedule"]["kind"] == "resource_wait"
 
 
-@requires_blueprint_support
 def test_run_shows_runtime_web_ui_url_in_submit_and_detach_panels(
     mocker, tmp_path, monkeypatch
 ):
@@ -578,9 +571,8 @@ def test_run_shows_runtime_web_ui_url_in_submit_and_detach_panels(
     monkeypatch.setenv("MN_RUN_BACKGROUND_EVENT_RELAY", "0")
     monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_PORT_START", str(web_ui_port))
     monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_PORT_END", str(web_ui_port))
-    run_manifest_lib._inject_local_blueprint_support_path()
     mocker.patch(
-        "mn_blueprint_support.runtime_web_ui.web_ui_port_available",
+        "mn_sdk.blueprint_support.runtime_web_ui.web_ui_port_available",
         return_value=True,
     )
     mocker.patch(
@@ -1283,7 +1275,6 @@ def test_write_local_web_ui_handle_skips_runtime_backed_shared_gradio_module(tmp
     assert not (tmp_path / "runs" / "bp-shared-gradio-run" / "ui.json").exists()
 
 
-@requires_blueprint_support
 def test_prepare_manifest_injects_runtime_web_ui_service_from_config(tmp_path, monkeypatch, mocker):
     first_port = 28800
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
@@ -1317,8 +1308,7 @@ def test_prepare_manifest_injects_runtime_web_ui_service_from_config(tmp_path, m
             }
         )
     )
-    run_manifest_lib._inject_local_blueprint_support_path()
-    mocker.patch("mn_blueprint_support.runtime_web_ui.web_ui_port_available", return_value=True)
+    mocker.patch("mn_sdk.blueprint_support.runtime_web_ui.web_ui_port_available", return_value=True)
     manifest = prepare_manifest_for_submission(
         bundle_dir,
         {
@@ -1876,11 +1866,10 @@ def test_live_web_ui_run_starts_background_event_relay(mocker, tmp_path, monkeyp
     assert "Live event relay" in result.stdout
     mock_popen.assert_called_once()
     command = mock_popen.call_args.args[0]
-    assert command[:3] == [sys.executable, "-m", "mn_blueprint_support.event_relay"]
+    assert command[:3] == [sys.executable, "-m", "mn_sdk.blueprint_support.event_relay"]
     assert "--max-seconds" in command
     pythonpath = mock_popen.call_args.kwargs["env"].get("PYTHONPATH", "")
-    if pythonpath:
-        assert "mn-skills/blueprint_support_skill/src" in pythonpath
+    assert "mn-skills/blueprint_support_skill/src" not in pythonpath
     relay = json.loads((tmp_path / "runs" / "live-ui-run" / "event_relay.json").read_text())
     assert relay["pid"] == 4242
 
