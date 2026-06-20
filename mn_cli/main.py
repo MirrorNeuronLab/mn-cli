@@ -45,6 +45,7 @@ Examples:
   mn runtime status
   mn runtime health
   mn runtime health --json
+  mn runtime ensure-context-engine
   mn runtime restart-sidecars --api
   mn runtime restart-sidecars --web-ui
   mn runtime stop
@@ -145,6 +146,7 @@ runtime_app.command(name="start")(sys_cmds.start)
 runtime_app.command(name="stop")(sys_cmds.stop)
 runtime_app.command(name="status")(sys_cmds.status)
 runtime_app.command(name="health")(sys_cmds.health)
+runtime_app.command(name="ensure-context-engine")(sys_cmds.ensure_context_engine)
 runtime_app.command(name="restart-sidecars")(sys_cmds.restart_sidecars)
 runtime_app.command(name="update")(update_cmds.update)
 runtime_app.command(name="metrics")(job_cmds.metrics)

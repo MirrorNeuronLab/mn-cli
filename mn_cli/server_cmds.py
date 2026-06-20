@@ -110,6 +110,11 @@ RUNTIME_COMPOSE_ENV = DIR / "docker-compose.env"
 RUNTIME_ENDPOINTS_FILE = DIR / "runtime-endpoints.json"
 RUNTIME_MODELS_OVERRIDE_FILE = "docker-compose.models.yml"
 DEFAULT_LLM_MODEL_RUNNER_MODEL = "ai/gemma4:E2B"
+DEFAULT_CONTEXT_MODEL_RUNNER_MODEL = "hf.co/homerquan/mn-context-engine-model-v-Q4_K_M"
+DEFAULT_MEMBRANE_REPO = "MirrorNeuronLab/Membrane"
+CONTEXT_ENGINE_SERVICE = "membrane-context-engine"
+CONTEXT_ENGINE_CONTAINER = "mirror-neuron-context-engine"
+CONTEXT_ENGINE_MODEL_CONTAINER = "mirror-neuron-context-engine-model"
 def _unique_paths(paths: list[Path]) -> tuple[Path, ...]:
     unique: list[Path] = []
     seen: set[str] = set()
@@ -1987,6 +1992,201 @@ def record_runtime_model_install(entry: dict[str, Any]) -> Optional[Path]:
     RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
     _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
     return _write_runtime_compose_models_override(docker_model)
+
+def ensure_context_engine_runtime(*, force: bool = False) -> dict[str, str]:
+    if not runtime_compose_available():
+        raise RuntimeError(
+            "MirrorNeuron runtime Compose files were not found. Run the installer or mn runtime start first."
+        )
+
+    env = _runtime_base_env(True)
+    source_dir = _ensure_context_engine_source(env)
+    profiles = _compose_profiles_with(env.get("COMPOSE_PROFILES"), "context")
+    model = str(env.get("MN_CONTEXT_MODEL_RUNNER_MODEL") or DEFAULT_CONTEXT_MODEL_RUNNER_MODEL)
+    updates = {
+        "COMPOSE_PROFILES": profiles,
+        "MEMBRANE_DIR": str(source_dir),
+        "MN_CONTEXT_MODEL_RUNNER_MODEL": model,
+    }
+    _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
+    env.update(updates)
+
+    _remove_non_mirror_neuron_container(CONTEXT_ENGINE_CONTAINER)
+    _remove_non_mirror_neuron_container(CONTEXT_ENGINE_MODEL_CONTAINER)
+    _ensure_docker_model_runner()
+
+    already_running = _docker_container_running(CONTEXT_ENGINE_CONTAINER)
+    if force or not already_running:
+        subprocess.run(
+            runtime_compose_cmd("build", CONTEXT_ENGINE_SERVICE),
+            check=True,
+            stdout=subprocess.DEVNULL,
+            env=env,
+        )
+        subprocess.run(
+            runtime_compose_cmd("up", "-d", CONTEXT_ENGINE_SERVICE),
+            check=True,
+            stdout=subprocess.DEVNULL,
+            env=env,
+        )
+        status = "restarted" if already_running and force else "started"
+    else:
+        status = "already_running"
+
+    return {
+        "status": status,
+        "service": CONTEXT_ENGINE_SERVICE,
+        "container": CONTEXT_ENGINE_CONTAINER,
+        "model": model,
+        "membrane_dir": str(source_dir),
+        "compose_profiles": profiles,
+    }
+
+def _compose_profiles_with(value: object, required_profile: str) -> str:
+    profiles: list[str] = []
+    seen: set[str] = set()
+    for raw_part in str(value or "").split(","):
+        profile = raw_part.strip()
+        if not profile:
+            continue
+        key = profile.lower()
+        if key in seen:
+            continue
+        profiles.append(profile)
+        seen.add(key)
+    if required_profile.lower() not in seen:
+        profiles.append(required_profile)
+    return ",".join(profiles)
+
+def _context_engine_git_url(env: dict[str, str]) -> str:
+    explicit = str(os.getenv("MN_MEMBRANE_GIT_URL") or env.get("MN_MEMBRANE_GIT_URL") or "").strip()
+    if explicit:
+        return explicit
+    repo = str(os.getenv("MN_MEMBRANE_REPO") or env.get("MN_MEMBRANE_REPO") or DEFAULT_MEMBRANE_REPO).strip()
+    return f"https://github.com/{repo}.git"
+
+def _context_engine_source_candidates(env: dict[str, str]) -> list[Path]:
+    checkout_dir = Path(__file__).resolve().parents[2]
+    raw_candidates = [
+        os.getenv("MN_MEMBRANE_DIR"),
+        env.get("MN_MEMBRANE_DIR"),
+        env.get("MEMBRANE_DIR"),
+        str(checkout_dir / "Membrane"),
+        str(checkout_dir.parent / "Membrane"),
+        str(Path.cwd() / "Membrane"),
+        str(Path.cwd().parent / "Membrane"),
+    ]
+    candidates: list[Path] = []
+    seen: set[str] = set()
+    for raw in raw_candidates:
+        value = str(raw or "").strip()
+        if not value:
+            continue
+        path = Path(value).expanduser()
+        key = str(path)
+        if key in seen:
+            continue
+        candidates.append(path)
+        seen.add(key)
+    return candidates
+
+def _valid_context_engine_source(path: Path) -> bool:
+    return (path / "Dockerfile").is_file()
+
+def _ensure_context_engine_source(env: dict[str, str]) -> Path:
+    for candidate in _context_engine_source_candidates(env):
+        if _valid_context_engine_source(candidate):
+            resolved = candidate.resolve()
+            _remove_dockerfile_frontend_directive(resolved / "Dockerfile")
+            return resolved
+
+    target = Path(str(env.get("MEMBRANE_DIR") or DIR / "Membrane")).expanduser()
+    if target.exists() and not target.is_dir():
+        raise RuntimeError(f"MEMBRANE_DIR is not a directory: {target}")
+    if target.exists() and not _valid_context_engine_source(target):
+        if not any(target.iterdir()):
+            target.rmdir()
+        else:
+            raise RuntimeError(
+                f"Membrane source at {target} is missing Dockerfile. "
+                "Set MN_MEMBRANE_DIR to a valid Membrane checkout or remove the invalid path."
+            )
+
+    if not target.exists():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["git", "clone", _context_engine_git_url(env), str(target)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+    else:
+        subprocess.run(
+            ["git", "-C", str(target), "pull", "--ff-only"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    if not _valid_context_engine_source(target):
+        raise RuntimeError(f"Membrane source at {target} is missing Dockerfile after checkout.")
+    resolved = target.resolve()
+    _remove_dockerfile_frontend_directive(resolved / "Dockerfile")
+    return resolved
+
+def _remove_dockerfile_frontend_directive(dockerfile: Path) -> None:
+    try:
+        lines = dockerfile.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    if not lines:
+        return
+    first = lines[0].strip()
+    if not (first.startswith("# syntax=docker/dockerfile:") or first.startswith("# syntax = docker/dockerfile:")):
+        return
+    dockerfile.write_text("\n".join(lines[1:]) + ("\n" if len(lines) > 1 else ""), encoding="utf-8")
+
+def _remove_non_mirror_neuron_container(name: str) -> None:
+    try:
+        result = subprocess.run(
+            ["docker", "container", "inspect", "-f", "{{ index .Config.Labels \"com.docker.compose.project\" }}", name],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("Docker is not installed or not in PATH.") from exc
+    if result.returncode != 0:
+        return
+    if result.stdout.strip() == "mirror-neuron":
+        return
+    subprocess.run(["docker", "rm", "-f", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def _docker_command_ok(command: list[str]) -> bool:
+    try:
+        result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except FileNotFoundError:
+        return False
+    return result.returncode == 0
+
+def _ensure_docker_model_runner() -> None:
+    if not _docker_command_ok(["docker", "model", "--help"]):
+        raise RuntimeError(
+            "Docker Model Runner CLI is not available. Upgrade Docker Desktop/Engine to a version "
+            "with 'docker model' support."
+        )
+    if _docker_command_ok(["docker", "model", "status"]):
+        return
+    if _docker_command_ok(["docker", "desktop", "enable", "model-runner"]) and _docker_command_ok(
+        ["docker", "model", "status"]
+    ):
+        return
+    if _docker_command_ok(["docker", "model", "install-runner", "--help"]):
+        subprocess.run(["docker", "model", "install-runner"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["docker", "model", "start-runner"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if _docker_command_ok(["docker", "model", "status"]):
+            return
+    raise RuntimeError(
+        "Docker Model Runner is not ready. Enable it in Docker Desktop Settings > AI, "
+        "or run 'docker model install-runner' and 'docker model start-runner'."
+    )
 
 def _runtime_compose_models_override_file() -> Path:
     return RUNTIME_COMPOSE_FILE.parent / RUNTIME_MODELS_OVERRIDE_FILE

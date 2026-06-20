@@ -23,6 +23,7 @@ from mn_cli.server_cmds import (
     _start_web_ui_if_installed,
     _write_runtime_endpoints_file,
     _valid_port_text,
+    ensure_context_engine_runtime,
     kill_tree,
     BEAM_PID_FILE,
     DEFAULT_HOST,
@@ -282,6 +283,28 @@ def restart_sidecars(
         details=details,
         next_steps="mn runtime health",
     )
+
+def ensure_context_engine(
+    force: bool = typer.Option(False, "--force", help="Rebuild and recreate the context engine even if it is running."),
+):
+    """Ensure the Membrane context engine Compose service is installed and running"""
+    try:
+        console.print("=> Ensuring Membrane context engine runtime...")
+        summary = ensure_context_engine_runtime(force=force)
+        print_success_confirmation(
+            console,
+            "Context engine",
+            status=summary["status"],
+            details=[
+                ("Service", summary["service"]),
+                ("Model", summary["model"]),
+                ("Membrane", summary["membrane_dir"]),
+            ],
+            next_steps="mn runtime health",
+        )
+    except Exception as exc:
+        handle_cli_error(exc, console, "runtime ensure-context-engine")
+        raise typer.Exit(1)
 
 def _sidecar_runtime_env() -> dict[str, str]:
     compose_runtime = runtime_compose_available()
