@@ -8,6 +8,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 from pathlib import Path
@@ -43,12 +44,14 @@ from mn_cli.libs.run_manifest import (
     runtime_web_ui_support_payloads_for_manifest,
     run_mode_label as _run_mode_label,
     stage_blueprint_support_payloads_for_manifest,
+    stage_skill_dependency_payloads_for_manifest,
     stage_skill_runtime_support_payloads_for_manifest,
     stage_local_input_payloads_for_manifest,
     stage_upload_path_payloads_for_manifest,
     with_shared_run_store_config as _with_shared_run_store_config,
 )
 from mn_cli.libs.skill_runtime import validate_skill_runtime_requirements
+from mn_cli.libs.skill_dependencies import gar_requirements_text
 from mn_cli.libs.workflow_validation import (
     _is_workflow_manifest,
     _manifest_workflow_id,
@@ -86,6 +89,10 @@ POST_LAUNCH_SCRIPT = Path("scripts/post-launch.sh")
 DEFAULT_BLUEPRINT_WEB_UI_PORT_START = 61000
 DEFAULT_BLUEPRINT_WEB_UI_PORT_END = 61049
 DETACHED_AFTER_INTERRUPT_MESSAGE = "Detached from workflow UI. Job is still running."
+CONTEXT_ENGINE_EXPECTATION = (
+    "This blueprint uses context memory. First launch may download the context model "
+    "and start the Membrane context engine; keep Docker running and be patient."
+)
 _HELPER_COMPAT = (
     _add_mn_llm_aliases,
     _blueprint_runtime_environment,
@@ -93,6 +100,13 @@ _HELPER_COMPAT = (
     _inject_node_environment,
     _materialize_sent_email_copy,
 )
+
+
+def _print_launch_progress(label: str, detail: str | None = None) -> None:
+    if detail:
+        console.print(f"[cyan]Launch:[/cyan] {label} - {detail}")
+    else:
+        console.print(f"[cyan]Launch:[/cyan] {label}")
 
 
 def fetch_and_save_results(job_id: str, data: dict = None):
@@ -240,8 +254,24 @@ def _ensure_context_engine_for_run_if_needed(
     if not blueprint_requires_context_engine(manifest, config, env=effective_env):
         return None
 
-    console.print("[cyan]Ensuring Membrane context engine runtime for this blueprint...[/cyan]")
-    summary = ensure_context_engine_runtime(force=force)
+    console.print(f"[cyan]{CONTEXT_ENGINE_EXPECTATION}[/cyan]")
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+        disable=not use_progress(),
+    ) as progress:
+        task = progress.add_task(
+            "[cyan]Preparing context memory: checking Membrane and Docker Model Runner...",
+            total=None,
+        )
+        summary = ensure_context_engine_runtime(force=force)
+        progress.update(task, description="[green]Context memory is ready.")
+    console.print(
+        f"[green]Context memory ready:[/green] {summary.get('service', 'membrane-context-engine')} "
+        f"using {summary.get('model', 'configured model')}"
+    )
     logger.info("Context engine runtime ensured for %s: %s", bundle_dir, summary)
     return summary
 
@@ -1451,6 +1481,7 @@ def _stage_bundle_payloads(
         payloads.update(runtime_web_ui_support_payloads_for_manifest(manifest_dict))
     stage_blueprint_support_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
     stage_skill_runtime_support_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
+    stage_skill_dependency_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
     return payloads
 
 
@@ -1542,6 +1573,10 @@ def run_bundle(
             submission_metadata,
             config_overrides=config_overrides,
         )
+        _print_launch_progress(
+            "Check runtime resources",
+            "confirming the runtime can satisfy this blueprint before submission.",
+        )
         _validate_manifest_hardware_or_exit(
             manifest_dict,
             force=force,
@@ -1564,6 +1599,10 @@ def run_bundle(
                 config_overrides=config_overrides,
             )
         if not force:
+            _print_launch_progress(
+                "Validate inputs and dependencies",
+                "checking services, models, local inputs, and non-hard requirements.",
+            )
             _validate_manifest_services_or_exit(
                 bundle_dir,
                 manifest_dict,
@@ -1586,6 +1625,10 @@ def run_bundle(
             console.print(
                 "[yellow]Validation skipped because --force was provided; service checks, model checks, input checks, and non-hard runtime requirements will be bypassed for this run.[/yellow]"
             )
+        _print_launch_progress(
+            "Package workflow",
+            "staging workflow files, local inputs, runtime helpers, and output wiring.",
+        )
         manifest_dict = prepare_manifest_for_submission(
             bundle_dir,
             manifest_dict,
@@ -1635,6 +1678,10 @@ def run_bundle(
             else None
         )
         submitted_run_dir = blueprint_run_dir
+        _print_launch_progress(
+            "Submit runtime job",
+            "handing the prepared bundle to MirrorNeuron core.",
+        )
         job_id = client.submit_job(manifest, payloads, force=force)
         submitted_job_id = job_id
         log_writer = JobLogWriter(job_id, run_dir=blueprint_run_dir)
@@ -1919,9 +1966,14 @@ def _prepare_openshell_custom_images(
         if source_path is None:
             continue
 
-        config["from"] = _build_openshell_from_image(
-            source_path, node.get("node_id") or "openshell"
-        )
+        build_source = _openshell_skill_dependency_context(source_path, manifest_dict)
+        try:
+            config["from"] = _build_openshell_from_image(
+                build_source, node.get("node_id") or "openshell"
+            )
+        finally:
+            if build_source != source_path:
+                shutil.rmtree(build_source, ignore_errors=True)
 
 
 def _openshell_gateway_endpoint() -> str:
@@ -2015,6 +2067,30 @@ def _openshell_local_from_path(bundle_dir: Path, source: Any) -> Path | None:
         if candidate.is_file() and candidate.name == "Dockerfile":
             return candidate
     return None
+
+
+def _openshell_skill_dependency_context(source_path: Path, manifest: dict[str, Any]) -> Path:
+    requirements_text = gar_requirements_text(manifest)
+    if not requirements_text:
+        return source_path
+
+    source_root = source_path.parent if source_path.is_file() else source_path
+    temp_context = Path(tempfile.mkdtemp(prefix=f"mn-openshell-skill-deps-{source_root.name}."))
+    shutil.copytree(source_root, temp_context, dirs_exist_ok=True)
+    dockerfile = temp_context / "Dockerfile"
+    requirements = temp_context / "__mn_skill_dependencies" / "requirements.txt"
+    requirements.parent.mkdir(parents=True, exist_ok=True)
+    requirements.write_text(requirements_text, encoding="utf-8")
+    dockerfile.write_text(
+        dockerfile.read_text(encoding="utf-8").rstrip()
+        + "\n\n"
+        + "COPY __mn_skill_dependencies/requirements.txt /tmp/mn-skill-dependencies/requirements.txt\n"
+        + "RUN if [ -s /tmp/mn-skill-dependencies/requirements.txt ]; then \\\n"
+        + "      python3 -m pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-dependencies/requirements.txt; \\\n"
+        + "    fi\n",
+        encoding="utf-8",
+    )
+    return temp_context
 
 
 def _build_openshell_from_image(source_path: Path, node_id: Any) -> str:

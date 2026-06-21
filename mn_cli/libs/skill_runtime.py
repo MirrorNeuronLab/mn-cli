@@ -10,12 +10,22 @@ from typing import Any
 
 from mn_sdk.runtime_modules import default_registered_modules_root
 
+from mn_cli.libs.skill_dependencies import (
+    DEFAULT_SKILL_PACKAGE_VERSION,
+    GAR_PIP_INDEX_URL,
+    PYPI_PIP_INDEX_URL,
+    normalize_package_name as normalize_dependency_package_name,
+    requirement_package_name,
+    skill_dependency_records,
+)
+
 
 HOST_LOCAL_RUNNER = "MirrorNeuron.Runner.HostLocal"
 DOCKER_WORKER_RUNNER = "MirrorNeuron.Runner.DockerWorker"
 DEFAULT_CONTEXT_ROOT = "__mn_skill_runtime"
 DEFAULT_CONTEXT_PATH = f"{DEFAULT_CONTEXT_ROOT}/docker_worker"
 DEFAULT_BASE_IMAGE = "debian:bookworm-slim"
+LOCAL_SKILL_ENABLE_VALUES = {"1", "true", "True", "TRUE", "yes", "Yes", "YES"}
 BLUEPRINT_SUPPORT_PACKAGE = "mirrorneuron-blueprint-support-skill"
 SDK_PACKAGE = "mirrorneuron-python-sdk"
 SDK_SOURCE = "mn-python-sdk"
@@ -33,7 +43,12 @@ def prepare_skill_runtime_for_manifest(
     if not isinstance(config, dict):
         return None
 
-    spec = resolve_skill_runtime_spec(config, bundle_dir=bundle_dir, workspace_root=workspace_root)
+    spec = resolve_skill_runtime_spec(
+        config,
+        manifest=manifest,
+        bundle_dir=bundle_dir,
+        workspace_root=workspace_root,
+    )
     if not spec:
         return None
 
@@ -62,6 +77,7 @@ def prepare_skill_runtime_for_manifest(
 def resolve_skill_runtime_spec(
     config: dict[str, Any],
     *,
+    manifest: dict[str, Any] | None = None,
     bundle_dir: Path,
     workspace_root: Path,
 ) -> dict[str, Any] | None:
@@ -87,9 +103,24 @@ def resolve_skill_runtime_spec(
     base_image = str(runtime_config.get("base_image") or _first_runtime_value(runtime_skills, "base_image") or DEFAULT_BASE_IMAGE)
     context_path = _clean_payload_path(str(runtime_config.get("docker_worker_image") or runtime_config.get("build_context") or DEFAULT_CONTEXT_PATH))
     generated = context_path == DEFAULT_CONTEXT_PATH or bool(runtime_config.get("generate_context", context_path == DEFAULT_CONTEXT_PATH))
-    local_packages = _local_python_packages(config, enabled_skills, local_skills, workspace_root=workspace_root)
+    skill_dependency_text = _skill_dependency_requirements_text(config, enabled_skills, manifest)
+    gar_package_names = _skill_dependency_requirement_package_names(skill_dependency_text)
+    local_packages = _local_python_packages(
+        config,
+        enabled_skills,
+        local_skills,
+        workspace_root=workspace_root,
+        excluded_packages=gar_package_names,
+        allow_local_skill_packages=_local_skill_sources_enabled(),
+    )
     package_names = {record["package"] for record in local_packages if record.get("package")}
-    requirements_text = _generated_requirements(config, bundle_dir, package_names)
+    requirements_text = _generated_requirements(
+        config,
+        bundle_dir,
+        package_names,
+        skill_dependency_text=skill_dependency_text,
+        excluded_packages=gar_package_names,
+    )
     apt_packages = _system_packages(runtime_skills, "apt")
     verify_commands = _verify_commands(runtime_skills)
 
@@ -359,6 +390,8 @@ def _local_python_packages(
     local_skills: dict[str, dict[str, dict[str, Any]]],
     *,
     workspace_root: Path,
+    excluded_packages: set[str] | None = None,
+    allow_local_skill_packages: bool = False,
 ) -> list[dict[str, str]]:
     packages: list[str] = []
     python_dependencies = config.get("python_dependencies") if isinstance(config.get("python_dependencies"), dict) else {}
@@ -368,11 +401,17 @@ def _local_python_packages(
     seen_sources: set[str] = set()
     records: list[dict[str, str]] = []
     include_sdk = False
+    excluded = excluded_packages or set()
     for package in packages:
-        if _normalize_package_name(package) == _normalize_package_name(BLUEPRINT_SUPPORT_PACKAGE):
+        normalized_package = _normalize_package_name(package)
+        if normalized_package in excluded:
+            continue
+        if normalized_package == _normalize_package_name(BLUEPRINT_SUPPORT_PACKAGE):
             include_sdk = True
-        local = local_skills["by_package"].get(_normalize_package_name(package))
+        local = local_skills["by_package"].get(normalized_package)
         if not local:
+            continue
+        if not allow_local_skill_packages:
             continue
         source = str(local.get("source") or "")
         if not source or source in seen_sources:
@@ -401,10 +440,81 @@ def _local_python_packages(
     return records
 
 
+def _skill_dependency_requirements_text(
+    config: dict[str, Any],
+    enabled_skills: list[dict[str, Any]],
+    manifest: dict[str, Any] | None,
+) -> str:
+    records = skill_dependency_records(manifest)
+    requirements_by_package = {
+        _normalize_package_name(record["name"]): f"{record['name']}=={record['version']}"
+        for record in records
+    }
+
+    for entry in enabled_skills:
+        package = entry.get("package")
+        if isinstance(package, str) and _is_skill_requirement(package):
+            name = _requirement_display_name(package)
+            requirements_by_package.setdefault(
+                _normalize_package_name(name),
+                f"{name}=={DEFAULT_SKILL_PACKAGE_VERSION}",
+            )
+
+    python_dependencies = config.get("python_dependencies") if isinstance(config.get("python_dependencies"), dict) else {}
+    for package in python_dependencies.get("packages", []):
+        if isinstance(package, str) and _is_skill_requirement(package):
+            name = _requirement_display_name(package)
+            requirements_by_package.setdefault(
+                _normalize_package_name(name),
+                f"{name}=={DEFAULT_SKILL_PACKAGE_VERSION}",
+            )
+
+    if not requirements_by_package:
+        return ""
+    lines = [
+        "--index-url",
+        GAR_PIP_INDEX_URL,
+        "--extra-index-url",
+        PYPI_PIP_INDEX_URL,
+        *requirements_by_package.values(),
+    ]
+    return "\n".join(lines).strip() + "\n"
+
+
+def _skill_dependency_requirement_package_names(requirements_text: str) -> set[str]:
+    return {
+        package
+        for line in requirements_text.splitlines()
+        if (package := requirement_package_name(line))
+    }
+
+
+def _is_skill_requirement(requirement: str) -> bool:
+    package = requirement_package_name(requirement)
+    return bool(package and package.startswith("mirrorneuron-") and package.endswith("-skill"))
+
+
+def _requirement_display_name(requirement: str) -> str:
+    match = re.match(r"([A-Za-z0-9_.-]+(?:\[[^\]]+\])?)", requirement.strip())
+    return match.group(1) if match else requirement.strip()
+
+
+def _local_skill_sources_enabled() -> bool:
+    value = (
+        os.getenv("MN_RUNTIME_MODULE_ALLOW_LOCAL_SKILLS")
+        or os.getenv("MN_USE_LOCAL_SKILLS")
+        or ""
+    )
+    return value in LOCAL_SKILL_ENABLE_VALUES
+
+
 def _generated_requirements(
     config: dict[str, Any],
     bundle_dir: Path,
     local_package_names: set[str],
+    *,
+    skill_dependency_text: str = "",
+    excluded_packages: set[str] | None = None,
 ) -> str:
     lines: list[str] = []
     python_dependencies = config.get("python_dependencies") if isinstance(config.get("python_dependencies"), dict) else {}
@@ -423,10 +533,17 @@ def _generated_requirements(
     output: list[str] = []
     seen: set[str] = set()
     normalized_local = {_normalize_package_name(name) for name in local_package_names}
+    normalized_excluded = set(excluded_packages or set())
     for line in lines:
         package = _requirement_package_name(line)
-        if package and package in normalized_local:
+        if package and (package in normalized_local or package in normalized_excluded):
             continue
+        key = line.strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        output.append(line)
+    for line in skill_dependency_text.splitlines():
         key = line.strip()
         if not key or key in seen:
             continue
@@ -666,7 +783,7 @@ def _requirement_package_name(line: str) -> str | None:
 
 
 def _normalize_package_name(value: str) -> str:
-    return re.sub(r"[-_.]+", "-", value).lower()
+    return normalize_dependency_package_name(value)
 
 
 def _clean_payload_path(value: str) -> str:

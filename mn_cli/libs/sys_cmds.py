@@ -5,11 +5,13 @@ from typing import Optional
 from pathlib import Path
 
 import typer
+from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 from mn_cli.banner import format_banner
 from mn_cli.shared import console
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.ui import print_success_confirmation
+from mn_cli.terminal import use_progress
 from mn_cli.server_cmds import (
     _start_server,
     _start_network_seed,
@@ -40,6 +42,11 @@ from mn_cli.server_cmds import (
     stop_matching_sidecar_processes as _stop_matching_sidecar_processes,
     api_pid_files,
     web_ui_pid_files,
+)
+
+CONTEXT_ENGINE_EXPECTATION = (
+    "This runtime service powers blueprint context memory. First launch may download the context model "
+    "and start the Membrane context engine; keep Docker running and be patient."
 )
 
 def start(
@@ -289,8 +296,20 @@ def ensure_context_engine(
 ):
     """Ensure the Membrane context engine Compose service is installed and running"""
     try:
-        console.print("=> Ensuring Membrane context engine runtime...")
-        summary = ensure_context_engine_runtime(force=force)
+        console.print(f"[cyan]{CONTEXT_ENGINE_EXPECTATION}[/cyan]")
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            TimeElapsedColumn(),
+            console=console,
+            disable=not use_progress(),
+        ) as progress:
+            task = progress.add_task(
+                "[cyan]Preparing context memory: checking Membrane and Docker Model Runner...",
+                total=None,
+            )
+            summary = ensure_context_engine_runtime(force=force)
+            progress.update(task, description="[green]Context memory is ready.")
         print_success_confirmation(
             console,
             "Context engine",

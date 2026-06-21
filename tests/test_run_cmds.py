@@ -759,9 +759,37 @@ def test_run_ensures_context_engine_when_blueprint_memory_enabled(mocker, tmp_pa
     result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--force"])
 
     assert result.exit_code == 0
-    assert "Ensuring Membrane context engine runtime" in result.stdout
+    stdout_text = re.sub(r"\s+", " ", result.stdout)
+    assert "This blueprint uses context memory" in result.stdout
+    assert "First launch may download the context model" in stdout_text
+    assert "Context memory ready" in result.stdout
+    assert "Launch: Check runtime resources" in result.stdout
+    assert "Launch: Package workflow" in result.stdout
+    assert "Launch: Submit runtime job" in result.stdout
     mock_ensure.assert_called_once_with(force=True)
     mock_submit.assert_called_once()
+
+
+def test_runtime_ensure_context_engine_explains_first_launch(mocker):
+    mock_ensure = mocker.patch(
+        "mn_cli.libs.sys_cmds.ensure_context_engine_runtime",
+        return_value={
+            "status": "started",
+            "service": "membrane-context-engine",
+            "model": "hf.co/example/context-model",
+            "membrane_dir": "/tmp/Membrane",
+        },
+    )
+
+    result = runner.invoke(app, ["runtime", "ensure-context-engine"])
+
+    assert result.exit_code == 0
+    stdout_text = re.sub(r"\s+", " ", result.stdout)
+    assert "This runtime service powers blueprint context memory" in result.stdout
+    assert "First launch may download the context model" in stdout_text
+    assert "Context engine" in result.stdout
+    assert "hf.co/example/context-model" in result.stdout
+    mock_ensure.assert_called_once_with(force=False)
 
 
 def test_run_does_not_ensure_context_engine_when_memory_disabled_by_env(mocker, tmp_path, monkeypatch):
@@ -925,6 +953,38 @@ def test_run_prebuilds_legacy_openshell_from_directory(mocker, tmp_path, monkeyp
     assert result.exit_code == 0
     manifest = json.loads(mock_submit.call_args.args[0])
     assert manifest["nodes"][0]["config"]["from"] == "openshell/sandbox-from:456"
+
+
+def test_openshell_skill_dependency_context_injects_pinned_gar_install(tmp_path):
+    sandbox_dir = tmp_path / "openshell_sandbox"
+    sandbox_dir.mkdir()
+    (sandbox_dir / "Dockerfile").write_text("FROM python:3.11-slim\n", encoding="utf-8")
+    manifest = {
+        "skill_dependencies": [
+            {
+                "type": "pip",
+                "source": "gar",
+                "name": "mirrorneuron-websocket-stream-skill",
+                "version": "1.2.6",
+            }
+        ]
+    }
+
+    context = run_cmds._openshell_skill_dependency_context(sandbox_dir, manifest)
+    try:
+        dockerfile = (context / "Dockerfile").read_text(encoding="utf-8")
+        requirements = (
+            context / "__mn_skill_dependencies" / "requirements.txt"
+        ).read_text(encoding="utf-8")
+    finally:
+        if context != sandbox_dir:
+            run_cmds.shutil.rmtree(context, ignore_errors=True)
+
+    assert context != sandbox_dir
+    assert "mirrorneuron-websocket-stream-skill==1.2.6" in requirements
+    assert "https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/" in requirements
+    assert "COPY __mn_skill_dependencies/requirements.txt" in dockerfile
+    assert "pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-dependencies/requirements.txt" in dockerfile
 
 
 def test_run_injects_blueprint_config_scenario_and_run_id(mocker, tmp_path):

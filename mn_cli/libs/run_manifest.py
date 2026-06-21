@@ -22,6 +22,13 @@ from mn_cli.libs.skill_runtime import (
     prepare_skill_runtime_for_manifest,
     stage_skill_runtime_payloads_for_manifest,
 )
+from mn_cli.libs.skill_dependencies import (
+    gar_requirement_lines,
+    gar_requirements_text,
+    pinned_skill_dependency_requirements,
+    skill_dependency_package_names,
+    without_requirements_for_packages,
+)
 USER_HOME_ENV_KEYS = ("MN_OUTPUT_HOME", "MN_USER_HOME", "OTTERDESK_USER_HOME")
 UPLOAD_SOURCE_EXCLUDED_DIRS = {
     ".git",
@@ -40,6 +47,9 @@ UPLOAD_SOURCE_EXCLUDED_DIRS = {
 BLUEPRINT_SUPPORT_SOURCE = "blueprint_support_skill"
 SDK_SOURCE = "mn-python-sdk"
 WORKSPACE_BASES = {"workspace_root", "workspace", "repo_root"}
+HOST_LOCAL_RUNNER = "MirrorNeuron.Runner.HostLocal"
+DOCKER_WORKER_RUNNER = "MirrorNeuron.Runner.DockerWorker"
+SKILL_DEPENDENCY_CONTEXT_ROOT = "__mn_skill_dependencies"
 
 
 def workspace_root() -> Path:
@@ -131,6 +141,7 @@ def prepare_manifest_for_submission(
         )
         ensure_blueprint_support_sdk_build_context_uploads(prepared)
         refresh_embedded_blueprint_config(prepared, config)
+    inject_skill_dependency_python_environments(prepared)
     if enable_runtime_web_ui and run_id and config is not None and blueprint_web_ui_enabled(config):
         inject_runtime_web_ui_service_for_submission(
             prepared,
@@ -145,6 +156,8 @@ def prepare_manifest_for_submission(
         config=config,
         config_overrides=config_overrides,
     )
+    if skill_dependency_package_names(prepared):
+        runtime_env = release_skill_dependency_runtime_environment(runtime_env)
     if run_id:
         runtime_env.setdefault("MN_RUN_ID", str(run_id))
         runtime_env["MN_RUNS_ROOT"] = runs_root
@@ -384,6 +397,9 @@ def stage_blueprint_support_payloads_for_manifest(
     *,
     bundle_dir: Path,
 ) -> dict[str, Any]:
+    if "mirrorneuron-blueprint-support-skill" in skill_dependency_package_names(manifest):
+        return {"staged": False, "sources": []}
+
     skills_root = Path(runtime_path_environment()["MN_SKILLS_ROOT"])
     support_root = skills_root / "blueprint_support_skill" / "src" / "mn_blueprint_support"
     if not support_root.is_dir():
@@ -415,6 +431,9 @@ def stage_blueprint_support_payloads_for_manifest(
 
 def ensure_blueprint_support_sdk_build_context_uploads(manifest: dict[str, Any]) -> dict[str, Any]:
     """Stage the SDK beside blueprint-support shims in DockerWorker build contexts."""
+
+    if "mirrorneuron-blueprint-support-skill" in skill_dependency_package_names(manifest):
+        return {"added": 0, "sources": []}
 
     sdk_root = workspace_root() / SDK_SOURCE
     if not sdk_root.joinpath("pyproject.toml").is_file():
@@ -455,6 +474,113 @@ def stage_skill_runtime_support_payloads_for_manifest(
         payloads,
         bundle_dir=bundle_dir,
     )
+
+
+def stage_skill_dependency_payloads_for_manifest(
+    manifest: dict[str, Any],
+    payloads: dict[str, bytes],
+    *,
+    bundle_dir: Path,
+) -> dict[str, Any]:
+    requirements_text = gar_requirements_text(manifest)
+    pinned_requirements = pinned_skill_dependency_requirements(manifest)
+    if not requirements_text or not pinned_requirements:
+        return {"staged": False, "sources": []}
+
+    staged_sources: list[str] = []
+    for context_path in _docker_worker_context_paths(manifest):
+        dockerfile_key = _payload_join(context_path, "Dockerfile")
+        if dockerfile_key not in payloads:
+            dockerfile_path = bundle_dir / "payloads" / dockerfile_key
+            if dockerfile_path.is_file():
+                payloads[dockerfile_key] = dockerfile_path.read_bytes()
+        dockerfile_bytes = payloads.get(dockerfile_key)
+        if dockerfile_bytes is None:
+            continue
+
+        dockerfile_text = dockerfile_bytes.decode("utf-8", errors="ignore")
+        if _docker_context_already_installs_skill_dependencies(
+            payloads,
+            dockerfile_text,
+            context_path,
+            pinned_requirements,
+        ):
+            continue
+        if SKILL_DEPENDENCY_CONTEXT_ROOT in dockerfile_text:
+            continue
+
+        requirements_key = _payload_join(context_path, SKILL_DEPENDENCY_CONTEXT_ROOT, "requirements.txt")
+        payloads[requirements_key] = requirements_text.encode("utf-8")
+        payloads[dockerfile_key] = (
+            dockerfile_text.rstrip()
+            + "\n\n"
+            + "COPY __mn_skill_dependencies/requirements.txt /tmp/mn-skill-dependencies/requirements.txt\n"
+            + "RUN if [ -s /tmp/mn-skill-dependencies/requirements.txt ]; then \\\n"
+            + "      python3 -m pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-dependencies/requirements.txt; \\\n"
+            + "    fi\n"
+        ).encode("utf-8")
+        staged_sources.extend([requirements_key, dockerfile_key])
+
+    return {"staged": bool(staged_sources), "sources": staged_sources}
+
+
+def inject_skill_dependency_python_environments(manifest: dict[str, Any]) -> dict[str, Any]:
+    gar_args = gar_requirement_lines(manifest)
+    if not gar_args:
+        return {"patched": 0, "nodes": []}
+
+    package_names = skill_dependency_package_names(manifest)
+    patched_nodes: list[str] = []
+    for node in manifest_nodes(manifest):
+        config = node.get("config") if isinstance(node.get("config"), dict) else {}
+        if config.get("runner_module") != HOST_LOCAL_RUNNER or not _python_hostlocal_node(config):
+            continue
+        python_environment = config.get("python_environment")
+        if not isinstance(python_environment, dict):
+            python_environment = {}
+            config["python_environment"] = python_environment
+        existing = [
+            str(package).strip()
+            for package in python_environment.get("packages", [])
+            if isinstance(package, str) and package.strip()
+        ]
+        merged: list[str] = []
+        seen: set[str] = set()
+        for package in [
+            *gar_args,
+            *without_requirements_for_packages(existing, package_names),
+        ]:
+            if package in seen:
+                continue
+            seen.add(package)
+            merged.append(package)
+        python_environment["packages"] = merged
+        patched_nodes.append(str(node.get("node_id") or node.get("id") or ""))
+
+    return {"patched": len(patched_nodes), "nodes": patched_nodes}
+
+
+def release_skill_dependency_runtime_environment(env: dict[str, str]) -> dict[str, str]:
+    cleaned = dict(env)
+    workspace = cleaned.pop("MN_WORKSPACE_ROOT", None)
+    skills_root = cleaned.pop("MN_SKILLS_ROOT", None)
+    pythonpath = cleaned.get("PYTHONPATH")
+    if pythonpath:
+        excluded_roots = []
+        if workspace:
+            excluded_roots.append(Path(workspace).expanduser() / "mn-skills")
+        if skills_root:
+            excluded_roots.append(Path(skills_root).expanduser())
+        kept = [
+            entry
+            for entry in pythonpath.split(os.pathsep)
+            if entry and not _path_is_under_any(entry, excluded_roots)
+        ]
+        if kept:
+            cleaned["PYTHONPATH"] = os.pathsep.join(kept)
+        else:
+            cleaned.pop("PYTHONPATH", None)
+    return cleaned
 
 
 def stage_upload_path_payloads_for_manifest(
@@ -691,6 +817,77 @@ def _payload_join(*parts: str) -> str:
             continue
         cleaned.append(value)
     return "/".join(cleaned)
+
+
+def _python_hostlocal_node(config: dict[str, Any]) -> bool:
+    if "python_environment" in config:
+        return True
+    command = config.get("command")
+    if isinstance(command, list) and command:
+        return "python" in Path(str(command[0])).name
+    if isinstance(command, str) and command.strip():
+        return "python" in command.split(maxsplit=1)[0]
+    return False
+
+
+def _docker_worker_context_paths(manifest: dict[str, Any]) -> list[str]:
+    paths: list[str] = []
+    for node in manifest_nodes(manifest):
+        config = node.get("config") if isinstance(node.get("config"), dict) else {}
+        if config.get("runner_module") != DOCKER_WORKER_RUNNER:
+            continue
+        for key in ("docker_worker_image", "build"):
+            value = config.get(key)
+            if isinstance(value, str) and value.strip() and "://" not in value:
+                cleaned = _safe_context_path(value)
+                if cleaned and cleaned not in paths:
+                    paths.append(cleaned)
+    return paths
+
+
+def _safe_context_path(value: str) -> str:
+    cleaned = value.strip().strip("/")
+    candidate = Path(cleaned)
+    if not cleaned or candidate.is_absolute() or ".." in candidate.parts:
+        return ""
+    if candidate.name == "Dockerfile":
+        return candidate.parent.as_posix()
+    return cleaned
+
+
+def _docker_context_already_installs_skill_dependencies(
+    payloads: dict[str, bytes],
+    dockerfile_text: str,
+    context_path: str,
+    pinned_requirements: list[str],
+) -> bool:
+    requirements_key = _payload_join(context_path, "requirements.txt")
+    requirements = payloads.get(requirements_key)
+    if requirements is None:
+        return False
+    try:
+        requirements_text = requirements.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    if not all(requirement in requirements_text for requirement in pinned_requirements):
+        return False
+    return "requirements.txt" in dockerfile_text and "pip install" in dockerfile_text
+
+
+def _path_is_under_any(value: str, roots: list[Path]) -> bool:
+    if not roots:
+        return False
+    try:
+        path = Path(value).expanduser().resolve()
+    except OSError:
+        return False
+    for root in roots:
+        try:
+            path.relative_to(root.expanduser().resolve())
+            return True
+        except (OSError, ValueError):
+            continue
+    return False
 
 
 def _shared_runs_root(env_overrides: Optional[dict[str, str]] = None) -> str:

@@ -2166,8 +2166,18 @@ def _docker_command_ok(command: list[str]) -> bool:
         return False
     return result.returncode == 0
 
+def _docker_model_command_available() -> bool:
+    try:
+        result = subprocess.run(["docker", "--help"], capture_output=True, text=True)
+    except FileNotFoundError:
+        return False
+    if result.returncode != 0:
+        return False
+    output = f"{result.stdout}\n{result.stderr}"
+    return any(line.strip().split()[0].rstrip("*") == "model" for line in output.splitlines() if line.strip())
+
 def _ensure_docker_model_runner() -> None:
-    if not _docker_command_ok(["docker", "model", "--help"]):
+    if not _docker_model_command_available():
         raise RuntimeError(
             "Docker Model Runner CLI is not available. Upgrade Docker Desktop/Engine to a version "
             "with 'docker model' support."
