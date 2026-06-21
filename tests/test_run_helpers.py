@@ -8,6 +8,7 @@ from mn_cli.libs.run_logs import JobLogWriter, materialize_sent_email_copy
 from mn_cli.libs.artifacts import promote_large_payloads_to_blob_refs
 from mn_cli.libs.run_manifest import (
     apply_manifest_config_bindings,
+    ensure_blueprint_support_sdk_build_context_uploads,
     load_blueprint_config,
     prepare_manifest_for_submission,
     stage_blueprint_support_payloads_for_manifest,
@@ -115,7 +116,10 @@ def test_prepare_manifest_for_submission_merges_runtime_env_and_metadata(tmp_pat
 def test_prepare_manifest_auto_patches_skill_binary_deps_to_dockerworker(tmp_path, monkeypatch):
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"
+    sdk_root = tmp_path / "mn-python-sdk"
     bundle_dir.mkdir()
+    sdk_root.mkdir()
+    (sdk_root / "pyproject.toml").write_text("[project]\nname='mirrorneuron-python-sdk'\n", encoding="utf-8")
     (bundle_dir / "config").mkdir()
     worker_dir = bundle_dir / "payloads" / "worker"
     worker_dir.mkdir(parents=True)
@@ -137,6 +141,7 @@ def test_prepare_manifest_auto_patches_skill_binary_deps_to_dockerworker(tmp_pat
         "mirrorneuron-blueprint-support-skill",
     )
     monkeypatch.setenv("MN_SKILLS_ROOT", str(skills_root))
+    monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path))
 
     (bundle_dir / "config" / "default.json").write_text(
         json.dumps(
@@ -191,6 +196,10 @@ def test_prepare_manifest_auto_patches_skill_binary_deps_to_dockerworker(tmp_pat
     assert "python_environment" not in node_config
     assert {"source": "__mn_skill_runtime", "target": "__mn_skill_runtime"} in node_config["upload_paths"]
     assert any(item["source"] == "w3m_browser_skill" for item in node_config["build_context_upload_paths"])
+    assert any(
+        item["base"] == "workspace_root" and item["source"] == "mn-python-sdk"
+        for item in node_config["build_context_upload_paths"]
+    )
     assert runtime["generated"] is True
     assert "w3m" in runtime["system_packages"]["apt"]
     assert runtime["patched_nodes"] == ["worker"]
@@ -207,11 +216,61 @@ def test_prepare_manifest_auto_patches_skill_binary_deps_to_dockerworker(tmp_pat
     requirements = payloads["__mn_skill_runtime/docker_worker/requirements.txt"].decode()
     assert "apt-get install" in dockerfile
     assert "w3m" in dockerfile
+    assert "COPY build_context/mn-python-sdk" in dockerfile
     assert "COPY build_context/w3m_browser_skill" in dockerfile
+    assert dockerfile.index("/tmp/mn-local-packages/mn-python-sdk") < dockerfile.index("/tmp/mn-local-packages/blueprint_support_skill")
     assert "command -v w3m" in dockerfile
     assert "mirrorneuron-w3m-browser-skill" not in requirements
     assert "mirrorneuron-blueprint-support-skill" not in requirements
     assert "example-external>=1" in requirements
+
+
+def test_prepare_manifest_adds_sdk_upload_for_manual_blueprint_support_worker(tmp_path, monkeypatch):
+    bundle_dir = tmp_path / "bundle"
+    skills_root = tmp_path / "mn-skills"
+    sdk_root = tmp_path / "mn-python-sdk"
+    bundle_dir.mkdir()
+    (bundle_dir / "config").mkdir()
+    sdk_root.mkdir()
+    (sdk_root / "pyproject.toml").write_text("[project]\nname='mirrorneuron-python-sdk'\n", encoding="utf-8")
+    _write_skill_pyproject(
+        skills_root,
+        "blueprint_support_skill",
+        "mirrorneuron-blueprint-support-skill",
+    )
+    monkeypatch.setenv("MN_SKILLS_ROOT", str(skills_root))
+    monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path))
+    (bundle_dir / "config" / "default.json").write_text(
+        json.dumps({"identity": {"blueprint_id": "manual_support"}}),
+        encoding="utf-8",
+    )
+    manifest = {
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.DockerWorker",
+                    "build_context_upload_paths": [
+                        {
+                            "base": "skills_root",
+                            "source": "blueprint_support_skill",
+                            "target": "document_workflow/docker_worker/build_context/blueprint_support_skill",
+                        }
+                    ],
+                },
+            }
+        ]
+    }
+
+    prepared = prepare_manifest_for_submission(bundle_dir, manifest)
+    uploads = prepared["nodes"][0]["config"]["build_context_upload_paths"]
+
+    assert {
+        "base": "workspace_root",
+        "source": "mn-python-sdk",
+        "target": "document_workflow/docker_worker/build_context/mn-python-sdk",
+    } in uploads
+    assert ensure_blueprint_support_sdk_build_context_uploads(prepared)["added"] == 0
 
 
 def test_prepare_manifest_skill_runtime_node_scope_patches_only_selected_nodes(tmp_path, monkeypatch):
@@ -705,6 +764,60 @@ def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_h
     env = prepared["nodes"][0]["config"]["environment"]
     assert env["MN_LLM_PROVIDER"] == "docker_model_runner"
     assert env["MN_LLM_API_BASE"] == "http://host.docker.internal:12434/engines/v1"
+
+
+def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_fake_llm(tmp_path):
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps(
+            {
+                "llm": {
+                    "enabled": True,
+                    "default_config": "primary",
+                    "configs": {
+                        "primary": {
+                            "provider": "docker_model_runner",
+                            "runtime_model": "gemma4:e2b",
+                            "model": "gemma4:e2b",
+                        }
+                    },
+                }
+            }
+        )
+    )
+    manifest = {
+        "required_services": [
+            {"name": "docker-model-runner", "model": "gemma4:e2b"},
+            {"name": "redis"},
+        ],
+        "runtime": {
+            "models": {"primary": {"provider": "docker_model_runner", "model": "gemma4:e2b"}},
+            "bindings": {"worker": {"workers": [{"id": "worker", "model": "gemma4:e2b"}]}},
+        },
+        "nodes": [
+            {
+                "node_id": "worker",
+                "requires_services": [{"name": "docker-model-runner", "model": "gemma4:e2b"}],
+                "config": {"environment": {}},
+            }
+        ],
+    }
+
+    prepared = prepare_manifest_for_submission(
+        bundle_dir,
+        manifest,
+        env_overrides={"MN_LLM_PROVIDER": "fake", "MN_LLM_MODEL": "fake-deterministic-blueprint-agent"},
+        submission_metadata={"fake_llm": True},
+    )
+
+    assert prepared["required_services"] == [{"name": "redis"}]
+    assert "models" not in prepared["runtime"]
+    assert "model" not in prepared["runtime"]["bindings"]["worker"]["workers"][0]
+    assert "requires_services" not in prepared["nodes"][0]
+    assert prepared["nodes"][0]["config"]["environment"]["MN_LLM_PROVIDER"] == "fake"
 
 
 def test_prepare_manifest_model_only_llm_config_does_not_request_scheduler_model(tmp_path):

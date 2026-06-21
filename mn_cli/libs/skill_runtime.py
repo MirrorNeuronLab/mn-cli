@@ -16,6 +16,9 @@ DOCKER_WORKER_RUNNER = "MirrorNeuron.Runner.DockerWorker"
 DEFAULT_CONTEXT_ROOT = "__mn_skill_runtime"
 DEFAULT_CONTEXT_PATH = f"{DEFAULT_CONTEXT_ROOT}/docker_worker"
 DEFAULT_BASE_IMAGE = "debian:bookworm-slim"
+BLUEPRINT_SUPPORT_PACKAGE = "mirrorneuron-blueprint-support-skill"
+SDK_PACKAGE = "mirrorneuron-python-sdk"
+SDK_SOURCE = "mn-python-sdk"
 
 
 def prepare_skill_runtime_for_manifest(
@@ -84,7 +87,7 @@ def resolve_skill_runtime_spec(
     base_image = str(runtime_config.get("base_image") or _first_runtime_value(runtime_skills, "base_image") or DEFAULT_BASE_IMAGE)
     context_path = _clean_payload_path(str(runtime_config.get("docker_worker_image") or runtime_config.get("build_context") or DEFAULT_CONTEXT_PATH))
     generated = context_path == DEFAULT_CONTEXT_PATH or bool(runtime_config.get("generate_context", context_path == DEFAULT_CONTEXT_PATH))
-    local_packages = _local_python_packages(config, enabled_skills, local_skills)
+    local_packages = _local_python_packages(config, enabled_skills, local_skills, workspace_root=workspace_root)
     package_names = {record["package"] for record in local_packages if record.get("package")}
     requirements_text = _generated_requirements(config, bundle_dir, package_names)
     apt_packages = _system_packages(runtime_skills, "apt")
@@ -192,9 +195,10 @@ def _patch_node_config_for_docker_worker(config: dict[str, Any], spec: dict[str,
     for package in spec.get("local_packages", []):
         _ensure_build_context_upload(
             config,
-            source=str(package["source"]),
-            target=_payload_join(context_path, "build_context", str(package["source"])),
-        )
+        base=str(package.get("base") or "skills_root"),
+        source=str(package["source"]),
+        target=_payload_join(context_path, "build_context", str(package["source"])),
+    )
 
 
 def _render_dockerfile(runtime: dict[str, Any]) -> str:
@@ -233,10 +237,10 @@ def _render_dockerfile(runtime: dict[str, Any]) -> str:
 
     for package in local_packages:
         source = str(package["source"])
-        lines.append(f"COPY build_context/{source} /tmp/mn-skills/{source}")
+        lines.append(f"COPY build_context/{source} /tmp/mn-local-packages/{source}")
 
     if local_packages:
-        install_targets = " ".join(f"/tmp/mn-skills/{package['source']}" for package in local_packages)
+        install_targets = " ".join(f"/tmp/mn-local-packages/{package['source']}" for package in local_packages)
         lines.extend(
             [
                 f"RUN python3 -m pip install --break-system-packages --no-cache-dir {install_targets}",
@@ -353,6 +357,8 @@ def _local_python_packages(
     config: dict[str, Any],
     enabled_skills: list[dict[str, Any]],
     local_skills: dict[str, dict[str, dict[str, Any]]],
+    *,
+    workspace_root: Path,
 ) -> list[dict[str, str]]:
     packages: list[str] = []
     python_dependencies = config.get("python_dependencies") if isinstance(config.get("python_dependencies"), dict) else {}
@@ -361,7 +367,10 @@ def _local_python_packages(
 
     seen_sources: set[str] = set()
     records: list[dict[str, str]] = []
+    include_sdk = False
     for package in packages:
+        if _normalize_package_name(package) == _normalize_package_name(BLUEPRINT_SUPPORT_PACKAGE):
+            include_sdk = True
         local = local_skills["by_package"].get(_normalize_package_name(package))
         if not local:
             continue
@@ -374,8 +383,21 @@ def _local_python_packages(
                 "package": str(local.get("package") or package),
                 "skill": str(local.get("skill") or source),
                 "source": source,
+                "base": "skills_root",
             }
         )
+    if include_sdk:
+        sdk_root = workspace_root / SDK_SOURCE
+        if sdk_root.joinpath("pyproject.toml").is_file() and SDK_SOURCE not in seen_sources:
+            records.insert(
+                0,
+                {
+                    "package": SDK_PACKAGE,
+                    "skill": SDK_SOURCE,
+                    "source": SDK_SOURCE,
+                    "base": "workspace_root",
+                },
+            )
     return records
 
 
@@ -567,13 +589,19 @@ def _ensure_upload_path(config: dict[str, Any], source: str, target: str) -> Non
         paths.append({"source": source, "target": target})
 
 
-def _ensure_build_context_upload(config: dict[str, Any], *, source: str, target: str) -> None:
+def _ensure_build_context_upload(config: dict[str, Any], *, base: str = "skills_root", source: str, target: str) -> None:
     uploads = config.setdefault("build_context_upload_paths", [])
     if not isinstance(uploads, list):
         uploads = []
         config["build_context_upload_paths"] = uploads
-    if not any(isinstance(item, dict) and item.get("source") == source and item.get("target") == target for item in uploads):
-        uploads.append({"base": "skills_root", "source": source, "target": target})
+    if not any(
+        isinstance(item, dict)
+        and item.get("base", "payloads") == base
+        and item.get("source") == source
+        and item.get("target") == target
+        for item in uploads
+    ):
+        uploads.append({"base": base, "source": source, "target": target})
 
 
 def _first_runtime_value(records: list[dict[str, Any]], key: str) -> Any:

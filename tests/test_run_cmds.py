@@ -725,6 +725,81 @@ def test_run_force_skips_input_validation(mocker, tmp_path, monkeypatch):
     assert mock_submit.call_args.kwargs["force"] is True
 
 
+def test_run_ensures_context_engine_when_blueprint_memory_enabled(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="context-run")
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-context")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_completed"})
+    ])
+    mock_ensure = mocker.patch(
+        "mn_cli.libs.run_cmds.ensure_context_engine_runtime",
+        return_value={"status": "started", "service": "membrane-context-engine"},
+    )
+
+    bundle_dir = tmp_path / "context_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({"nodes": []}))
+    (bundle_dir / "payloads").mkdir()
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps(
+            {
+                "memory_layer": {
+                    "enabled": True,
+                    "enabled_env": "MN_CONTEXT_MEMORY_ENABLED",
+                    "sdk_import_package": "mn_context_engine_sdk",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--force"])
+
+    assert result.exit_code == 0
+    assert "Ensuring Membrane context engine runtime" in result.stdout
+    mock_ensure.assert_called_once_with(force=True)
+    mock_submit.assert_called_once()
+
+
+def test_run_does_not_ensure_context_engine_when_memory_disabled_by_env(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    monkeypatch.setenv("MN_CONTEXT_MEMORY_ENABLED", "0")
+    mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="context-disabled-run")
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-context-disabled")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_completed"})
+    ])
+    mock_ensure = mocker.patch("mn_cli.libs.run_cmds.ensure_context_engine_runtime")
+
+    bundle_dir = tmp_path / "context_disabled_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({"nodes": []}))
+    (bundle_dir / "payloads").mkdir()
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps(
+            {
+                "memory_layer": {
+                    "enabled": True,
+                    "enabled_env": "MN_CONTEXT_MEMORY_ENABLED",
+                    "sdk_import_package": "mn_context_engine_sdk",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--force"])
+
+    assert result.exit_code == 0
+    mock_ensure.assert_not_called()
+    mock_submit.assert_called_once()
+
+
 def test_run_submits_python_environment_requirements_payload(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="python-env-run")

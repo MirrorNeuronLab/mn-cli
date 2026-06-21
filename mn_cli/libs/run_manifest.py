@@ -37,6 +37,9 @@ UPLOAD_SOURCE_EXCLUDED_DIRS = {
     "node_modules",
     "venv",
 }
+BLUEPRINT_SUPPORT_SOURCE = "blueprint_support_skill"
+SDK_SOURCE = "mn-python-sdk"
+WORKSPACE_BASES = {"workspace_root", "workspace", "repo_root"}
 
 
 def workspace_root() -> Path:
@@ -107,6 +110,7 @@ def prepare_manifest_for_submission(
     ensure_runtime_modules_for_manifest(prepared, workspace_root=workspace_root())
     render_agent_templates_for_submission(prepared)
     metadata = dict(submission_metadata or {})
+    fake_llm = bool(metadata.get("fake_llm")) or str((env_overrides or {}).get("MN_LLM_PROVIDER") or "").strip().lower() == "fake"
     run_id = (
         metadata.get("blueprint_run_id")
         or metadata.get("run_id")
@@ -125,6 +129,7 @@ def prepare_manifest_for_submission(
             bundle_dir=bundle_dir,
             workspace_root=workspace_root(),
         )
+        ensure_blueprint_support_sdk_build_context_uploads(prepared)
         refresh_embedded_blueprint_config(prepared, config)
     if enable_runtime_web_ui and run_id and config is not None and blueprint_web_ui_enabled(config):
         inject_runtime_web_ui_service_for_submission(
@@ -152,7 +157,7 @@ def prepare_manifest_for_submission(
     )
     if runtime_env:
         inject_node_environment(prepared, runtime_env)
-        strip_docker_model_runner_placement_requirements(prepared)
+        strip_docker_model_runner_placement_requirements(prepared, force=fake_llm)
     normalize_host_local_uploads(prepared)
     lower_manifest_topology_for_runtime_submission(prepared)
     if metadata:
@@ -408,6 +413,37 @@ def stage_blueprint_support_payloads_for_manifest(
     return {"staged": bool(staged_sources), "sources": staged_sources}
 
 
+def ensure_blueprint_support_sdk_build_context_uploads(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Stage the SDK beside blueprint-support shims in DockerWorker build contexts."""
+
+    sdk_root = workspace_root() / SDK_SOURCE
+    if not sdk_root.joinpath("pyproject.toml").is_file():
+        return {"added": 0, "sources": []}
+
+    added: list[str] = []
+    for node in manifest_nodes(manifest):
+        config = node.get("config") if isinstance(node.get("config"), dict) else {}
+        uploads = config.get("build_context_upload_paths")
+        if not isinstance(uploads, list):
+            continue
+        for entry in list(uploads):
+            if not isinstance(entry, dict):
+                continue
+            base = str(entry.get("base") or "payloads").strip()
+            source = str(entry.get("source") or "").strip().strip("/")
+            if base not in {"skills_root", "mn_skills", "skills"} or source != BLUEPRINT_SUPPORT_SOURCE:
+                continue
+            target = str(entry.get("target") or "").strip().strip("/")
+            sdk_target = _sdk_build_context_target(target)
+            if not sdk_target:
+                continue
+            if _has_build_context_upload(uploads, base="workspace_root", source=SDK_SOURCE, target=sdk_target):
+                continue
+            uploads.append({"base": "workspace_root", "source": SDK_SOURCE, "target": sdk_target})
+            added.append(sdk_target)
+    return {"added": len(added), "sources": added}
+
+
 def stage_skill_runtime_support_payloads_for_manifest(
     manifest: dict[str, Any],
     payloads: dict[str, bytes],
@@ -482,6 +518,30 @@ def _support_dependent_upload_sources(manifest: dict[str, Any], payload_root: Pa
             if _payload_source_imports_blueprint_support(payload_root, source):
                 sources.append(source)
     return sources
+
+
+def _sdk_build_context_target(blueprint_support_target: str) -> str:
+    if not blueprint_support_target:
+        return ""
+    target = blueprint_support_target.strip("/")
+    parts = target.split("/")
+    if not parts or parts[-1] != BLUEPRINT_SUPPORT_SOURCE:
+        return ""
+    return "/".join([*parts[:-1], SDK_SOURCE])
+
+
+def _has_build_context_upload(uploads: list[Any], *, base: str, source: str, target: str) -> bool:
+    for item in uploads:
+        if not isinstance(item, dict):
+            continue
+        item_base = str(item.get("base") or "payloads").strip()
+        item_source = str(item.get("source") or "").strip().strip("/")
+        item_target = str(item.get("target") or "").strip().strip("/")
+        if item_base in WORKSPACE_BASES and base in WORKSPACE_BASES and item_source == source and item_target == target:
+            return True
+        if item_base == base and item_source == source and item_target == target:
+            return True
+    return False
 
 
 def _node_upload_sources(config: dict[str, Any]) -> list[str]:
@@ -966,8 +1026,8 @@ def adjust_llm_environment_for_node(environment: dict[str, Any], node: dict[str,
         environment["MN_LLM_API_BASE"] = DOCKER_MODEL_RUNNER_CONTAINER_API_BASE
 
 
-def strip_docker_model_runner_placement_requirements(manifest: dict[str, Any]) -> None:
-    if not _manifest_uses_docker_model_runner_http_endpoint(manifest):
+def strip_docker_model_runner_placement_requirements(manifest: dict[str, Any], *, force: bool = False) -> None:
+    if not force and not _manifest_uses_docker_model_runner_http_endpoint(manifest):
         return
 
     _strip_service_list_field(manifest, "required_services")

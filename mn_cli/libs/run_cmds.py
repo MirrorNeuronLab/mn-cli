@@ -59,6 +59,7 @@ from mn_cli.libs.blueprint_observability import (
     make_blueprint_run_id as _make_blueprint_run_id,
 )
 from mn_cli.libs.blueprint_resources import cleanup_blueprint_host_hooks
+from mn_cli.server_cmds import ensure_context_engine_runtime
 from mn_cli.shared import console, client, logger
 from mn_cli.terminal import use_progress
 from mn_cli.error_handler import handle_cli_error
@@ -75,6 +76,7 @@ from mn_sdk import (
     validate_service_spec_issues,
     workflow_progress_snapshot,
 )
+from mn_sdk.context_engine import blueprint_requires_context_engine
 from mn_sdk.runtime_config import default_runs_root
 
 FINAL_STATUSES = {"completed", "failed", "cancelled"}
@@ -216,6 +218,32 @@ def _manifest_config(manifest: dict[str, Any]) -> dict[str, Any]:
             if isinstance(decoded, dict):
                 return decoded
     return {}
+
+
+def _ensure_context_engine_for_run_if_needed(
+    bundle_dir: Path,
+    manifest: dict[str, Any],
+    *,
+    env_overrides: Optional[dict[str, str]] = None,
+    config_overrides: Optional[dict[str, Any]] = None,
+    force: bool = False,
+) -> dict[str, str] | None:
+    config = load_blueprint_config(bundle_dir, config_overrides=config_overrides)
+    effective_env = os.environ.copy()
+    effective_env.update(
+        {
+            str(key): str(value)
+            for key, value in (env_overrides or {}).items()
+            if value is not None
+        }
+    )
+    if not blueprint_requires_context_engine(manifest, config, env=effective_env):
+        return None
+
+    console.print("[cyan]Ensuring Membrane context engine runtime for this blueprint...[/cyan]")
+    summary = ensure_context_engine_runtime(force=force)
+    logger.info("Context engine runtime ensured for %s: %s", bundle_dir, summary)
+    return summary
 
 
 def _expand_user_output_path(value: str) -> Path:
@@ -1582,6 +1610,14 @@ def run_bundle(
                 schedule_attrs,
             )
             return
+
+        _ensure_context_engine_for_run_if_needed(
+            bundle_dir,
+            manifest_dict,
+            env_overrides=env_overrides,
+            config_overrides=config_overrides,
+            force=force,
+        )
 
         prepared_submission = prepare_job_submission(
             manifest_dict,
