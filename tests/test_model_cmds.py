@@ -128,6 +128,38 @@ def test_model_install_streams_pull_progress(mocker):
     assert pull_kwargs["capture_output"] is False
 
 
+def test_model_install_retries_transient_pull_failure(mocker):
+    calls = []
+    pull_attempts = 0
+
+    def fake_run(command, **kwargs):
+        nonlocal pull_attempts
+        calls.append(command)
+        if command[:4] == ["docker", "model", "status", "--json"]:
+            return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
+        if command[:4] == ["docker", "model", "run", "--help"]:
+            return _completed(command, stdout="Options:\n")
+        if command == ["docker", "model", "pull", "ai/gemma4:E2B"]:
+            pull_attempts += 1
+            if pull_attempts == 1:
+                return _completed(command, returncode=1, stderr="writing blob: blob digest mismatch")
+        if command == ["docker", "model", "inspect", "ai/gemma4:E2B"]:
+            return _completed(command, returncode=1)
+        return _completed(command)
+
+    mocker.patch("subprocess.run", side_effect=fake_run)
+    mocker.patch(
+        "mn_sdk.model_runtime.detect_host_hardware",
+        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+    )
+
+    result = runner.invoke(app, ["model", "install", "gemma4:e2b"])
+
+    assert result.exit_code == 0
+    assert calls.count(["docker", "model", "pull", "ai/gemma4:E2B"]) == 2
+    assert ["docker", "model", "run", "--detach", "ai/gemma4:E2B"] in calls
+
+
 def test_model_install_persists_manual_ownership_record(mocker):
     def fake_run(command, **kwargs):
         if command[:4] == ["docker", "model", "status", "--json"]:
@@ -293,6 +325,8 @@ def test_model_install_failure_does_not_record_manual_ownership(mocker, tmp_path
             return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
         if command[:3] == ["docker", "model", "pull"]:
             return _completed(command, returncode=1, stderr="pull failed")
+        if command[:3] == ["docker", "model", "inspect"]:
+            return _completed(command, returncode=1)
         return _completed(command)
 
     mocker.patch("subprocess.run", side_effect=fake_run)

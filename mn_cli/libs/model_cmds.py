@@ -250,7 +250,7 @@ def install_model_entry(
     target = docker_model_name(entry)
     if _docker_model_cli_available():
         _ensure_runner(compatibility.backend, compatibility.accelerator)
-        _docker(["model", "pull", target], timeout=900, stream=True)
+        _docker_model_pull(target)
         run_command = ["model", "run", "--detach"]
         resolved_context = context_size or entry.get("context_size")
         if resolved_context and _docker_model_run_supports_context_size():
@@ -267,6 +267,22 @@ def install_model_entry(
         "transport": "docker_model_runner_api",
         "api": api_result,
     }
+
+
+def _docker_model_pull(target: str, *, attempts: int = 2) -> None:
+    last_error: RuntimeError | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            _docker(["model", "pull", target], timeout=900, stream=True)
+            return
+        except RuntimeError as exc:
+            if _model_installed(target):
+                return
+            last_error = exc
+            if attempt < attempts:
+                console.print("[yellow]Docker model pull failed; retrying once...[/yellow]")
+    if last_error is not None:
+        raise last_error
 
 
 def remove_model_ref(model: str, *, force: bool = False) -> None:
