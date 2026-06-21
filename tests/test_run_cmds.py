@@ -965,7 +965,7 @@ def test_openshell_skill_dependency_context_injects_pinned_gar_install(tmp_path)
                 "type": "pip",
                 "source": "gar",
                 "name": "mirrorneuron-websocket-stream-skill",
-                "version": "1.2.6",
+                "version": "1.2.7",
             }
         ]
     }
@@ -981,7 +981,7 @@ def test_openshell_skill_dependency_context_injects_pinned_gar_install(tmp_path)
             run_cmds.shutil.rmtree(context, ignore_errors=True)
 
     assert context != sandbox_dir
-    assert "mirrorneuron-websocket-stream-skill==1.2.6" in requirements
+    assert "mirrorneuron-websocket-stream-skill==1.2.7" in requirements
     assert "https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/" in requirements
     assert "COPY __mn_skill_dependencies/requirements.txt" in dockerfile
     assert "pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-dependencies/requirements.txt" in dockerfile

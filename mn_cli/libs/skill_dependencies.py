@@ -7,7 +7,7 @@ from typing import Any
 
 GAR_PIP_INDEX_URL = "https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/"
 PYPI_PIP_INDEX_URL = "https://pypi.org/simple"
-DEFAULT_SKILL_PACKAGE_VERSION = "1.2.6"
+DEFAULT_SKILL_PACKAGE_VERSION = "1.2.7"
 
 
 def normalize_package_name(value: str) -> str:

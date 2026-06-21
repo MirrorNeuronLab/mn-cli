@@ -218,8 +218,8 @@ def test_prepare_manifest_auto_patches_skill_binary_deps_to_dockerworker(tmp_pat
     assert "COPY build_context/w3m_browser_skill" not in dockerfile
     assert "/tmp/mn-local-packages" not in dockerfile
     assert "command -v w3m" in dockerfile
-    assert "mirrorneuron-w3m-browser-skill==1.2.6" in requirements
-    assert "mirrorneuron-blueprint-support-skill==1.2.6" in requirements
+    assert "mirrorneuron-w3m-browser-skill==1.2.7" in requirements
+    assert "mirrorneuron-blueprint-support-skill==1.2.7" in requirements
     assert "example-external>=1" in requirements
 
 
@@ -240,7 +240,7 @@ def test_prepare_manifest_injects_gar_skill_dependencies_for_hostlocal(tmp_path,
                 "type": "pip",
                 "source": "gar",
                 "name": "mirrorneuron-llm-ocr-skill",
-                "version": "v1.2.6",
+                "version": "v1.2.7",
             }
         ],
         "nodes": [
@@ -264,7 +264,7 @@ def test_prepare_manifest_injects_gar_skill_dependencies_for_hostlocal(tmp_path,
         "https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/",
         "--extra-index-url",
         "https://pypi.org/simple",
-        "mirrorneuron-llm-ocr-skill==1.2.6",
+        "mirrorneuron-llm-ocr-skill==1.2.7",
     ]
     env = node_config["environment"]
     assert "MN_SKILLS_ROOT" not in env
@@ -313,7 +313,7 @@ def test_prepare_manifest_gar_skill_runtime_uses_pinned_requirements_not_local_s
                 "type": "pip",
                 "source": "gar",
                 "name": "mirrorneuron-w3m-browser-skill",
-                "version": "1.2.6",
+                "version": "1.2.7",
             }
         ],
         "nodes": [
@@ -337,7 +337,7 @@ def test_prepare_manifest_gar_skill_runtime_uses_pinned_requirements_not_local_s
     assert node_config["runner_module"] == "MirrorNeuron.Runner.DockerWorker"
     assert node_config.get("build_context_upload_paths") in (None, [])
     assert runtime["local_packages"] == []
-    assert "mirrorneuron-w3m-browser-skill==1.2.6" in runtime["requirements_text"]
+    assert "mirrorneuron-w3m-browser-skill==1.2.7" in runtime["requirements_text"]
     assert "example-external>=1" in runtime["requirements_text"]
 
     payloads: dict[str, bytes] = {}
@@ -346,7 +346,7 @@ def test_prepare_manifest_gar_skill_runtime_uses_pinned_requirements_not_local_s
     requirements = payloads["__mn_skill_runtime/docker_worker/requirements.txt"].decode()
     assert "COPY build_context/w3m_browser_skill" not in dockerfile
     assert "/tmp/mn-local-packages" not in dockerfile
-    assert "mirrorneuron-w3m-browser-skill==1.2.6" in requirements
+    assert "mirrorneuron-w3m-browser-skill==1.2.7" in requirements
 
 
 def test_stage_skill_dependency_payloads_injects_pinned_gar_requirements_for_dockerworker(tmp_path):
@@ -358,7 +358,7 @@ def test_stage_skill_dependency_payloads_injects_pinned_gar_requirements_for_doc
                 "type": "pip",
                 "source": "gar",
                 "name": "mirrorneuron-rag-skill",
-                "version": "1.2.6",
+                "version": "1.2.7",
             }
         ],
         "nodes": [
@@ -382,7 +382,7 @@ def test_stage_skill_dependency_payloads_injects_pinned_gar_requirements_for_doc
     assert staged["staged"] is True
     requirements = payloads["worker/docker_worker/__mn_skill_dependencies/requirements.txt"].decode()
     dockerfile = payloads["worker/docker_worker/Dockerfile"].decode()
-    assert "mirrorneuron-rag-skill==1.2.6" in requirements
+    assert "mirrorneuron-rag-skill==1.2.7" in requirements
     assert "https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/" in requirements
     assert "COPY __mn_skill_dependencies/requirements.txt" in dockerfile
     assert "pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-dependencies/requirements.txt" in dockerfile
@@ -679,7 +679,8 @@ def test_prepare_manifest_for_submission_lowers_legacy_agent_graph_workflow_id(t
 
 
 def test_stage_blueprint_support_payloads_for_support_dependent_hostlocal_worker(tmp_path, monkeypatch):
-    if not (workspace_root() / "mn-skills" / "blueprint_support_skill" / "src").is_dir():
+    skills_root = workspace_root() / "mn-skills"
+    if not (skills_root / "blueprint_support_skill" / "src").is_dir():
         pytest.skip("blueprint support skill source is not checked out")
 
     bundle_dir = tmp_path / "bundle"
@@ -708,6 +709,7 @@ def test_stage_blueprint_support_payloads_for_support_dependent_hostlocal_worker
     payloads = {
         "simulation_loop/scripts/run_blueprint.py": b"from mn_blueprint_support import run_blueprint_cli\n"
     }
+    monkeypatch.setenv("MN_SKILLS_ROOT", str(skills_root))
     monkeypatch.chdir(tmp_path)
 
     summary = stage_blueprint_support_payloads_for_manifest(
