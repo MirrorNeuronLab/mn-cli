@@ -588,6 +588,39 @@ def test_ensure_context_engine_runtime_persists_profile_and_starts_compose(mocke
     assert run.call_args_list[0].args[0] == runtime_compose_cmd("build", "membrane-context-engine")
     assert run.call_args_list[1].args[0] == runtime_compose_cmd("up", "-d", "membrane-context-engine")
 
+def test_ensure_context_engine_runtime_uses_release_image_without_source_clone(mocker):
+    server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
+    server_cmds.RUNTIME_COMPOSE_ENV.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "COMPOSE_PROFILES=openshell\n"
+        "MN_RUNTIME_MODULE_VERSION=1.2.7\n"
+        "MEMBRANE_DIR=/private/membrane\n",
+        encoding="utf-8",
+    )
+    server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
+    ensure_source = mocker.patch("mn_cli.server_cmds._ensure_context_engine_source")
+    mocker.patch("mn_cli.server_cmds._ensure_docker_model_runner")
+    mocker.patch("mn_cli.server_cmds._remove_non_mirror_neuron_container")
+    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
+    run = mocker.patch("mn_cli.server_cmds.subprocess.run")
+
+    result = server_cmds.ensure_context_engine_runtime()
+
+    env = server_cmds._read_env_file(server_cmds.RUNTIME_COMPOSE_ENV)
+    expected_image = (
+        "us-central1-docker.pkg.dev/mirrorneuron-public-packages/"
+        "mirrorneuron-runtime/membrane-context-engine:v1.2.7"
+    )
+    assert env["COMPOSE_PROFILES"] == "openshell,context"
+    assert env["ENGINE_IMAGE"] == expected_image
+    assert env["MN_MEMBRANE_ENGINE_IMAGE"] == expected_image
+    assert "MEMBRANE_DIR" not in env
+    assert result["status"] == "started"
+    assert result["engine_image"] == expected_image
+    ensure_source.assert_not_called()
+    assert run.call_args_list[0].args[0] == runtime_compose_cmd("pull", "membrane-context-engine")
+    assert run.call_args_list[1].args[0] == runtime_compose_cmd("up", "-d", "--no-build", "membrane-context-engine")
+
 def test_ensure_context_engine_runtime_skips_compose_when_already_running(mocker, tmp_path):
     membrane_dir = tmp_path / "Membrane"
     membrane_dir.mkdir()

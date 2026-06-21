@@ -112,6 +112,10 @@ RUNTIME_MODELS_OVERRIDE_FILE = "docker-compose.models.yml"
 DEFAULT_LLM_MODEL_RUNNER_MODEL = "ai/gemma4:E2B"
 DEFAULT_CONTEXT_MODEL_RUNNER_MODEL = "hf.co/homerquan/mn-context-engine-model-v-Q4_K_M"
 DEFAULT_MEMBRANE_REPO = "MirrorNeuronLab/Membrane"
+DEFAULT_MEMBRANE_ENGINE_IMAGE_REPOSITORY = (
+    "us-central1-docker.pkg.dev/mirrorneuron-public-packages/"
+    "mirrorneuron-runtime/membrane-context-engine"
+)
 CONTEXT_ENGINE_SERVICE = "membrane-context-engine"
 CONTEXT_ENGINE_CONTAINER = "mirror-neuron-context-engine"
 CONTEXT_ENGINE_MODEL_CONTAINER = "mirror-neuron-context-engine-model"
@@ -2000,14 +2004,23 @@ def ensure_context_engine_runtime(*, force: bool = False) -> dict[str, str]:
         )
 
     env = _runtime_base_env(True)
-    source_dir = _ensure_context_engine_source(env)
     profiles = _compose_profiles_with(env.get("COMPOSE_PROFILES"), "context")
     model = str(env.get("MN_CONTEXT_MODEL_RUNNER_MODEL") or DEFAULT_CONTEXT_MODEL_RUNNER_MODEL)
+    engine_image = _context_engine_release_image(env)
+    use_engine_image = _context_engine_image_mode_enabled(env, engine_image)
     updates = {
         "COMPOSE_PROFILES": profiles,
-        "MEMBRANE_DIR": str(source_dir),
         "MN_CONTEXT_MODEL_RUNNER_MODEL": model,
     }
+    source_dir: Path | None = None
+    if use_engine_image:
+        updates["ENGINE_IMAGE"] = engine_image
+        updates["MN_MEMBRANE_ENGINE_IMAGE"] = engine_image
+        _remove_env_file_keys(RUNTIME_COMPOSE_ENV, {"MEMBRANE_DIR"})
+        env.pop("MEMBRANE_DIR", None)
+    else:
+        source_dir = _ensure_context_engine_source(env)
+        updates["MEMBRANE_DIR"] = str(source_dir)
     _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
     env.update(updates)
 
@@ -2017,14 +2030,24 @@ def ensure_context_engine_runtime(*, force: bool = False) -> dict[str, str]:
 
     already_running = _docker_container_running(CONTEXT_ENGINE_CONTAINER)
     if force or not already_running:
+        if use_engine_image:
+            subprocess.run(
+                runtime_compose_cmd("pull", CONTEXT_ENGINE_SERVICE),
+                check=True,
+                stdout=subprocess.DEVNULL,
+                env=env,
+            )
+            up_args = ("up", "-d", "--no-build", CONTEXT_ENGINE_SERVICE)
+        else:
+            subprocess.run(
+                runtime_compose_cmd("build", CONTEXT_ENGINE_SERVICE),
+                check=True,
+                stdout=subprocess.DEVNULL,
+                env=env,
+            )
+            up_args = ("up", "-d", CONTEXT_ENGINE_SERVICE)
         subprocess.run(
-            runtime_compose_cmd("build", CONTEXT_ENGINE_SERVICE),
-            check=True,
-            stdout=subprocess.DEVNULL,
-            env=env,
-        )
-        subprocess.run(
-            runtime_compose_cmd("up", "-d", CONTEXT_ENGINE_SERVICE),
+            runtime_compose_cmd(*up_args),
             check=True,
             stdout=subprocess.DEVNULL,
             env=env,
@@ -2038,8 +2061,8 @@ def ensure_context_engine_runtime(*, force: bool = False) -> dict[str, str]:
         "service": CONTEXT_ENGINE_SERVICE,
         "container": CONTEXT_ENGINE_CONTAINER,
         "model": model,
-        "membrane_dir": str(source_dir),
         "compose_profiles": profiles,
+        **({"engine_image": engine_image} if use_engine_image else {"membrane_dir": str(source_dir)}),
     }
 
 def _compose_profiles_with(value: object, required_profile: str) -> str:
@@ -2057,6 +2080,50 @@ def _compose_profiles_with(value: object, required_profile: str) -> str:
     if required_profile.lower() not in seen:
         profiles.append(required_profile)
     return ",".join(profiles)
+
+def _normalized_release_image_tag(value: object) -> str:
+    tag = str(value or "").strip()
+    if not tag:
+        return ""
+    return tag if tag.startswith("v") else f"v{tag}"
+
+def _context_engine_release_image(env: dict[str, str]) -> str:
+    explicit = str(
+        os.getenv("MN_MEMBRANE_ENGINE_IMAGE")
+        or env.get("MN_MEMBRANE_ENGINE_IMAGE")
+        or os.getenv("MN_CONTEXT_ENGINE_IMAGE")
+        or env.get("MN_CONTEXT_ENGINE_IMAGE")
+        or os.getenv("ENGINE_IMAGE")
+        or env.get("ENGINE_IMAGE")
+        or ""
+    ).strip()
+    if explicit:
+        return explicit
+
+    tag = _normalized_release_image_tag(
+        os.getenv("MN_MEMBRANE_ENGINE_IMAGE_TAG")
+        or env.get("MN_MEMBRANE_ENGINE_IMAGE_TAG")
+        or os.getenv("MN_RUNTIME_MODULE_VERSION")
+        or env.get("MN_RUNTIME_MODULE_VERSION")
+        or os.getenv("MN_PACKAGE_VERSION")
+        or env.get("MN_PACKAGE_VERSION")
+    )
+    if not tag:
+        return ""
+    repository = str(
+        os.getenv("MN_MEMBRANE_ENGINE_IMAGE_REPOSITORY")
+        or env.get("MN_MEMBRANE_ENGINE_IMAGE_REPOSITORY")
+        or DEFAULT_MEMBRANE_ENGINE_IMAGE_REPOSITORY
+    ).strip().rstrip("/")
+    return f"{repository}:{tag}" if repository else ""
+
+def _context_engine_image_mode_enabled(env: dict[str, str], image: str) -> bool:
+    mode = str(os.getenv("MN_MEMBRANE_SOURCE_MODE") or env.get("MN_MEMBRANE_SOURCE_MODE") or "").strip().lower()
+    if mode in {"source", "git", "checkout", "local"}:
+        return False
+    if mode in {"image", "docker", "gar", "release"}:
+        return bool(image)
+    return bool(image and image != "mirror-neuron-memory-engine:latest")
 
 def _context_engine_git_url(env: dict[str, str]) -> str:
     explicit = str(os.getenv("MN_MEMBRANE_GIT_URL") or env.get("MN_MEMBRANE_GIT_URL") or "").strip()
