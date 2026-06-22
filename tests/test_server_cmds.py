@@ -49,6 +49,7 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_GRPC_AUTH_TOKEN_FILE", raising=False)
     monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN_FILE", raising=False)
     monkeypatch.delenv("MN_API_TOKEN", raising=False)
+    monkeypatch.delenv("MN_ENV", raising=False)
     monkeypatch.delenv("MN_ARTIFACT_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("MN_NODE_GPU", raising=False)
     monkeypatch.delenv("MN_NODE_GPU_COUNT", raising=False)
@@ -1521,13 +1522,18 @@ def test_start_server_restarts_existing_api_when_runtime_blueprint_env_changes(m
     compose_file.write_text("services: {}\n", encoding="utf-8")
     compose_env.write_text(
         "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_ENV=dev\n"
         "MN_BLUEPRINT_SOURCE=github\n"
         "MN_BLUEPRINT_REPO=https://github.com/MirrorNeuronLab/mn-blueprints.git\n"
         "MN_RUNS_ROOT=/tmp/mn-runs\n",
         encoding="utf-8",
     )
+    monkeypatch.setenv("MN_ENV", "prod")
     monkeypatch.setenv("MN_BLUEPRINT_SOURCE", "github")
-    monkeypatch.setenv("MN_BLUEPRINT_REPO", "https://github.com/MirrorNeuronLab/otterdesk-blueprints")
+    monkeypatch.setenv(
+        "MN_BLUEPRINT_REPO",
+        "[MirrorNeuronLab/otterdesk-blueprints](https://github.com/MirrorNeuronLab/otterdesk-blueprints)",
+    )
     monkeypatch.setenv("MN_RUNS_ROOT", "/tmp/otterdesk-runs")
     mocker.patch('mn_cli.server_cmds._runtime_grpc_tokens_from_running_container', return_value={})
     mocker.patch('mn_cli.server_cmds._docker_container_running', return_value=True)
@@ -1535,12 +1541,14 @@ def test_start_server_restarts_existing_api_when_runtime_blueprint_env_changes(m
         'mn_cli.server_cmds._read_runtime_api_health',
         return_value={
             "status": "ok",
+            "env": "dev",
             "blueprint_source": "github",
             "blueprint_repo": "https://github.com/MirrorNeuronLab/mn-blueprints.git",
             "active_blueprint_location": "https://github.com/MirrorNeuronLab/mn-blueprints.git",
             "runs_root": "/tmp/mn-runs",
         },
     )
+    mock_run = mocker.patch('mn_cli.server_cmds.subprocess.run')
     start_api = mocker.patch('mn_cli.server_cmds._start_api_if_installed')
     mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed', return_value=False)
     mocker.patch('mn_cli.server_cmds._write_runtime_endpoints_file', return_value={"api": {}})
@@ -1552,9 +1560,12 @@ def test_start_server_restarts_existing_api_when_runtime_blueprint_env_changes(m
     api_env = start_api.call_args.args[0]
     assert start_api.call_args.kwargs["restart_running"] is True
     assert start_api.call_args.kwargs["restart_reason"] == "runtime config changed"
+    assert api_env["MN_ENV"] == "prod"
     assert api_env["MN_BLUEPRINT_REPO"] == "https://github.com/MirrorNeuronLab/otterdesk-blueprints"
     assert api_env["MN_RUNS_ROOT"] == "/tmp/otterdesk-runs"
+    mock_run.assert_any_call(runtime_compose_cmd("up", "-d"), check=True, stdout=subprocess.DEVNULL, env=api_env)
     compose_text = compose_env.read_text()
+    assert "MN_ENV=prod" in compose_text
     assert "MN_BLUEPRINT_REPO=https://github.com/MirrorNeuronLab/otterdesk-blueprints" in compose_text
     assert "MN_RUNS_ROOT=/tmp/otterdesk-runs" in compose_text
 
@@ -1811,6 +1822,7 @@ def test_compose_native_settings_persists_runtime_blueprint_env(mocker, tmp_path
 
     env = server_cmds._ensure_compose_native_port_settings(
         {
+            "MN_ENV": "prod",
             "MN_BLUEPRINT_SOURCE": "local",
             "MN_BLUEPRINT_REPO": "https://github.com/MirrorNeuronLab/mn-blueprints.git",
             "MN_BLUEPRINT_LOCAL": "/work/mn/otterdesk-blueprints",
@@ -1818,6 +1830,7 @@ def test_compose_native_settings_persists_runtime_blueprint_env(mocker, tmp_path
         }
     )
 
+    assert env["MN_ENV"] == "prod"
     assert env["MN_BLUEPRINT_SOURCE"] == "local"
     assert env["MN_BLUEPRINT_REPO"] == "https://github.com/MirrorNeuronLab/mn-blueprints.git"
     assert env["MN_BLUEPRINT_LOCAL"] == "/work/mn/otterdesk-blueprints"
@@ -1830,6 +1843,7 @@ def test_compose_native_settings_persists_runtime_blueprint_env(mocker, tmp_path
     assert env["MN_BLUEPRINT_WEB_UI_PORT_END"] == "61049"
     assert env["MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE"] == "prepublished"
     compose_env_text = compose_env.read_text()
+    assert "MN_ENV=prod" in compose_env_text
     assert "MN_BLUEPRINT_SOURCE=local" in compose_env_text
     assert "MN_BLUEPRINT_REPO=https://github.com/MirrorNeuronLab/mn-blueprints.git" in compose_env_text
     assert "MN_BLUEPRINT_LOCAL=/work/mn/otterdesk-blueprints" in compose_env_text
@@ -1859,6 +1873,7 @@ def test_compose_native_settings_defaults_runtime_blueprint_repo(mocker, tmp_pat
     assert env["MN_BLUEPRINT_WEB_UI_PORT_END"] == "61049"
     assert env["MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE"] == "prepublished"
     compose_env_text = compose_env.read_text()
+    assert "MN_ENV=dev" in compose_env_text
     assert "MN_BLUEPRINT_SOURCE=github" in compose_env_text
     assert "MN_BLUEPRINT_REPO=https://github.com/MirrorNeuronLab/mn-blueprints.git" in compose_env_text
     assert "MN_BLUEPRINT_LOCAL=" in compose_env_text
@@ -1868,6 +1883,21 @@ def test_compose_native_settings_defaults_runtime_blueprint_repo(mocker, tmp_pat
     assert "MN_BLUEPRINT_WEB_UI_PORT_START=61000" in compose_env_text
     assert "MN_BLUEPRINT_WEB_UI_PORT_END=61049" in compose_env_text
     assert "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE=prepublished" in compose_env_text
+
+def test_compose_native_settings_normalizes_markdown_blueprint_repo(mocker, tmp_path):
+    compose_env = tmp_path / "docker-compose.env"
+    compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
+
+    env = server_cmds._ensure_compose_native_port_settings(
+        {
+            "MN_BLUEPRINT_SOURCE": "github",
+            "MN_BLUEPRINT_REPO": "[MirrorNeuronLab/otterdesk-blueprints](https://github.com/MirrorNeuronLab/otterdesk-blueprints)",
+        }
+    )
+
+    assert env["MN_BLUEPRINT_REPO"] == "https://github.com/MirrorNeuronLab/otterdesk-blueprints"
+    assert "MN_BLUEPRINT_REPO=https://github.com/MirrorNeuronLab/otterdesk-blueprints" in compose_env.read_text()
 
 def test_compose_cluster_bind_settings_exposes_lan_advertised_host(mocker, tmp_path, monkeypatch):
     for name in ("MN_GRPC_BIND_HOST", "MN_EPMD_BIND_HOST", "MN_DIST_BIND_HOST", "ERL_EPMD_ADDRESS"):

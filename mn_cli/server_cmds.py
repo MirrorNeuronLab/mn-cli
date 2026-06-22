@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 import typer
 from rich.console import Console
 from rich.table import Table
-from mn_sdk.blueprint_source import DEFAULT_BLUEPRINT_REPO
+from mn_sdk.blueprint_source import DEFAULT_BLUEPRINT_REPO, normalize_blueprint_repo_value
 from mn_cli.config import CliConfig
 from mn_cli.libs.ui import print_confirmed, print_success_confirmation
 from mn_cli.logging_config import configure_logging
@@ -2454,10 +2454,13 @@ def _cluster_endpoint_host(env: dict[str, str], host: str) -> str:
     return _native_endpoint_host(normalized)
 
 def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
+    runtime_env = str(env.get("MN_ENV") or os.getenv("MN_ENV") or "dev").strip().lower()
     blueprint_source = str(env.get("MN_BLUEPRINT_SOURCE") or os.getenv("MN_BLUEPRINT_SOURCE") or "github").strip().lower()
     if blueprint_source not in {"github", "local"}:
         blueprint_source = "github"
-    blueprint_repo = str(env.get("MN_BLUEPRINT_REPO") or os.getenv("MN_BLUEPRINT_REPO") or DEFAULT_BLUEPRINT_REPO).strip()
+    blueprint_repo = normalize_blueprint_repo_value(
+        str(env.get("MN_BLUEPRINT_REPO") or os.getenv("MN_BLUEPRINT_REPO") or DEFAULT_BLUEPRINT_REPO).strip()
+    )
     blueprint_local = str(env.get("MN_BLUEPRINT_LOCAL") or os.getenv("MN_BLUEPRINT_LOCAL") or "").strip()
     host_home_dir = str(
         env.get("MN_HOST_HOME_DIR")
@@ -2500,6 +2503,7 @@ def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
         or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT
     ).strip()
     updates: dict[str, str] = {
+        "MN_ENV": runtime_env,
         "MN_BLUEPRINT_SOURCE": blueprint_source,
         "MN_BLUEPRINT_REPO": blueprint_repo,
         "MN_BLUEPRINT_LOCAL": blueprint_local,
@@ -2636,6 +2640,11 @@ def _runtime_api_config_mismatches(env: dict[str, str], health: Optional[dict[st
     if not health:
         return []
     mismatches: list[tuple[str, str, str]] = []
+    expected_env = str(env.get("MN_ENV") or "dev").strip().lower()
+    active_env = str(health.get("env") or health.get("mn_env") or "").strip().lower()
+    if active_env and expected_env and active_env != expected_env:
+        mismatches.append(("MN_ENV", active_env, expected_env))
+
     expected_blueprint = _expected_blueprint_location(env)
     active_blueprint = str(
         health.get("active_blueprint_location")
@@ -3779,14 +3788,16 @@ def _start_server(
         env = _ensure_runtime_api_token(env, persist_compose=compose_runtime)
         if compose_runtime:
             env = _ensure_compose_native_port_settings(env)
-            if not _docker_container_running("mirror-neuron-core"):
+            core_running = _docker_container_running("mirror-neuron-core")
+            if not core_running:
                 console.print("=> MirrorNeuron Core is not running; starting Docker runtime (Compose)...")
-                try:
-                    subprocess.run(runtime_compose_cmd("up", "-d"), check=True, stdout=subprocess.DEVNULL, env=env)
+            try:
+                subprocess.run(runtime_compose_cmd("up", "-d"), check=True, stdout=subprocess.DEVNULL, env=env)
+                if not core_running:
                     console.print("   [green][Started][/green] Docker runtime (Compose project: mirror-neuron)")
-                except (FileNotFoundError, subprocess.CalledProcessError):
-                    console.print("[red]Failed to start MirrorNeuron Docker runtime.[/red]")
-                    raise typer.Exit(1)
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                console.print("[red]Failed to start MirrorNeuron Docker runtime.[/red]")
+                raise typer.Exit(1)
         env.setdefault("MN_API_HOST", _api_host())
         env.setdefault("MN_API_PORT", DEFAULT_API_PORT)
         env.setdefault("MN_WEB_UI_HOST", _web_ui_host())
