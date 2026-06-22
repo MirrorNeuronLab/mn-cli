@@ -789,6 +789,27 @@ def test_runtime_ensure_context_engine_explains_first_launch(mocker):
     assert "First launch may download the context model" in stdout_text
     assert "Context engine" in result.stdout
     assert "hf.co/example/context-model" in result.stdout
+    assert "/tmp/Membrane" in result.stdout
+    mock_ensure.assert_called_once_with(force=False)
+
+
+def test_runtime_ensure_context_engine_reports_release_image(mocker):
+    mock_ensure = mocker.patch(
+        "mn_cli.libs.sys_cmds.ensure_context_engine_runtime",
+        return_value={
+            "status": "started",
+            "service": "membrane-context-engine",
+            "model": "hf.co/example/context-model",
+            "engine_image": "us-central1-docker.pkg.dev/example/runtime/membrane-context-engine:v1.2.14",
+        },
+    )
+
+    result = runner.invoke(app, ["runtime", "ensure-context-engine"])
+
+    assert result.exit_code == 0
+    assert "Context engine" in result.stdout
+    assert "hf.co/example/context-model" in result.stdout
+    assert "membrane-context-engine:v1.2.14" in result.stdout
     mock_ensure.assert_called_once_with(force=False)
 
 
@@ -983,6 +1004,9 @@ def test_openshell_skill_dependency_context_injects_pinned_gar_install(tmp_path)
     assert context != sandbox_dir
     assert "mirrorneuron-websocket-stream-skill==1.2.7" in requirements
     assert "https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/" in requirements
+    assert "--index-url\n" not in requirements
+    assert "--index-url https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/" in requirements
+    assert "--extra-index-url https://pypi.org/simple" in requirements
     assert "COPY __mn_skill_dependencies/requirements.txt" in dockerfile
     assert "pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-dependencies/requirements.txt" in dockerfile
 

@@ -79,8 +79,19 @@ def gar_requirement_lines(manifest: dict[str, Any] | None) -> list[str]:
     ]
 
 
+def gar_requirements_file_lines(manifest: dict[str, Any] | None) -> list[str]:
+    requirements = pinned_skill_dependency_requirements(manifest)
+    if not requirements:
+        return []
+    return [
+        f"--index-url {GAR_PIP_INDEX_URL}",
+        f"--extra-index-url {PYPI_PIP_INDEX_URL}",
+        *requirements,
+    ]
+
+
 def gar_requirements_text(manifest: dict[str, Any] | None) -> str:
-    lines = gar_requirement_lines(manifest)
+    lines = gar_requirements_file_lines(manifest)
     return "\n".join(lines).strip() + ("\n" if lines else "")
 
 

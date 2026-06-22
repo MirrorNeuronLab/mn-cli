@@ -2029,9 +2029,11 @@ def ensure_context_engine_runtime(*, force: bool = False) -> dict[str, str]:
     _remove_non_mirror_neuron_container(CONTEXT_ENGINE_CONTAINER)
     _remove_non_mirror_neuron_container(CONTEXT_ENGINE_MODEL_CONTAINER)
     _ensure_docker_model_runner()
+    model_already_installed = _docker_model_inspect_ok(model)
+    model_status = "already_installed" if model_already_installed else "compose_pending"
 
     already_running = _docker_container_running(CONTEXT_ENGINE_CONTAINER)
-    if force or not already_running:
+    if force or not already_running or not model_already_installed:
         compose_env = env
         anonymous_docker_config: Path | None = None
         if use_engine_image:
@@ -2064,6 +2066,8 @@ def ensure_context_engine_runtime(*, force: bool = False) -> dict[str, str]:
             if anonymous_docker_config is not None:
                 shutil.rmtree(anonymous_docker_config, ignore_errors=True)
         status = "restarted" if already_running and force else "started"
+        if not model_already_installed:
+            model_status = "installed" if _docker_model_inspect_ok(model) else "compose_managed"
     else:
         status = "already_running"
 
@@ -2072,6 +2076,7 @@ def ensure_context_engine_runtime(*, force: bool = False) -> dict[str, str]:
         "service": CONTEXT_ENGINE_SERVICE,
         "container": CONTEXT_ENGINE_CONTAINER,
         "model": model,
+        "model_status": model_status,
         "compose_profiles": profiles,
         **({"engine_image": engine_image} if use_engine_image else {"membrane_dir": str(source_dir)}),
     }
@@ -2080,6 +2085,11 @@ def _compose_subprocess_env(env: dict[str, str]) -> dict[str, str]:
     merged = dict(os.environ)
     merged.update({str(key): str(value) for key, value in env.items()})
     return merged
+
+def _docker_model_inspect_ok(model: str) -> bool:
+    if not model:
+        return False
+    return _docker_command_ok(["docker", "model", "inspect", model])
 
 def _anonymous_public_gar_docker_env(env: dict[str, str], image: str) -> tuple[dict[str, str], Path | None]:
     if not _is_public_gar_image(image):

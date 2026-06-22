@@ -325,6 +325,9 @@ def test_deploy_compose_passes_host_shared_storage_to_core():
 
     assert "MN_HOST_SHARED_STORAGE_ROOT:" in compose_text
     assert "${MN_HOST_SHARED_STORAGE_ROOT:-${MN_SHARED_STORAGE_ROOT:-" in compose_text
+    assert "membrane-context-engine:" in compose_text
+    assert "context-engine-model:" in compose_text
+    assert "MN_CONTEXT_MODEL_ENDPOINT" in compose_text
 
 def test_runtime_blueprint_env_updates_ignores_legacy_host_mn_dir(tmp_path):
     legacy_home = tmp_path / "legacy-mn-home"
@@ -575,6 +578,7 @@ def test_ensure_context_engine_runtime_persists_profile_and_starts_compose(mocke
     server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
     mocker.patch("mn_cli.server_cmds._ensure_context_engine_source", return_value=membrane_dir)
     mocker.patch("mn_cli.server_cmds._ensure_docker_model_runner")
+    inspect_model = mocker.patch("mn_cli.server_cmds._docker_model_inspect_ok", side_effect=[False, True])
     mocker.patch("mn_cli.server_cmds._remove_non_mirror_neuron_container")
     mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
     run = mocker.patch("mn_cli.server_cmds.subprocess.run")
@@ -586,6 +590,8 @@ def test_ensure_context_engine_runtime_persists_profile_and_starts_compose(mocke
     assert env["MEMBRANE_DIR"] == str(membrane_dir)
     assert env["MN_CONTEXT_MODEL_RUNNER_MODEL"] == server_cmds.DEFAULT_CONTEXT_MODEL_RUNNER_MODEL
     assert result["status"] == "started"
+    assert result["model_status"] == "installed"
+    assert inspect_model.call_args_list[0].args[0] == server_cmds.DEFAULT_CONTEXT_MODEL_RUNNER_MODEL
     assert run.call_args_list[0].args[0] == runtime_compose_cmd("build", "membrane-context-engine")
     assert run.call_args_list[1].args[0] == runtime_compose_cmd("up", "-d", "membrane-context-engine")
 
@@ -602,6 +608,7 @@ def test_ensure_context_engine_runtime_uses_release_image_without_source_clone(m
     server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
     ensure_source = mocker.patch("mn_cli.server_cmds._ensure_context_engine_source")
     mocker.patch("mn_cli.server_cmds._ensure_docker_model_runner")
+    inspect_model = mocker.patch("mn_cli.server_cmds._docker_model_inspect_ok", return_value=True)
     mocker.patch("mn_cli.server_cmds._remove_non_mirror_neuron_container")
     mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
     run = mocker.patch("mn_cli.server_cmds.subprocess.run")
@@ -618,8 +625,10 @@ def test_ensure_context_engine_runtime_uses_release_image_without_source_clone(m
     assert env["MN_MEMBRANE_ENGINE_IMAGE"] == expected_image
     assert "MEMBRANE_DIR" not in env
     assert result["status"] == "started"
+    assert result["model_status"] == "already_installed"
     assert result["engine_image"] == expected_image
     ensure_source.assert_not_called()
+    inspect_model.assert_called_once_with(server_cmds.DEFAULT_CONTEXT_MODEL_RUNNER_MODEL)
     assert run.call_args_list[0].args[0] == runtime_compose_cmd("pull", "membrane-context-engine")
     assert run.call_args_list[1].args[0] == runtime_compose_cmd("up", "-d", "--no-build", "membrane-context-engine")
     assert run.call_args_list[0].kwargs["env"]["DOCKER_CONFIG"] != str(Path.home() / ".docker")
@@ -688,6 +697,7 @@ def test_ensure_context_engine_runtime_skips_compose_when_already_running(mocker
     server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
     mocker.patch("mn_cli.server_cmds._ensure_context_engine_source", return_value=membrane_dir)
     mocker.patch("mn_cli.server_cmds._ensure_docker_model_runner")
+    inspect_model = mocker.patch("mn_cli.server_cmds._docker_model_inspect_ok", return_value=True)
     mocker.patch("mn_cli.server_cmds._remove_non_mirror_neuron_container")
     mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=True)
     run = mocker.patch("mn_cli.server_cmds.subprocess.run")
@@ -696,7 +706,35 @@ def test_ensure_context_engine_runtime_skips_compose_when_already_running(mocker
 
     assert result["status"] == "already_running"
     assert result["model"] == "hf.co/acme/context"
+    assert result["model_status"] == "already_installed"
+    inspect_model.assert_called_once_with("hf.co/acme/context")
     run.assert_not_called()
+
+def test_ensure_context_engine_runtime_reconciles_missing_model_with_compose(mocker, tmp_path):
+    membrane_dir = tmp_path / "Membrane"
+    membrane_dir.mkdir()
+    (membrane_dir / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+    server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
+    server_cmds.RUNTIME_COMPOSE_ENV.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "COMPOSE_PROFILES=context\n"
+        "MN_CONTEXT_MODEL_RUNNER_MODEL=hf.co/acme/context\n",
+        encoding="utf-8",
+    )
+    server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
+    mocker.patch("mn_cli.server_cmds._ensure_context_engine_source", return_value=membrane_dir)
+    mocker.patch("mn_cli.server_cmds._ensure_docker_model_runner")
+    mocker.patch("mn_cli.server_cmds._docker_model_inspect_ok", side_effect=[False, True])
+    mocker.patch("mn_cli.server_cmds._remove_non_mirror_neuron_container")
+    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=True)
+    run = mocker.patch("mn_cli.server_cmds.subprocess.run")
+
+    result = server_cmds.ensure_context_engine_runtime()
+
+    assert result["status"] == "started"
+    assert result["model_status"] == "installed"
+    assert run.call_args_list[0].args[0] == runtime_compose_cmd("build", "membrane-context-engine")
+    assert run.call_args_list[1].args[0] == runtime_compose_cmd("up", "-d", "membrane-context-engine")
 
 def test_runtime_compose_cmd_includes_models_override():
     server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)

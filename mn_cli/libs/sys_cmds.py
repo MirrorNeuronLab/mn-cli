@@ -310,15 +310,21 @@ def ensure_context_engine(
             )
             summary = ensure_context_engine_runtime(force=force)
             progress.update(task, description="[green]Context memory is ready.")
+        details = [
+            ("Service", summary["service"]),
+            ("Model", summary["model"]),
+            ("Model status", summary.get("model_status", "unknown")),
+        ]
+        if summary.get("membrane_dir"):
+            details.append(("Membrane", summary["membrane_dir"]))
+        if summary.get("engine_image"):
+            details.append(("Engine image", summary["engine_image"]))
+
         print_success_confirmation(
             console,
             "Context engine",
             status=summary["status"],
-            details=[
-                ("Service", summary["service"]),
-                ("Model", summary["model"]),
-                ("Membrane", summary["membrane_dir"]),
-            ],
+            details=details,
             next_steps="mn runtime health",
         )
     except Exception as exc:

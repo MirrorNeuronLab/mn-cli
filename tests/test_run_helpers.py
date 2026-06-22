@@ -384,6 +384,9 @@ def test_stage_skill_dependency_payloads_injects_pinned_gar_requirements_for_doc
     dockerfile = payloads["worker/docker_worker/Dockerfile"].decode()
     assert "mirrorneuron-rag-skill==1.2.7" in requirements
     assert "https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/" in requirements
+    assert "--index-url\n" not in requirements
+    assert "--index-url https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/" in requirements
+    assert "--extra-index-url https://pypi.org/simple" in requirements
     assert "COPY __mn_skill_dependencies/requirements.txt" in dockerfile
     assert "pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-dependencies/requirements.txt" in dockerfile
 
