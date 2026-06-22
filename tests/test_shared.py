@@ -13,7 +13,7 @@ for parent in Path(__file__).resolve().parents:
         sys.path.insert(0, str(sdk_path))
         break
 
-from mn_sdk.runtime_config import RuntimeConfig
+from mn_sdk.runtime_config import DEFAULT_GRPC_ADMIN_TOKEN, DEFAULT_GRPC_AUTH_TOKEN, RuntimeConfig
 
 
 @pytest.fixture(autouse=True)
@@ -63,7 +63,7 @@ def test_shared_client_omits_admin_token_for_older_sdk(monkeypatch, tmp_path):
         {
             "target": "localhost:55051",
             "timeout": 10.0,
-            "auth_token": "",
+            "auth_token": DEFAULT_GRPC_AUTH_TOKEN,
         }
     ]
 
@@ -90,8 +90,8 @@ def test_shared_client_passes_admin_token_for_current_sdk(monkeypatch, tmp_path)
         {
             "target": "localhost:55051",
             "timeout": 10.0,
-            "auth_token": "",
-            "admin_token": "admin-secret",
+            "auth_token": DEFAULT_GRPC_AUTH_TOKEN,
+            "admin_token": DEFAULT_GRPC_ADMIN_TOKEN,
         }
     ]
 
@@ -131,8 +131,8 @@ def test_shared_client_reads_runtime_env_target_and_tokens(monkeypatch, tmp_path
         {
             "target": "127.0.0.1:55111",
             "timeout": 10.0,
-            "auth_token": "auth-from-state",
-            "admin_token": "admin-from-state",
+            "auth_token": DEFAULT_GRPC_AUTH_TOKEN,
+            "admin_token": DEFAULT_GRPC_ADMIN_TOKEN,
         }
     ]
 
@@ -169,8 +169,8 @@ def test_shared_client_prefers_runtime_endpoint_over_stale_core_target(monkeypat
         {
             "target": "192.168.4.20:55051",
             "timeout": 10.0,
-            "auth_token": "auth-from-state",
-            "admin_token": "",
+            "auth_token": DEFAULT_GRPC_AUTH_TOKEN,
+            "admin_token": DEFAULT_GRPC_ADMIN_TOKEN,
         }
     ]
 
@@ -200,8 +200,8 @@ def test_shared_client_reads_refreshed_token_files(monkeypatch, tmp_path):
         {
             "target": "localhost:55051",
             "timeout": 10.0,
-            "auth_token": "auth-from-file",
-            "admin_token": "admin-from-file",
+            "auth_token": DEFAULT_GRPC_AUTH_TOKEN,
+            "admin_token": DEFAULT_GRPC_ADMIN_TOKEN,
         }
     ]
 
@@ -236,7 +236,7 @@ def test_shared_client_reads_token_files_before_stale_runtime_env(monkeypatch, t
         {
             "target": "localhost:55051",
             "timeout": 10.0,
-            "auth_token": "auth-from-file",
-            "admin_token": "admin-from-file",
+            "auth_token": DEFAULT_GRPC_AUTH_TOKEN,
+            "admin_token": DEFAULT_GRPC_ADMIN_TOKEN,
         }
     ]
