@@ -1,5 +1,6 @@
 import json
 import pytest
+import shutil
 import subprocess
 import sys
 from io import StringIO
@@ -588,7 +589,8 @@ def test_ensure_context_engine_runtime_persists_profile_and_starts_compose(mocke
     assert run.call_args_list[0].args[0] == runtime_compose_cmd("build", "membrane-context-engine")
     assert run.call_args_list[1].args[0] == runtime_compose_cmd("up", "-d", "membrane-context-engine")
 
-def test_ensure_context_engine_runtime_uses_release_image_without_source_clone(mocker):
+def test_ensure_context_engine_runtime_uses_release_image_without_source_clone(mocker, monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/local/bin:/usr/bin:/bin")
     server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
     server_cmds.RUNTIME_COMPOSE_ENV.write_text(
         "COMPOSE_PROJECT_NAME=mirror-neuron\n"
@@ -620,6 +622,51 @@ def test_ensure_context_engine_runtime_uses_release_image_without_source_clone(m
     ensure_source.assert_not_called()
     assert run.call_args_list[0].args[0] == runtime_compose_cmd("pull", "membrane-context-engine")
     assert run.call_args_list[1].args[0] == runtime_compose_cmd("up", "-d", "--no-build", "membrane-context-engine")
+    assert run.call_args_list[0].kwargs["env"]["DOCKER_CONFIG"] != str(Path.home() / ".docker")
+    assert run.call_args_list[0].kwargs["env"]["PATH"] == "/usr/local/bin:/usr/bin:/bin"
+
+def test_public_gar_docker_env_strips_gcloud_helpers(monkeypatch, tmp_path):
+    docker_config = tmp_path / "docker-config"
+    docker_config.mkdir()
+    docker_plugins = docker_config / "cli-plugins"
+    docker_plugins.mkdir()
+    (docker_plugins / "docker-compose").write_text("#!/bin/sh\n", encoding="utf-8")
+    (docker_config / "config.json").write_text(
+        json.dumps(
+            {
+                "auths": {
+                    "https://us-central1-docker.pkg.dev": {"auth": "private"},
+                    "ghcr.io": {"auth": "keep"},
+                },
+                "credHelpers": {
+                    "us-central1-docker.pkg.dev": "gcloud",
+                    "ghcr.io": "ghcr",
+                },
+                "credsStore": "desktop",
+                "proxies": {"default": {"httpProxy": "http://proxy.test"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = {"DOCKER_CONFIG": str(docker_config)}
+
+    next_env, temp_config_dir = server_cmds._anonymous_public_gar_docker_env(
+        env,
+        "us-central1-docker.pkg.dev/mirrorneuron-public-packages/mirrorneuron-runtime/membrane-context-engine:v1.2.8",
+    )
+
+    try:
+        assert temp_config_dir is not None
+        assert next_env["DOCKER_CONFIG"] == str(temp_config_dir)
+        assert next_env["DOCKER_CONFIG"] != env["DOCKER_CONFIG"]
+        sanitized = json.loads((temp_config_dir / "config.json").read_text(encoding="utf-8"))
+        assert "credsStore" not in sanitized
+        assert sanitized["credHelpers"] == {"ghcr.io": "ghcr"}
+        assert sanitized["auths"] == {"ghcr.io": {"auth": "keep"}}
+        assert sanitized["proxies"] == {"default": {"httpProxy": "http://proxy.test"}}
+        assert (temp_config_dir / "cli-plugins" / "docker-compose").exists()
+    finally:
+        shutil.rmtree(temp_config_dir, ignore_errors=True)
 
 def test_ensure_context_engine_runtime_skips_compose_when_already_running(mocker, tmp_path):
     membrane_dir = tmp_path / "Membrane"

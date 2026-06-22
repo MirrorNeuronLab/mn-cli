@@ -9,6 +9,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from datetime import datetime, timezone
@@ -116,6 +117,7 @@ DEFAULT_MEMBRANE_ENGINE_IMAGE_REPOSITORY = (
     "us-central1-docker.pkg.dev/mirrorneuron-public-packages/"
     "mirrorneuron-runtime/membrane-context-engine"
 )
+PUBLIC_GAR_PROJECT_PATH = "/mirrorneuron-public-packages/"
 CONTEXT_ENGINE_SERVICE = "membrane-context-engine"
 CONTEXT_ENGINE_CONTAINER = "mirror-neuron-context-engine"
 CONTEXT_ENGINE_MODEL_CONTAINER = "mirror-neuron-context-engine-model"
@@ -2030,28 +2032,37 @@ def ensure_context_engine_runtime(*, force: bool = False) -> dict[str, str]:
 
     already_running = _docker_container_running(CONTEXT_ENGINE_CONTAINER)
     if force or not already_running:
+        compose_env = env
+        anonymous_docker_config: Path | None = None
         if use_engine_image:
+            compose_env, anonymous_docker_config = _anonymous_public_gar_docker_env(env, engine_image)
+        compose_process_env = _compose_subprocess_env(compose_env)
+        try:
+            if use_engine_image:
+                subprocess.run(
+                    runtime_compose_cmd("pull", CONTEXT_ENGINE_SERVICE),
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    env=compose_process_env,
+                )
+                up_args = ("up", "-d", "--no-build", CONTEXT_ENGINE_SERVICE)
+            else:
+                subprocess.run(
+                    runtime_compose_cmd("build", CONTEXT_ENGINE_SERVICE),
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    env=compose_process_env,
+                )
+                up_args = ("up", "-d", CONTEXT_ENGINE_SERVICE)
             subprocess.run(
-                runtime_compose_cmd("pull", CONTEXT_ENGINE_SERVICE),
+                runtime_compose_cmd(*up_args),
                 check=True,
                 stdout=subprocess.DEVNULL,
-                env=env,
+                env=compose_process_env,
             )
-            up_args = ("up", "-d", "--no-build", CONTEXT_ENGINE_SERVICE)
-        else:
-            subprocess.run(
-                runtime_compose_cmd("build", CONTEXT_ENGINE_SERVICE),
-                check=True,
-                stdout=subprocess.DEVNULL,
-                env=env,
-            )
-            up_args = ("up", "-d", CONTEXT_ENGINE_SERVICE)
-        subprocess.run(
-            runtime_compose_cmd(*up_args),
-            check=True,
-            stdout=subprocess.DEVNULL,
-            env=env,
-        )
+        finally:
+            if anonymous_docker_config is not None:
+                shutil.rmtree(anonymous_docker_config, ignore_errors=True)
         status = "restarted" if already_running and force else "started"
     else:
         status = "already_running"
@@ -2064,6 +2075,82 @@ def ensure_context_engine_runtime(*, force: bool = False) -> dict[str, str]:
         "compose_profiles": profiles,
         **({"engine_image": engine_image} if use_engine_image else {"membrane_dir": str(source_dir)}),
     }
+
+def _compose_subprocess_env(env: dict[str, str]) -> dict[str, str]:
+    merged = dict(os.environ)
+    merged.update({str(key): str(value) for key, value in env.items()})
+    return merged
+
+def _anonymous_public_gar_docker_env(env: dict[str, str], image: str) -> tuple[dict[str, str], Path | None]:
+    if not _is_public_gar_image(image):
+        return env, None
+
+    registry_host = _docker_image_registry_host(image)
+    config_dir = Path(tempfile.mkdtemp(prefix="mn-public-gar-docker-config-"))
+    source_config = _docker_config_dir(env) / "config.json"
+    config: dict[str, Any] = {}
+    if source_config.exists():
+        try:
+            loaded = json.loads(source_config.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                config = loaded
+        except Exception:
+            logger.debug("Could not read Docker config for public GAR pull; using anonymous config", exc_info=True)
+
+    config = _docker_config_without_public_gar_credentials(config, registry_host)
+    (config_dir / "config.json").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _expose_docker_cli_plugins(source_config.parent, config_dir)
+
+    next_env = dict(env)
+    next_env["DOCKER_CONFIG"] = str(config_dir)
+    return next_env, config_dir
+
+def _expose_docker_cli_plugins(source_config_dir: Path, target_config_dir: Path) -> None:
+    source_plugins = source_config_dir / "cli-plugins"
+    if not source_plugins.is_dir():
+        return
+    target_plugins = target_config_dir / "cli-plugins"
+    try:
+        os.symlink(source_plugins, target_plugins, target_is_directory=True)
+    except Exception:
+        try:
+            shutil.copytree(source_plugins, target_plugins, symlinks=True)
+        except Exception:
+            logger.debug("Could not expose Docker CLI plugins for anonymous GAR pull", exc_info=True)
+
+def _is_public_gar_image(image: str) -> bool:
+    text = str(image or "").strip()
+    return PUBLIC_GAR_PROJECT_PATH in text and _docker_image_registry_host(text).endswith(".pkg.dev")
+
+def _docker_image_registry_host(image: str) -> str:
+    return str(image or "").split("/", 1)[0].strip().lower()
+
+def _docker_config_dir(env: dict[str, str]) -> Path:
+    configured = str(env.get("DOCKER_CONFIG") or os.environ.get("DOCKER_CONFIG") or "").strip()
+    return Path(configured).expanduser() if configured else Path.home() / ".docker"
+
+def _docker_config_without_public_gar_credentials(config: dict[str, Any], registry_host: str) -> dict[str, Any]:
+    sanitized = dict(config)
+    sanitized.pop("credsStore", None)
+    for key in ("credHelpers", "auths"):
+        value = sanitized.get(key)
+        if not isinstance(value, dict):
+            continue
+        filtered = {
+            str(registry): details
+            for registry, details in value.items()
+            if not _docker_registry_matches_public_gar(str(registry), registry_host)
+        }
+        if filtered:
+            sanitized[key] = filtered
+        else:
+            sanitized.pop(key, None)
+    return sanitized
+
+def _docker_registry_matches_public_gar(registry: str, registry_host: str) -> bool:
+    normalized = registry.strip().lower()
+    normalized = normalized.removeprefix("https://").removeprefix("http://").split("/", 1)[0]
+    return normalized == registry_host or normalized.endswith(".pkg.dev")
 
 def _compose_profiles_with(value: object, required_profile: str) -> str:
     profiles: list[str] = []
@@ -3725,7 +3812,6 @@ def _start_server(
     if token:
         _write_network_token(network_token)
     env = _runtime_base_env(compose_runtime)
-    persisted_join_profile_before_network = bool(compose_runtime and not ip and _persisted_join_profile(env))
     mode_override = docker_network_mode or os.getenv("MN_DOCKER_NETWORK_MODE", "").strip()
     requested_docker_mode = _docker_network_mode(
         mode_override or None,

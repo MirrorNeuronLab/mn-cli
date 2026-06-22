@@ -15,6 +15,7 @@ runner = CliRunner()
 @pytest.fixture(autouse=True)
 def isolate_model_ownership(monkeypatch, tmp_path):
     monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
+    monkeypatch.setattr("mn_cli.libs.model_cmds._endpoint_responds", lambda: False)
 
 
 def _completed(command, returncode=0, stdout="", stderr=""):
@@ -268,6 +269,40 @@ def test_model_install_falls_back_to_dmr_rest_when_cli_plugin_missing(mocker):
     assert ["docker", "model", "pull", "ai/gemma4:E2B"] not in calls
     assert any(url.endswith("/models/create") and method == "POST" for url, method, _data in requests)
     payloads = [json.loads(data.decode("utf-8")) for _url, _method, data in requests if data]
+    assert {"from": "ai/gemma4:E2B"} in payloads
+
+
+def test_model_install_prefers_dmr_rest_pull_when_runner_api_reachable(mocker, monkeypatch):
+    calls = []
+    requests = []
+    monkeypatch.setattr("mn_cli.libs.model_cmds._endpoint_responds", lambda: True)
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:4] == ["docker", "model", "status", "--json"]:
+            return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
+        if command[:4] == ["docker", "model", "run", "--help"]:
+            return _completed(command, stdout="Options:\n")
+        return _completed(command)
+
+    def fake_urlopen(request, timeout=0):
+        requests.append((request.full_url, request.get_method(), request.data, timeout))
+        return FakeResponse("{}")
+
+    mocker.patch("subprocess.run", side_effect=fake_run)
+    mocker.patch("urllib.request.urlopen", side_effect=fake_urlopen)
+    mocker.patch(
+        "mn_sdk.model_runtime.detect_host_hardware",
+        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+    )
+
+    result = runner.invoke(app, ["model", "install", "gemma4:e2b"])
+
+    assert result.exit_code == 0
+    assert ["docker", "model", "pull", "ai/gemma4:E2B"] not in calls
+    assert ["docker", "model", "run", "--detach", "ai/gemma4:E2B"] in calls
+    assert any(url.endswith("/models/create") and method == "POST" for url, method, _data, _timeout in requests)
+    payloads = [json.loads(data.decode("utf-8")) for _url, _method, data, _timeout in requests if data]
     assert {"from": "ai/gemma4:E2B"} in payloads
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from typing import Annotated, Any, Optional
 
@@ -250,16 +251,21 @@ def install_model_entry(
     target = docker_model_name(entry)
     if _docker_model_cli_available():
         _ensure_runner(compatibility.backend, compatibility.accelerator)
-        _docker_model_pull(target)
+        pull_result = _pull_model(target)
         run_command = ["model", "run", "--detach"]
         resolved_context = context_size or entry.get("context_size")
         if resolved_context and _docker_model_run_supports_context_size():
             run_command.extend(["--context-size", str(resolved_context)])
         run_command.append(target)
         _docker(run_command, timeout=300)
-        return {"entry": entry, "docker_model": target, "compatibility": payload, "transport": "docker_cli"}
+        return {
+            "entry": entry,
+            "docker_model": target,
+            "compatibility": payload,
+            **pull_result,
+        }
 
-    api_result = dmr_api_pull_model(target, timeout=900)
+    api_result = dmr_api_pull_model(target, timeout=_model_pull_timeout_seconds())
     return {
         "entry": entry,
         "docker_model": target,
@@ -267,6 +273,21 @@ def install_model_entry(
         "transport": "docker_model_runner_api",
         "api": api_result,
     }
+
+
+def _model_pull_timeout_seconds() -> float:
+    try:
+        return max(float(os.getenv("MN_DOCKER_MODEL_PULL_TIMEOUT_SECONDS", "3600")), 1.0)
+    except ValueError:
+        return 3600.0
+
+
+def _pull_model(target: str) -> dict[str, Any]:
+    if _endpoint_responds():
+        api_result = dmr_api_pull_model(target, timeout=_model_pull_timeout_seconds())
+        return {"transport": "docker_model_runner_api", "api": api_result}
+    _docker_model_pull(target)
+    return {"transport": "docker_cli"}
 
 
 def _docker_model_pull(target: str, *, attempts: int = 2) -> None:
