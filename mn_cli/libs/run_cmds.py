@@ -61,14 +61,23 @@ from mn_cli.libs.workflow_validation import (
 from mn_cli.libs.blueprint_observability import (
     make_blueprint_run_id as _make_blueprint_run_id,
 )
+from mn_cli.libs.blueprint_models import BlueprintModelOps, blueprint_model_dependency_summary
+from mn_cli.libs.model_cmds import install_model_entry, model_installed
 from mn_cli.libs.blueprint_resources import cleanup_blueprint_host_hooks
 from mn_cli.server_cmds import ensure_context_engine_runtime
 from mn_cli.shared import console, client, logger
 from mn_cli.terminal import use_progress
 from mn_cli.error_handler import handle_cli_error
 from mn_sdk import (
+    cluster_provided_model,
+    docker_model_name,
+    load_model_catalog,
+    load_model_ownership,
     make_validation_report,
     prepare_job_submission,
+    record_model_owner,
+    required_blueprint_models,
+    resolve_model_entry,
     run_hardware_requirements_validation,
     run_input_validation,
     run_model_validation,
@@ -232,6 +241,119 @@ def _manifest_config(manifest: dict[str, Any]) -> dict[str, Any]:
             if isinstance(decoded, dict):
                 return decoded
     return {}
+
+
+def _prepare_runtime_models_for_run_or_exit(
+    bundle_dir: Path,
+    manifest: dict[str, Any],
+    *,
+    env_overrides: Optional[dict[str, str]] = None,
+    config_overrides: Optional[dict[str, Any]] = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    config = load_blueprint_config(bundle_dir, config_overrides=config_overrides) or {}
+    validation_manifest = _manifest_for_model_validation(manifest, config)
+    summary = blueprint_model_dependency_summary(
+        blueprint_id=_runtime_model_blueprint_id(bundle_dir, manifest, config),
+        blueprint_revision=_runtime_model_blueprint_revision(manifest, config),
+        bundle_root=bundle_dir,
+        manifest=validation_manifest,
+        config=config,
+        install_source=str(bundle_dir),
+        force=force,
+        ops=BlueprintModelOps(
+            load_model_catalog=load_model_catalog,
+            required_blueprint_models=required_blueprint_models,
+            load_model_ownership=load_model_ownership,
+            resolve_model_entry=resolve_model_entry,
+            docker_model_name=docker_model_name,
+            cluster_provided_model=cluster_provided_model,
+            record_model_owner=record_model_owner,
+            model_installed=model_installed,
+            install_model_entry=install_model_entry,
+            notify_model_install_start=_print_runtime_model_install_start,
+        ),
+    )
+    _print_runtime_model_install_summary(summary)
+    if summary["errors"]:
+        raise typer.Exit(1)
+    return summary
+
+
+def _runtime_model_blueprint_id(
+    bundle_dir: Path,
+    manifest: dict[str, Any],
+    config: dict[str, Any],
+) -> str:
+    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    identity = config.get("identity") if isinstance(config.get("identity"), dict) else {}
+    for value in (
+        metadata.get("blueprint_id"),
+        metadata.get("blueprintId"),
+        identity.get("blueprint_id"),
+        identity.get("blueprintId"),
+        manifest.get("id"),
+        manifest.get("graph_id"),
+        manifest.get("job_name"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return bundle_dir.name
+
+
+def _runtime_model_blueprint_revision(
+    manifest: dict[str, Any],
+    config: dict[str, Any],
+) -> str | None:
+    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    identity = config.get("identity") if isinstance(config.get("identity"), dict) else {}
+    for value in (
+        metadata.get("blueprint_revision"),
+        metadata.get("blueprintRevision"),
+        identity.get("blueprint_revision"),
+        identity.get("blueprintRevision"),
+        manifest.get("revision"),
+        manifest.get("version"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return None
+
+
+def _print_runtime_model_install_start(model: dict[str, Any]) -> None:
+    label = str(model.get("id") or model.get("model") or "runtime model")
+    docker_model = str(model.get("model") or "")
+    backend = str(model.get("backend") or "auto")
+    detail = f"{label} ({docker_model})" if docker_model and docker_model != label else label
+    console.print(
+        f"[yellow]Runtime model {detail} is not installed. "
+        f"Installing with backend {backend}; this may take a few minutes the first time.[/yellow]"
+    )
+
+
+def _print_runtime_model_install_summary(summary: dict[str, Any]) -> None:
+    models = summary.get("models") or []
+    if not models:
+        return
+
+    prepared = [
+        item
+        for item in models
+        if str(item.get("status") or "")
+        in {"installed", "already_installed", "service_required", "cluster_provided"}
+    ]
+    if prepared:
+        labels = ", ".join(
+            str(item.get("id") or item.get("model") or "runtime model")
+            for item in prepared[:4]
+        )
+        if len(prepared) > 4:
+            labels = f"{labels}, +{len(prepared) - 4} more"
+        console.print(f"[green]Runtime models ready:[/green] {labels}")
+    for error in summary.get("errors") or []:
+        console.print(f"[red]Runtime model install failed: {error}[/red]")
 
 
 def _ensure_context_engine_for_run_if_needed(
@@ -1609,6 +1731,17 @@ def run_bundle(
                 env_overrides=env_overrides,
                 config_overrides=config_overrides,
             )
+            _print_launch_progress(
+                "Prepare runtime models",
+                "installing any missing Docker Model Runner models required by this blueprint.",
+            )
+            _prepare_runtime_models_for_run_or_exit(
+                bundle_dir,
+                manifest_dict,
+                env_overrides=env_overrides,
+                config_overrides=config_overrides,
+                force=force,
+            )
             _validate_manifest_models_or_exit(
                 bundle_dir,
                 manifest_dict,
@@ -1623,7 +1756,18 @@ def run_bundle(
             )
         else:
             console.print(
-                "[yellow]Validation skipped because --force was provided; service checks, model checks, input checks, and non-hard runtime requirements will be bypassed for this run.[/yellow]"
+                "[yellow]Validation skipped because --force was provided; service checks, model checks, input checks, and non-hard runtime requirements will be bypassed, but required runtime models will still be prepared.[/yellow]"
+            )
+            _print_launch_progress(
+                "Prepare runtime models",
+                "installing any missing Docker Model Runner models required by this blueprint.",
+            )
+            _prepare_runtime_models_for_run_or_exit(
+                bundle_dir,
+                manifest_dict,
+                env_overrides=env_overrides,
+                config_overrides=config_overrides,
+                force=force,
             )
         _print_launch_progress(
             "Package workflow",

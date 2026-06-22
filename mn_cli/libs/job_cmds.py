@@ -98,11 +98,6 @@ def list_jobs(running_only: bool = typer.Option(False, "--running-only", help="O
 def clear():
     """Remove all job records except running ones"""
     try:
-        admin_token = str(getattr(client, "admin_token", "") or config.grpc_admin_token or "").strip()
-        if not admin_token:
-            console.print("[red]Error: No local gRPC admin token was found for job clear.[/red]")
-            console.print("Start or recreate the runtime so the shared grpc_admin.token file is generated.")
-            return
         cleared_count = client.clear_jobs()
         logger.info("Cleared %d non-running jobs", cleared_count)
         print_success_confirmation(
@@ -115,11 +110,10 @@ def clear():
         if e.code() == grpc.StatusCode.PERMISSION_DENIED and "MN_GRPC_ADMIN_TOKEN" in str(e.details()):
             console.print("[red]Error: ClearJobs admin authorization failed.[/red]")
             console.print(
-                "The local admin token exists, but the running core rejected it. "
-                "This usually means the CLI/API is pointed at a runtime with different cluster tokens, "
-                "or the running core has not been recreated with the shared token-file mount."
+                "The running core rejected the fixed gRPC admin token. "
+                "Recreate the runtime with the current fixed-token build."
             )
-            console.print("Recreate the runtime once, then retry: mn runtime stop; mn runtime start")
+            console.print("Retry after: mn runtime stop; mn runtime start")
             return
         handle_cli_error(e, console, 'clear')
     except Exception as e:

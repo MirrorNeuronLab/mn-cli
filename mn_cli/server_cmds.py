@@ -36,6 +36,8 @@ logger = configure_logging("mn-cli", CliConfig.from_env().log_path)
 GRPC_ADMIN_TOKEN_ENV = "MN_GRPC_ADMIN_TOKEN"
 GRPC_AUTH_TOKEN_FILE_ENV = "MN_GRPC_AUTH_TOKEN_FILE"
 GRPC_ADMIN_TOKEN_FILE_ENV = "MN_GRPC_ADMIN_TOKEN_FILE"
+FIXED_GRPC_AUTH_TOKEN = "mirror_neuron_password"
+FIXED_GRPC_ADMIN_TOKEN = "mirror_neuron_password_admin"
 
 def _erl_aflags(dist_port: str | int) -> str:
     return (
@@ -186,8 +188,6 @@ DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE = "prepublished"
 DEFAULT_CONTAINER_RUNS_ROOT = "/root/.mn/runs"
 DEFAULT_CONTAINER_BLOB_STORE_ROOT = "/root/.mn/blobs"
 DEFAULT_RUNTIME_SHARED_STORAGE_ROOT = "/root/.mn/shared"
-DEFAULT_CONTAINER_GRPC_AUTH_TOKEN_FILE = "/root/.mn/grpc_auth.token"
-DEFAULT_CONTAINER_GRPC_ADMIN_TOKEN_FILE = "/root/.mn/grpc_admin.token"
 DEFAULT_REDIS_IMAGE = "redis:8"
 LEGACY_GRPC_PORT = "50051"
 LEGACY_API_PORT = "4001"
@@ -732,46 +732,10 @@ def _resolve_mn_cookie() -> str:
     return generated_cookie
 
 def _resolve_grpc_auth_token() -> str:
-    env_token = os.getenv("MN_GRPC_AUTH_TOKEN", "").strip()
-    if env_token:
-        return env_token
-
-    token_file = DIR / "grpc_auth.token"
-    try:
-        existing_token = token_file.read_text().strip()
-        if existing_token:
-            return existing_token
-    except FileNotFoundError:
-        pass
-
-    DIR.mkdir(parents=True, exist_ok=True)
-    generated_token = secrets.token_hex(32)
-    _write_grpc_token_file(token_file, generated_token, "gRPC auth")
-    return generated_token
+    return FIXED_GRPC_AUTH_TOKEN
 
 def _resolve_grpc_admin_token() -> str:
-    env_token = os.getenv(GRPC_ADMIN_TOKEN_ENV, "").strip()
-    if env_token:
-        return env_token
-
-    token_file = DIR / "grpc_admin.token"
-    try:
-        existing_token = token_file.read_text().strip()
-        if existing_token:
-            return existing_token
-    except FileNotFoundError:
-        pass
-
-    DIR.mkdir(parents=True, exist_ok=True)
-    generated_token = secrets.token_hex(32)
-    _write_grpc_token_file(token_file, generated_token, "gRPC admin")
-    return generated_token
-
-def _write_grpc_token_file(token_file: Path, token: str, label: str) -> None:
-    token = str(token or "").strip()
-    if not token:
-        return
-    write_private_text(token_file, f"{token}\n")
+    return FIXED_GRPC_ADMIN_TOKEN
 
 def _resolve_api_token() -> str:
     env_token = os.getenv("MN_API_TOKEN", "").strip()
@@ -802,57 +766,34 @@ def _ensure_runtime_api_token(env: dict[str, str], *, persist_compose: bool = Fa
 
 def _ensure_runtime_grpc_tokens(env: dict[str, str], *, persist_compose: bool = False) -> dict[str, str]:
     resolved = dict(env)
-    if not str(resolved.get("MN_GRPC_AUTH_TOKEN") or "").strip():
-        resolved["MN_GRPC_AUTH_TOKEN"] = _resolve_grpc_auth_token()
-    if not str(resolved.get(GRPC_ADMIN_TOKEN_ENV) or "").strip():
-        resolved[GRPC_ADMIN_TOKEN_ENV] = _resolve_grpc_admin_token()
-    if not str(resolved.get(GRPC_AUTH_TOKEN_FILE_ENV) or "").strip():
-        resolved[GRPC_AUTH_TOKEN_FILE_ENV] = DEFAULT_CONTAINER_GRPC_AUTH_TOKEN_FILE
-    if not str(resolved.get(GRPC_ADMIN_TOKEN_FILE_ENV) or "").strip():
-        resolved[GRPC_ADMIN_TOKEN_FILE_ENV] = DEFAULT_CONTAINER_GRPC_ADMIN_TOKEN_FILE
-
-    _write_grpc_token_file(DIR / "grpc_auth.token", resolved["MN_GRPC_AUTH_TOKEN"], "gRPC auth")
-    _write_grpc_token_file(
-        DIR / "grpc_admin.token",
-        resolved[GRPC_ADMIN_TOKEN_ENV],
-        "gRPC admin",
-    )
+    fixed_tokens = {
+        "MN_GRPC_AUTH_TOKEN": FIXED_GRPC_AUTH_TOKEN,
+        GRPC_ADMIN_TOKEN_ENV: FIXED_GRPC_ADMIN_TOKEN,
+    }
+    stale_token_keys = {
+        "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN",
+        GRPC_AUTH_TOKEN_FILE_ENV,
+        GRPC_ADMIN_TOKEN_FILE_ENV,
+    }
+    for key in stale_token_keys:
+        resolved.pop(key, None)
+    resolved.update(fixed_tokens)
     if persist_compose:
-        _write_env_file_values(
-            RUNTIME_COMPOSE_ENV,
-            {
-                "MN_GRPC_AUTH_TOKEN": resolved["MN_GRPC_AUTH_TOKEN"],
-                GRPC_ADMIN_TOKEN_ENV: resolved[GRPC_ADMIN_TOKEN_ENV],
-                GRPC_AUTH_TOKEN_FILE_ENV: resolved[GRPC_AUTH_TOKEN_FILE_ENV],
-                GRPC_ADMIN_TOKEN_FILE_ENV: resolved[GRPC_ADMIN_TOKEN_FILE_ENV],
-            },
-        )
+        _write_env_file_values(RUNTIME_COMPOSE_ENV, fixed_tokens)
+        _remove_env_file_keys(RUNTIME_COMPOSE_ENV, stale_token_keys)
     return resolved
 
 def _grpc_tokens_from_handshake(handshake: Optional[dict]) -> dict[str, str]:
-    if not handshake:
-        return {}
-    tokens: dict[str, str] = {}
-    auth_token = str(handshake.get("grpc_auth_token") or "").strip()
-    admin_token = str(handshake.get("grpc_admin_token") or "").strip()
-    if auth_token:
-        tokens["MN_GRPC_AUTH_TOKEN"] = auth_token
-    if admin_token:
-        tokens[GRPC_ADMIN_TOKEN_ENV] = admin_token
-    return tokens
+    return {
+        "MN_GRPC_AUTH_TOKEN": FIXED_GRPC_AUTH_TOKEN,
+        GRPC_ADMIN_TOKEN_ENV: FIXED_GRPC_ADMIN_TOKEN,
+    }
 
 def _runtime_grpc_tokens_from_running_container() -> dict[str, str]:
-    tokens: dict[str, str] = {}
-    for container_name in (LOCAL_CORE_CONTAINER, NETWORK_CORE_CONTAINER):
-        auth_token = _docker_container_env_value(container_name, "MN_GRPC_AUTH_TOKEN")
-        admin_token = _docker_container_env_value(container_name, GRPC_ADMIN_TOKEN_ENV)
-        if auth_token:
-            tokens["MN_GRPC_AUTH_TOKEN"] = auth_token
-        if admin_token:
-            tokens[GRPC_ADMIN_TOKEN_ENV] = admin_token
-        if tokens:
-            break
-    return tokens
+    return {
+        "MN_GRPC_AUTH_TOKEN": FIXED_GRPC_AUTH_TOKEN,
+        GRPC_ADMIN_TOKEN_ENV: FIXED_GRPC_ADMIN_TOKEN,
+    }
 
 def _resolve_network_token(force_new: bool = False) -> str:
     if force_new:
@@ -1245,8 +1186,8 @@ def _network_core_env(
             "MN_RUNTIME_SHARED_STORAGE_ROOT": DEFAULT_RUNTIME_SHARED_STORAGE_ROOT,
             "MN_DIST_PORT": str(dist_port),
             "MN_COOKIE": _derive_network_secret(token, "cookie"),
-            "MN_GRPC_AUTH_TOKEN": _resolve_grpc_auth_token(),
-            GRPC_ADMIN_TOKEN_ENV: _resolve_grpc_admin_token(),
+            "MN_GRPC_AUTH_TOKEN": FIXED_GRPC_AUTH_TOKEN,
+            GRPC_ADMIN_TOKEN_ENV: FIXED_GRPC_ADMIN_TOKEN,
             "ERL_EPMD_ADDRESS": "0.0.0.0",
             "ERL_EPMD_PORT": str(epmd_port),
             "ERL_AFLAGS": _erl_aflags(dist_port),
@@ -1652,9 +1593,6 @@ def _start_network_seed(
         redis_public_host=redis_public_host,
         redis_public_port=redis_public_port,
     )
-    env["MN_GRPC_AUTH_TOKEN"] = _resolve_grpc_auth_token()
-    env[GRPC_ADMIN_TOKEN_ENV] = _resolve_grpc_admin_token()
-
     env = _ensure_runtime_grpc_tokens(env, persist_compose=runtime_compose_available())
 
     console.print("=> Starting MirrorNeuron core-only exposed node...")
@@ -2029,11 +1967,10 @@ def ensure_context_engine_runtime(*, force: bool = False) -> dict[str, str]:
     _remove_non_mirror_neuron_container(CONTEXT_ENGINE_CONTAINER)
     _remove_non_mirror_neuron_container(CONTEXT_ENGINE_MODEL_CONTAINER)
     _ensure_docker_model_runner()
-    model_already_installed = _docker_model_inspect_ok(model)
-    model_status = "already_installed" if model_already_installed else "compose_pending"
+    model_status = _install_context_engine_model(model)
 
     already_running = _docker_container_running(CONTEXT_ENGINE_CONTAINER)
-    if force or not already_running or not model_already_installed:
+    if force or not already_running:
         compose_env = env
         anonymous_docker_config: Path | None = None
         if use_engine_image:
@@ -2066,8 +2003,6 @@ def ensure_context_engine_runtime(*, force: bool = False) -> dict[str, str]:
             if anonymous_docker_config is not None:
                 shutil.rmtree(anonymous_docker_config, ignore_errors=True)
         status = "restarted" if already_running and force else "started"
-        if not model_already_installed:
-            model_status = "installed" if _docker_model_inspect_ok(model) else "compose_managed"
     else:
         status = "already_running"
 
@@ -2090,6 +2025,37 @@ def _docker_model_inspect_ok(model: str) -> bool:
     if not model:
         return False
     return _docker_command_ok(["docker", "model", "inspect", model])
+
+def _install_context_engine_model(model: str) -> str:
+    model = str(model or "").strip()
+    if not model:
+        return "skipped"
+    if _docker_model_inspect_ok(model):
+        return "already_installed"
+    pull_result = subprocess.run(
+        ["docker", "model", "pull", model],
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+    if pull_result.returncode != 0 and not _docker_model_inspect_ok(model):
+        output = _subprocess_error_output(pull_result)
+        raise RuntimeError(f"Failed to install context engine model {model}: {output}")
+    run_result = subprocess.run(
+        ["docker", "model", "run", "--detach", model],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    if run_result.returncode != 0:
+        output = _subprocess_error_output(run_result)
+        if "already" not in output.lower():
+            raise RuntimeError(f"Failed to start context engine model {model}: {output}")
+    return "installed"
+
+def _subprocess_error_output(result: subprocess.CompletedProcess[str]) -> str:
+    output = f"{result.stderr or ''}\n{result.stdout or ''}".strip()
+    return output or f"exit code {result.returncode}"
 
 def _anonymous_public_gar_docker_env(env: dict[str, str], image: str) -> tuple[dict[str, str], Path | None]:
     if not _is_public_gar_image(image):
@@ -3641,10 +3607,8 @@ def _build_core_docker_run_command(
 
     cmd.extend(["-e", f"MN_NODE_NAME={env['MN_NODE_NAME']}"])
     cmd.extend(["-e", f"MN_COOKIE={env['MN_COOKIE']}"])
-    cmd.extend(["-e", f"MN_GRPC_AUTH_TOKEN={env['MN_GRPC_AUTH_TOKEN']}"])
-    cmd.extend(["-e", f"{GRPC_AUTH_TOKEN_FILE_ENV}={env[GRPC_AUTH_TOKEN_FILE_ENV]}"])
-    cmd.extend(["-e", f"{GRPC_ADMIN_TOKEN_ENV}={env[GRPC_ADMIN_TOKEN_ENV]}"])
-    cmd.extend(["-e", f"{GRPC_ADMIN_TOKEN_FILE_ENV}={env[GRPC_ADMIN_TOKEN_FILE_ENV]}"])
+    cmd.extend(["-e", f"MN_GRPC_AUTH_TOKEN={env.get('MN_GRPC_AUTH_TOKEN', FIXED_GRPC_AUTH_TOKEN)}"])
+    cmd.extend(["-e", f"{GRPC_ADMIN_TOKEN_ENV}={env.get(GRPC_ADMIN_TOKEN_ENV, FIXED_GRPC_ADMIN_TOKEN)}"])
     cmd.extend(["-e", f"MN_NETWORK_JOIN_TOKEN={env['MN_NETWORK_JOIN_TOKEN']}"])
     cmd.extend(["-e", f"MN_NETWORK_ADVERTISE_HOST={env['MN_NETWORK_ADVERTISE_HOST']}"])
     if env.get("MN_MODEL_SERVICE_NODE_NAME"):

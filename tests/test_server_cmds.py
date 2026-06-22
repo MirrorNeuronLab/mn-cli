@@ -284,15 +284,14 @@ def test_resolve_grpc_auth_token_generates_persistent_token(tmp_path, mocker):
 
     token = _resolve_grpc_auth_token()
 
-    assert token
-    assert (token_dir / "grpc_auth.token").read_text().strip() == token
-    assert (token_dir / "grpc_auth.token").stat().st_mode & 0o777 == 0o600
+    assert token == "mirror_neuron_password"
+    assert not (token_dir / "grpc_auth.token").exists()
     assert _resolve_grpc_auth_token() == token
 
 def test_resolve_grpc_auth_token_prefers_env(monkeypatch):
     monkeypatch.setenv("MN_GRPC_AUTH_TOKEN", "auth-token")
 
-    assert _resolve_grpc_auth_token() == "auth-token"
+    assert _resolve_grpc_auth_token() == "mirror_neuron_password"
 
 def test_runtime_blueprint_env_updates_prefers_host_home_dir(tmp_path):
     host_home = tmp_path / "mn-home"
@@ -327,8 +326,8 @@ def test_deploy_compose_passes_host_shared_storage_to_core():
     assert "MN_HOST_SHARED_STORAGE_ROOT:" in compose_text
     assert "${MN_HOST_SHARED_STORAGE_ROOT:-${MN_SHARED_STORAGE_ROOT:-" in compose_text
     assert "membrane-context-engine:" in compose_text
-    assert "context-engine-model:" in compose_text
     assert "MN_CONTEXT_MODEL_ENDPOINT" in compose_text
+    assert "MN_CONTEXT_MODEL_NAME" in compose_text
 
 def test_runtime_blueprint_env_updates_ignores_legacy_host_mn_dir(tmp_path):
     legacy_home = tmp_path / "legacy-mn-home"
@@ -344,20 +343,19 @@ def test_resolve_grpc_admin_token_generates_persistent_token(tmp_path, mocker):
 
     token = _resolve_grpc_admin_token()
 
-    assert token
-    assert (token_dir / "grpc_admin.token").read_text().strip() == token
-    assert (token_dir / "grpc_admin.token").stat().st_mode & 0o777 == 0o600
+    assert token == "mirror_neuron_password_admin"
+    assert not (token_dir / "grpc_admin.token").exists()
     assert _resolve_grpc_admin_token() == token
 
 def test_resolve_grpc_admin_token_prefers_env(monkeypatch):
     monkeypatch.setenv("MN_GRPC_ADMIN_TOKEN", "admin-token")
 
-    assert _resolve_grpc_admin_token() == "admin-token"
+    assert _resolve_grpc_admin_token() == "mirror_neuron_password_admin"
 
 def test_resolve_grpc_admin_token_ignores_legacy_env(monkeypatch):
     monkeypatch.setenv("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN", "legacy-admin-token")
 
-    assert _resolve_grpc_admin_token() != "legacy-admin-token"
+    assert _resolve_grpc_admin_token() == "mirror_neuron_password_admin"
 
 def test_runtime_api_token_is_generated_for_prod_and_persisted(mocker):
     mocker.patch("mn_cli.server_cmds.secrets.token_hex", return_value="generated-api-token")
@@ -579,10 +577,13 @@ def test_ensure_context_engine_runtime_persists_profile_and_starts_compose(mocke
     server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
     mocker.patch("mn_cli.server_cmds._ensure_context_engine_source", return_value=membrane_dir)
     mocker.patch("mn_cli.server_cmds._ensure_docker_model_runner")
-    inspect_model = mocker.patch("mn_cli.server_cmds._docker_model_inspect_ok", side_effect=[False, True])
+    inspect_model = mocker.patch("mn_cli.server_cmds._docker_model_inspect_ok", return_value=False)
     mocker.patch("mn_cli.server_cmds._remove_non_mirror_neuron_container")
     mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
-    run = mocker.patch("mn_cli.server_cmds.subprocess.run")
+    run = mocker.patch(
+        "mn_cli.server_cmds.subprocess.run",
+        return_value=subprocess.CompletedProcess([], 0, "", ""),
+    )
 
     result = server_cmds.ensure_context_engine_runtime()
 
@@ -593,8 +594,21 @@ def test_ensure_context_engine_runtime_persists_profile_and_starts_compose(mocke
     assert result["status"] == "started"
     assert result["model_status"] == "installed"
     assert inspect_model.call_args_list[0].args[0] == server_cmds.DEFAULT_CONTEXT_MODEL_RUNNER_MODEL
-    assert run.call_args_list[0].args[0] == runtime_compose_cmd("build", "membrane-context-engine")
-    assert run.call_args_list[1].args[0] == runtime_compose_cmd("up", "-d", "membrane-context-engine")
+    assert run.call_args_list[0].args[0] == [
+        "docker",
+        "model",
+        "pull",
+        server_cmds.DEFAULT_CONTEXT_MODEL_RUNNER_MODEL,
+    ]
+    assert run.call_args_list[1].args[0] == [
+        "docker",
+        "model",
+        "run",
+        "--detach",
+        server_cmds.DEFAULT_CONTEXT_MODEL_RUNNER_MODEL,
+    ]
+    assert run.call_args_list[2].args[0] == runtime_compose_cmd("build", "membrane-context-engine")
+    assert run.call_args_list[3].args[0] == runtime_compose_cmd("up", "-d", "membrane-context-engine")
 
 def test_ensure_context_engine_runtime_uses_release_image_without_source_clone(mocker, monkeypatch):
     monkeypatch.setenv("PATH", "/usr/local/bin:/usr/bin:/bin")
@@ -711,7 +725,7 @@ def test_ensure_context_engine_runtime_skips_compose_when_already_running(mocker
     inspect_model.assert_called_once_with("hf.co/acme/context")
     run.assert_not_called()
 
-def test_ensure_context_engine_runtime_reconciles_missing_model_with_compose(mocker, tmp_path):
+def test_ensure_context_engine_runtime_installs_missing_model_without_compose_restart(mocker, tmp_path):
     membrane_dir = tmp_path / "Membrane"
     membrane_dir.mkdir()
     (membrane_dir / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
@@ -725,17 +739,21 @@ def test_ensure_context_engine_runtime_reconciles_missing_model_with_compose(moc
     server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
     mocker.patch("mn_cli.server_cmds._ensure_context_engine_source", return_value=membrane_dir)
     mocker.patch("mn_cli.server_cmds._ensure_docker_model_runner")
-    mocker.patch("mn_cli.server_cmds._docker_model_inspect_ok", side_effect=[False, True])
+    mocker.patch("mn_cli.server_cmds._docker_model_inspect_ok", return_value=False)
     mocker.patch("mn_cli.server_cmds._remove_non_mirror_neuron_container")
     mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=True)
-    run = mocker.patch("mn_cli.server_cmds.subprocess.run")
+    run = mocker.patch(
+        "mn_cli.server_cmds.subprocess.run",
+        return_value=subprocess.CompletedProcess([], 0, "", ""),
+    )
 
     result = server_cmds.ensure_context_engine_runtime()
 
-    assert result["status"] == "started"
+    assert result["status"] == "already_running"
     assert result["model_status"] == "installed"
-    assert run.call_args_list[0].args[0] == runtime_compose_cmd("build", "membrane-context-engine")
-    assert run.call_args_list[1].args[0] == runtime_compose_cmd("up", "-d", "membrane-context-engine")
+    assert run.call_args_list[0].args[0] == ["docker", "model", "pull", "hf.co/acme/context"]
+    assert run.call_args_list[1].args[0] == ["docker", "model", "run", "--detach", "hf.co/acme/context"]
+    assert len(run.call_args_list) == 2
 
 def test_runtime_compose_cmd_includes_models_override():
     server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)

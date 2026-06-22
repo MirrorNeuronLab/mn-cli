@@ -14,6 +14,7 @@ from mn_cli.main import app
 from mn_cli.libs import run_cmds
 from mn_cli.libs.ui import JobMonitorState, generate_live_layout
 from mn_cli.libs.run_manifest import prepare_manifest_for_submission
+from mn_sdk import load_model_ownership
 
 runner = CliRunner()
 
@@ -42,6 +43,63 @@ def test_manifest_for_model_validation_filters_dmr_models_for_fake_llm():
 
     assert set(filtered["runtime"]["models"]) == {"external"}
     assert set(manifest["runtime"]["models"]) == {"primary", "secondary", "external"}
+
+
+def test_prepare_runtime_models_installs_missing_model_for_run(
+    mocker,
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
+    bundle_dir = tmp_path / "vc_assistant"
+    bundle_dir.mkdir()
+    manifest = {
+        "metadata": {"blueprint_id": "vc_assistant", "blueprint_revision": "rev-1"},
+        "runtime": {
+            "models": {
+                "primary": {
+                    "provider": "docker_model_runner",
+                    "runtime_model": "gemma4:e2b",
+                    "backend": "llama.cpp",
+                }
+            }
+        },
+    }
+    catalog = {
+        "gemma4:e2b": {
+            "id": "gemma4:e2b",
+            "model": "ai/gemma4:E2B",
+            "provider": "docker_model_runner",
+            "backend": "llama.cpp",
+        }
+    }
+    mocker.patch("mn_cli.libs.run_cmds.load_model_catalog", return_value=catalog)
+    mocker.patch("mn_cli.libs.run_cmds.model_installed", return_value=False)
+    install_model = mocker.patch(
+        "mn_cli.libs.run_cmds.install_model_entry",
+        return_value={
+            "entry": catalog["gemma4:e2b"],
+            "docker_model": "ai/gemma4:E2B",
+            "compatibility": {"backend": "llama.cpp"},
+        },
+    )
+
+    summary = run_cmds._prepare_runtime_models_for_run_or_exit(bundle_dir, manifest)
+
+    assert summary["ok"] is True
+    assert summary["models"][0]["status"] == "installed"
+    install_model.assert_called_once_with(
+        catalog["gemma4:e2b"],
+        backend="llama.cpp",
+        context_size=None,
+        force=False,
+    )
+    record = load_model_ownership()["models"]["ai/gemma4:E2B"]
+    assert record["owners"]["vc_assistant"]["blueprint_revision"] == "rev-1"
+    output = capsys.readouterr().out
+    assert "Runtime model gemma4:e2b (ai/gemma4:E2B) is not installed." in output
+    assert "Runtime models ready: gemma4:e2b" in output
 
 
 def _workflow_manifest_fixture():
@@ -537,6 +595,41 @@ def test_run_success(mocker, tmp_path, monkeypatch):
     assert submitted_payloads["test.txt"] == b"hello"
     assert submitted_payloads["nested/input.json"] == b"{}"
     mock_stream.assert_called_once_with("job-123", follow=True, timeout=None, heartbeat_interval_ms=5000)
+
+
+def test_run_prepares_runtime_models_before_model_validation(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="run-order")
+    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-order")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_completed"}),
+    ])
+    order: list[str] = []
+
+    mocker.patch(
+        "mn_cli.libs.run_cmds._validate_manifest_services_or_exit",
+        side_effect=lambda *args, **kwargs: order.append("services") or {"ok": True},
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds._prepare_runtime_models_for_run_or_exit",
+        side_effect=lambda *args, **kwargs: order.append("prepare_models") or {"ok": True},
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds._validate_manifest_models_or_exit",
+        side_effect=lambda *args, **kwargs: order.append("validate_models") or {"ok": True},
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds._validate_manifest_inputs_or_exit",
+        side_effect=lambda *args, **kwargs: order.append("inputs") or {"ok": True},
+    )
+
+    bundle_dir = tmp_path / "run_order_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({"nodes": []}))
+
+    run_cmds.run_bundle(str(bundle_dir), follow_seconds=0)
+
+    assert order == ["services", "prepare_models", "validate_models", "inputs"]
 
 
 def test_run_auto_schedule_creates_resource_wait_schedule(mocker, tmp_path, monkeypatch):
