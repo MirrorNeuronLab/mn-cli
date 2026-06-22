@@ -25,7 +25,7 @@ def _capture_console(monkeypatch):
     return output
 
 
-def test_clear_preflights_missing_admin_token(monkeypatch):
+def test_clear_runs_without_local_admin_token_preflight(monkeypatch):
     output = _capture_console(monkeypatch)
     client = SimpleNamespace(admin_token="", clear_jobs=lambda: 1)
     monkeypatch.setattr(job_cmds, "client", client)
@@ -34,8 +34,8 @@ def test_clear_preflights_missing_admin_token(monkeypatch):
     job_cmds.clear()
 
     rendered = output.getvalue()
-    assert "No local gRPC admin token was found" in rendered
-    assert "shared grpc_admin.token file" in rendered
+    assert "Job clear successful" in rendered
+    assert "Jobs cleared: 1 non-running" in rendered
 
 
 def test_clear_reports_admin_token_mismatch(monkeypatch):
@@ -54,4 +54,4 @@ def test_clear_reports_admin_token_mismatch(monkeypatch):
 
     rendered = output.getvalue()
     assert "ClearJobs admin authorization failed" in rendered
-    assert "different cluster tokens" in rendered
+    assert "fixed gRPC admin token" in rendered
