@@ -2100,6 +2100,7 @@ def _anonymous_public_gar_docker_env(env: dict[str, str], image: str) -> tuple[d
     config = _docker_config_without_public_gar_credentials(config, registry_host)
     (config_dir / "config.json").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     _expose_docker_cli_plugins(source_config.parent, config_dir)
+    _expose_docker_contexts(source_config.parent, config_dir)
 
     next_env = dict(env)
     next_env["DOCKER_CONFIG"] = str(config_dir)
@@ -2117,6 +2118,19 @@ def _expose_docker_cli_plugins(source_config_dir: Path, target_config_dir: Path)
             shutil.copytree(source_plugins, target_plugins, symlinks=True)
         except Exception:
             logger.debug("Could not expose Docker CLI plugins for anonymous GAR pull", exc_info=True)
+
+def _expose_docker_contexts(source_config_dir: Path, target_config_dir: Path) -> None:
+    source_contexts = source_config_dir / "contexts"
+    if not source_contexts.is_dir():
+        return
+    target_contexts = target_config_dir / "contexts"
+    try:
+        os.symlink(source_contexts, target_contexts, target_is_directory=True)
+    except Exception:
+        try:
+            shutil.copytree(source_contexts, target_contexts, symlinks=True)
+        except Exception:
+            logger.debug("Could not expose Docker contexts for anonymous GAR pull", exc_info=True)
 
 def _is_public_gar_image(image: str) -> bool:
     text = str(image or "").strip()

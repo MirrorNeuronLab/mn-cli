@@ -631,9 +631,13 @@ def test_public_gar_docker_env_strips_gcloud_helpers(monkeypatch, tmp_path):
     docker_plugins = docker_config / "cli-plugins"
     docker_plugins.mkdir()
     (docker_plugins / "docker-compose").write_text("#!/bin/sh\n", encoding="utf-8")
+    docker_context = docker_config / "contexts" / "meta" / "desktop-linux"
+    docker_context.mkdir(parents=True)
+    (docker_context / "meta.json").write_text('{"Name":"desktop-linux"}\n', encoding="utf-8")
     (docker_config / "config.json").write_text(
         json.dumps(
             {
+                "currentContext": "desktop-linux",
                 "auths": {
                     "https://us-central1-docker.pkg.dev": {"auth": "private"},
                     "ghcr.io": {"auth": "keep"},
@@ -664,7 +668,9 @@ def test_public_gar_docker_env_strips_gcloud_helpers(monkeypatch, tmp_path):
         assert sanitized["credHelpers"] == {"ghcr.io": "ghcr"}
         assert sanitized["auths"] == {"ghcr.io": {"auth": "keep"}}
         assert sanitized["proxies"] == {"default": {"httpProxy": "http://proxy.test"}}
+        assert sanitized["currentContext"] == "desktop-linux"
         assert (temp_config_dir / "cli-plugins" / "docker-compose").exists()
+        assert (temp_config_dir / "contexts" / "meta" / "desktop-linux" / "meta.json").exists()
     finally:
         shutil.rmtree(temp_config_dir, ignore_errors=True)
 
