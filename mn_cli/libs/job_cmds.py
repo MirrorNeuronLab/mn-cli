@@ -15,6 +15,7 @@ from mn_cli.libs.ui import print_confirmed, print_success_confirmation
 import typer
 
 from mn_sdk.runtime_config import default_runs_root
+from mn_sdk import ValidationError, parse_duration_ms as sdk_parse_duration_ms
 
 
 def submit(
@@ -476,34 +477,10 @@ def maintenance_node(
 
 
 def parse_duration_ms(value: str) -> int:
-    text = str(value or "").strip().lower()
-    if not text:
-        raise typer.BadParameter("deadline must not be empty")
-
-    units = {
-        "ms": 1,
-        "s": 1_000,
-        "m": 60_000,
-        "h": 3_600_000,
-    }
-
-    for suffix, multiplier in units.items():
-        if text.endswith(suffix):
-            number = text[: -len(suffix)]
-            break
-    else:
-        number = text
-        multiplier = 1
-
     try:
-        amount = float(number)
-    except ValueError as exc:
-        raise typer.BadParameter("deadline must be a duration like 30m, 10s, 1h, or 5000ms") from exc
-
-    if amount < 0:
-        raise typer.BadParameter("deadline must be non-negative")
-
-    return int(amount * multiplier)
+        return sdk_parse_duration_ms(value, field_name="deadline")
+    except ValidationError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 def wait_for_drain(node_name: str, first_result: dict) -> dict:

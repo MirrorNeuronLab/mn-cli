@@ -7,6 +7,7 @@ from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.bundles import read_bundle
 from mn_cli.libs.ui import print_success_confirmation
 from mn_cli.shared import client, console
+from mn_sdk import deployment_policy
 
 deployment_app = typer.Typer(help="Deployment commands")
 
@@ -174,10 +175,4 @@ def update_policy(
     auto_promote: bool,
     auto_revert: bool,
 ) -> dict:
-    return {
-        "strategy": strategy,
-        "canary": canary,
-        "max_parallel": max_parallel,
-        "auto_promote": auto_promote,
-        "auto_revert": auto_revert,
-    }
+    return deployment_policy(strategy, canary, max_parallel, auto_promote, auto_revert)

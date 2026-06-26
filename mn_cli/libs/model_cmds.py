@@ -32,6 +32,15 @@ from mn_sdk import (
     remove_model_record,
     resolve_model_entry,
 )
+from mn_sdk import (
+    docker_status as sdk_docker_status,
+    install_model_entry as sdk_install_model_entry,
+    installed_model_names as sdk_installed_model_names,
+    model_entry_payload as sdk_model_entry_payload,
+    model_installed as sdk_model_installed,
+    parse_model_list as sdk_parse_model_list,
+    remove_model_ref as sdk_remove_model_ref,
+)
 
 
 model_app = typer.Typer(help="Manage local Docker Model Runner models")
@@ -243,36 +252,12 @@ def install_model_entry(
     context_size: Optional[int] = None,
     force: bool = False,
 ) -> dict[str, Any]:
-    compatibility = assess_model_compatibility(entry, backend=backend, force=force)
-    payload = compatibility.to_dict()
-    if not compatibility.ok:
-        _print_compatibility(payload)
-        raise RuntimeError(compatibility.message)
-    target = docker_model_name(entry)
-    if _docker_model_cli_available():
-        _ensure_runner(compatibility.backend, compatibility.accelerator)
-        pull_result = _pull_model(target)
-        run_command = ["model", "run", "--detach"]
-        resolved_context = context_size or entry.get("context_size")
-        if resolved_context and _docker_model_run_supports_context_size():
-            run_command.extend(["--context-size", str(resolved_context)])
-        run_command.append(target)
-        _docker(run_command, timeout=300)
-        return {
-            "entry": entry,
-            "docker_model": target,
-            "compatibility": payload,
-            **pull_result,
-        }
-
-    api_result = dmr_api_pull_model(target, timeout=_model_pull_timeout_seconds())
-    return {
-        "entry": entry,
-        "docker_model": target,
-        "compatibility": payload,
-        "transport": "docker_model_runner_api",
-        "api": api_result,
-    }
+    try:
+        return sdk_install_model_entry(entry, backend=backend, context_size=context_size, force=force)
+    except RuntimeError as exc:
+        compatibility = assess_model_compatibility(entry, backend=backend, force=force)
+        _print_compatibility(compatibility.to_dict())
+        raise exc
 
 
 def _model_pull_timeout_seconds() -> float:
@@ -307,22 +292,15 @@ def _docker_model_pull(target: str, *, attempts: int = 2) -> None:
 
 
 def remove_model_ref(model: str, *, force: bool = False) -> None:
-    if _docker_model_cli_available():
-        command = ["model", "rm"]
-        if force:
-            command.append("--force")
-        command.append(model)
-        _docker(command, timeout=120)
-        return
-    dmr_api_remove_model(model, timeout=120)
+    sdk_remove_model_ref(model, force=force)
 
 
 def installed_model_names() -> set[str]:
-    return _installed_model_names()
+    return sdk_installed_model_names()
 
 
 def model_installed(model: str) -> bool:
-    return _model_installed(model)
+    return sdk_model_installed(model)
 
 
 def _record_runtime_model_install(entry: dict[str, Any]) -> None:
@@ -340,24 +318,7 @@ def _entry_payload(
     installed: bool,
     ownership: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    docker_model = docker_model_name(entry)
-    owner_payload = model_ownership_metadata(docker_model, installed=installed, ledger=ownership)
-    is_default = str(entry.get("id") or "") == DEFAULT_MODEL_ID
-    return {
-        "id": entry.get("id"),
-        "name": entry.get("name"),
-        "provider": entry.get("provider", "docker_model_runner"),
-        "model": docker_model,
-        "docker_model": docker_model,
-        "backend": entry.get("backend", "llama.cpp"),
-        "aliases": list(entry.get("aliases") or []),
-        "context_size": entry.get("context_size"),
-        "requirements": entry.get("requirements") or {},
-        "installed": installed,
-        "default": is_default,
-        "status": "default" if is_default else "",
-        **owner_payload,
-    }
+    return sdk_model_entry_payload(entry, installed=installed, ownership=ownership)
 
 
 def _print_model_table(models: list[dict[str, Any]]) -> None:
@@ -461,40 +422,15 @@ def _ensure_runner(backend: str, accelerator: str) -> None:
 
 
 def _installed_model_names() -> set[str]:
-    if not _docker_model_cli_available():
-        if not _docker_available():
-            return set()
-        return dmr_api_list_models(timeout=60)
-    result = _docker(["model", "list", "--format", "json"], check=False, timeout=60)
-    if result.returncode != 0:
-        result = _docker(["model", "list"], check=False, timeout=60)
-    return _parse_model_list(result.stdout or "")
+    return sdk_installed_model_names()
 
 
 def _model_installed(model: str) -> bool:
-    if _docker_model_cli_available():
-        result = _docker(["model", "inspect", model], check=False, timeout=30)
-        if result.returncode == 0:
-            return True
-    if not _docker_available():
-        return False
-    try:
-        return dmr_api_model_installed(model, timeout=30)
-    except Exception:
-        return False
+    return sdk_model_installed(model)
 
 
 def _docker_status() -> dict[str, Any]:
-    if not _docker_model_cli_available():
-        return {"running": _endpoint_responds(), "backends": {}, "transport": "docker_model_runner_api"}
-    result = _docker(["model", "status", "--json"], check=False, timeout=30)
-    if result.returncode != 0:
-        return {"running": False, "error": (result.stderr or result.stdout or "").strip()}
-    try:
-        value = json.loads(result.stdout or "{}")
-    except json.JSONDecodeError:
-        return {"running": "running" in (result.stdout or "").lower(), "raw": result.stdout}
-    return value if isinstance(value, dict) else {"raw": value}
+    return sdk_docker_status()
 
 
 def _endpoint_responds() -> bool:
@@ -506,42 +442,7 @@ def _endpoint_responds() -> bool:
 
 
 def _parse_model_list(output: str) -> set[str]:
-    names: set[str] = set()
-    stripped = output.strip()
-    if not stripped:
-        return names
-    try:
-        decoded = json.loads(stripped)
-    except json.JSONDecodeError:
-        decoded = None
-    if isinstance(decoded, list):
-        for item in decoded:
-            if isinstance(item, dict):
-                names.update(_model_name_candidates(item))
-            elif isinstance(item, str):
-                names.add(item)
-        return names
-    if isinstance(decoded, dict):
-        items = decoded.get("models") if isinstance(decoded.get("models"), list) else [decoded]
-        for item in items:
-            if isinstance(item, dict):
-                names.update(_model_name_candidates(item))
-        return names
-
-    for line in stripped.splitlines():
-        line = line.strip()
-        if not line or line.lower().startswith(("name", "model")):
-            continue
-        if line.startswith("{"):
-            try:
-                item = json.loads(line)
-            except json.JSONDecodeError:
-                item = {}
-            if isinstance(item, dict):
-                names.update(_model_name_candidates(item))
-                continue
-        names.add(line.split()[0])
-    return names
+    return sdk_parse_model_list(output)
 
 
 def _model_name_candidates(item: dict[str, Any]) -> set[str]:

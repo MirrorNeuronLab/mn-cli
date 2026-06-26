@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import time
 from typing import Any, Optional
 
 import typer
@@ -10,6 +9,13 @@ from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.deployment_cmds import read_bundle
 from mn_cli.libs.ui import print_success_confirmation
 from mn_cli.shared import client, console
+from mn_sdk import (
+    ValidationError,
+    delayed_schedule as sdk_delayed_schedule,
+    event_schedule as sdk_event_schedule,
+    parse_duration_ms as sdk_parse_duration_ms,
+    periodic_schedule as sdk_periodic_schedule,
+)
 
 
 schedule_app = typer.Typer(help="Periodic, delayed, and event-triggered job schedules")
@@ -30,19 +36,10 @@ def _json_option(value: str, flag: str) -> dict[str, Any]:
 
 
 def _duration_ms(value: str) -> int:
-    raw = str(value or "").strip().lower()
-    if not raw:
-        raise typer.BadParameter("duration cannot be empty")
-    units = {"ms": 1, "s": 1000, "m": 60_000, "h": 3_600_000, "d": 86_400_000}
-    for suffix, multiplier in units.items():
-        if raw.endswith(suffix):
-            number = raw[: -len(suffix)]
-            return int(float(number) * multiplier)
-    return int(float(raw) * 1000)
-
-
-def _local_timezone() -> str:
-    return time.tzname[0] or "UTC"
+    try:
+        return sdk_parse_duration_ms(value, default_unit="s")
+    except ValidationError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 def _print_result(
@@ -90,21 +87,16 @@ def create_schedule(
     """Create a periodic schedule for a bundle."""
     try:
         manifest_json, payloads = read_bundle(bundle)
-        schedule = _json_option(schedule_json, "--schedule-json")
-        schedule.update(
-            {
-                "kind": "periodic",
-                "crons": cron or schedule.get("crons") or ([schedule["cron"]] if schedule.get("cron") else []),
-                "timezone": timezone_name or schedule.get("timezone") or _local_timezone(),
-                "missed_policy": missed_policy,
-                "catchup_limit": catchup_limit,
-                "prohibit_overlap": not allow_overlap,
-            }
+        schedule = sdk_periodic_schedule(
+            crons=cron,
+            name=name,
+            timezone_name=timezone_name,
+            missed_policy=missed_policy,
+            catchup_limit=catchup_limit,
+            allow_overlap=allow_overlap,
+            window=window,
+            schedule=_json_option(schedule_json, "--schedule-json"),
         )
-        if name:
-            schedule["name"] = name
-        if window:
-            schedule["window"] = {"duration_ms": _duration_ms(window), "end_action": "cancel"}
         _print_result(
             client.create_schedule(manifest_json, payloads, schedule=schedule, source={"cli": "schedule create"}),
             action="Schedule create",
@@ -127,13 +119,7 @@ def delay_schedule(
         if not at and not in_:
             raise typer.BadParameter("provide --at or --in")
         manifest_json, payloads = read_bundle(bundle)
-        schedule: dict[str, Any] = {"kind": "delayed", "timezone": _local_timezone()}
-        if at:
-            schedule["run_at"] = at
-        if in_:
-            schedule["delay_ms"] = _duration_ms(in_)
-        if name:
-            schedule["name"] = name
+        schedule = sdk_delayed_schedule(at=at, delay=in_, name=name)
         _print_result(
             client.create_schedule(manifest_json, payloads, schedule=schedule, source={"cli": "schedule delay"}),
             action="Schedule delay",
@@ -229,15 +215,12 @@ def create_trigger(
     """Create an event-triggered schedule."""
     try:
         manifest_json, payloads = read_bundle(bundle)
-        schedule = {
-            "kind": "event",
-            "name": name,
-            "trigger": {
-                "event_type": event_type,
-                "filters": _json_option(filter_json, "--filter-json"),
-            },
-            "prohibit_overlap": not allow_overlap,
-        }
+        schedule = sdk_event_schedule(
+            event_type=event_type,
+            name=name,
+            filters=_json_option(filter_json, "--filter-json"),
+            allow_overlap=allow_overlap,
+        )
         _print_result(
             client.create_schedule(manifest_json, payloads, schedule=schedule, source={"cli": "trigger create"}),
             action="Trigger create",
