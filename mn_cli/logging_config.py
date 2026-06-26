@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
-import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+from mn_cli.config import load_config
 
 
 def configure_logging(
@@ -12,8 +13,9 @@ def configure_logging(
     *,
     level: str | None = None,
 ) -> logging.Logger:
+    config = load_config(app_name="mn-cli")
     logger = logging.getLogger(name)
-    logger.setLevel((level or os.getenv("MN_LOG_LEVEL", "INFO")).upper())
+    logger.setLevel((level or str(config.get("MN_LOG_LEVEL", "info"))).upper())
     logger.propagate = False
 
     if logger.handlers:
@@ -27,8 +29,8 @@ def configure_logging(
         log_path.parent.mkdir(parents=True, exist_ok=True)
         handler: logging.Handler = RotatingFileHandler(
             log_path,
-            maxBytes=int(os.getenv("MN_LOG_MAX_BYTES", "1048576")),
-            backupCount=int(os.getenv("MN_LOG_BACKUP_COUNT", "5")),
+            maxBytes=int(config.get("MN_LOG_MAX_BYTES", 1048576)),
+            backupCount=int(config.get("MN_LOG_BACKUP_COUNT", 5)),
         )
     except OSError:
         handler = logging.StreamHandler()

@@ -1,6 +1,11 @@
 from importlib import metadata
 
 import typer
+
+from mn_cli.config import bootstrap_environment
+
+bootstrap_environment()
+
 from mn_cli import update_cmds
 from mn_cli.banner import format_banner
 from mn_cli.libs import backup_cmds, deployment_cmds, job_cmds, model_cmds, resource_cmds, run_cmds, schedule_cmds, service_cmds, sys_cmds

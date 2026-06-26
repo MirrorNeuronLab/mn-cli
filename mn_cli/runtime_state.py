@@ -5,10 +5,12 @@ import os
 from pathlib import Path
 from typing import Any
 
+from mn_cli.config import load_config
+
 
 def mn_home() -> Path:
-    configured_home = os.getenv("MN_HOME")
-    return Path(configured_home).expanduser() if configured_home else Path.home() / ".mn"
+    configured_home = load_config(app_name="mn-cli").path("MN_HOME")
+    return configured_home if configured_home else Path.home() / ".mn"
 
 
 def read_env_file(path: Path) -> dict[str, str]:
