@@ -1137,6 +1137,7 @@ def _record_blueprint_install(
     install_dir = _blueprint_installs_dir()
     install_dir.mkdir(parents=True, exist_ok=True)
     payload = {
+        "version": 1,
         "schema_version": "mn.blueprint.install.v1",
         "blueprint_id": blueprint_id,
         "name": entry.get("name") or manifest.get("job_name") or blueprint_id,
@@ -1167,12 +1168,14 @@ def _archive_blueprint_install(
         payload = _read_json_object(record_path)
     else:
         payload = {
+            "version": 1,
             "schema_version": "mn.blueprint.install.v1",
             "blueprint_id": blueprint_id,
             "path": (entry or {}).get("path"),
             "storage_dir": str(storage_dir),
             "bundle_root": str(bundle_root) if bundle_root else "",
         }
+    payload.setdefault("version", 1)
     payload["archived_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     archive_dir = install_dir / "archive"
     archive_path = archive_dir / f"{blueprint_id}-{int(time.time())}.json"

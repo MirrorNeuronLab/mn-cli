@@ -414,6 +414,7 @@ def _archive_metadata(backup_payload: dict[str, Any]) -> dict[str, Any]:
         for key, value in backup_payload.items()
         if key not in {"runtime"}
     }
+    metadata.setdefault("version", 1)
     metadata.setdefault("schema_version", SCHEMA_VERSION)
     metadata.setdefault("created_at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     return metadata

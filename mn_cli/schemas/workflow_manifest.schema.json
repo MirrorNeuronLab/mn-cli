@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": 1,
   "$id": "https://mirrorneuron.dev/schemas/mn.workflow.v1.manifest.schema.json",
   "title": "MirrorNeuron workflow manifest",
   "type": "object",
@@ -42,7 +43,12 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["type", "source", "name", "version"],
+        "required": [
+          "type",
+          "source",
+          "name",
+          "version"
+        ],
         "properties": {
           "type": {
             "const": "pip"
@@ -69,14 +75,19 @@
     "entrypoints": false,
     "contract": {
       "type": "object",
-      "required": ["inputs", "outputs"],
+      "required": [
+        "inputs",
+        "outputs"
+      ],
       "properties": {
         "inputs": {
           "type": "object"
         },
         "outputs": {
           "type": "object",
-          "required": ["primary"],
+          "required": [
+            "primary"
+          ],
           "properties": {
             "primary": {
               "type": "object"
@@ -107,7 +118,9 @@
           "minLength": 1
         },
         "mode": {
-          "enum": ["static_dag"]
+          "enum": [
+            "static_dag"
+          ]
         },
         "entrypoint": {
           "type": "string",
@@ -125,13 +138,19 @@
           "oneOf": [
             {
               "type": "string",
-              "enum": ["parallel", "serial"]
+              "enum": [
+                "parallel",
+                "serial"
+              ]
             },
             {
               "type": "object",
               "properties": {
                 "strategy": {
-                  "enum": ["parallel", "serial"]
+                  "enum": [
+                    "parallel",
+                    "serial"
+                  ]
                 },
                 "max_parallel_steps": {
                   "type": "integer",
@@ -152,14 +171,19 @@
           "type": "object"
         },
         "observers": {
-          "type": ["array", "object"]
+          "type": [
+            "array",
+            "object"
+          ]
         },
         "steps": {
           "type": "array",
           "minItems": 1,
           "items": {
             "type": "object",
-            "required": ["id"],
+            "required": [
+              "id"
+            ],
             "properties": {
               "id": {
                 "type": "string",
@@ -174,7 +198,11 @@
           "minItems": 1,
           "items": {
             "type": "object",
-            "required": ["id", "from", "to"],
+            "required": [
+              "id",
+              "from",
+              "to"
+            ],
             "properties": {
               "id": {
                 "type": "string",
@@ -214,7 +242,12 @@
     },
     "agents": {
       "type": "object",
-      "required": ["schema", "nodes", "edges", "entrypoints"],
+      "required": [
+        "schema",
+        "nodes",
+        "edges",
+        "entrypoints"
+      ],
       "properties": {
         "schema": {
           "const": "mn.agents.communication_graph/v1"
@@ -232,7 +265,9 @@
           "minItems": 1,
           "items": {
             "type": "object",
-            "required": ["node_id"],
+            "required": [
+              "node_id"
+            ],
             "properties": {
               "node_id": {
                 "type": "string",
@@ -246,7 +281,11 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["edge_id", "from_node", "to_node"],
+            "required": [
+              "edge_id",
+              "from_node",
+              "to_node"
+            ],
             "properties": {
               "edge_id": {
                 "type": "string",
@@ -272,13 +311,18 @@
     },
     "runtime": {
       "type": "object",
-      "required": ["bindings"],
+      "required": [
+        "bindings"
+      ],
       "properties": {
         "bindings": {
           "type": "object"
         }
       },
       "additionalProperties": true
+    },
+    "version": {
+      "const": 1
     }
   },
   "additionalProperties": true
