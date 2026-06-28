@@ -170,6 +170,8 @@ class CliConfig:
     grpc_timeout_seconds: float | None = 10.0
     grpc_auth_token: str = ""
     grpc_admin_token: str = ""
+    api_base_url: str = ""
+    api_token: str = ""
     log_path: Path = field(default_factory=lambda: _default_logs_root() / "cli.log")
     output_mode: str = "rich"
 
@@ -186,6 +188,8 @@ class CliConfig:
             grpc_timeout_seconds=runtime_config.grpc_timeout_seconds,
             grpc_auth_token=runtime_config.grpc_auth_token,
             grpc_admin_token=runtime_config.grpc_admin_token,
+            api_base_url=runtime_config.api_base_url,
+            api_token=str(app_config.get("MN_API_TOKEN", "")),
             log_path=log_path or (_default_logs_root(app_config.effective_env) / "cli.log"),
             output_mode=str(app_config.get("MN_CLI_OUTPUT", "rich")),
         )

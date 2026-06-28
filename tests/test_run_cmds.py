@@ -13,8 +13,9 @@ from rich.console import Console
 from mn_cli.main import app
 from mn_cli.libs import run_cmds
 from mn_cli.libs.ui import JobMonitorState, generate_live_layout
+from mn_cli.libs.workflow_progress import _agent_progress_detail
 from mn_cli.libs.run_manifest import prepare_manifest_for_submission
-from mn_sdk import load_model_ownership
+from mn_sdk import AgentProgress, load_model_ownership
 
 runner = CliRunner()
 
@@ -43,6 +44,30 @@ def test_manifest_for_model_validation_filters_dmr_models_for_fake_llm():
 
     assert set(filtered["runtime"]["models"]) == {"external"}
     assert set(manifest["runtime"]["models"]) == {"primary", "secondary", "external"}
+
+
+def test_cli_agent_progress_detail_marks_estimates_and_token_budgets():
+    estimated = AgentProgress(
+        id="worker",
+        status="running",
+        progress=0.35,
+        progress_source="milestone",
+        token_budget=12000,
+        tools=4,
+    )
+    explicit = AgentProgress(
+        id="worker",
+        status="running",
+        progress=0.42,
+        progress_source="explicit",
+        tokens_used=1300,
+        token_budget=12000,
+    )
+
+    assert "35% est." in _agent_progress_detail(estimated)
+    assert "12k tok budget" in _agent_progress_detail(estimated)
+    assert "42% est." not in _agent_progress_detail(explicit)
+    assert "1.3k/12k tok" in _agent_progress_detail(explicit)
 
 
 def test_prepare_runtime_models_installs_missing_model_for_run(

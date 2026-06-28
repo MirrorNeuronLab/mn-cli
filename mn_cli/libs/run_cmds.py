@@ -26,6 +26,7 @@ from mn_cli.libs.ui import (
 )
 from mn_cli.libs.bundles import load_bundle_payloads
 from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress
+from mn_cli.libs.progress_stream import ProgressSnapshotStream, stream_api_workflow_progress
 from mn_cli.libs.run_logs import (
     JobLogWriter,
     STANDARD_EVENTS,
@@ -65,7 +66,7 @@ from mn_cli.libs.blueprint_models import BlueprintModelOps, blueprint_model_depe
 from mn_cli.libs.model_cmds import install_model_entry, model_installed
 from mn_cli.libs.blueprint_resources import cleanup_blueprint_host_hooks
 from mn_cli.server_cmds import ensure_context_engine_runtime
-from mn_cli.shared import console, client, logger
+from mn_cli.shared import console, client, config, logger
 from mn_cli.terminal import use_progress
 from mn_cli.error_handler import handle_cli_error
 from mn_sdk import (
@@ -825,6 +826,7 @@ def _stream_and_format_workflow_events(
         else follow_seconds
     )
     view = BlueprintWorkflowProgress(manifest, job_id=job_id)
+    progress_stream = ProgressSnapshotStream(view)
     status_text = "running"
     live: Live | None = None
 
@@ -849,8 +851,8 @@ def _stream_and_format_workflow_events(
                     web_ui_url = log_writer.record_web_ui_url(event)
                     if web_ui_url:
                         view._remember(f"Blueprint Web UI: {web_ui_url}")
-                    view.update(event)
-                    if live is not None:
+                    should_render = progress_stream.observe_event(event)
+                    if live is not None and should_render:
                         live.update(view.render())
 
                     event_type = event.get("type")
@@ -869,6 +871,8 @@ def _stream_and_format_workflow_events(
                         break
                 except Exception:
                     log_writer.run_logger.exception("Failed to process streamed event")
+                if live is not None and progress_stream.flush_due():
+                    live.update(view.render())
 
             if status_text not in FINAL_STATUSES:
                 status_text = _follow_workflow_job_events(
@@ -3326,7 +3330,118 @@ def _manifest_from_job_data(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _live_monitor_api_stream(job_id: str) -> bool:
+    api_base_url = str(getattr(config, "api_base_url", "") or "").strip()
+    if not api_base_url or os.getenv("MN_JOB_MONITOR_DISABLE_API_STREAM", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return False
+
+    import queue
+    import threading
+    import sys
+    import select
+
+    event_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
+
+    def reader() -> None:
+        try:
+            for snapshot in stream_api_workflow_progress(
+                api_base_url,
+                job_id,
+                api_token=str(getattr(config, "api_token", "") or ""),
+                timeout=float(os.getenv("MN_JOB_MONITOR_API_STREAM_TIMEOUT", "10")),
+            ):
+                event_queue.put(("snapshot", snapshot))
+                if str(snapshot.get("status") or "").lower() in FINAL_STATUSES:
+                    break
+        except Exception as exc:
+            event_queue.put(("error", exc))
+        finally:
+            event_queue.put(("done", None))
+
+    class MonitorView:
+        def __init__(self, state: JobMonitorState):
+            self.data: dict[str, Any] | None = None
+            self.state = state
+
+        def __rich__(self):
+            if not self.data:
+                from rich.panel import Panel
+
+                return Panel("Connecting to workflow progress stream...", style="cyan")
+            return generate_live_layout(job_id, self.data, state=self.state)
+
+    monitor_state = JobMonitorState()
+    view = MonitorView(monitor_state)
+    worker = threading.Thread(target=reader, daemon=True)
+    worker.start()
+    is_tty = sys.stdin.isatty()
+    old_settings = None
+    if is_tty:
+        import tty
+        import termios
+
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
+
+    saw_snapshot = False
+    try:
+        with Live(
+            view,
+            refresh_per_second=12,
+            console=console,
+            screen=bool(is_tty and getattr(console, "is_terminal", False)),
+            transient=bool(is_tty and getattr(console, "is_terminal", False)),
+        ):
+            while True:
+                try:
+                    kind, payload = event_queue.get(timeout=0.5)
+                except queue.Empty:
+                    if is_tty:
+                        i, _o, _e = select.select([sys.stdin], [], [], 0)
+                        if i:
+                            key = _read_monitor_key(sys.stdin, select)
+                            agent_count = _workflow_progress_agent_count(view.data)
+                            if not monitor_state.handle_key(key, agent_count):
+                                break
+                    continue
+                if kind == "error":
+                    if not saw_snapshot:
+                        return False
+                    logger.warning("Workflow progress stream ended: %s", payload)
+                    break
+                if kind == "done":
+                    break
+                if kind == "snapshot" and isinstance(payload, dict):
+                    saw_snapshot = True
+                    view.data = {
+                        "workflow_progress": payload,
+                        "summary": {"status": payload.get("status")},
+                        "job": {"job_id": job_id, "status": payload.get("status")},
+                    }
+                    if str(payload.get("status") or "").lower() in FINAL_STATUSES:
+                        break
+        return saw_snapshot
+    finally:
+        if is_tty and old_settings:
+            import termios
+
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
+
+
+def _workflow_progress_agent_count(data: dict[str, Any] | None) -> int:
+    progress = data.get("workflow_progress") if isinstance(data, dict) else None
+    if not isinstance(progress, dict):
+        return 0
+    current_step = progress.get("current_step") if isinstance(progress.get("current_step"), dict) else {}
+    agents = current_step.get("agents") if isinstance(current_step, dict) else []
+    return len(agents) if isinstance(agents, list) else 0
+
+
 def _live_monitor(job_id: str):
+    if _live_monitor_api_stream(job_id):
+        return
+
     import sys
     import select
     import time
