@@ -272,6 +272,125 @@ def test_prepare_manifest_injects_gar_skill_dependencies_for_hostlocal(tmp_path,
     assert str(tmp_path / "mn-skills") not in env.get("PYTHONPATH", "")
 
 
+def test_prepare_manifest_stages_local_skill_dependencies_in_dev(tmp_path, monkeypatch):
+    bundle_dir = tmp_path / "bundle"
+    skills_root = tmp_path / "mn-skills"
+    bundle_dir.mkdir()
+    (bundle_dir / "config").mkdir()
+    (bundle_dir / "config" / "default.json").write_text(
+        json.dumps({"identity": {"blueprint_id": "local_skill_dev"}}),
+        encoding="utf-8",
+    )
+    _write_skill_pyproject(
+        skills_root,
+        "evidence_engine_skill",
+        "mirrorneuron-evidence-engine-skill",
+    )
+    skill_module = skills_root / "evidence_engine_skill" / "src" / "mn_evidence_engine_skill"
+    skill_module.mkdir(parents=True)
+    (skill_module / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+    monkeypatch.setenv("MN_ENV", "dev")
+    monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("MN_SKILLS_ROOT", str(skills_root))
+
+    manifest = {
+        "skill_dependencies": [
+            {
+                "type": "pip",
+                "source": "gar",
+                "name": "mirrorneuron-evidence-engine-skill",
+                "version": "1.2.7",
+            },
+            {
+                "type": "pip",
+                "source": "gar",
+                "name": "mirrorneuron-rag-skill",
+                "version": "1.2.14",
+            },
+        ],
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.DockerWorker",
+                    "docker_worker_image": "worker/docker_worker",
+                    "environment": {},
+                },
+            }
+        ],
+    }
+    payloads = {"worker/docker_worker/Dockerfile": b"FROM python:3.11-slim\n"}
+
+    prepared = prepare_manifest_for_submission(bundle_dir, manifest)
+    remaining = [item["name"] for item in prepared["skill_dependencies"]]
+    assert remaining == ["mirrorneuron-rag-skill"]
+    assert prepared["metadata"]["mn_local_skill_dependencies"]["packages"] == [
+        "mirrorneuron-evidence-engine-skill"
+    ]
+
+    staged = stage_skill_dependency_payloads_for_manifest(
+        prepared,
+        payloads,
+        bundle_dir=bundle_dir,
+    )
+
+    assert ".mn-local-skills/evidence_engine_skill" in staged["sources"]
+    assert (
+        ".mn-local-skills/evidence_engine_skill/src/mn_evidence_engine_skill/__init__.py"
+        in payloads
+    )
+    requirements = payloads["worker/docker_worker/__mn_skill_dependencies/requirements.txt"].decode()
+    assert "mirrorneuron-rag-skill==1.2.14" in requirements
+    assert "mirrorneuron-evidence-engine-skill" not in requirements
+
+
+def test_prepare_manifest_keeps_gar_skill_dependencies_for_hostlocal_dev(tmp_path, monkeypatch):
+    bundle_dir = tmp_path / "bundle"
+    skills_root = tmp_path / "mn-skills"
+    bundle_dir.mkdir()
+    (bundle_dir / "config").mkdir()
+    (bundle_dir / "config" / "default.json").write_text(
+        json.dumps({"identity": {"blueprint_id": "hostlocal_dev"}}),
+        encoding="utf-8",
+    )
+    _write_skill_pyproject(
+        skills_root,
+        "evidence_engine_skill",
+        "mirrorneuron-evidence-engine-skill",
+    )
+    monkeypatch.setenv("MN_ENV", "dev")
+    monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("MN_SKILLS_ROOT", str(skills_root))
+
+    manifest = {
+        "skill_dependencies": [
+            {
+                "type": "pip",
+                "source": "gar",
+                "name": "mirrorneuron-evidence-engine-skill",
+                "version": "1.2.7",
+            }
+        ],
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.HostLocal",
+                    "command": ["python3.11", "run.py"],
+                    "environment": {},
+                },
+            }
+        ],
+    }
+
+    prepared = prepare_manifest_for_submission(bundle_dir, manifest)
+
+    assert prepared["skill_dependencies"] == manifest["skill_dependencies"]
+    assert "mn_local_skill_dependencies" not in prepared.get("metadata", {})
+    packages = prepared["nodes"][0]["config"]["python_environment"]["packages"]
+    assert "mirrorneuron-evidence-engine-skill==1.2.7" in packages
+
+
 def test_prepare_manifest_gar_skill_runtime_uses_pinned_requirements_not_local_sources(tmp_path, monkeypatch):
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import tomllib
 from pathlib import Path
 from typing import Any, Optional
 
@@ -25,7 +26,9 @@ from mn_cli.libs.skill_runtime import (
 from mn_cli.libs.skill_dependencies import (
     gar_requirement_lines,
     gar_requirements_text,
+    normalize_package_name,
     pinned_skill_dependency_requirements,
+    skill_dependency_records,
     skill_dependency_package_names,
     without_requirements_for_packages,
 )
@@ -50,6 +53,10 @@ WORKSPACE_BASES = {"workspace_root", "workspace", "repo_root"}
 HOST_LOCAL_RUNNER = "MirrorNeuron.Runner.HostLocal"
 DOCKER_WORKER_RUNNER = "MirrorNeuron.Runner.DockerWorker"
 SKILL_DEPENDENCY_CONTEXT_ROOT = "__mn_skill_dependencies"
+LOCAL_SKILL_CONTEXT_ROOT = ".mn-local-skills"
+LOCAL_SKILL_ENABLE_VALUES = {"1", "true", "True", "TRUE", "yes", "Yes", "YES"}
+LOCAL_SKILL_DISABLE_VALUES = {"0", "false", "False", "FALSE", "no", "No", "NO"}
+LOCAL_SKILL_ENV_VALUES = {"dev", "development", "local"}
 
 
 def workspace_root() -> Path:
@@ -91,6 +98,121 @@ def runtime_path_environment() -> dict[str, str]:
         env["PYTHONPATH"] = os.pathsep.join(resolved_python_paths)
     env.update(user_home_environment())
     return env
+
+
+def local_skill_sources_enabled() -> bool:
+    flag = os.getenv("MN_USE_LOCAL_SKILLS", "").strip()
+    if flag in LOCAL_SKILL_DISABLE_VALUES:
+        return False
+    if flag in LOCAL_SKILL_ENABLE_VALUES:
+        return True
+    return os.getenv("MN_ENV", "").strip().lower() in LOCAL_SKILL_ENV_VALUES
+
+
+def localize_skill_dependencies_for_dev(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Stage local skill sources for dev runs and leave prod GAR dependencies intact."""
+
+    if not local_skill_sources_enabled():
+        return {"localized": 0, "packages": []}
+
+    records = skill_dependency_records(manifest)
+    if not records:
+        return {"localized": 0, "packages": []}
+
+    skills_root = Path(
+        os.getenv("MN_SKILLS_ROOT") or default_registered_modules_root(workspace_root=workspace_root())
+    ).expanduser()
+    local_sources = _local_skill_sources_by_package(skills_root)
+    selected: dict[str, tuple[dict[str, str], Path]] = {}
+    for record in records:
+        package_key = normalize_package_name(record["name"])
+        source = local_sources.get(package_key)
+        if source:
+            selected[package_key] = (record, source)
+
+    if not selected:
+        return {"localized": 0, "packages": []}
+
+    upload_roots = _docker_worker_upload_roots(manifest)
+    if not upload_roots:
+        return {"localized": 0, "packages": []}
+
+    raw_dependencies = manifest.get("skill_dependencies")
+    if isinstance(raw_dependencies, list):
+        manifest["skill_dependencies"] = [
+            item
+            for item in raw_dependencies
+            if not (
+                isinstance(item, dict)
+                and normalize_package_name(str(item.get("name") or "")) in selected
+            )
+        ]
+
+    packages: list[str] = []
+    sources: list[dict[str, str]] = []
+    for _package_key, (record, source) in selected.items():
+        if record["name"] not in packages:
+            packages.append(record["name"])
+        for upload_root in upload_roots:
+            target = "/".join(
+                part
+                for part in (
+                    upload_root.strip("/"),
+                    LOCAL_SKILL_CONTEXT_ROOT,
+                    source.name,
+                )
+                if part
+            )
+            sources.append(
+                {
+                    "package": record["name"],
+                    "source": str(source),
+                    "target": target,
+                }
+            )
+
+    if packages:
+        metadata = manifest.setdefault("metadata", {})
+        if isinstance(metadata, dict):
+            metadata["mn_local_skill_dependencies"] = {
+                "context_root": LOCAL_SKILL_CONTEXT_ROOT,
+                "packages": packages,
+                "sources": sources,
+            }
+    return {"localized": len(packages), "packages": packages}
+
+
+def _local_skill_sources_by_package(skills_root: Path) -> dict[str, Path]:
+    if not skills_root.is_dir():
+        return {}
+    sources: dict[str, Path] = {}
+    for pyproject in skills_root.glob("*/pyproject.toml"):
+        try:
+            data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError):
+            continue
+        project = data.get("project") if isinstance(data, dict) else {}
+        name = project.get("name") if isinstance(project, dict) else None
+        if isinstance(name, str) and name.strip():
+            sources[normalize_package_name(name)] = pyproject.parent
+    return sources
+
+
+def _docker_worker_upload_roots(manifest: dict[str, Any]) -> list[str]:
+    roots: list[str] = []
+    has_docker_worker = False
+    for node in manifest_nodes(manifest):
+        config = node.get("config") if isinstance(node.get("config"), dict) else {}
+        if config.get("runner_module") != DOCKER_WORKER_RUNNER:
+            continue
+        has_docker_worker = True
+        for source in _node_upload_sources(config):
+            cleaned = source.strip("/")
+            if cleaned and cleaned not in roots:
+                roots.append(cleaned)
+    if not has_docker_worker:
+        return []
+    return roots or [""]
 
 
 def user_home_environment() -> dict[str, str]:
@@ -141,6 +263,7 @@ def prepare_manifest_for_submission(
         )
         ensure_blueprint_support_sdk_build_context_uploads(prepared)
         refresh_embedded_blueprint_config(prepared, config)
+    localize_skill_dependencies_for_dev(prepared)
     inject_skill_dependency_python_environments(prepared)
     if enable_runtime_web_ui and run_id and config is not None and blueprint_web_ui_enabled(config):
         inject_runtime_web_ui_service_for_submission(
@@ -482,12 +605,13 @@ def stage_skill_dependency_payloads_for_manifest(
     *,
     bundle_dir: Path,
 ) -> dict[str, Any]:
+    local_staged_sources = _stage_local_skill_dependency_payloads(manifest, payloads)
     requirements_text = gar_requirements_text(manifest)
     pinned_requirements = pinned_skill_dependency_requirements(manifest)
     if not requirements_text or not pinned_requirements:
-        return {"staged": False, "sources": []}
+        return {"staged": bool(local_staged_sources), "sources": local_staged_sources}
 
-    staged_sources: list[str] = []
+    staged_sources: list[str] = list(local_staged_sources)
     for context_path in _docker_worker_context_paths(manifest):
         dockerfile_key = _payload_join(context_path, "Dockerfile")
         if dockerfile_key not in payloads:
@@ -522,6 +646,34 @@ def stage_skill_dependency_payloads_for_manifest(
         staged_sources.extend([requirements_key, dockerfile_key])
 
     return {"staged": bool(staged_sources), "sources": staged_sources}
+
+
+def _stage_local_skill_dependency_payloads(
+    manifest: dict[str, Any],
+    payloads: dict[str, bytes],
+) -> list[str]:
+    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    local = metadata.get("mn_local_skill_dependencies") if isinstance(metadata, dict) else {}
+    sources = local.get("sources") if isinstance(local, dict) else None
+    if not isinstance(sources, list):
+        return []
+
+    staged: list[str] = []
+    for entry in sources:
+        if not isinstance(entry, dict):
+            continue
+        source = Path(str(entry.get("source") or "")).expanduser()
+        target = str(entry.get("target") or "").strip().strip("/")
+        if (
+            not source.exists()
+            or not target
+            or Path(target).is_absolute()
+            or ".." in Path(target).parts
+        ):
+            continue
+        if _add_upload_source_to_payloads(source, target, payloads):
+            staged.append(target)
+    return staged
 
 
 def inject_skill_dependency_python_environments(manifest: dict[str, Any]) -> dict[str, Any]:
