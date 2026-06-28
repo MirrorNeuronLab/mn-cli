@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-mn = "mn_cli.main:app"
+mn = "mn_cli.main:cli"
 
 [build-system]
 requires = ["setuptools>=77", "setuptools-scm>=8"]

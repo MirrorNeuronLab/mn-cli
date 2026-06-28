@@ -1,6 +1,8 @@
 from importlib import metadata
+import sys
 
 import typer
+from rich.console import Console
 
 from mn_cli.config import bootstrap_environment
 
@@ -10,11 +12,12 @@ from mn_cli import update_cmds
 from mn_cli.banner import format_banner
 from mn_cli.libs import backup_cmds, deployment_cmds, job_cmds, model_cmds, resource_cmds, run_cmds, schedule_cmds, service_cmds, sys_cmds
 from mn_cli.libs.blueprint_cmds import blueprint_app
+from mn_cli.error_handler import handle_cli_error, set_debug
 from mn_cli.runtime_mode import local_runtime_mode
 
 PACKAGE_NAME = "mirrorneuron-cli"
 FALLBACK_VERSION = "0.0.0"
-CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
+CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"], "max_content_width": 120}
 ROOT_HELP = """Run and operate MirrorNeuron workflows, blueprints, jobs, and local runtime services.
 
 Examples:
@@ -61,6 +64,7 @@ app = typer.Typer(
     invoke_without_command=True,
     no_args_is_help=False,
     context_settings=CONTEXT_SETTINGS,
+    pretty_exceptions_enable=False,
 )
 job_app = typer.Typer(help=JOB_HELP, context_settings=CONTEXT_SETTINGS)
 node_app = typer.Typer(help=NODE_HELP, context_settings=CONTEXT_SETTINGS)
@@ -99,7 +103,18 @@ def main(
         is_eager=True,
         help="Show the installed MirrorNeuron CLI version.",
     ),
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        help="Show sanitized diagnostic details for unexpected errors.",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        help="Alias for --debug.",
+    ),
 ):
+    set_debug(debug or verbose)
     if ctx.invoked_subcommand is None:
         typer.echo(format_banner("MirrorNeuron CLI"))
         mode = _runtime_mode_line()
@@ -172,5 +187,24 @@ app.add_typer(schedule_cmds.schedule_app, name="schedule")
 app.add_typer(schedule_cmds.trigger_app, name="trigger")
 app.add_typer(schedule_cmds.event_app, name="event")
 
+def cli() -> None:
+    try:
+        app(standalone_mode=True)
+    except typer.Exit:
+        raise
+    except SystemExit:
+        raise
+    except Exception as exc:
+        try:
+            handle_cli_error(
+                exc,
+                Console(),
+                " ".join(sys.argv[1:2]) or "command",
+                command_context={"argv": sys.argv[1:]},
+            )
+        except typer.Exit as exit_exc:
+            raise SystemExit(exit_exc.exit_code) from exc
+
+
 if __name__ == "__main__":
-    app()
+    cli()

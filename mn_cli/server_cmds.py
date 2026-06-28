@@ -1100,10 +1100,17 @@ def _handshake_with_main_node(
             node_info=local_node_info,
         )
     except Exception as exc:
-        console.print(f"[red]Error: Could not join MirrorNeuron node at {target}.[/red]")
-        console.print("Check the host, gRPC port, and token printed by 'mn runtime start' on the main box.")
-        console.print(f"[dim]{exc}[/dim]")
-        raise typer.Exit(1) from exc
+        from mn_sdk.errors import AppError
+
+        raise AppError(
+            "MN_EXECUTION_FAILED",
+            f"Could not join MirrorNeuron node at {target}.",
+            internal_message=str(exc),
+            hint="Check the host, gRPC port, and token printed by 'mn runtime start' on the main box.",
+            exit_code=1,
+            http_status=500,
+            cause=exc,
+        ) from exc
 
     if _node_name_unset(handshake.get("node_name")):
         handshake["node_name"] = _network_node_name(seed_host)
@@ -1666,10 +1673,17 @@ def _join_network(
     except TypeError:
         status = local_client.add_node(remote_node)
     except Exception as exc:
-        console.print(f"[red]Error: Could not add {remote_node} to the local cluster.[/red]")
-        console.print("Check that the local MirrorNeuron core is running, and that the remote host and token are correct.")
-        console.print(f"[dim]{exc}[/dim]")
-        raise typer.Exit(1) from exc
+        from mn_sdk.errors import AppError
+
+        raise AppError(
+            "MN_EXECUTION_FAILED",
+            f"Could not add {remote_node} to the local cluster.",
+            internal_message=str(exc),
+            hint="Check that the local MirrorNeuron core is running, and that the remote host and token are correct.",
+            exit_code=1,
+            http_status=500,
+            cause=exc,
+        ) from exc
     if runtime_compose_available():
         _persist_compose_cluster_node(remote_node)
     details: list[tuple[str, str]] = [("Node", remote_node)]
@@ -1767,10 +1781,17 @@ def _ensure_local_cluster_runtime_for_join(
         )
         _wait_for_local_cluster_grpc()
     except (FileNotFoundError, subprocess.CalledProcessError) as exc:
-        console.print("[red]Error: Could not enable cluster mode for the local runtime.[/red]")
-        console.print("Run 'mn runtime stop' and then 'mn runtime start --host <this-box-ip>' before joining the worker.")
-        console.print(f"[dim]{exc}[/dim]")
-        raise typer.Exit(1) from exc
+        from mn_sdk.errors import AppError
+
+        raise AppError(
+            "MN_EXECUTION_FAILED",
+            "Could not enable cluster mode for the local runtime.",
+            internal_message=str(exc),
+            hint="Run 'mn runtime stop' and then 'mn runtime start --host <this-box-ip>' before joining the worker.",
+            exit_code=1,
+            http_status=500,
+            cause=exc,
+        ) from exc
 
 def _wait_for_local_cluster_grpc(
     timeout_seconds: float = 10.0,
@@ -2971,11 +2992,17 @@ def _configure_worker_redis_replica(
         except Exception:
             logger.debug("Primary Redis WAIT after worker replica setup failed", exc_info=True)
     except Exception as exc:
-        console.print("[red]Error: Could not configure worker Redis replication.[/red]")
-        console.print(f"Primary Redis: {primary_host}:{primary_port}")
-        console.print(f"Worker Redis:  {worker_redis_host}:{worker_redis_port}")
-        console.print(f"[dim]{exc}[/dim]")
-        raise typer.Exit(1) from exc
+        from mn_sdk.errors import AppError
+
+        raise AppError(
+            "MN_EXECUTION_FAILED",
+            "Could not configure worker Redis replication.",
+            internal_message=str(exc),
+            hint="Check that both Redis endpoints are reachable and retry the node join.",
+            exit_code=1,
+            http_status=500,
+            cause=exc,
+        ) from exc
 
     console.print(
         f"=> Worker Redis {worker_redis_host}:{worker_redis_port} is replicating from "

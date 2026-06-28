@@ -1,10 +1,19 @@
-import grpc
+from __future__ import annotations
+
+import os
+from typing import Any, Mapping
+
+import typer
 from rich.console import Console
+
 from mn_cli.config import CliConfig
 from mn_cli.logging_config import configure_logging
+from mn_sdk.errors import AppError, normalize_exception, sanitize_context
 
 log_file = CliConfig.from_env().log_path
 logger = configure_logging("mn-cli", log_file)
+
+_DEBUG = False
 
 CONTEXT_MESSAGES = {
     "submit": "Error submitting job",
@@ -43,27 +52,49 @@ CONTEXT_MESSAGES = {
     "leave": "Error removing node",
 }
 
-def handle_cli_error(e: Exception, console: Console, context: str = ""):
-    """Handle exceptions gracefully, log the full trace, and print a friendly message."""
-    logger.exception(f"Error during {context}")
-    
-    if isinstance(e, grpc.RpcError):
-        code = e.code()
-        details = e.details()
-        
-        if code == grpc.StatusCode.NOT_FOUND:
-            console.print(f"[red]Error: Cannot find the job by ID. ({details})[/red]")
-        elif code == grpc.StatusCode.INTERNAL and "not found" in str(details).lower():
-            console.print(f"[red]Error: Cannot find the job by ID. ({details})[/red]")
-        elif code == grpc.StatusCode.INTERNAL and "terminal state" in str(details).lower():
-            console.print("[red]Error: Job is already in a terminal state and cannot be modified.[/red]")
-        elif code == grpc.StatusCode.RESOURCE_EXHAUSTED:
-            console.print("[yellow]Runtime is under CPU/GPU/memory pressure and is not accepting new jobs.[/yellow]")
-            console.print(f"[dim]{details}[/dim]")
-        else:
-            console.print(f"[red]Communication Error: {details} (Code: {code.name})[/red]")
-            console.print(f"[dim]See {log_file} for full details.[/dim]")
-    else:
-        prefix = CONTEXT_MESSAGES.get(context, "Error")
-        console.print(f"[red]{prefix}: {str(e)}[/red]")
-        console.print(f"[dim]See {log_file} for full details.[/dim]")
+
+def set_debug(enabled: bool) -> None:
+    global _DEBUG
+    _DEBUG = bool(enabled)
+
+
+def debug_enabled() -> bool:
+    return _DEBUG or os.getenv("MN_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def handle_cli_error(
+    error: Exception,
+    console: Console,
+    context: str = "",
+    *,
+    debug: bool | None = None,
+    command_context: Mapping[str, Any] | None = None,
+) -> None:
+    """Log full diagnostics and print a stable user-safe CLI error."""
+    app_error = normalize_exception(error, context=command_context)
+    sanitized = sanitize_context(
+        {
+            "context": context,
+            **(dict(command_context or {})),
+        }
+    )
+    logger.exception(
+        "CLI command failed error_code=%s context=%s sanitized_context=%s",
+        app_error.code,
+        context,
+        sanitized,
+    )
+    print_cli_error(app_error, console, debug=debug_enabled() if debug is None else debug)
+    raise typer.Exit(app_error.exit_code) from error
+
+
+def print_cli_error(app_error: AppError, console: Console, *, debug: bool = False) -> None:
+    console.print(f"[red]Error {app_error.code}: {app_error.user_message}[/red]")
+    if app_error.hint:
+        console.print()
+        console.print(f"Hint: {app_error.hint}")
+    if debug and app_error.internal_message:
+        console.print()
+        console.print(f"[dim]Diagnostic: {app_error.internal_message}[/dim]")
+    if not debug:
+        console.print("[dim]See the MirrorNeuron CLI logs for full details.[/dim]")
