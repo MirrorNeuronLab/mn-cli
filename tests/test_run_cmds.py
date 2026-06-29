@@ -15,7 +15,7 @@ from mn_cli.libs import run_cmds
 from mn_cli.libs.ui import JobMonitorState, generate_live_layout
 from mn_cli.libs.workflow_progress import _agent_progress_detail
 from mn_cli.libs.run_manifest import prepare_manifest_for_submission
-from mn_sdk import AgentProgress, load_model_ownership
+from mn_sdk import AgentProgress, load_model_ownership, upsert_model_remote
 
 runner = CliRunner()
 
@@ -185,6 +185,65 @@ def test_prepare_runtime_models_uses_cluster_model_endpoint(
     assert endpoints["qwen3-coder"]["api_base"] == "http://192.168.4.173:12434/v1"
     assert "MN_LLM_API_BASE" not in env_overrides
     assert "MN_LLM_MODEL" not in env_overrides
+
+
+def test_prepare_runtime_models_uses_registered_nemotron_remote(
+    mocker,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
+    monkeypatch.setenv("MN_MODEL_REMOTES_PATH", str(tmp_path / "remotes.json"))
+    bundle_dir = tmp_path / "assistant"
+    bundle_dir.mkdir()
+    manifest = {
+        "metadata": {"blueprint_id": "assistant"},
+        "runtime": {
+            "models": {
+                "primary": {
+                    "provider": "docker_model_runner",
+                    "runtime_model": "nemotron3:latest",
+                    "backend": "llama.cpp",
+                }
+            }
+        },
+    }
+    catalog = {
+        "nemotron3:latest": {
+            "id": "nemotron3:latest",
+            "model": "ai/nemotron3:latest",
+            "api_model": "ai/nemotron3:latest",
+            "provider": "docker_model_runner",
+            "backend": "llama.cpp",
+        }
+    }
+    upsert_model_remote(
+        "spark",
+        "ai/nemotron3:latest",
+        "http://192.168.4.173:12434/v1",
+        api_model="ai/nemotron3:latest",
+        node="spark",
+    )
+    mocker.patch("mn_cli.libs.run_cmds.load_model_catalog", return_value=catalog)
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.resolve_service",
+        return_value=json.dumps({"services": []}),
+    )
+    install_model = mocker.patch("mn_cli.libs.run_cmds.install_model_entry")
+    env_overrides = {}
+
+    summary = run_cmds._prepare_runtime_models_for_run_or_exit(
+        bundle_dir,
+        manifest,
+        env_overrides=env_overrides,
+    )
+
+    assert summary["ok"] is True
+    assert summary["models"][0]["status"] == "model_remote"
+    install_model.assert_not_called()
+    endpoints = json.loads(env_overrides["MN_MODEL_ENDPOINTS_JSON"])
+    assert endpoints["nemotron3:latest"]["api_base"] == "http://192.168.4.173:12434/v1"
+    assert endpoints["nemotron3:latest"]["node"] == "spark"
 
 
 def _workflow_manifest_fixture():
