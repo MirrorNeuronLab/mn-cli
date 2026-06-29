@@ -1234,6 +1234,9 @@ def _network_core_env(
     redis_public_port: int,
 ) -> dict[str, str]:
     env = os.environ.copy()
+    host_shared_storage_root, runtime_shared_storage_root, runtime_bundle_cache_dir = (
+        _network_shared_storage_roots(env)
+    )
     env.update(
         {
             "MN_NETWORK_ONLY": "true",
@@ -1252,9 +1255,11 @@ def _network_core_env(
             "MN_NODE_ROLE": "runtime",
             "MN_CLUSTER_NODES": cluster_nodes,
             "MN_REDIS_URL": redis_url,
-            "MN_HOST_SHARED_STORAGE_ROOT": str(DIR / "shared"),
-            "MN_SHARED_STORAGE_ROOT": DEFAULT_RUNTIME_SHARED_STORAGE_ROOT,
-            "MN_RUNTIME_SHARED_STORAGE_ROOT": DEFAULT_RUNTIME_SHARED_STORAGE_ROOT,
+            "MN_HOST_SHARED_STORAGE_ROOT": host_shared_storage_root,
+            "MN_SHARED_STORAGE_ROOT": runtime_shared_storage_root,
+            "MN_RUNTIME_SHARED_STORAGE_ROOT": runtime_shared_storage_root,
+            "MN_CONTAINER_SHARED_STORAGE_ROOT": runtime_shared_storage_root,
+            "MN_BUNDLE_CACHE_DIR": runtime_bundle_cache_dir,
             "MN_DIST_PORT": str(dist_port),
             "MN_COOKIE": _derive_network_secret(token, "cookie"),
             "MN_GRPC_AUTH_TOKEN": FIXED_GRPC_AUTH_TOKEN,
@@ -1266,6 +1271,26 @@ def _network_core_env(
     )
     env = _ensure_node_advertisement_settings(env)
     return env
+
+
+def _network_shared_storage_roots(env: dict[str, str]) -> tuple[str, str, str]:
+    runtime_root = str(
+        env.get("MN_RUNTIME_SHARED_STORAGE_ROOT")
+        or env.get("MN_CONTAINER_SHARED_STORAGE_ROOT")
+        or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT
+    ).strip() or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT
+    host_home_dir = Path(str(env.get("MN_HOST_HOME_DIR") or DIR)).expanduser()
+    host_root = str(env.get("MN_HOST_SHARED_STORAGE_ROOT") or "").strip()
+    legacy_shared_root = str(env.get("MN_SHARED_STORAGE_ROOT") or "").strip()
+    if not host_root and legacy_shared_root and legacy_shared_root != runtime_root:
+        host_root = legacy_shared_root
+    if not host_root:
+        host_root = str(host_home_dir / "shared")
+    bundle_cache_dir = str(
+        env.get("MN_BUNDLE_CACHE_DIR")
+        or f"{runtime_root.rstrip('/')}/bundle_cache"
+    ).strip()
+    return str(Path(host_root).expanduser()), runtime_root, bundle_cache_dir
 
 def _docker_env_args(env: dict[str, str]) -> list[str]:
     args: list[str] = []
@@ -1291,16 +1316,20 @@ def _docker_host_socket() -> Optional[Path]:
             return path
     return None
 
-def _network_core_bind_args() -> list[str]:
+def _network_core_bind_args(env: Optional[dict[str, str]] = None) -> list[str]:
     args: list[str] = []
-    shared_dir = DIR / "shared"
+    env = env or os.environ
+    host_shared_storage_root, runtime_shared_storage_root, _runtime_bundle_cache_dir = (
+        _network_shared_storage_roots(env)
+    )
+    shared_dir = Path(host_shared_storage_root)
     shared_dir.mkdir(parents=True, exist_ok=True)
 
     for host_path, container_path in (
         (DIR, "/root/.mn"),
         (DIR, "/opt/mirror_neuron/.mn"),
         (DIR, str(DIR)),
-        (shared_dir, "/root/.mn/shared"),
+        (shared_dir, runtime_shared_storage_root),
         (shared_dir, "/opt/mirror_neuron/.mn/shared"),
     ):
         args.extend(["-v", f"{host_path}:{container_path}:rw"])
@@ -1412,7 +1441,7 @@ def _start_network_core(
         NETWORK_CORE_CONTAINER,
         *_docker_network_run_args(docker_network_mode, docker_network_name, node_alias),
         *port_args,
-        *_network_core_bind_args(),
+        *_network_core_bind_args(env),
         *env_args,
         "mirror-neuron-core:latest",
         *_distributed_core_command(),

@@ -350,6 +350,55 @@ def test_shared_storage_env_from_handshake_ignores_missing_primary_mount(tmp_pat
 
     assert updates == {}
 
+
+def test_network_core_env_preserves_configured_shared_storage(monkeypatch, tmp_path):
+    host_shared = tmp_path / "nfs-shared"
+    monkeypatch.setenv("MN_HOST_SHARED_STORAGE_ROOT", str(host_shared))
+    monkeypatch.setenv("MN_RUNTIME_SHARED_STORAGE_ROOT", "/runtime/shared")
+
+    env = server_cmds._network_core_env(
+        token="join-token",
+        host="192.168.1.10",
+        docker_network_mode="disabled",
+        docker_network_name="mirror-neuron-runtime",
+        node_alias="",
+        node_name="mirror_neuron@192.168.1.10",
+        cluster_nodes="mirror_neuron@192.168.1.10",
+        grpc_port=55051,
+        epmd_port=54369,
+        dist_port=54370,
+        redis_url="redis://:secret@192.168.1.10:56379/0",
+        redis_public_host="192.168.1.10",
+        redis_public_port=56379,
+    )
+
+    assert env["MN_HOST_SHARED_STORAGE_ROOT"] == str(host_shared)
+    assert env["MN_SHARED_STORAGE_ROOT"] == "/runtime/shared"
+    assert env["MN_RUNTIME_SHARED_STORAGE_ROOT"] == "/runtime/shared"
+    assert env["MN_CONTAINER_SHARED_STORAGE_ROOT"] == "/runtime/shared"
+    assert env["MN_BUNDLE_CACHE_DIR"] == "/runtime/shared/bundle_cache"
+
+
+def test_network_core_bind_args_mounts_configured_shared_storage(tmp_path):
+    host_shared = tmp_path / "nfs-shared"
+
+    bind_args = server_cmds._network_core_bind_args(
+        {
+            "MN_HOST_SHARED_STORAGE_ROOT": str(host_shared),
+            "MN_RUNTIME_SHARED_STORAGE_ROOT": "/runtime/shared",
+        }
+    )
+
+    runtime_mount = f"{host_shared}:/runtime/shared:rw"
+    mirror_mount = f"{host_shared}:/opt/mirror_neuron/.mn/shared:rw"
+    assert ["-v", f"{host_shared}:/runtime/shared:rw"] == bind_args[
+        bind_args.index(runtime_mount) - 1 : bind_args.index(runtime_mount) + 1
+    ]
+    assert ["-v", f"{host_shared}:/opt/mirror_neuron/.mn/shared:rw"] == bind_args[
+        bind_args.index(mirror_mount) - 1 : bind_args.index(mirror_mount) + 1
+    ]
+
+
 def test_deploy_compose_passes_host_shared_storage_to_core():
     compose_path = Path(__file__).resolve().parents[2] / "mn-deploy" / "docker-compose.yml"
     if not compose_path.exists():
