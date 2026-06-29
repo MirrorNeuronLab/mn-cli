@@ -130,13 +130,10 @@ class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
 
     def render(self) -> Panel:
         elapsed = time.time() - self.started_at
-        done_agents = sum(step.done_count for step in self.steps)
-        ready_agents = sum(step.ready_count for step in self.steps)
-        total_agents = sum(step.total_count for step in self.steps)
-        shown_agents = ready_agents if self.workflow_kind == "service" else done_agents
+        shown_steps, total_steps = self._summary_step_counts()
         elapsed_label = f"{elapsed:.0f}s" if elapsed < 60 else f"{elapsed / 60:.1f}m"
         header = Text(self.workflow_id, style="bold bright_blue")
-        meta = f"{shown_agents}/{total_agents} agents  |  {elapsed_label}  |  {self.status_label}"
+        meta = f"{shown_steps}/{total_steps} steps  |  {elapsed_label}  |  {self.status_label}"
         phases = self._phase_table()
         agents = self._agent_table()
         body = Table.grid(expand=True)
@@ -158,6 +155,19 @@ class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
         if self.job_id:
             title += f"  {self.job_id}"
         return Panel(content, title=title, border_style="cyan", box=box.ROUNDED)
+
+    def _summary_step_counts(self) -> tuple[int, int]:
+        total_steps = len(self.steps)
+        if self.workflow_kind == "service":
+            shown_steps = sum(
+                1
+                for step in self.steps
+                if step.status in {"done", "running", "idle"}
+                or step.ready_count > 0
+            )
+        else:
+            shown_steps = sum(1 for step in self.steps if step.status == "done")
+        return shown_steps, total_steps
 
     def _phase_table(self) -> Table:
         table = Table(title="Phases", box=box.SIMPLE, show_header=False, expand=True)

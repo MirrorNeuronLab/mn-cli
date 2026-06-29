@@ -208,11 +208,7 @@ def _generate_workflow_progress_layout(job_id: str, progress: dict[str, Any], st
     status = str(progress.get("status") or "unknown")
     color = _status_color(status)
     workflow_kind = str(progress.get("workflow_kind") or "batch").lower()
-    agent_count = progress.get("agent_count") if isinstance(progress.get("agent_count"), dict) else {}
-    done_agents = int(agent_count.get("done") or 0)
-    ready_agents = int(agent_count.get("ready") or done_agents)
-    total_agents = int(agent_count.get("total") or len(agents))
-    shown_agents = ready_agents if workflow_kind == "service" else done_agents
+    shown_steps, total_steps = _workflow_summary_step_counts(steps, workflow_kind=workflow_kind)
     elapsed_label = _format_elapsed(progress.get("elapsed_seconds"))
 
     header = Table.grid(expand=True)
@@ -220,7 +216,7 @@ def _generate_workflow_progress_layout(job_id: str, progress: dict[str, Any], st
     header.add_column(justify="right")
     header.add_row(
         Text(str(progress.get("workflow_id") or progress.get("name") or job_id), style="bold bright_blue"),
-        Text(f"{shown_agents}/{total_agents} agents  |  {elapsed_label}  |  {status}", style=f"bold {color}"),
+        Text(f"{shown_steps}/{total_steps} steps  |  {elapsed_label}  |  {status}", style=f"bold {color}"),
     )
 
     subtitle = Text(str(progress.get("description") or f"Job {job_id}"), style="dim")
@@ -249,6 +245,26 @@ def _generate_workflow_progress_layout(job_id: str, progress: dict[str, Any], st
         border_style=color,
         box=box.ROUNDED,
     )
+
+
+def _workflow_summary_step_counts(
+    steps: list[dict[str, Any]], *, workflow_kind: str = "batch"
+) -> tuple[int, int]:
+    total_steps = len(steps)
+    if workflow_kind == "service":
+        shown_steps = sum(
+            1
+            for step in steps
+            if str(step.get("status") or "").lower() in {"done", "completed", "running", "idle"}
+            or int(step.get("ready_count") or 0) > 0
+        )
+    else:
+        shown_steps = sum(
+            1
+            for step in steps
+            if str(step.get("status") or "").lower() in {"done", "completed"}
+        )
+    return shown_steps, total_steps
 
 
 def _workflow_phase_table(steps: list[dict[str, Any]], *, workflow_kind: str = "batch") -> Table:

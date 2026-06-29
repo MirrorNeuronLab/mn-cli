@@ -2343,7 +2343,8 @@ def test_run_displays_workflow_steps_and_agents(mocker, tmp_path):
     assert "Research" in result.stdout
     assert "research:docs" in result.stdout
     assert "Analyze docs" in " ".join(result.stdout.split())
-    assert "2/2 agents" in result.stdout
+    assert "1/1 steps" in result.stdout
+    assert "Research  |  2 agents" in result.stdout
 
 
 def test_workflow_monitor_renders_service_idle_and_ready_counts():
@@ -2385,7 +2386,7 @@ def test_workflow_monitor_renders_service_idle_and_ready_counts():
     console.print(generate_live_layout("job-service", {"workflow_progress": progress}, JobMonitorState()))
     rendered = console.export_text()
 
-    assert "2/2 agents" in rendered
+    assert "2/2 steps" in rendered
     assert "idle" in rendered
     assert "Review visual detection" in rendered
     assert "Visual Detector" in rendered
