@@ -1537,3 +1537,73 @@ def test_materialize_sent_email_copy_uses_safe_host_paths(tmp_path):
 
 def PathLikeName(path: str) -> str:
     return path.rsplit("/", 1)[-1]
+
+
+def test_prepare_manifest_stages_local_skill_dependencies_from_workspace_fallback_when_env_roots_are_stale(tmp_path, monkeypatch):
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "config").mkdir()
+    (bundle_dir / "config" / "default.json").write_text(
+        json.dumps({"identity": {"blueprint_id": "vc_assistant"}}),
+        encoding="utf-8",
+    )
+    workspace_skills_root = tmp_path / "mn-skills"
+    _write_skill_pyproject(
+        workspace_skills_root,
+        "evidence_engine_skill",
+        "mirrorneuron-evidence-engine-skill",
+    )
+
+    stale_root = tmp_path / "stale-skills"
+    stale_root.mkdir()
+    monkeypatch.setenv("MN_ENV", "dev")
+    monkeypatch.setenv("MN_USE_LOCAL_SKILLS", "1")
+    monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("MN_SKILLS_ROOT", str(stale_root))
+
+    manifest = {
+        "skill_dependencies": [
+            {
+                "type": "pip",
+                "source": "gar",
+                "name": "mirrorneuron-evidence-engine-skill",
+                "version": "v1.2.7",
+            },
+            {
+                "type": "pip",
+                "source": "gar",
+                "name": "mirrorneuron-rag-skill",
+                "version": "v1.2.14",
+            },
+        ],
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.DockerWorker",
+                    "upload_path": "worker",
+                    "upload_as": "worker",
+                    "command": ["python3", "run.py"],
+                    "environment": {},
+                },
+            }
+        ],
+    }
+
+    prepared = prepare_manifest_for_submission(bundle_dir, manifest)
+
+    remaining_dependencies = prepared["skill_dependencies"]
+    local_metadata = prepared["metadata"]["mn_local_skill_dependencies"]
+    assert [item["name"] for item in remaining_dependencies] == ["mirrorneuron-rag-skill"]
+    assert local_metadata["context_root"] == ".mn-local-skills"
+    assert local_metadata["packages"] == ["mirrorneuron-evidence-engine-skill"]
+    assert local_metadata["sources"][0]["target"] == "worker/.mn-local-skills/evidence_engine_skill"
+
+    payloads: dict[str, bytes] = {}
+    stage_skill_dependency_payloads_for_manifest(
+        prepared,
+        payloads,
+        bundle_dir=bundle_dir,
+    )
+
+    assert "worker/.mn-local-skills/evidence_engine_skill/pyproject.toml" in payloads

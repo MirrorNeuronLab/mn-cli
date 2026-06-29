@@ -115,6 +115,33 @@ def _runtime_env_value(key: str) -> str:
     return read_env_file(mn_home() / "docker-compose.env").get(key, "").strip()
 
 
+def _local_skill_source_roots() -> list[Path]:
+    """Return candidate local skill roots, ordered by explicit env then fallbacks."""
+
+    root = workspace_root()
+    roots: list[Path] = []
+    seen: set[str] = set()
+
+    def add(value: str | Path | None) -> None:
+        if value is None:
+            return
+        path = Path(value).expanduser()
+        if not str(path).strip():
+            return
+        key = str(path.resolve())
+        if key in seen:
+            return
+        seen.add(key)
+        roots.append(path)
+
+    add(os.getenv("MN_SKILLS_ROOT"))
+    add(_runtime_env_value("MN_SKILLS_ROOT"))
+    add(default_registered_modules_root(workspace_root=root))
+    add(root / "mn-skills")
+    add(mn_home() / "skills")
+    return roots
+
+
 def localize_skill_dependencies_for_dev(manifest: dict[str, Any]) -> dict[str, Any]:
     """Stage local skill sources for dev runs and leave prod GAR dependencies intact."""
 
@@ -125,10 +152,10 @@ def localize_skill_dependencies_for_dev(manifest: dict[str, Any]) -> dict[str, A
     if not records:
         return {"localized": 0, "packages": []}
 
-    skills_root = Path(
-        os.getenv("MN_SKILLS_ROOT") or default_registered_modules_root(workspace_root=workspace_root())
-    ).expanduser()
-    local_sources = _local_skill_sources_by_package(skills_root)
+    local_sources: dict[str, Path] = {}
+    for skills_root in _local_skill_source_roots():
+        for package, source in _local_skill_sources_by_package(skills_root).items():
+            local_sources.setdefault(package, source)
     selected: dict[str, tuple[dict[str, str], Path]] = {}
     for record in records:
         package_key = normalize_package_name(record["name"])
