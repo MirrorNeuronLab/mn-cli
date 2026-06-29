@@ -394,9 +394,9 @@ def _resolve_shared_storage_roots(
     runtime_env: Mapping[str, str],
     mn_home: Path,
 ) -> tuple[str, str, bool]:
-    host_root = _first_env(env, "MN_SHARED_STORAGE_ROOT", "MN_HOST_SHARED_STORAGE_ROOT")
+    host_root = _first_env(env, "MN_HOST_SHARED_STORAGE_ROOT", "MN_SHARED_STORAGE_ROOT")
     if not host_root:
-        host_root = _first_env(runtime_env, "MN_SHARED_STORAGE_ROOT", "MN_HOST_SHARED_STORAGE_ROOT")
+        host_root = _first_env(runtime_env, "MN_HOST_SHARED_STORAGE_ROOT", "MN_SHARED_STORAGE_ROOT")
     configured = bool(host_root)
     if not host_root:
         runs_root = _env_value(env, "MN_RUNS_ROOT") or _env_value(runtime_env, "MN_RUNS_ROOT")

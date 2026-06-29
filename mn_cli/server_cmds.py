@@ -812,6 +812,47 @@ def _grpc_tokens_from_handshake(handshake: Optional[dict]) -> dict[str, str]:
         GRPC_ADMIN_TOKEN_ENV: FIXED_GRPC_ADMIN_TOKEN,
     }
 
+def _shared_storage_env_from_handshake(handshake: Optional[dict]) -> dict[str, str]:
+    if not isinstance(handshake, dict):
+        return {}
+
+    node_info = handshake.get("node_info")
+    if not isinstance(node_info, dict):
+        node_info = {}
+
+    host_root = str(
+        handshake.get("host_shared_storage_root")
+        or node_info.get("host_shared_storage_root")
+        or ""
+    ).strip()
+    runtime_root = str(
+        handshake.get("runtime_shared_storage_root")
+        or node_info.get("runtime_shared_storage_root")
+        or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT
+    ).strip()
+    if not host_root:
+        return {}
+
+    expanded_host_root = Path(host_root).expanduser()
+    if not expanded_host_root.exists():
+        console.print(
+            "[yellow]Warning: remote shared-storage root is not mounted locally:[/yellow] "
+            f"{host_root}"
+        )
+        console.print(
+            "[yellow]         Mount the same NFS export at that path or set MN_HOST_SHARED_STORAGE_ROOT "
+            "to a shared mount before starting/joining nodes.[/yellow]"
+        )
+        return {}
+
+    return {
+        "MN_HOST_SHARED_STORAGE_ROOT": str(expanded_host_root),
+        "MN_SHARED_STORAGE_ROOT": str(expanded_host_root),
+        "MN_RUNTIME_SHARED_STORAGE_ROOT": runtime_root or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT,
+        "MN_CONTAINER_SHARED_STORAGE_ROOT": runtime_root or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT,
+        "MN_BUNDLE_CACHE_DIR": f"{(runtime_root or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT).rstrip('/')}/bundle_cache",
+    }
+
 def _runtime_grpc_tokens_from_running_container() -> dict[str, str]:
     return {
         "MN_GRPC_AUTH_TOKEN": FIXED_GRPC_AUTH_TOKEN,
@@ -1687,6 +1728,9 @@ def _join_network(
         node_name=local_node_name,
         node_info=_handshake_node_info(local_host, node_name=local_node_name),
     )
+    shared_storage_updates = _shared_storage_env_from_handshake(handshake)
+    if shared_storage_updates and runtime_compose_available():
+        _write_env_file_values(RUNTIME_COMPOSE_ENV, shared_storage_updates)
     remote_node = handshake.get("node_name") or _network_node_name(seed_host)
     redis_host, redis_port, redis_url = _validate_remote_redis_details(handshake, seed_host, token)
 
@@ -3906,6 +3950,7 @@ def _start_server(
     if join_handshake:
         _validate_remote_redis_details(join_handshake, ip, network_token)
         env.update(_grpc_tokens_from_handshake(join_handshake))
+        env.update(_shared_storage_env_from_handshake(join_handshake))
     env = _ensure_runtime_api_token(env, persist_compose=compose_runtime)
     env = _ensure_runtime_grpc_tokens(env, persist_compose=compose_runtime)
     reconnecting_joined_node = bool(compose_runtime and not ip and _persisted_join_profile(env))

@@ -318,6 +318,38 @@ def test_runtime_blueprint_env_updates_prefers_host_shared_storage_root(tmp_path
     assert updates["MN_RUNTIME_SHARED_STORAGE_ROOT"] == "/root/.mn/shared"
     assert updates["MN_BUNDLE_CACHE_DIR"] == "/root/.mn/shared/bundle_cache"
 
+def test_shared_storage_env_from_handshake_adopts_existing_primary_mount(tmp_path):
+    shared_root = tmp_path / "mn-shared"
+    shared_root.mkdir()
+
+    updates = server_cmds._shared_storage_env_from_handshake(
+        {
+            "node_info": {
+                "host_shared_storage_root": str(shared_root),
+                "runtime_shared_storage_root": "/root/.mn/shared",
+            }
+        }
+    )
+
+    assert updates["MN_HOST_SHARED_STORAGE_ROOT"] == str(shared_root)
+    assert updates["MN_SHARED_STORAGE_ROOT"] == str(shared_root)
+    assert updates["MN_RUNTIME_SHARED_STORAGE_ROOT"] == "/root/.mn/shared"
+    assert updates["MN_BUNDLE_CACHE_DIR"] == "/root/.mn/shared/bundle_cache"
+
+def test_shared_storage_env_from_handshake_ignores_missing_primary_mount(tmp_path):
+    missing_root = tmp_path / "missing-shared"
+
+    updates = server_cmds._shared_storage_env_from_handshake(
+        {
+            "node_info": {
+                "host_shared_storage_root": str(missing_root),
+                "runtime_shared_storage_root": "/root/.mn/shared",
+            }
+        }
+    )
+
+    assert updates == {}
+
 def test_deploy_compose_passes_host_shared_storage_to_core():
     compose_path = Path(__file__).resolve().parents[2] / "mn-deploy" / "docker-compose.yml"
     if not compose_path.exists():
