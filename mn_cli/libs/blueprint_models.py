@@ -95,7 +95,7 @@ def blueprint_model_dependency_summary(
         if ops.resolve_cluster_model is not None:
             cluster_model = ops.resolve_cluster_model(requirement=requirement, entry=entry)
         if cluster_model:
-            results.append({**base_result, "status": cluster_model.get("status") or "cluster_node", "cluster": cluster_model})
+            results.append({**base_result, "status": "runtime_node_install", "cluster": cluster_model})
             continue
 
         fallback_ref = str(entry.get("fallback_model") or "").strip()

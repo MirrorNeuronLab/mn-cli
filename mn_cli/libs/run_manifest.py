@@ -1429,12 +1429,6 @@ def _manifest_uses_docker_model_runner_http_endpoint(manifest: dict[str, Any]) -
         environment = config.get("environment") if isinstance(config.get("environment"), dict) else {}
         if str(environment.get("MN_MODEL_ENDPOINTS_JSON") or "").strip():
             return True
-        provider = str(environment.get("MN_LLM_PROVIDER") or "").strip().lower()
-        api_base = str(environment.get("MN_LLM_API_BASE") or "").strip().lower()
-        if provider == "docker_model_runner" and (
-            api_base.startswith("http://") or api_base.startswith("https://")
-        ):
-            return True
     return False
 
 

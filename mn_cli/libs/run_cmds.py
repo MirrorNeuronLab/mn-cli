@@ -421,7 +421,7 @@ def _print_runtime_model_install_summary(summary: dict[str, Any]) -> None:
             "already_installed",
             "service_required",
             "cluster_provided",
-            "cluster_node",
+            "runtime_node_install",
             "fallback_model",
             "service_registry",
             "model_remote",
@@ -1535,7 +1535,7 @@ def _prepared_runtime_model_keys(model_install_summary: Optional[dict[str, Any]]
     prepared_statuses = {
         "installed",
         "already_installed",
-        "cluster_node",
+        "runtime_node_install",
         "fallback_model",
         "cluster_provided",
         "service_registry",

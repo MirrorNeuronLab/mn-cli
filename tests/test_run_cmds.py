@@ -246,7 +246,7 @@ def test_prepare_runtime_models_uses_registered_nemotron_remote(
     assert endpoints["nemotron3:latest"]["node"] == "spark"
 
 
-def test_prepare_runtime_models_uses_capable_cluster_node_instead_of_local_install(
+def test_prepare_runtime_models_schedules_runtime_install_on_capable_cluster_node(
     mocker,
     tmp_path,
     monkeypatch,
@@ -332,7 +332,7 @@ def test_prepare_runtime_models_uses_capable_cluster_node_instead_of_local_insta
     summary = run_cmds._prepare_runtime_models_for_run_or_exit(bundle_dir, manifest, env_overrides=env_overrides)
 
     assert summary["ok"] is True
-    assert summary["models"][0]["status"] == "cluster_node"
+    assert summary["models"][0]["status"] == "runtime_node_install"
     assert summary["models"][0]["cluster"]["node"] == "spark"
     assert "ai/nemotron3:latest" in json.loads(env_overrides["MN_PREPARED_RUNTIME_MODELS_JSON"])
     install_model.assert_not_called()
