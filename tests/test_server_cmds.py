@@ -1165,6 +1165,22 @@ def test_start_network_seed_default_disabled_ignores_stale_named_network(mocker,
     assert "MN_DOCKER_NETWORK_MODE=disabled" in core_run
     assert "MN_NODE_NAME=mirror_neuron@192.168.4.173" in core_run
 
+def test_start_worker_node_prefers_env_join_token_over_stale_file(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_NETWORK_JOIN_TOKEN", "primary-token")
+    token_file = server_cmds.NETWORK_TOKEN_FILE
+    token_file.parent.mkdir(parents=True, exist_ok=True)
+    token_file.write_text("stale-worker-token\n", encoding="utf-8")
+    start_seed = mocker.patch("mn_cli.server_cmds._start_network_seed", return_value="primary-token")
+    stop_runtime = mocker.patch("mn_cli.server_cmds._stop_local_runtime_for_worker")
+    clear_redis = mocker.patch("mn_cli.server_cmds._clear_worker_redis_state")
+
+    assert _start_worker_node(host="192.168.4.173") == "primary-token"
+
+    stop_runtime.assert_called_once()
+    clear_redis.assert_called_once()
+    assert token_file.read_text(encoding="utf-8").strip() == "primary-token"
+    start_seed.assert_called_once()
+
 def test_start_network_seed_uses_configured_redis_image(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_REDIS_URL", raising=False)
     monkeypatch.setenv("MN_REDIS_IMAGE", "redis:8.8")

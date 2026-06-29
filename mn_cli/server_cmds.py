@@ -1761,6 +1761,9 @@ def _start_worker_node(
     console.print("=> Preparing this box as a clean MirrorNeuron worker node...")
     _stop_local_runtime_for_worker()
     _clear_worker_redis_state()
+    env_token = os.getenv("MN_NETWORK_JOIN_TOKEN", "").strip()
+    if env_token:
+        _write_network_token(env_token)
     return _start_network_seed(
         host=host,
         grpc_port=grpc_port,
