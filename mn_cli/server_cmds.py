@@ -1341,21 +1341,43 @@ def _start_network_redis(
         "--name",
         NETWORK_REDIS_CONTAINER,
         *_docker_network_run_args(docker_network_mode, docker_network_name, redis_alias),
+        "-e",
+        f"MN_REDIS_PASSWORD={password}",
         "-v",
         f"{data_dir}:/data",
         _network_redis_image(),
-        "redis-server",
-        "--appendonly",
-        "yes",
-        "--requirepass",
-        password,
-        "--masterauth",
-        password,
+        "sh",
+        "-c",
+        (
+            "exec redis-server --appendonly yes "
+            "--requirepass \"$MN_REDIS_PASSWORD\" "
+            "--masterauth \"$MN_REDIS_PASSWORD\""
+        ),
     ]
     if publish_host_port:
         volume_index = cmd.index("-v")
         cmd[volume_index:volume_index] = ["-p", f"{publish_host}:{redis_port or REDIS_CONTAINER_PORT}:6379"]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
+    _force_network_redis_primary()
+
+
+def _force_network_redis_primary() -> None:
+    command = [
+        "docker",
+        "exec",
+        NETWORK_REDIS_CONTAINER,
+        "sh",
+        "-c",
+        (
+            "until redis-cli -a \"$MN_REDIS_PASSWORD\" --no-auth-warning PING >/dev/null 2>&1; do "
+            "sleep 0.2; "
+            "done; "
+            "redis-cli -a \"$MN_REDIS_PASSWORD\" --no-auth-warning REPLICAOF NO ONE >/dev/null; "
+            "redis-cli -a \"$MN_REDIS_PASSWORD\" --no-auth-warning SET mn:network-redis:write-probe ok EX 30 >/dev/null; "
+            "redis-cli -a \"$MN_REDIS_PASSWORD\" --no-auth-warning CONFIG REWRITE >/dev/null 2>&1 || true"
+        ),
+    ]
+    subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def _start_network_core(
     env: dict[str, str],

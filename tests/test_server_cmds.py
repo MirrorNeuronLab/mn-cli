@@ -1000,6 +1000,11 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     assert "--network-alias" in redis_run
     assert "mn-seed-redis" in redis_run
     assert "-p" not in redis_run
+    redis_primary = next(
+        cmd for cmd in commands if cmd[:3] == ["docker", "exec", "mirror-neuron-network-redis"]
+    )
+    assert "REPLICAOF NO ONE" in redis_primary[-1]
+    assert "mn:network-redis:write-probe" in redis_primary[-1]
     start_api.assert_not_called()
     start_web_ui.assert_not_called()
     port_available.assert_not_called()
