@@ -71,6 +71,7 @@ from mn_cli.terminal import use_progress
 from mn_cli.error_handler import handle_cli_error
 from mn_sdk import (
     cluster_provided_model,
+    docker_api_model_name,
     docker_model_name,
     load_model_remotes,
     load_model_catalog,
@@ -80,6 +81,7 @@ from mn_sdk import (
     prepare_job_submission,
     record_model_owner,
     required_blueprint_models,
+    resolve_cluster_model_placement,
     resolve_model_endpoint,
     resolve_model_entry,
     run_hardware_requirements_validation,
@@ -276,16 +278,32 @@ def _prepare_runtime_models_for_run_or_exit(
             model_installed=model_installed,
             install_model_entry=install_model_entry,
             resolve_model_endpoint=_resolve_runtime_model_endpoint,
+            resolve_cluster_model=_resolve_cluster_model_for_requirement,
             notify_model_install_start=_print_runtime_model_install_start,
         ),
     )
     endpoints = summary.get("endpoints") if isinstance(summary.get("endpoints"), dict) else {}
     if endpoints and env_overrides is not None:
         env_overrides["MN_MODEL_ENDPOINTS_JSON"] = model_endpoints_json(endpoints)
+    prepared_json = _prepared_runtime_models_json(summary)
+    if prepared_json and env_overrides is not None:
+        env_overrides["MN_PREPARED_RUNTIME_MODELS_JSON"] = prepared_json
+    fallback_config = _config_with_runtime_model_fallbacks(config, summary)
+    if fallback_config is not config and env_overrides is not None:
+        summary["config_overrides"] = fallback_config
+        env_overrides["MN_BLUEPRINT_CONFIG_JSON"] = json.dumps(fallback_config, sort_keys=True)
+        env_overrides.update(_runtime_model_fallback_llm_env(fallback_config))
     _print_runtime_model_install_summary(summary)
     if summary["errors"]:
         raise typer.Exit(1)
     return summary
+
+
+def _resolve_cluster_model_for_requirement(*, requirement: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any] | None:
+    return resolve_cluster_model_placement(
+        entry,
+        resource_report=lambda: _runtime_resource_report(allow_local_fallback=False),
+    )
 
 
 def _resolve_runtime_model_endpoint(*, requirement: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any] | None:
@@ -403,6 +421,8 @@ def _print_runtime_model_install_summary(summary: dict[str, Any]) -> None:
             "already_installed",
             "service_required",
             "cluster_provided",
+            "cluster_node",
+            "fallback_model",
             "service_registry",
             "model_remote",
             "explicit_config",
@@ -410,7 +430,7 @@ def _print_runtime_model_install_summary(summary: dict[str, Any]) -> None:
     ]
     if prepared:
         labels = ", ".join(
-            str(item.get("id") or item.get("model") or "runtime model")
+            _runtime_model_ready_label(item)
             for item in prepared[:4]
         )
         if len(prepared) > 4:
@@ -418,6 +438,15 @@ def _print_runtime_model_install_summary(summary: dict[str, Any]) -> None:
         console.print(f"[green]Runtime models ready:[/green] {labels}")
     for error in summary.get("errors") or []:
         console.print(f"[red]Runtime model install failed: {error}[/red]")
+
+
+def _runtime_model_ready_label(item: dict[str, Any]) -> str:
+    label = str(item.get("id") or item.get("model") or "runtime model")
+    fallback = item.get("fallback") if isinstance(item.get("fallback"), dict) else {}
+    if str(item.get("status") or "") == "fallback_model" and fallback:
+        fallback_label = str(fallback.get("id") or fallback.get("model") or "fallback model")
+        return f"{label} -> {fallback_label}"
+    return label
 
 
 def _ensure_context_engine_for_run_if_needed(
@@ -1403,6 +1432,7 @@ def _validate_manifest_models_or_exit(
     *,
     env_overrides: Optional[dict[str, str]] = None,
     config_overrides: Optional[dict[str, Any]] = None,
+    model_install_summary: Optional[dict[str, Any]] = None,
     output_format: str = "table",
 ) -> dict[str, Any]:
     config = load_blueprint_config(bundle_dir, config_overrides=config_overrides)
@@ -1418,13 +1448,236 @@ def _validate_manifest_models_or_exit(
             if value is not None
         }
     )
+    if env_overrides and str(env_overrides.get("MN_BLUEPRINT_CONFIG_JSON") or "").strip():
+        try:
+            decoded_config = json.loads(str(env_overrides["MN_BLUEPRINT_CONFIG_JSON"]))
+        except json.JSONDecodeError:
+            decoded_config = None
+        if isinstance(decoded_config, dict):
+            config = decoded_config
     validation_manifest = _manifest_for_model_validation(manifest, config)
-    result = run_model_validation(bundle_dir, validation_manifest, config=config, env=env)
+    validation_config = config
+    if model_install_summary:
+        validation_manifest, validation_config = _model_validation_inputs_with_prepared_models(
+            validation_manifest,
+            config,
+            model_install_summary,
+        )
+    result = run_model_validation(
+        bundle_dir,
+        validation_manifest,
+        config=validation_config,
+        env=env,
+        installed_resolver=_prepared_model_installed_resolver(model_install_summary),
+    )
     if result.get("ok"):
         return result
 
     _emit_validation_report(result, output_format, title="Model validation failed")
     raise typer.Exit(1)
+
+
+def _prepared_model_installed_resolver(model_install_summary: Optional[dict[str, Any]]):
+    prepared = _prepared_runtime_model_keys(model_install_summary)
+
+    def resolver(model_name: str, requirement: dict[str, Any]) -> bool:
+        keys = {
+            str(model_name or "").strip(),
+            str(requirement.get("model") or "").strip(),
+            str(requirement.get("runtime_model") or "").strip(),
+            str(requirement.get("name") or "").strip(),
+        }
+        if any(key and key in prepared for key in keys):
+            return True
+        return model_installed(model_name)
+
+    return resolver
+
+
+def _merge_runtime_model_config_overrides(
+    config_overrides: dict[str, Any],
+    model_install_summary: Optional[dict[str, Any]],
+) -> None:
+    patch = model_install_summary.get("config_overrides") if isinstance(model_install_summary, dict) else None
+    if not isinstance(patch, dict) or not patch:
+        return
+    merged = _deep_merge_dict(config_overrides, patch)
+    config_overrides.clear()
+    config_overrides.update(merged)
+
+
+def _prepared_runtime_models_json(model_install_summary: Optional[dict[str, Any]]) -> str:
+    keys = _prepared_runtime_model_keys(model_install_summary)
+    return json.dumps(sorted(keys), separators=(",", ":")) if keys else ""
+
+
+def _prepared_runtime_model_keys(model_install_summary: Optional[dict[str, Any]]) -> set[str]:
+    prepared_statuses = {
+        "installed",
+        "already_installed",
+        "cluster_node",
+        "fallback_model",
+        "cluster_provided",
+        "service_registry",
+        "model_remote",
+        "explicit_config",
+    }
+    keys: set[str] = set()
+    models = model_install_summary.get("models") if isinstance(model_install_summary, dict) else []
+    for item in models or []:
+        if not isinstance(item, dict) or str(item.get("status") or "") not in prepared_statuses:
+            continue
+        for key in ("id", "model", "runtime_model", "name"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                keys.add(value)
+        endpoint = item.get("endpoint") if isinstance(item.get("endpoint"), dict) else {}
+        for key in ("model", "runtime_model"):
+            value = str(endpoint.get(key) or "").strip()
+            if value:
+                keys.add(value)
+        fallback = item.get("fallback") if isinstance(item.get("fallback"), dict) else {}
+        for key in ("id", "model", "runtime_model", "name"):
+            value = str(fallback.get(key) or "").strip()
+            if value:
+                keys.add(value)
+    return keys
+
+
+def _config_with_runtime_model_fallbacks(config: dict[str, Any], model_install_summary: dict[str, Any]) -> dict[str, Any]:
+    fallback_items = [
+        item for item in model_install_summary.get("models", [])
+        if isinstance(item, dict)
+        and str(item.get("status") or "") == "fallback_model"
+        and isinstance(item.get("fallback"), dict)
+    ] if isinstance(model_install_summary, dict) else []
+    if not fallback_items:
+        return config
+    config_copy = json.loads(json.dumps(config))
+    for item in fallback_items:
+        fallback = item["fallback"]
+        path = str(item.get("path") or "")
+        if path.startswith("llm"):
+            _apply_llm_model_fallback(config_copy, path, fallback)
+    return config_copy
+
+
+def _apply_llm_model_fallback(config: dict[str, Any], path: str, fallback: dict[str, Any]) -> None:
+    llm = config.setdefault("llm", {})
+    if not isinstance(llm, dict):
+        return
+    fallback_id = str(fallback.get("id") or "").strip()
+    fallback_model = fallback_id or str(fallback.get("model") or "").strip()
+    fallback_backend = str(fallback.get("backend") or "auto").strip()
+    context_size = fallback.get("context_size")
+    fields = {
+        "provider": str(fallback.get("provider") or "docker_model_runner"),
+        "model": fallback_model,
+        "runtime_model": fallback_model,
+        "backend": fallback_backend,
+    }
+    if context_size is not None:
+        fields["context_size"] = context_size
+    for key, value in fields.items():
+        if value not in (None, ""):
+            llm[key] = value
+    llm.pop("quantization", None)
+    llm.pop("parameter_count_b", None)
+    live_profile = llm.get("live_model_profile")
+    if isinstance(live_profile, dict):
+        live_profile.update({key: value for key, value in fields.items() if value not in (None, "")})
+        live_profile.pop("quantization", None)
+        live_profile.pop("parameter_count_b", None)
+        live_profile.pop("hardware", None)
+        live_profile["fallback_from"] = str(fallback.get("reason") or "runtime_model_fallback")
+
+    configs = llm.get("configs") if isinstance(llm.get("configs"), dict) else {}
+    config_name = _llm_config_name_from_path(path) or str(llm.get("default_config") or "primary")
+    primary = configs.get(config_name)
+    if isinstance(primary, dict):
+        primary.update({key: value for key, value in fields.items() if value not in (None, "")})
+        primary.pop("quantization", None)
+        primary.pop("parameter_count_b", None)
+
+
+def _llm_config_name_from_path(path: str) -> str:
+    parts = [part for part in str(path or "").split(".") if part]
+    if len(parts) >= 3 and parts[0] == "llm" and parts[1] == "configs":
+        return parts[2]
+    return ""
+
+
+def _runtime_model_fallback_llm_env(config: dict[str, Any]) -> dict[str, str]:
+    llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
+    config_name = str(llm.get("default_config") or "primary")
+    configs = llm.get("configs") if isinstance(llm.get("configs"), dict) else {}
+    primary = configs.get(config_name) if isinstance(configs.get(config_name), dict) else {}
+    model_ref = str(primary.get("runtime_model") or primary.get("model") or llm.get("runtime_model") or llm.get("model") or "").strip()
+    env = {}
+    if model_ref:
+        try:
+            entry = resolve_model_entry(model_ref)
+        except KeyError:
+            entry = {}
+        env["MN_LLM_MODEL"] = docker_api_model_name(entry) if entry else model_ref
+        env["MN_LLM_RUNTIME_MODEL"] = docker_model_name(entry) if entry else model_ref
+    provider = str(primary.get("provider") or llm.get("provider") or "docker_model_runner").strip()
+    if provider:
+        env["MN_LLM_PROVIDER"] = provider
+    backend = str(primary.get("backend") or llm.get("backend") or "").strip()
+    if backend:
+        env["MN_LLM_BACKEND"] = backend
+    context_size = primary.get("context_size") or llm.get("context_size")
+    if context_size is not None:
+        env["MN_LLM_CONTEXT_SIZE"] = str(context_size)
+    return env
+
+
+def _model_validation_inputs_with_prepared_models(
+    manifest: dict[str, Any],
+    config: dict[str, Any],
+    model_install_summary: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    prepared = _prepared_runtime_model_keys(model_install_summary)
+    if not prepared:
+        return manifest, config
+    manifest_copy = json.loads(json.dumps(manifest))
+    config_copy = json.loads(json.dumps(config))
+    runtime = manifest_copy.get("runtime") if isinstance(manifest_copy.get("runtime"), dict) else {}
+    models = runtime.get("models") if isinstance(runtime.get("models"), dict) else {}
+    for entry in models.values():
+        if isinstance(entry, dict) and _model_config_matches_prepared(entry, prepared):
+            entry["install_mode"] = "cluster_provided"
+    llm = config_copy.get("llm") if isinstance(config_copy.get("llm"), dict) else {}
+    configs = llm.get("configs") if isinstance(llm.get("configs"), dict) else {}
+    for entry in configs.values():
+        if isinstance(entry, dict) and _model_config_matches_prepared(entry, prepared):
+            entry["install_mode"] = "cluster_provided"
+    if isinstance(llm, dict) and _model_config_matches_prepared(llm, prepared):
+        llm["install_mode"] = "cluster_provided"
+    return manifest_copy, config_copy
+
+
+def _model_config_matches_prepared(config: dict[str, Any], prepared: set[str]) -> bool:
+    values = {
+        str(config.get("runtime_model") or "").strip(),
+        str(config.get("model") or "").strip(),
+        str(config.get("model_alias") or "").strip(),
+    }
+    return any(_model_match_keys(value) & prepared for value in values if value)
+
+
+def _model_match_keys(model: str) -> set[str]:
+    value = str(model or "").strip()
+    if not value:
+        return set()
+    keys = {value}
+    lower = value.lower()
+    if lower.startswith("ai/"):
+        keys.add(value[3:])
+    elif "/" not in value:
+        keys.add(f"ai/{value}")
+    return keys
 
 
 def _manifest_for_model_validation(manifest: dict[str, Any], config: dict[str, Any] | None) -> dict[str, Any]:
@@ -1802,18 +2055,20 @@ def run_bundle(
                 "Prepare runtime models",
                 "installing any missing Docker Model Runner models required by this blueprint.",
             )
-            _prepare_runtime_models_for_run_or_exit(
+            model_install_summary = _prepare_runtime_models_for_run_or_exit(
                 bundle_dir,
                 manifest_dict,
                 env_overrides=env_overrides,
                 config_overrides=config_overrides,
                 force=force,
             )
+            _merge_runtime_model_config_overrides(config_overrides, model_install_summary)
             _validate_manifest_models_or_exit(
                 bundle_dir,
                 manifest_dict,
                 env_overrides=env_overrides,
                 config_overrides=config_overrides,
+                model_install_summary=model_install_summary,
             )
             _validate_manifest_inputs_or_exit(
                 bundle_dir,
@@ -1829,13 +2084,14 @@ def run_bundle(
                 "Prepare runtime models",
                 "installing any missing Docker Model Runner models required by this blueprint.",
             )
-            _prepare_runtime_models_for_run_or_exit(
+            model_install_summary = _prepare_runtime_models_for_run_or_exit(
                 bundle_dir,
                 manifest_dict,
                 env_overrides=env_overrides,
                 config_overrides=config_overrides,
                 force=force,
             )
+            _merge_runtime_model_config_overrides(config_overrides, model_install_summary)
         _print_launch_progress(
             "Package workflow",
             "staging workflow files, local inputs, runtime helpers, and output wiring.",

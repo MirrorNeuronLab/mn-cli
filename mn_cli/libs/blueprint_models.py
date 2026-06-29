@@ -17,6 +17,7 @@ class BlueprintModelOps:
     model_installed: Callable[[str], bool]
     install_model_entry: Callable[..., dict[str, Any]]
     resolve_model_endpoint: Callable[..., dict[str, Any] | None] | None = None
+    resolve_cluster_model: Callable[..., dict[str, Any] | None] | None = None
     notify_model_install_start: Callable[[dict[str, Any]], Any] | None = None
 
 
@@ -90,6 +91,35 @@ def blueprint_model_dependency_summary(
             results.append({**base_result, "status": endpoint.get("source") or "cluster_provided", "endpoint": endpoint})
             continue
 
+        cluster_model = None
+        if ops.resolve_cluster_model is not None:
+            cluster_model = ops.resolve_cluster_model(requirement=requirement, entry=entry)
+        if cluster_model:
+            results.append({**base_result, "status": cluster_model.get("status") or "cluster_node", "cluster": cluster_model})
+            continue
+
+        fallback_ref = str(entry.get("fallback_model") or "").strip()
+        if fallback_ref:
+            try:
+                fallback_entry = ops.resolve_model_entry(fallback_ref, catalog=catalog)
+                fallback_result = _prepare_fallback_model(
+                    fallback_entry=fallback_entry,
+                    original=base_result,
+                    requirement=requirement,
+                    blueprint_id=blueprint_id,
+                    blueprint_revision=blueprint_revision,
+                    install_source=install_source,
+                    force=force,
+                    ledger=ledger,
+                    ops=ops,
+                )
+                results.append(fallback_result)
+            except Exception as exc:
+                message = str(exc)
+                results.append({**base_result, "status": "failed", "error": message})
+                errors.append(message)
+            continue
+
         preexisting_record = ledger.get("models", {}).get(docker_model)
         try:
             installed = ops.model_installed(docker_model)
@@ -136,4 +166,78 @@ def blueprint_model_dependency_summary(
         "endpoints": endpoints,
         "errors": errors,
         "ok": not errors,
+    }
+
+
+def _prepare_fallback_model(
+    *,
+    fallback_entry: dict[str, Any],
+    original: dict[str, Any],
+    requirement: dict[str, Any],
+    blueprint_id: str,
+    blueprint_revision: str | None,
+    install_source: str,
+    force: bool,
+    ledger: dict[str, Any],
+    ops: BlueprintModelOps,
+) -> dict[str, Any]:
+    fallback_model = ops.docker_model_name(fallback_entry)
+    fallback_backend = str(fallback_entry.get("backend") or requirement.get("backend") or "auto")
+    preexisting_record = ledger.get("models", {}).get(fallback_model)
+    try:
+        installed = ops.model_installed(fallback_model)
+    except Exception:
+        installed = False
+    fallback_status = "already_installed" if installed else "installed"
+    compatibility = None
+    if installed:
+        ops.record_model_owner(
+            fallback_entry,
+            blueprint_id=blueprint_id,
+            blueprint_revision=blueprint_revision,
+            install_source=install_source,
+            backend=fallback_backend,
+            preexisting_manual=not isinstance(preexisting_record, dict),
+        )
+    else:
+        fallback_base = {
+            "id": fallback_entry.get("id"),
+            "model": fallback_model,
+            "provider": str(fallback_entry.get("provider") or "docker_model_runner"),
+            "backend": fallback_backend,
+            "path": requirement.get("path"),
+        }
+        if ops.notify_model_install_start is not None:
+            ops.notify_model_install_start(fallback_base)
+        install_result = ops.install_model_entry(
+            fallback_entry,
+            backend=fallback_backend,
+            context_size=fallback_entry.get("context_size") or requirement.get("context_size"),
+            force=force,
+        )
+        compatibility = install_result.get("compatibility") or {}
+        fallback_backend = str(compatibility.get("backend") or fallback_backend)
+        ops.record_model_owner(
+            fallback_entry,
+            blueprint_id=blueprint_id,
+            blueprint_revision=blueprint_revision,
+            install_source=install_source,
+            backend=fallback_backend,
+        )
+    fallback = {
+        "id": fallback_entry.get("id"),
+        "model": fallback_model,
+        "provider": str(fallback_entry.get("provider") or "docker_model_runner"),
+        "backend": fallback_backend,
+        "context_size": fallback_entry.get("context_size"),
+        "status": fallback_status,
+        "reason": "no_capable_cluster_node",
+    }
+    if compatibility is not None:
+        fallback["compatibility"] = compatibility
+    return {
+        **original,
+        "status": "fallback_model",
+        "fallback": fallback,
+        "effective": fallback,
     }

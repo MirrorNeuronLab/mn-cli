@@ -1340,6 +1340,9 @@ def inject_node_environment(manifest: dict[str, Any], env: dict[str, str]) -> No
         environment.clear()
         environment.update(node_env)
         environment.update(existing_env)
+        for key in ("MN_BLUEPRINT_CONFIG_JSON",):
+            if key in node_env:
+                environment[key] = node_env[key]
         add_mn_llm_aliases(environment)
 
 
