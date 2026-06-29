@@ -80,6 +80,7 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', pid_dir / "api.pid")
     mocker.patch('mn_cli.server_cmds.API_WATCHDOG_PID_FILE', pid_dir / "api-watchdog.pid")
     mocker.patch('mn_cli.server_cmds.API_TOKEN_FILE', state_dir / "api.token")
+    mocker.patch('mn_cli.server_cmds.REDIS_PASSWORD_FILE', state_dir / "redis.password")
     mocker.patch('mn_cli.server_cmds.WEB_UI_PID_FILE', pid_dir / "web-ui.pid")
     mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_PID_FILE', pid_dir / "web-ui-watchdog.pid")
     mocker.patch('mn_cli.server_cmds.BEAM_LOG', log_dir / "beam.log")
@@ -356,6 +357,21 @@ def test_resolve_grpc_admin_token_ignores_legacy_env(monkeypatch):
     monkeypatch.setenv("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN", "legacy-admin-token")
 
     assert _resolve_grpc_admin_token() == "mirror_neuron_password_admin"
+
+def test_resolve_redis_password_uses_fixed_dev_password():
+    assert server_cmds._resolve_redis_password({"MN_ENV": "dev"}) == "mirror_neuron_redis_dev"
+    assert not server_cmds.REDIS_PASSWORD_FILE.exists()
+
+def test_resolve_redis_password_derives_from_admin_token_in_prod():
+    expected = server_cmds._derive_redis_password("prod-admin-token")
+
+    password = server_cmds._resolve_redis_password(
+        {"MN_ENV": "prod", "MN_GRPC_ADMIN_TOKEN": "prod-admin-token"}
+    )
+
+    assert password == expected
+    assert server_cmds.REDIS_PASSWORD_FILE.read_text().strip() == expected
+    assert server_cmds.REDIS_PASSWORD_FILE.stat().st_mode & 0o777 == 0o600
 
 def test_runtime_api_token_is_generated_for_prod_and_persisted(mocker):
     mocker.patch("mn_cli.server_cmds.secrets.token_hex", return_value="generated-api-token")
@@ -945,10 +961,7 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     assert "mirror-neuron-runtime" in core_run
     assert "--network-alias" in core_run
     assert "mn-seed" in core_run
-    assert (
-        f"MN_REDIS_URL=redis://:{_derive_network_secret('seed-token', 'redis')}"
-        "@mn-seed-redis:6379/0"
-    ) in core_run
+    assert f"MN_REDIS_URL=redis://:{server_cmds.DEV_REDIS_PASSWORD}@mn-seed-redis:6379/0" in core_run
     assert "MN_NETWORK_REDIS_HOST=mn-seed-redis" in core_run
     redis_run = next(cmd for cmd in commands if len(cmd) > 4 and cmd[:4] == ["docker", "run", "-d", "--name"] and cmd[4] == "mirror-neuron-network-redis")
     assert "--network-alias" in redis_run
@@ -1002,7 +1015,7 @@ def test_start_network_seed_default_disabled_ignores_stale_named_network(mocker,
     assert f"ERL_EPMD_PORT={server_cmds.DEFAULT_EPMD_PORT}" in core_run
     assert "0.0.0.0:4369:4369" not in core_run
     assert (
-        f"MN_REDIS_URL=redis://:{_derive_network_secret('worker-token', 'redis')}"
+        f"MN_REDIS_URL=redis://:{server_cmds.DEV_REDIS_PASSWORD}"
         f"@192.168.4.173:{server_cmds.REDIS_DYNAMIC_PORT_START}/0"
     ) in core_run
     assert "MN_NETWORK_REDIS_HOST=192.168.4.173" in core_run
@@ -1171,7 +1184,7 @@ def test_add_node_uses_handshake_and_local_core(mocker, tmp_path, capsys):
     mocker.patch('mn_cli.server_cmds._docker_container_running', return_value=False)
     mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=1)
     mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.99")
-    redis_password = _derive_network_secret("join-token", "redis")
+    redis_password = "remote-redis-password"
 
     class StubClient:
         def __init__(self, target, auth_token, timeout):
@@ -1218,7 +1231,7 @@ def test_add_node_overlay_uses_local_alias_in_handshake(mocker, tmp_path, monkey
     import mn_cli.shared
 
     monkeypatch.setenv("MN_NODE_ALIAS", "mn-main")
-    redis_password = _derive_network_secret("join-token", "redis")
+    redis_password = "remote-redis-password"
     mocker.patch(
         "mn_cli.server_cmds.subprocess.run",
         return_value=mocker.Mock(
@@ -1260,7 +1273,7 @@ def test_add_node_bridge_uses_docker_alias_in_handshake(mocker, monkeypatch):
     import mn_cli.shared
 
     monkeypatch.setenv("MN_NODE_ALIAS", "mn-main")
-    redis_password = _derive_network_secret("join-token", "redis")
+    redis_password = "remote-redis-password"
     mock_run = mocker.patch(
         "mn_cli.server_cmds.subprocess.run",
         return_value=mocker.Mock(
@@ -1353,8 +1366,8 @@ def test_join_network_configures_worker_redis_replica(mocker, tmp_path, capsys):
 
     compose_file = server_cmds.RUNTIME_COMPOSE_FILE
     compose_env = server_cmds.RUNTIME_COMPOSE_ENV
-    primary_password = _derive_network_secret("primary-token", "redis")
-    worker_password = _derive_network_secret("join-token", "redis")
+    primary_password = "primary-redis-password"
+    worker_password = "worker-redis-password"
     compose_file.parent.mkdir(parents=True, exist_ok=True)
     compose_file.write_text("services: {}\n")
     compose_env.write_text(
@@ -1593,7 +1606,7 @@ def test_start_server_join_compose_imports_primary_grpc_tokens(mocker, tmp_path)
     compose_file.parent.mkdir(parents=True, exist_ok=True)
     compose_file.write_text("services: {}\n", encoding="utf-8")
     compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n", encoding="utf-8")
-    redis_password = _derive_network_secret("join-token", "redis")
+    redis_password = "remote-redis-password"
 
     mocker.patch(
         'mn_cli.server_cmds._handshake_with_main_node',
@@ -1626,7 +1639,7 @@ def test_start_server_join_compose_imports_primary_grpc_tokens(mocker, tmp_path)
     assert "MN_GRPC_ADMIN_TOKEN=mirror_neuron_password_admin" in compose_text
 
 def test_start_server_join_docker_imports_primary_grpc_tokens(mocker, tmp_path):
-    redis_password = _derive_network_secret("join-token", "redis")
+    redis_password = "remote-redis-password"
     commands = []
 
     def mock_run(cmd, **kwargs):
@@ -1791,7 +1804,7 @@ def test_compose_internal_redis_settings_persists_docker_alias(mocker, tmp_path)
         network_redis_port=6379,
     )
 
-    redis_password = _derive_network_secret("join-token", "redis")
+    redis_password = server_cmds.DEV_REDIS_PASSWORD
     assert env["MN_REDIS_PASSWORD"] == redis_password
     assert env["MN_REDIS_URL"] == f"redis://:{redis_password}@redis:6379/0"
     assert env["MN_NETWORK_REDIS_HOST"] == "mn-node-redis"
@@ -2082,7 +2095,7 @@ def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path)
     mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.99")
-    redis_password = _derive_network_secret("join-token", "redis")
+    redis_password = "remote-redis-password"
     mocker.patch(
         'mn_cli.server_cmds._handshake_with_main_node',
         return_value={
@@ -2121,7 +2134,7 @@ def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
 def test_start_server_preserves_persisted_join_profile_on_restart(mocker, tmp_path):
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
-    redis_password = _derive_network_secret("join-token", "redis")
+    redis_password = "persisted-redis-password"
     compose_file.write_text("services: {}\n")
     compose_env.write_text(
         "COMPOSE_PROJECT_NAME=mirror-neuron\n"
@@ -2178,7 +2191,7 @@ def test_start_server_preserves_persisted_join_profile_on_restart(mocker, tmp_pa
 def test_start_server_refreshes_generated_node_name_for_joined_runtime_ip_change(mocker, tmp_path):
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
-    redis_password = _derive_network_secret("join-token", "redis")
+    redis_password = "persisted-redis-password"
     compose_file.write_text("services: {}\n")
     compose_env.write_text(
         "COMPOSE_PROJECT_NAME=mirror-neuron\n"
@@ -2240,7 +2253,7 @@ def test_start_server_refreshes_generated_node_name_for_joined_runtime_ip_change
 def test_start_server_refreshes_generated_node_name_for_joined_runtime_explicit_host_change(mocker, tmp_path):
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
-    redis_password = _derive_network_secret("join-token", "redis")
+    redis_password = "persisted-redis-password"
     compose_file.write_text("services: {}\n")
     compose_env.write_text(
         "COMPOSE_PROJECT_NAME=mirror-neuron\n"
@@ -2428,7 +2441,7 @@ def test_start_server_success(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
     mocker.patch('mn_cli.server_cmds.API_WATCHDOG_PID_FILE', tmp_path / "api-watchdog.pid")
     mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', ())
-    redis_password = _derive_network_secret("join-token", "redis")
+    redis_password = "remote-redis-password"
     monkeypatch.setenv("MN_API_PORT", "54111")
     monkeypatch.setenv("MN_BLUEPRINT_SOURCE", "local")
     monkeypatch.setenv("MN_BLUEPRINT_REPO", "https://github.com/MirrorNeuronLab/mn-blueprints.git")

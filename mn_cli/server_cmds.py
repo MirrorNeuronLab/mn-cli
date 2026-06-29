@@ -38,6 +38,7 @@ GRPC_AUTH_TOKEN_FILE_ENV = "MN_GRPC_AUTH_TOKEN_FILE"
 GRPC_ADMIN_TOKEN_FILE_ENV = "MN_GRPC_ADMIN_TOKEN_FILE"
 FIXED_GRPC_AUTH_TOKEN = "mirror_neuron_password"
 FIXED_GRPC_ADMIN_TOKEN = "mirror_neuron_password_admin"
+DEV_REDIS_PASSWORD = "mirror_neuron_redis_dev"
 
 def _erl_aflags(dist_port: str | int) -> str:
     return (
@@ -102,6 +103,7 @@ API_WATCHDOG_PID_FILE = PID_DIR / "api-watchdog.pid"
 WEB_UI_PID_FILE = PID_DIR / "web-ui.pid"
 WEB_UI_WATCHDOG_PID_FILE = PID_DIR / "web-ui-watchdog.pid"
 API_TOKEN_FILE = DIR / "api.token"
+REDIS_PASSWORD_FILE = DIR / "redis.password"
 BEAM_LOG = LOG_DIR / "beam.log"
 API_LOG = LOG_DIR / "api.log"
 API_WATCHDOG_LOG = LOG_DIR / "api-watchdog.log"
@@ -737,6 +739,26 @@ def _resolve_grpc_auth_token() -> str:
 def _resolve_grpc_admin_token() -> str:
     return FIXED_GRPC_ADMIN_TOKEN
 
+def _runtime_env_name(env: Optional[dict[str, str]] = None) -> str:
+    values = env or {}
+    return str(values.get("MN_ENV") or os.getenv("MN_ENV") or "dev").strip().lower()
+
+def _runtime_env_is_prod(env: Optional[dict[str, str]] = None) -> bool:
+    return _runtime_env_name(env) in {"prod", "production"}
+
+def _derive_redis_password(admin_token: str) -> str:
+    material = f"mirror-neuron:redis:{admin_token}".encode("utf-8")
+    return hashlib.sha256(material).hexdigest()
+
+def _resolve_redis_password(env: Optional[dict[str, str]] = None) -> str:
+    if not _runtime_env_is_prod(env):
+        return DEV_REDIS_PASSWORD
+
+    admin_token = str((env or {}).get(GRPC_ADMIN_TOKEN_ENV) or "").strip() or _resolve_grpc_admin_token()
+    password = _derive_redis_password(admin_token)
+    write_private_text(REDIS_PASSWORD_FILE, f"{password}\n")
+    return password
+
 def _resolve_api_token() -> str:
     env_token = os.getenv("MN_API_TOKEN", "").strip()
     if env_token:
@@ -1149,8 +1171,8 @@ def _docker_container_env_value(name: str, key: str) -> Optional[str]:
 def _ensure_network_docker_network(mode: str = "bridge", name: Optional[str] = None) -> None:
     _ensure_docker_network(mode, name or NETWORK_DOCKER_NETWORK)
 
-def _network_redis_url(token: str, redis_host: str, redis_port: int) -> str:
-    password = _derive_network_secret(token, "redis")
+def _network_redis_url(token: str, redis_host: str, redis_port: int, password: Optional[str] = None) -> str:
+    password = password or _resolve_redis_password()
     return f"redis://:{password}@{redis_host}:{redis_port}/0"
 
 def _network_core_env(
@@ -1259,6 +1281,7 @@ def _start_network_redis(
     redis_port: Optional[int],
     token: str,
     *,
+    redis_password: Optional[str] = None,
     docker_network_mode: str,
     docker_network_name: str,
     redis_alias: str,
@@ -1266,7 +1289,7 @@ def _start_network_redis(
 ) -> None:
     subprocess.run(["docker", "rm", "-f", NETWORK_REDIS_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
     publish_host = _network_publish_host(host)
-    password = _derive_network_secret(token, "redis")
+    password = redis_password or _resolve_redis_password()
     data_dir = DIR / "network-redis"
     data_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -1531,6 +1554,7 @@ def _start_network_seed(
 
     host = (host or _detect_lan_ip()).strip() or "127.0.0.1"
     env = _runtime_base_env(runtime_compose_available())
+    env = _ensure_runtime_grpc_tokens(env, persist_compose=runtime_compose_available())
     requested_mode = _docker_network_mode(docker_network_mode, default="disabled")
     container_network_mode = requested_mode
     use_internal_identity = _docker_network_uses_internal_identity(requested_mode)
@@ -1546,15 +1570,16 @@ def _start_network_seed(
         console.print("[yellow]--force-new-token is deprecated; run 'mn node refresh-token' to rotate the join token.[/yellow]")
     token = _resolve_network_token()
     external_redis_url = os.getenv("MN_REDIS_URL", "").strip()
+    redis_password = _resolve_redis_password(env)
     selected_redis_port = (
         _resolve_network_seed_redis_port(host, redis_port)
         if not external_redis_url and not use_internal_identity
         else None
     )
     redis_url = external_redis_url or (
-        _network_redis_url(token, redis_alias, 6379)
+        _network_redis_url(token, redis_alias, 6379, redis_password)
         if use_internal_identity
-        else _network_redis_url(token, host, selected_redis_port or REDIS_CONTAINER_PORT)
+        else _network_redis_url(token, host, selected_redis_port or REDIS_CONTAINER_PORT, redis_password)
     )
     redis_public_host, redis_public_port_value = _host_port_from_target(
         external_redis_url,
@@ -1579,6 +1604,7 @@ def _start_network_seed(
             host,
             selected_redis_port,
             token,
+            redis_password=redis_password,
             docker_network_mode=container_network_mode,
             docker_network_name=network_name,
             redis_alias=redis_alias,
@@ -1736,6 +1762,7 @@ def _ensure_local_cluster_runtime_for_join(
 
     primary_token = _resolve_network_token()
     console.print(f"=> Enabling cluster mode for this primary node as {node_name}...")
+    env = _ensure_runtime_grpc_tokens(env, persist_compose=True)
     env = _ensure_compose_native_port_settings(env)
     env = _ensure_compose_cluster_bind_settings(env, local_host)
     if _docker_network_uses_internal_identity(docker_network_mode):
@@ -2783,7 +2810,7 @@ def _ensure_compose_cluster_port_settings(
         explicit=redis_port is not None or bool(env_redis_port),
         owner_container=COMPOSE_REDIS_CONTAINER,
     )
-    redis_password = _derive_network_secret(token, "redis")
+    redis_password = _resolve_redis_password(adjusted)
     updates = {
         "MN_REDIS_PASSWORD": redis_password,
         "MN_REDIS_BIND_HOST": publish_host,
@@ -2806,7 +2833,7 @@ def _ensure_compose_internal_redis_settings(
     network_redis_port: Optional[int] = None,
 ) -> dict[str, str]:
     adjusted = dict(env)
-    redis_password = _derive_network_secret(token, "redis")
+    redis_password = _resolve_redis_password(adjusted)
     redis_host = os.getenv("MN_NETWORK_REDIS_HOST", "").strip() or network_redis_host or "redis"
     redis_port = network_redis_port or REDIS_CONTAINER_PORT
 
@@ -2858,8 +2885,8 @@ def _validate_remote_redis_details(handshake: dict, seed_host: str, token: str) 
     if parsed.scheme not in {"redis", "rediss"} or not parsed.hostname or not parsed.port:
         console.print(f"[red]Error: Remote node at {seed_host} returned an invalid Redis URL.[/red]")
         raise typer.Exit(1)
-    if parsed.password != _derive_network_secret(token, "redis"):
-        console.print(f"[red]Error: Remote node at {seed_host} did not advertise token-authenticated Redis.[/red]")
+    if not parsed.password:
+        console.print(f"[red]Error: Remote node at {seed_host} did not advertise password-authenticated Redis.[/red]")
         raise typer.Exit(1)
 
     return redis_host, redis_port, redis_url
@@ -2896,8 +2923,7 @@ def _primary_redis_details(fallback_token: str) -> Optional[tuple[str, int, str]
         or (_redis_password_from_url(redis_url) if redis_url else "")
     )
     if not password:
-        primary_token = _running_network_token((LOCAL_CORE_CONTAINER, NETWORK_CORE_CONTAINER)) or fallback_token
-        password = _derive_network_secret(primary_token, "redis")
+        password = _resolve_redis_password(env)
     if not host or not port or not password:
         return None
     return host, port, password
@@ -2967,7 +2993,7 @@ def _configure_worker_redis_replica(
         token,
     )
     worker_redis_host = _usable_remote_host(worker_redis_host, worker_host)
-    worker_password = _redis_password_from_url(worker_redis_url) or _derive_network_secret(token, "redis")
+    worker_password = _redis_password_from_url(worker_redis_url)
 
     try:
         _redis_command(
@@ -3872,6 +3898,7 @@ def _start_server(
         _validate_remote_redis_details(join_handshake, ip, network_token)
         env.update(_grpc_tokens_from_handshake(join_handshake))
     env = _ensure_runtime_api_token(env, persist_compose=compose_runtime)
+    env = _ensure_runtime_grpc_tokens(env, persist_compose=compose_runtime)
     reconnecting_joined_node = bool(compose_runtime and not ip and _persisted_join_profile(env))
     if compose_runtime:
         env = _ensure_compose_native_port_settings(env)
@@ -4036,7 +4063,7 @@ def _start_server(
         ):
             env["MN_CLUSTER_NODES"] = local_node_name
         if compose_runtime and not reconnecting_joined_node and _compose_supports_redis_password():
-            redis_password = _derive_network_secret(network_token, "redis")
+            redis_password = _resolve_redis_password(env)
             env["MN_REDIS_PASSWORD"] = redis_password
             env["MN_REDIS_URL"] = f"redis://:{redis_password}@redis:{REDIS_CONTAINER_PORT}/0"
             env["MN_CONTEXT_REDIS_URL"] = f"redis://:{redis_password}@redis:{REDIS_CONTAINER_PORT}/1"
@@ -4079,7 +4106,6 @@ def _start_server(
             },
         )
 
-    env = _ensure_runtime_grpc_tokens(env, persist_compose=compose_runtime)
     if compose_runtime:
         _write_env_file_values(RUNTIME_COMPOSE_ENV, {"MN_COOKIE": env["MN_COOKIE"]})
 
