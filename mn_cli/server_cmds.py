@@ -3,6 +3,7 @@ import json
 import hashlib
 import ipaddress
 import re
+import shlex
 import signal
 import secrets
 import shutil
@@ -852,6 +853,133 @@ def _shared_storage_env_from_handshake(handshake: Optional[dict]) -> dict[str, s
         "MN_CONTAINER_SHARED_STORAGE_ROOT": runtime_root or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT,
         "MN_BUNDLE_CACHE_DIR": f"{(runtime_root or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT).rstrip('/')}/bundle_cache",
     }
+
+def _truthy_env(value: object) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on", "required"}
+
+def _nfs_enabled(env: dict[str, str]) -> bool:
+    value = str(env.get("MN_NFS_ENABLED") or os.getenv("MN_NFS_ENABLED") or "auto").strip().lower()
+    return value not in {"0", "false", "no", "n", "off", "disabled"}
+
+def _nfs_required(env: dict[str, str]) -> bool:
+    return _truthy_env(env.get("MN_NFS_REQUIRED") or os.getenv("MN_NFS_REQUIRED"))
+
+def _nfs_warn_or_fail(message: str, env: dict[str, str]) -> None:
+    if _nfs_required(env):
+        console.print(f"[red]Error: {message}[/red]")
+        raise typer.Exit(1)
+    console.print(f"[yellow]Warning: {message}[/yellow]")
+
+def _nfs_host_shared_root(env: dict[str, str]) -> str:
+    explicit = str(env.get("MN_NFS_EXPORT_PATH") or os.getenv("MN_NFS_EXPORT_PATH") or "").strip()
+    if explicit:
+        return str(Path(explicit).expanduser())
+    host_root, _runtime_root, _bundle_cache = _network_shared_storage_roots(env)
+    return host_root
+
+def _command_succeeds(command: list[str]) -> bool:
+    try:
+        return subprocess.run(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode == 0
+    except FileNotFoundError:
+        return False
+
+def _path_is_mountpoint(path: str) -> bool:
+    if sys.platform.startswith("linux"):
+        return _command_succeeds(["findmnt", "-T", path])
+    if sys.platform == "darwin":
+        try:
+            resolved = str(Path(path).expanduser().resolve())
+        except OSError:
+            resolved = str(Path(path).expanduser())
+        try:
+            result = subprocess.run(["mount"], capture_output=True, text=True)
+        except FileNotFoundError:
+            return False
+        return any(f" on {resolved} " in line for line in result.stdout.splitlines())
+    return False
+
+def _ensure_nfs_export_for_cluster(env: dict[str, str], *, advertised_host: str) -> None:
+    if not _nfs_enabled(env):
+        return
+    host_root = _nfs_host_shared_root(env)
+    try:
+        Path(host_root).expanduser().mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        _nfs_warn_or_fail(f"could not create NFS shared-storage export root {host_root}: {exc}", env)
+        return
+
+    system_name = os.uname().sysname
+    try:
+        if system_name == "Darwin":
+            export_line = f"{host_root} -alldirs -mapall={os.getuid()}:{os.getgid()} -network 192.168.0.0 -mask 255.255.0.0 -insecure"
+            command = (
+                "exports=/etc/exports; "
+                f"line={shlex.quote(export_line)}; "
+                "grep -Fqx \"$line\" \"$exports\" 2>/dev/null || printf '%s\\n' \"$line\" >> \"$exports\"; "
+                "nfsd enable >/dev/null 2>&1 || true; "
+                "nfsd restart"
+            )
+            subprocess.run(["sudo", "-n", "sh", "-c", command], check=True)
+        elif system_name == "Linux":
+            export_line = f"{host_root} 192.168.0.0/16(rw,sync,no_subtree_check,no_root_squash)"
+            command = (
+                "exports=/etc/exports; "
+                f"line={shlex.quote(export_line)}; "
+                "grep -Fqx \"$line\" \"$exports\" 2>/dev/null || printf '%s\\n' \"$line\" >> \"$exports\"; "
+                "exportfs -ra; "
+                "(systemctl start nfs-server || systemctl start nfs-kernel-server || service nfs-kernel-server start || true)"
+            )
+            subprocess.run(["sudo", "-n", "sh", "-c", command], check=True)
+        else:
+            return
+        console.print(f"=> NFS shared storage exported from {advertised_host}:{host_root}")
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        _nfs_warn_or_fail(
+            f"could not export NFS shared storage at {host_root}; run with sudo or set MN_NFS_ENABLED=0. {exc}",
+            env,
+        )
+
+def _ensure_nfs_mount_from_handshake(seed_host: str, handshake: Optional[dict], env: dict[str, str]) -> None:
+    if not _nfs_enabled(env) or not isinstance(handshake, dict):
+        return
+    node_info = handshake.get("node_info")
+    if not isinstance(node_info, dict):
+        node_info = {}
+    host_root = str(
+        handshake.get("host_shared_storage_root")
+        or node_info.get("host_shared_storage_root")
+        or ""
+    ).strip()
+    if not host_root:
+        return
+    host_root = str(Path(host_root).expanduser())
+    if _path_is_mountpoint(host_root):
+        return
+
+    system_name = os.uname().sysname
+    source = f"{seed_host}:{host_root}"
+    try:
+        if system_name == "Darwin":
+            subprocess.run(["sudo", "-n", "mkdir", "-p", host_root], check=True)
+            subprocess.run(["sudo", "-n", "mount_nfs", "-o", "resvport", source, host_root], check=True)
+        elif system_name == "Linux":
+            subprocess.run(["sudo", "-n", "mkdir", "-p", host_root], check=True)
+            subprocess.run(
+                ["sudo", "-n", "mount", "-t", "nfs", "-o", "vers=3,tcp,nolock", source, host_root],
+                check=True,
+            )
+        else:
+            return
+        console.print(f"=> Mounted NFS shared storage {source} at {host_root}")
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        _nfs_warn_or_fail(
+            f"could not mount NFS shared storage {source} at {host_root}; run with sudo or set MN_NFS_ENABLED=0. {exc}",
+            env,
+        )
 
 def _runtime_grpc_tokens_from_running_container() -> dict[str, str]:
     return {
@@ -1720,6 +1848,7 @@ def _start_network_seed(
         redis_public_port=redis_public_port,
     )
     env = _ensure_runtime_grpc_tokens(env, persist_compose=runtime_compose_available())
+    _ensure_nfs_export_for_cluster(env, advertised_host=host)
 
     console.print("=> Starting MirrorNeuron core-only exposed node...")
     _start_network_core(
@@ -1779,6 +1908,7 @@ def _join_network(
         node_name=local_node_name,
         node_info=_handshake_node_info(local_host, node_name=local_node_name),
     )
+    _ensure_nfs_mount_from_handshake(seed_host, handshake, env)
     shared_storage_updates = _shared_storage_env_from_handshake(handshake)
     if shared_storage_updates and runtime_compose_available():
         _write_env_file_values(RUNTIME_COMPOSE_ENV, shared_storage_updates)
@@ -4001,6 +4131,7 @@ def _start_server(
     if join_handshake:
         _validate_remote_redis_details(join_handshake, ip, network_token)
         env.update(_grpc_tokens_from_handshake(join_handshake))
+        _ensure_nfs_mount_from_handshake(ip, join_handshake, env)
         env.update(_shared_storage_env_from_handshake(join_handshake))
     env = _ensure_runtime_api_token(env, persist_compose=compose_runtime)
     env = _ensure_runtime_grpc_tokens(env, persist_compose=compose_runtime)
@@ -4101,6 +4232,8 @@ def _start_server(
     env["MN_ARTIFACT_PUBLISH_HOST"] = _network_publish_host(advertised_host)
     env["MN_ARTIFACT_PORT"] = artifact_port
     env["MN_ARTIFACT_ADVERTISE_URL"] = f"http://{advertised_host}:{artifact_port}"
+    if not ip:
+        _ensure_nfs_export_for_cluster(env, advertised_host=advertised_host)
     if requested_docker_mode != "disabled" and node_alias:
         env.update(_docker_network_env(requested_docker_mode, network_name, node_alias))
     if _generated_node_setting_should_update("MN_NODE_NAME", env.get("MN_NODE_NAME"), local_node_name):

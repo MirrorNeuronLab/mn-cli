@@ -68,6 +68,9 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_DOCKER_NETWORK_MODE", raising=False)
     monkeypatch.delenv("MN_DOCKER_NETWORK_NAME", raising=False)
     monkeypatch.delenv("MN_REDIS_IMAGE", raising=False)
+    monkeypatch.setenv("MN_NFS_ENABLED", "0")
+    monkeypatch.delenv("MN_NFS_REQUIRED", raising=False)
+    monkeypatch.delenv("MN_NFS_EXPORT_PATH", raising=False)
     monkeypatch.delenv("DOCKER_HOST_SOCKET", raising=False)
     monkeypatch.delenv("MN_NETWORK_JOIN_TOKEN", raising=False)
     state_dir = tmp_path / ".mn"
@@ -396,6 +399,58 @@ def test_network_core_bind_args_mounts_configured_shared_storage(tmp_path):
     ]
     assert ["-v", f"{host_shared}:/opt/mirror_neuron/.mn/shared:rw"] == bind_args[
         bind_args.index(mirror_mount) - 1 : bind_args.index(mirror_mount) + 1
+    ]
+
+
+def test_ensure_nfs_export_for_cluster_runs_platform_export(mocker, tmp_path, monkeypatch):
+    host_shared = tmp_path / "shared"
+    monkeypatch.setenv("MN_NFS_ENABLED", "auto")
+    mocker.patch("mn_cli.server_cmds.os.uname", return_value=mocker.Mock(sysname="Darwin"))
+    run = mocker.patch("mn_cli.server_cmds.subprocess.run", return_value=mocker.Mock(returncode=0))
+
+    server_cmds._ensure_nfs_export_for_cluster(
+        {
+            "MN_HOST_SHARED_STORAGE_ROOT": str(host_shared),
+            "MN_RUNTIME_SHARED_STORAGE_ROOT": "/root/.mn/shared",
+        },
+        advertised_host="192.168.6.28",
+    )
+
+    assert host_shared.is_dir()
+    run.assert_called_once()
+    assert run.call_args.args[0][:4] == ["sudo", "-n", "sh", "-c"]
+    assert str(host_shared) in run.call_args.args[0][4]
+
+
+def test_ensure_nfs_mount_from_handshake_mounts_missing_primary_path(mocker, tmp_path, monkeypatch):
+    host_shared = tmp_path / "primary-shared"
+    monkeypatch.setenv("MN_NFS_ENABLED", "auto")
+    mocker.patch("mn_cli.server_cmds.os.uname", return_value=mocker.Mock(sysname="Linux"))
+    mocker.patch("mn_cli.server_cmds._path_is_mountpoint", return_value=False)
+    run = mocker.patch("mn_cli.server_cmds.subprocess.run", return_value=mocker.Mock(returncode=0))
+
+    server_cmds._ensure_nfs_mount_from_handshake(
+        "192.168.6.28",
+        {
+            "node_info": {
+                "host_shared_storage_root": str(host_shared),
+                "runtime_shared_storage_root": "/root/.mn/shared",
+            }
+        },
+        {},
+    )
+
+    assert run.call_args_list[0].args[0] == ["sudo", "-n", "mkdir", "-p", str(host_shared)]
+    assert run.call_args_list[1].args[0] == [
+        "sudo",
+        "-n",
+        "mount",
+        "-t",
+        "nfs",
+        "-o",
+        "vers=3,tcp,nolock",
+        f"192.168.6.28:{host_shared}",
+        str(host_shared),
     ]
 
 
