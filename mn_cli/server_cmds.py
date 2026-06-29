@@ -1536,6 +1536,24 @@ def _force_network_redis_primary() -> None:
     ]
     subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+def _force_compose_redis_primary() -> None:
+    command = [
+        "docker",
+        "exec",
+        COMPOSE_REDIS_CONTAINER,
+        "sh",
+        "-c",
+        (
+            "until redis-cli -a \"$MN_REDIS_PASSWORD\" --no-auth-warning PING >/dev/null 2>&1; do "
+            "sleep 0.2; "
+            "done; "
+            "redis-cli -a \"$MN_REDIS_PASSWORD\" --no-auth-warning REPLICAOF NO ONE >/dev/null; "
+            "redis-cli -a \"$MN_REDIS_PASSWORD\" --no-auth-warning SET mn:compose-redis:write-probe ok EX 30 >/dev/null; "
+            "redis-cli -a \"$MN_REDIS_PASSWORD\" --no-auth-warning CONFIG REWRITE >/dev/null 2>&1 || true"
+        ),
+    ]
+    subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
 def _start_network_core(
     env: dict[str, str],
     host: str,
@@ -2032,6 +2050,7 @@ def _ensure_local_cluster_runtime_for_join(
             stdout=subprocess.DEVNULL,
             env=compose_env,
         )
+        _force_compose_redis_primary()
         _wait_for_local_cluster_grpc()
     except (FileNotFoundError, subprocess.CalledProcessError) as exc:
         from mn_sdk.errors import AppError
@@ -4353,6 +4372,8 @@ def _start_server(
         logger.info("Starting MirrorNeuron Docker Compose runtime")
         try:
             subprocess.run(runtime_compose_cmd("up", "-d"), check=True, stdout=subprocess.DEVNULL, env=env)
+            if not ip and not reconnecting_joined_node:
+                _force_compose_redis_primary()
             console.print("   [green][Started][/green] Docker runtime (Compose project: mirror-neuron)")
         except (FileNotFoundError, subprocess.CalledProcessError):
             console.print("[red]Failed to start MirrorNeuron Docker Compose runtime.[/red]")

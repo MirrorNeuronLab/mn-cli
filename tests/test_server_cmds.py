@@ -1605,10 +1605,12 @@ def test_join_promotes_local_compose_runtime_to_cluster_mode(mocker, tmp_path):
     assert "MN_CLUSTER_NODES=mirror_neuron@192.168.4.20" in env_text
     assert "MN_NETWORK_ADVERTISE_HOST=192.168.4.20" in env_text
     assert "MN_GRPC_BIND_HOST=0.0.0.0" in env_text
-    mock_run.assert_called_once()
-    assert mock_run.call_args.args[0] == runtime_compose_cmd(
+    assert mock_run.call_args_list[0].args[0] == runtime_compose_cmd(
         "up", "-d", "--force-recreate", "redis", "mirror-neuron-core"
     )
+    assert mock_run.call_args_list[1].args[0][:3] == ["docker", "exec", "mirror-neuron-redis"]
+    assert "REPLICAOF NO ONE" in mock_run.call_args_list[1].args[0][-1]
+    assert "mn:compose-redis:write-probe" in mock_run.call_args_list[1].args[0][-1]
 
 def test_wait_for_local_cluster_grpc_uses_injected_core_client(mocker):
     shared_summary = mocker.patch(
