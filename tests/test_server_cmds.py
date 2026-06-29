@@ -316,6 +316,7 @@ def test_runtime_blueprint_env_updates_prefers_host_shared_storage_root(tmp_path
     assert updates["MN_HOST_SHARED_STORAGE_ROOT"] == str(host_shared)
     assert updates["MN_SHARED_STORAGE_ROOT"] == str(host_shared)
     assert updates["MN_RUNTIME_SHARED_STORAGE_ROOT"] == "/root/.mn/shared"
+    assert updates["MN_BUNDLE_CACHE_DIR"] == "/root/.mn/shared/bundle_cache"
 
 def test_deploy_compose_passes_host_shared_storage_to_core():
     compose_path = Path(__file__).resolve().parents[2] / "mn-deploy" / "docker-compose.yml"
@@ -2570,6 +2571,7 @@ def test_start_server_passes_slack_env_to_docker(mocker, tmp_path, monkeypatch):
     auth_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_GRPC_AUTH_TOKEN="))
     admin_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_GRPC_ADMIN_TOKEN="))
     runs_root_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_RUNS_ROOT="))
+    bundle_cache_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_BUNDLE_CACHE_DIR="))
     assert cookie_env != "MN_COOKIE=mirrorneuron"
     assert auth_env == "MN_GRPC_AUTH_TOKEN=mirror_neuron_password"
     assert admin_env == "MN_GRPC_ADMIN_TOKEN=mirror_neuron_password_admin"
@@ -2584,6 +2586,7 @@ def test_start_server_passes_slack_env_to_docker(mocker, tmp_path, monkeypatch):
         if flag == "-e"
     )
     assert runs_root_env == "MN_RUNS_ROOT=/root/.mn/runs"
+    assert bundle_cache_env == "MN_BUNDLE_CACHE_DIR=/root/.mn/shared/bundle_cache"
     assert ["-e", f"MN_HOST_SHARED_STORAGE_ROOT={host_shared}"] == docker_run[
         docker_run.index(f"MN_HOST_SHARED_STORAGE_ROOT={host_shared}") - 1 : docker_run.index(f"MN_HOST_SHARED_STORAGE_ROOT={host_shared}") + 1
     ]

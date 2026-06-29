@@ -190,6 +190,7 @@ DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE = "prepublished"
 DEFAULT_CONTAINER_RUNS_ROOT = "/root/.mn/runs"
 DEFAULT_CONTAINER_BLOB_STORE_ROOT = "/root/.mn/blobs"
 DEFAULT_RUNTIME_SHARED_STORAGE_ROOT = "/root/.mn/shared"
+DEFAULT_RUNTIME_BUNDLE_CACHE_DIR = f"{DEFAULT_RUNTIME_SHARED_STORAGE_ROOT}/bundle_cache"
 DEFAULT_REDIS_IMAGE = "redis:8"
 LEGACY_GRPC_PORT = "50051"
 LEGACY_API_PORT = "4001"
@@ -2516,6 +2517,11 @@ def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
         or os.getenv("MN_CONTAINER_SHARED_STORAGE_ROOT")
         or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT
     ).strip()
+    runtime_bundle_cache_dir = str(
+        env.get("MN_BUNDLE_CACHE_DIR")
+        or os.getenv("MN_BUNDLE_CACHE_DIR")
+        or f"{runtime_shared_storage_root.rstrip('/')}/bundle_cache"
+    ).strip()
     updates: dict[str, str] = {
         "MN_ENV": runtime_env,
         "MN_BLUEPRINT_SOURCE": blueprint_source,
@@ -2530,6 +2536,7 @@ def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
         "MN_CONTAINER_BLOB_STORE_ROOT": container_blob_store_root,
         "MN_RUNTIME_SHARED_STORAGE_ROOT": runtime_shared_storage_root,
         "MN_CONTAINER_SHARED_STORAGE_ROOT": runtime_shared_storage_root,
+        "MN_BUNDLE_CACHE_DIR": runtime_bundle_cache_dir,
         "MN_BLOB_STORE_ROOT": container_blob_store_root,
         "MN_BLUEPRINT_WEB_UI_BIND_HOST": str(
             env.get("MN_BLUEPRINT_WEB_UI_BIND_HOST") or DEFAULT_BLUEPRINT_WEB_UI_BIND_HOST
@@ -3764,6 +3771,7 @@ def _build_core_docker_run_command(
     container_blob_store_root = str(env.get("MN_CONTAINER_BLOB_STORE_ROOT") or DEFAULT_CONTAINER_BLOB_STORE_ROOT)
     host_shared_storage_root = str(env.get("MN_HOST_SHARED_STORAGE_ROOT") or env.get("MN_SHARED_STORAGE_ROOT") or Path(host_home_dir).expanduser() / "shared")
     runtime_shared_storage_root = str(env.get("MN_RUNTIME_SHARED_STORAGE_ROOT") or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT)
+    runtime_bundle_cache_dir = str(env.get("MN_BUNDLE_CACHE_DIR") or f"{runtime_shared_storage_root.rstrip('/')}/bundle_cache")
     cmd.extend(["-e", f"MN_HOST_SHARED_STORAGE_ROOT={host_shared_storage_root}"])
     cmd.extend(["-v", f"{host_home_dir}:/root/.mn"])
     cmd.extend(["-v", f"{host_home_dir}:/opt/mirror_neuron/.mn"])
@@ -3775,6 +3783,7 @@ def _build_core_docker_run_command(
     cmd.extend(["-v", f"{host_shared_storage_root}:/opt/mirror_neuron/.mn/shared"])
     cmd.extend(_docker_worker_bind_args())
     cmd.extend(["-e", f"MN_BLOB_STORE_ROOT={container_blob_store_root}"])
+    cmd.extend(["-e", f"MN_BUNDLE_CACHE_DIR={runtime_bundle_cache_dir}"])
 
     cmd.extend(["mirror-neuron-core:latest", *_distributed_core_command()])
     return cmd

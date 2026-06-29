@@ -32,6 +32,7 @@ from mn_cli.libs.skill_dependencies import (
     skill_dependency_package_names,
     without_requirements_for_packages,
 )
+from mn_cli.runtime_state import mn_home, read_env_file
 USER_HOME_ENV_KEYS = ("MN_OUTPUT_HOME", "MN_USER_HOME", "OTTERDESK_USER_HOME")
 UPLOAD_SOURCE_EXCLUDED_DIRS = {
     ".git",
@@ -106,7 +107,12 @@ def local_skill_sources_enabled() -> bool:
         return False
     if flag in LOCAL_SKILL_ENABLE_VALUES:
         return True
-    return os.getenv("MN_ENV", "").strip().lower() in LOCAL_SKILL_ENV_VALUES
+    env_name = os.getenv("MN_ENV", "").strip() or _runtime_env_value("MN_ENV")
+    return env_name.strip().lower() in LOCAL_SKILL_ENV_VALUES
+
+
+def _runtime_env_value(key: str) -> str:
+    return read_env_file(mn_home() / "docker-compose.env").get(key, "").strip()
 
 
 def localize_skill_dependencies_for_dev(manifest: dict[str, Any]) -> dict[str, Any]:

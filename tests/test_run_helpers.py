@@ -344,6 +344,64 @@ def test_prepare_manifest_stages_local_skill_dependencies_in_dev(tmp_path, monke
     assert "mirrorneuron-evidence-engine-skill" not in requirements
 
 
+def test_prepare_manifest_stages_local_skill_dependencies_from_runtime_env(tmp_path, monkeypatch):
+    bundle_dir = tmp_path / "bundle"
+    skills_root = tmp_path / "mn-skills"
+    runtime_home = tmp_path / ".mn"
+    bundle_dir.mkdir()
+    runtime_home.mkdir()
+    (runtime_home / "docker-compose.env").write_text("MN_ENV=dev\n", encoding="utf-8")
+    monkeypatch.delenv("MN_ENV", raising=False)
+    monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("MN_SKILLS_ROOT", str(skills_root))
+    monkeypatch.setattr("mn_cli.libs.run_manifest.mn_home", lambda: runtime_home)
+    _write_skill_pyproject(
+        skills_root,
+        "evidence_engine_skill",
+        "mirrorneuron-evidence-engine-skill",
+    )
+    skill_module = skills_root / "evidence_engine_skill" / "src" / "mn_evidence_engine_skill"
+    skill_module.mkdir(parents=True)
+    (skill_module / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    manifest = {
+        "skill_dependencies": [
+            {
+                "type": "pip",
+                "source": "gar",
+                "name": "mirrorneuron-evidence-engine-skill",
+                "version": "1.2.7",
+            }
+        ],
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.DockerWorker",
+                    "docker_worker_image": "worker/docker_worker",
+                    "environment": {},
+                },
+            }
+        ],
+    }
+    payloads = {"worker/docker_worker/Dockerfile": b"FROM python:3.11-slim\n"}
+
+    prepared = prepare_manifest_for_submission(bundle_dir, manifest)
+    assert prepared["skill_dependencies"] == []
+
+    staged = stage_skill_dependency_payloads_for_manifest(
+        prepared,
+        payloads,
+        bundle_dir=bundle_dir,
+    )
+
+    assert ".mn-local-skills/evidence_engine_skill" in staged["sources"]
+    assert (
+        ".mn-local-skills/evidence_engine_skill/src/mn_evidence_engine_skill/__init__.py"
+        in payloads
+    )
+
+
 def test_prepare_manifest_keeps_gar_skill_dependencies_for_hostlocal_dev(tmp_path, monkeypatch):
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"
