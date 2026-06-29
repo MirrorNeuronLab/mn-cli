@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
+import re
 import subprocess
+from pathlib import Path
 from typing import Annotated, Any, Optional
 
 import typer
@@ -15,6 +18,7 @@ from mn_sdk import (
     DEFAULT_MODEL_ID,
     DOCKER_MODEL_RUNNER_HOST_API_BASE,
     assess_model_compatibility,
+    default_model_proxies_path,
     detect_host_hardware,
     dmr_api_list_models,
     dmr_api_model_installed,
@@ -30,10 +34,13 @@ from mn_sdk import (
     load_model_remotes,
     merge_catalog_and_installed_models,
     model_ownership_metadata,
+    proxy_model_ids,
     record_manual_model_install,
+    remove_model_proxy,
     remove_model_remote,
     remove_model_record,
     resolve_model_entry,
+    upsert_model_proxy,
     upsert_model_remote,
 )
 from mn_sdk import (
@@ -64,15 +71,18 @@ def list_models(
             installed_models = _installed_model_names()
         except Exception:
             installed_models = set()
+        installed_model_ids = installed_models | proxy_model_ids()
         ownership = load_model_ownership()
         entries = merge_catalog_and_installed_models(
             catalog=catalog,
-            installed_models=installed_models,
+            installed_models=installed_model_ids,
             ownership=ownership,
         )
-        installed_model_keys = {key for model in installed_models for key in docker_model_match_keys(model)}
+        installed_model_keys = {key for model in installed_model_ids for key in docker_model_match_keys(model)}
 
         def is_installed(entry: dict[str, Any]) -> bool:
+            if _is_proxy_entry(entry):
+                return True
             return bool(docker_model_match_keys(docker_model_name(entry)) & installed_model_keys)
 
         if installed:
@@ -201,7 +211,21 @@ def remove_model(
 ):
     """Remove a Docker Model Runner model."""
     try:
-        target = _resolve_or_raw_model(model)
+        try:
+            entry = resolve_model_entry(model)
+        except KeyError:
+            entry = None
+        if _is_proxy_entry(entry):
+            removed = remove_model_proxy(str(entry.get("id") or model))
+            print_success_confirmation(
+                console,
+                "Model proxy",
+                status="removed",
+                details={"Model": str(entry.get("id") or model), "Backend": "proxy"},
+                next_steps="mn model list --installed",
+            )
+            return
+        target = docker_model_name(entry) if entry else _resolve_or_raw_model(model)
         remove_model_ref(target, force=force)
         remove_model_record(target)
         print_success_confirmation(
@@ -213,6 +237,81 @@ def remove_model(
         )
     except Exception as exc:
         handle_cli_error(exc, console, "model remove")
+        raise typer.Exit(1)
+
+
+@model_app.command(name="proxy")
+def proxy_model(
+    config: Annotated[Path, typer.Option("--config", help="Proxy config file. Supports LiteLLM model_list or MirrorNeuron provider JSON.")],
+    port: Annotated[int, typer.Option("--port", help="Host port for the LiteLLM proxy.")] = 4000,
+    host: Annotated[str, typer.Option("--host", help="Host bind address for the LiteLLM proxy.")] = "127.0.0.1",
+    image: Annotated[str, typer.Option("--image", help="LiteLLM Docker image.")] = "ghcr.io/berriai/litellm:main-latest",
+    container_name: Annotated[Optional[str], typer.Option("--container-name", help="Docker container name.")] = None,
+    no_start: Annotated[bool, typer.Option("--no-start", help="Only generate config and register proxy models.")] = False,
+    replace: Annotated[bool, typer.Option("--replace", help="Replace an existing proxy container with the same name.")] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+):
+    """Create a LiteLLM proxy and register its models as installed runtime models."""
+    try:
+        config_path = config.expanduser().resolve()
+        proxy_spec = _build_proxy_spec(config_path, host=host, port=port)
+        resolved_container = container_name or proxy_spec["container_name"]
+        generated_config = _write_litellm_proxy_config(proxy_spec["litellm_config"], resolved_container)
+        if not no_start:
+            _start_litellm_proxy(
+                generated_config,
+                container_name=resolved_container,
+                host=host,
+                port=port,
+                image=image,
+                env_names=proxy_spec["env_names"],
+                replace=replace,
+            )
+
+        base_url = f"http://{host}:{port}/v1"
+        proxies = [
+            upsert_model_proxy(
+                model["id"],
+                display_name=model.get("name"),
+                source_model=model.get("source_model"),
+                api_model=model["id"],
+                base_url=base_url,
+                config_path=config_path,
+                litellm_config_path=generated_config,
+                container_name=resolved_container,
+                image=image,
+                port=port,
+                host=host,
+            )
+            for model in proxy_spec["models"]
+        ]
+        payload = {
+            "status": "registered" if no_start else "running",
+            "models": proxies,
+            "container_name": resolved_container,
+            "base_url": base_url,
+            "config": str(generated_config),
+            "ledger": str(default_model_proxies_path()),
+        }
+        if json_output:
+            console.print_json(data=payload)
+            return
+        print_success_confirmation(
+            console,
+            "Model proxy",
+            status=payload["status"],
+            details=[
+                ("Models", ", ".join(proxy["id"] for proxy in proxies)),
+                ("Backend", "proxy"),
+                ("Base URL", base_url),
+                ("Config", str(generated_config)),
+            ],
+            next_steps="mn model list --installed",
+        )
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        handle_cli_error(exc, console, "model proxy")
         raise typer.Exit(1)
 
 
@@ -357,6 +456,167 @@ def remove_remote_model(
         raise typer.Exit(1)
 
 
+def _build_proxy_spec(config_path: Path, *, host: str, port: int) -> dict[str, Any]:
+    raw = _load_proxy_config(config_path)
+    model_entries: list[dict[str, Any]] = []
+    env_names: set[str] = set()
+
+    if isinstance(raw.get("model_list"), list):
+        litellm_config = dict(raw)
+        for item in raw["model_list"]:
+            if not isinstance(item, dict):
+                continue
+            model_name = str(item.get("model_name") or "").strip()
+            params = item.get("litellm_params") if isinstance(item.get("litellm_params"), dict) else {}
+            source_model = str(params.get("model") or model_name).strip()
+            if not model_name:
+                continue
+            model_entries.append({"id": model_name, "name": str(item.get("name") or model_name), "source_model": source_model})
+            for value in params.values():
+                if isinstance(value, str) and value.startswith("os.environ/"):
+                    env_names.add(value.split("/", 1)[1])
+    else:
+        litellm_models, model_entries, env_names = _provider_config_to_litellm_models(raw)
+        litellm_config = {"model_list": litellm_models}
+
+    if not model_entries:
+        raise ValueError(f"{config_path} does not declare any proxy models")
+
+    digest = hashlib.sha256(str(config_path).encode("utf-8")).hexdigest()[:10]
+    return {
+        "container_name": f"mn-litellm-proxy-{digest}",
+        "litellm_config": litellm_config,
+        "models": model_entries,
+        "env_names": sorted(env_names),
+        "base_url": f"http://{host}:{port}/v1",
+    }
+
+
+def _load_proxy_config(config_path: Path) -> dict[str, Any]:
+    if not config_path.is_file():
+        raise FileNotFoundError(f"proxy config file not found: {config_path}")
+    raw = config_path.read_text(encoding="utf-8")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        try:
+            import yaml  # type: ignore
+        except ModuleNotFoundError as exc:
+            raise ValueError(f"{config_path} is not JSON; install PyYAML or provide JSON config") from exc
+        data = yaml.safe_load(raw)
+    if not isinstance(data, dict):
+        raise ValueError(f"{config_path} must contain a JSON/YAML object")
+    return data
+
+
+def _provider_config_to_litellm_models(config: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], set[str]]:
+    providers = config.get("provider")
+    if not isinstance(providers, dict):
+        raise ValueError("proxy config must contain either model_list or provider")
+
+    litellm_models: list[dict[str, Any]] = []
+    model_entries: list[dict[str, Any]] = []
+    env_names: set[str] = set()
+    for provider_key, provider in providers.items():
+        if not isinstance(provider, dict):
+            continue
+        options = provider.get("options") if isinstance(provider.get("options"), dict) else {}
+        api_base = str(options.get("baseURL") or options.get("base_url") or options.get("api_base") or "").strip()
+        api_key_env = str(options.get("apiKeyEnv") or options.get("api_key_env") or "").strip()
+        if api_key_env:
+            env_names.add(api_key_env)
+        models = provider.get("models") if isinstance(provider.get("models"), dict) else {}
+        for model_id, model_config in models.items():
+            if not isinstance(model_config, dict):
+                continue
+            proxy_model_id = str(model_id).strip()
+            source_model = _litellm_source_model(str(provider_key), str(model_config.get("model") or proxy_model_id), api_base)
+            if not proxy_model_id or not source_model:
+                continue
+            params: dict[str, Any] = {"model": source_model}
+            if api_base:
+                params["api_base"] = api_base
+            if api_key_env:
+                params["api_key"] = f"os.environ/{api_key_env}"
+            timeout = model_config.get("timeout_seconds")
+            if timeout is not None:
+                params["timeout"] = timeout
+            litellm_entry: dict[str, Any] = {
+                "model_name": proxy_model_id,
+                "litellm_params": params,
+            }
+            rpm = model_config.get("rate_limit_rpm") or model_config.get("rpm")
+            if rpm is not None:
+                litellm_entry["rpm"] = rpm
+            litellm_models.append(litellm_entry)
+            model_entries.append(
+                {
+                    "id": proxy_model_id,
+                    "name": str(model_config.get("name") or proxy_model_id),
+                    "source_model": source_model,
+                }
+            )
+    return litellm_models, model_entries, env_names
+
+
+def _litellm_source_model(provider_key: str, model: str, api_base: str) -> str:
+    source = str(model or "").strip()
+    if not source:
+        return ""
+    if "/" in source:
+        return source
+    provider = provider_key.strip().lower().replace("_", "-")
+    if provider in {"openai", "openai-compatible"} and ("api.openai.com" in api_base or provider == "openai"):
+        return f"openai/{source}"
+    if provider and provider not in {"openai-compatible", "compatible"}:
+        return f"{provider}/{source}"
+    return source
+
+
+def _write_litellm_proxy_config(litellm_config: dict[str, Any], container_name: str) -> Path:
+    root = default_model_proxies_path().parent / "proxies" / _safe_path_name(container_name)
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "config.yaml"
+    path.write_text(json.dumps(litellm_config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def _start_litellm_proxy(
+    config_path: Path,
+    *,
+    container_name: str,
+    host: str,
+    port: int,
+    image: str,
+    env_names: list[str],
+    replace: bool,
+) -> None:
+    if replace:
+        _docker(["rm", "-f", container_name], check=False, timeout=60)
+    args = [
+        "run",
+        "-d",
+        "--name",
+        container_name,
+        "-p",
+        f"{host}:{port}:4000",
+        "-v",
+        f"{config_path}:/app/config.yaml:ro",
+    ]
+    for env_name in env_names:
+        if env_name in os.environ:
+            args.extend(["-e", env_name])
+        else:
+            console.print(f"[yellow]Warning: environment variable {env_name} is not set for the proxy container.[/yellow]")
+            args.extend(["-e", env_name])
+    args.extend([image, "--config", "/app/config.yaml"])
+    _docker(args, timeout=300)
+
+
+def _safe_path_name(value: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_.-]+", "-", str(value or "").strip()).strip("-._") or "proxy"
+
+
 def install_model_entry(
     entry: dict[str, Any],
     *,
@@ -431,6 +691,12 @@ def _entry_payload(
     ownership: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return sdk_model_entry_payload(entry, installed=installed, ownership=ownership)
+
+
+def _is_proxy_entry(entry: dict[str, Any] | None) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    return str(entry.get("provider") or "").strip().lower() == "litellm_proxy" or str(entry.get("backend") or "").strip().lower() == "proxy"
 
 
 def _print_model_table(models: list[dict[str, Any]]) -> None:

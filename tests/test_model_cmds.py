@@ -1,12 +1,13 @@
 import json
 import subprocess
 import urllib.error
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from mn_cli.main import app
-from mn_sdk import HostHardwareProfile, load_model_ownership, load_model_remotes
+from mn_sdk import HostHardwareProfile, load_model_ownership, load_model_proxies, load_model_remotes
 
 
 runner = CliRunner()
@@ -16,6 +17,7 @@ runner = CliRunner()
 def isolate_model_ownership(monkeypatch, tmp_path):
     monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
     monkeypatch.setenv("MN_MODEL_REMOTES_PATH", str(tmp_path / "model-remotes.json"))
+    monkeypatch.setenv("MN_MODEL_PROXIES_PATH", str(tmp_path / "model-proxies.json"))
     monkeypatch.setattr("mn_cli.libs.model_cmds._endpoint_responds", lambda: False)
 
 
@@ -105,6 +107,56 @@ def test_model_remote_add_list_remove_json():
     assert removed.exit_code == 0
     assert json.loads(removed.stdout)["removed"]["name"] == "spark"
     assert load_model_remotes()["remotes"] == {}
+
+
+def test_model_proxy_registers_provider_config_without_start(tmp_path, mocker):
+    mocker.patch("mn_cli.libs.model_cmds._installed_model_names", return_value=set())
+    config = tmp_path / "openai-compatible.json"
+    config.write_text(
+        json.dumps(
+            {
+                "provider": {
+                    "openai-compatible": {
+                        "name": "OpenAI-compatible endpoint",
+                        "options": {
+                            "baseURL": "https://api.openai.com/v1",
+                            "apiKeyEnv": "OPENAI_API_KEY",
+                        },
+                        "models": {
+                            "openai/gpt-5.4-mini": {
+                                "name": "GPT 5.4 Mini",
+                                "model": "openai/gpt-5.4-mini",
+                                "rate_limit_rpm": 30,
+                                "timeout_seconds": 120,
+                            }
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["model", "proxy", "--config", str(config), "--no-start", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "registered"
+    assert payload["models"][0]["id"] == "openai/gpt-5.4-mini"
+    assert payload["models"][0]["backend"] == "proxy"
+    generated = json.loads(Path(payload["config"]).read_text(encoding="utf-8"))
+    assert generated["model_list"][0]["model_name"] == "openai/gpt-5.4-mini"
+    assert generated["model_list"][0]["litellm_params"]["api_key"] == "os.environ/OPENAI_API_KEY"
+    assert load_model_proxies()["proxies"]["openai-gpt-5.4-mini"]["backend"] == "proxy"
+
+    listed = runner.invoke(app, ["model", "list", "--installed", "--json"])
+    assert listed.exit_code == 0
+    proxy_models = [model for model in json.loads(listed.stdout)["models"] if model["id"] == "openai/gpt-5.4-mini"]
+    assert len(proxy_models) == 1
+    model = proxy_models[0]
+    assert model["id"] == "openai/gpt-5.4-mini"
+    assert model["backend"] == "proxy"
+    assert model["installed"] is True
 
 
 def test_model_install_pulls_and_runs_compatible_model(mocker):
