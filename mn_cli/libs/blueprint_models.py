@@ -16,6 +16,7 @@ class BlueprintModelOps:
     record_model_owner: Callable[..., Any]
     model_installed: Callable[[str], bool]
     install_model_entry: Callable[..., dict[str, Any]]
+    resolve_model_endpoint: Callable[..., dict[str, Any] | None] | None = None
     notify_model_install_start: Callable[[dict[str, Any]], Any] | None = None
 
 
@@ -35,6 +36,7 @@ def blueprint_model_dependency_summary(
     ledger = ops.load_model_ownership()
     results: list[dict[str, Any]] = []
     errors: list[str] = []
+    endpoints: dict[str, dict[str, Any]] = {}
     for requirement in requirements:
         model_ref = str(requirement.get("model") or "")
         try:
@@ -68,6 +70,24 @@ def blueprint_model_dependency_summary(
                 backend=backend,
             )
             results.append({**base_result, "status": "service_required"})
+            continue
+
+        endpoint = None
+        if ops.resolve_model_endpoint is not None:
+            endpoint = ops.resolve_model_endpoint(requirement=requirement, entry=entry)
+        if endpoint:
+            keys = {
+                str(requirement.get("name") or "").strip(),
+                str(requirement.get("model") or "").strip(),
+                str(entry.get("id") or "").strip(),
+                docker_model,
+                str(endpoint.get("model") or "").strip(),
+                str(endpoint.get("runtime_model") or "").strip(),
+            }
+            for key in keys:
+                if key:
+                    endpoints[key] = endpoint
+            results.append({**base_result, "status": endpoint.get("source") or "cluster_provided", "endpoint": endpoint})
             continue
 
         preexisting_record = ledger.get("models", {}).get(docker_model)
@@ -113,6 +133,7 @@ def blueprint_model_dependency_summary(
         "blueprint_id": blueprint_id,
         "bundle_root": str(bundle_root),
         "models": results,
+        "endpoints": endpoints,
         "errors": errors,
         "ok": not errors,
     }

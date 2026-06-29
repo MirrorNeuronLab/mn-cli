@@ -72,12 +72,15 @@ from mn_cli.error_handler import handle_cli_error
 from mn_sdk import (
     cluster_provided_model,
     docker_model_name,
+    load_model_remotes,
     load_model_catalog,
     load_model_ownership,
     make_validation_report,
+    model_endpoints_json,
     prepare_job_submission,
     record_model_owner,
     required_blueprint_models,
+    resolve_model_endpoint,
     resolve_model_entry,
     run_hardware_requirements_validation,
     run_input_validation,
@@ -272,13 +275,65 @@ def _prepare_runtime_models_for_run_or_exit(
             record_model_owner=record_model_owner,
             model_installed=model_installed,
             install_model_entry=install_model_entry,
+            resolve_model_endpoint=_resolve_runtime_model_endpoint,
             notify_model_install_start=_print_runtime_model_install_start,
         ),
     )
+    endpoints = summary.get("endpoints") if isinstance(summary.get("endpoints"), dict) else {}
+    if endpoints and env_overrides is not None:
+        env_overrides["MN_MODEL_ENDPOINTS_JSON"] = model_endpoints_json(endpoints)
     _print_runtime_model_install_summary(summary)
     if summary["errors"]:
         raise typer.Exit(1)
     return summary
+
+
+def _resolve_runtime_model_endpoint(*, requirement: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any] | None:
+    model = str(requirement.get("model") or entry.get("id") or "").strip()
+    config = requirement.get("config") if isinstance(requirement.get("config"), dict) else {}
+    services = _resolve_model_services_for_requirement(entry)
+    try:
+        return resolve_model_endpoint(
+            model,
+            config=config,
+            entry=entry,
+            services=services,
+            remotes=load_model_remotes(),
+        )
+    except Exception:
+        return None
+
+
+def _resolve_model_services_for_requirement(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    tags = _model_service_tags(entry)
+    services: list[dict[str, Any]] = []
+    for tag in tags:
+        try:
+            response = client.resolve_service(
+                "docker-model-runner",
+                tags=[tag],
+                passing_only=True,
+            )
+            decoded = json.loads(response)
+            for service in decoded.get("services") or []:
+                if isinstance(service, dict) and service not in services:
+                    services.append(service)
+        except Exception:
+            continue
+    return services
+
+
+def _model_service_tags(entry: dict[str, Any]) -> list[str]:
+    tags: list[str] = []
+    for prefix, value in (
+        ("model-id", entry.get("id")),
+        ("model", entry.get("model") or entry.get("docker_model")),
+        ("model", entry.get("api_model")),
+    ):
+        text = str(value or "").strip().lower().replace("_", "-")
+        if text:
+            tags.append(f"{prefix}:{text}")
+    return list(dict.fromkeys(tags))
 
 
 def _runtime_model_blueprint_id(
@@ -343,7 +398,15 @@ def _print_runtime_model_install_summary(summary: dict[str, Any]) -> None:
         item
         for item in models
         if str(item.get("status") or "")
-        in {"installed", "already_installed", "service_required", "cluster_provided"}
+        in {
+            "installed",
+            "already_installed",
+            "service_required",
+            "cluster_provided",
+            "service_registry",
+            "model_remote",
+            "explicit_config",
+        }
     ]
     if prepared:
         labels = ", ".join(

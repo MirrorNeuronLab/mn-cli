@@ -6,7 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from mn_cli.main import app
-from mn_sdk import HostHardwareProfile, load_model_ownership
+from mn_sdk import HostHardwareProfile, load_model_ownership, load_model_remotes
 
 
 runner = CliRunner()
@@ -15,6 +15,7 @@ runner = CliRunner()
 @pytest.fixture(autouse=True)
 def isolate_model_ownership(monkeypatch, tmp_path):
     monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
+    monkeypatch.setenv("MN_MODEL_REMOTES_PATH", str(tmp_path / "model-remotes.json"))
     monkeypatch.setattr("mn_cli.libs.model_cmds._endpoint_responds", lambda: False)
 
 
@@ -72,6 +73,38 @@ def test_model_show_does_not_require_docker_binary(mocker):
     payload = json.loads(result.stdout)
     assert payload["installed"] is False
     mock_api_model_installed.assert_not_called()
+
+
+def test_model_remote_add_list_remove_json():
+    add = runner.invoke(
+        app,
+        [
+            "model",
+            "remote",
+            "add",
+            "ai/qwen3-coder",
+            "--base-url",
+            "http://192.168.4.173:12434/v1",
+            "--name",
+            "spark",
+            "--json",
+        ],
+    )
+
+    assert add.exit_code == 0
+    added = json.loads(add.stdout)
+    assert added["remote"]["name"] == "spark"
+    assert added["remote"]["model"] == "ai/qwen3-coder"
+    assert load_model_remotes()["remotes"]["spark"]["base_url"] == "http://192.168.4.173:12434/v1"
+
+    listed = runner.invoke(app, ["model", "remote", "list", "--json"])
+    assert listed.exit_code == 0
+    assert json.loads(listed.stdout)["remotes"][0]["name"] == "spark"
+
+    removed = runner.invoke(app, ["model", "remote", "remove", "spark", "--json"])
+    assert removed.exit_code == 0
+    assert json.loads(removed.stdout)["removed"]["name"] == "spark"
+    assert load_model_remotes()["remotes"] == {}
 
 
 def test_model_install_pulls_and_runs_compatible_model(mocker):

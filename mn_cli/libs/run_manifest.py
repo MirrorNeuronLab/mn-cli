@@ -1391,6 +1391,8 @@ def _manifest_uses_docker_model_runner_http_endpoint(manifest: dict[str, Any]) -
     for node in _service_requirement_nodes(manifest):
         config = node.get("config") if isinstance(node.get("config"), dict) else {}
         environment = config.get("environment") if isinstance(config.get("environment"), dict) else {}
+        if str(environment.get("MN_MODEL_ENDPOINTS_JSON") or "").strip():
+            return True
         provider = str(environment.get("MN_LLM_PROVIDER") or "").strip().lower()
         api_base = str(environment.get("MN_LLM_API_BASE") or "").strip().lower()
         if provider == "docker_model_runner" and (

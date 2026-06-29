@@ -23,14 +23,18 @@ from mn_sdk import (
     docker_model_match_keys,
     docker_model_name,
     docker_runner_command,
+    default_model_remotes_path,
     list_model_entries,
     load_model_catalog,
     load_model_ownership,
+    load_model_remotes,
     merge_catalog_and_installed_models,
     model_ownership_metadata,
     record_manual_model_install,
+    remove_model_remote,
     remove_model_record,
     resolve_model_entry,
+    upsert_model_remote,
 )
 from mn_sdk import (
     docker_status as sdk_docker_status,
@@ -44,6 +48,8 @@ from mn_sdk import (
 
 
 model_app = typer.Typer(help="Manage local Docker Model Runner models")
+remote_app = typer.Typer(help="Manage remote model endpoints")
+model_app.add_typer(remote_app, name="remote")
 
 
 @model_app.command(name="list")
@@ -242,6 +248,112 @@ def doctor_model(
         _print_doctor(payload)
     except Exception as exc:
         handle_cli_error(exc, console, "model doctor")
+        raise typer.Exit(1)
+
+
+@remote_app.command(name="add")
+def add_remote_model(
+    model: Annotated[str, typer.Argument(help="Model id, alias, or Docker/OpenAI model reference.")],
+    base_url: Annotated[str, typer.Option("--base-url", help="OpenAI-compatible base URL for this model.")],
+    name: Annotated[Optional[str], typer.Option("--name", help="Stable remote endpoint name.")] = None,
+    api_model: Annotated[Optional[str], typer.Option("--api-model", help="Model name to pass to the remote API.")] = None,
+    api_key: Annotated[str, typer.Option("--api-key", help="API key for the remote endpoint.")] = "not-needed",
+    node: Annotated[Optional[str], typer.Option("--node", help="Optional node label for display/advertisement.")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+):
+    """Declare an already-running remote model endpoint."""
+    try:
+        try:
+            entry = resolve_model_entry(model)
+            runtime_model = docker_model_name(entry)
+            resolved_api_model = api_model or str(entry.get("api_model") or runtime_model)
+            remote_name = name or str(entry.get("id") or runtime_model).replace("/", "-").replace(":", "-")
+        except Exception:
+            runtime_model = model
+            resolved_api_model = api_model or model
+            remote_name = name or model.replace("/", "-").replace(":", "-")
+        remote = upsert_model_remote(
+            remote_name,
+            runtime_model,
+            base_url,
+            api_key=api_key,
+            api_model=resolved_api_model,
+            node=node,
+        )
+        payload = {"remote": remote, "path": str(default_model_remotes_path())}
+        if json_output:
+            console.print_json(data=payload)
+            return
+        print_success_confirmation(
+            console,
+            "Remote model",
+            status="registered",
+            details=[
+                ("Name", remote["name"]),
+                ("Model", remote["model"]),
+                ("API base", remote["base_url"]),
+            ],
+            next_steps="mn model remote list",
+        )
+    except Exception as exc:
+        handle_cli_error(exc, console, "model remote add")
+        raise typer.Exit(1)
+
+
+@remote_app.command(name="list")
+def list_remote_models(
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+):
+    """List declared remote model endpoints."""
+    try:
+        ledger = load_model_remotes()
+        remotes = list((ledger.get("remotes") or {}).values())
+        payload = {"remotes": remotes, "path": str(default_model_remotes_path())}
+        if json_output:
+            console.print_json(data=payload)
+            return
+        table = Table(title="Remote model endpoints")
+        table.add_column("Name")
+        table.add_column("Model")
+        table.add_column("API model")
+        table.add_column("Base URL")
+        for remote in remotes:
+            table.add_row(
+                str(remote.get("name") or ""),
+                str(remote.get("model") or ""),
+                str(remote.get("api_model") or ""),
+                str(remote.get("base_url") or ""),
+            )
+        console.print(table)
+    except Exception as exc:
+        handle_cli_error(exc, console, "model remote list")
+        raise typer.Exit(1)
+
+
+@remote_app.command(name="remove")
+def remove_remote_model(
+    name: Annotated[str, typer.Argument(help="Remote endpoint name.")],
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+):
+    """Remove a declared remote model endpoint."""
+    try:
+        removed = remove_model_remote(name)
+        payload = {"removed": removed, "path": str(default_model_remotes_path())}
+        if json_output:
+            console.print_json(data=payload)
+            return
+        if removed:
+            print_success_confirmation(
+                console,
+                "Remote model",
+                status="removed",
+                details=[("Name", removed.get("name")), ("Model", removed.get("model"))],
+                next_steps="mn model remote list",
+            )
+        else:
+            console.print(f"[yellow]Remote model endpoint {name!r} was not registered.[/yellow]")
+    except Exception as exc:
+        handle_cli_error(exc, console, "model remote remove")
         raise typer.Exit(1)
 
 

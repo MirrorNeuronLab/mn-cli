@@ -127,6 +127,66 @@ def test_prepare_runtime_models_installs_missing_model_for_run(
     assert "Runtime models ready: gemma4:e2b" in output
 
 
+def test_prepare_runtime_models_uses_cluster_model_endpoint(
+    mocker,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
+    monkeypatch.setenv("MN_MODEL_REMOTES_PATH", str(tmp_path / "remotes.json"))
+    bundle_dir = tmp_path / "assistant"
+    bundle_dir.mkdir()
+    manifest = {
+        "metadata": {"blueprint_id": "assistant"},
+        "runtime": {
+            "models": {
+                "primary": {
+                    "provider": "docker_model_runner",
+                    "runtime_model": "qwen3-coder",
+                }
+            }
+        },
+    }
+    catalog = {
+        "qwen3-coder": {
+            "id": "qwen3-coder",
+            "model": "ai/qwen3-coder",
+            "api_model": "ai/qwen3-coder",
+            "provider": "docker_model_runner",
+        }
+    }
+    service = {
+        "id": "spark:docker-model-runner:qwen3",
+        "name": "docker-model-runner",
+        "node": "spark@192.168.4.173",
+        "status": "passing",
+        "address": "http://192.168.4.173:12434/v1",
+        "tags": ["model:ai/qwen3-coder", "model-id:qwen3-coder"],
+        "meta": {"model": "ai/qwen3-coder", "api_model": "ai/qwen3-coder"},
+    }
+    mocker.patch("mn_cli.libs.run_cmds.load_model_catalog", return_value=catalog)
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.resolve_service",
+        return_value=json.dumps({"services": [service]}),
+    )
+    install_model = mocker.patch("mn_cli.libs.run_cmds.install_model_entry")
+    env_overrides = {}
+
+    summary = run_cmds._prepare_runtime_models_for_run_or_exit(
+        bundle_dir,
+        manifest,
+        env_overrides=env_overrides,
+    )
+
+    assert summary["ok"] is True
+    assert summary["models"][0]["status"] == "service_registry"
+    install_model.assert_not_called()
+    endpoints = json.loads(env_overrides["MN_MODEL_ENDPOINTS_JSON"])
+    assert endpoints["qwen3-coder"]["api_base"] == "http://192.168.4.173:12434/v1"
+    assert "MN_LLM_API_BASE" not in env_overrides
+    assert "MN_LLM_MODEL" not in env_overrides
+
+
 def _workflow_manifest_fixture():
     return {
         "apiVersion": "mn.workflow/v1",
