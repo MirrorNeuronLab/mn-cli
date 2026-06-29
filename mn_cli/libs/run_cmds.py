@@ -683,7 +683,27 @@ def _materialize_shared_storage_outputs(storage: dict[str, Any]) -> bool:
         if copied:
             copied_any = True
             console.print(f"[green]Materialized shared outputs:[/green] {target}")
+    if copied_any and storage.get("cleanup_after_output_copy") is True:
+        _cleanup_shared_storage_submission(storage)
     return copied_any
+
+
+def _cleanup_shared_storage_submission(storage: dict[str, Any]) -> None:
+    host_root = storage.get("host_root")
+    submission_path = storage.get("host_submission_path")
+    if not isinstance(host_root, str) or not isinstance(submission_path, str):
+        return
+    root = Path(host_root).expanduser().resolve()
+    submission = Path(submission_path).expanduser().resolve()
+    submissions_root = root / "submissions"
+    try:
+        submission.relative_to(submissions_root)
+    except ValueError:
+        logger.warning("Skipping shared storage cleanup outside submissions root: %s", submission)
+        return
+    if submission.name in {"", ".", ".."}:
+        return
+    shutil.rmtree(submission, ignore_errors=True)
 
 
 def _host_shared_path_for_runtime_path(storage: dict[str, Any], runtime_path: str) -> Optional[Path]:
@@ -2190,7 +2210,7 @@ def run_bundle(
             if web_ui and blueprint_run_dir is not None:
                 _start_background_event_relay_if_needed(
                     bundle_dir,
-                    manifest_dict,
+                    submitted_manifest or manifest_dict,
                     job_id,
                     blueprint_run_dir,
                     "submitted",
@@ -2222,7 +2242,7 @@ def run_bundle(
             if web_ui:
                 _start_background_event_relay_if_needed(
                     bundle_dir,
-                    manifest_dict,
+                    submitted_manifest or manifest_dict,
                     job_id,
                     blueprint_run_dir,
                     final_status,
@@ -3038,6 +3058,15 @@ def _start_background_event_relay_if_needed(
         "--poll-seconds",
         f"{poll_seconds:g}",
     ]
+    storage = _shared_storage_metadata(manifest_dict)
+    storage_path: Path | None = None
+    if storage:
+        storage_path = run_dir / "shared_storage.json"
+        storage_path.write_text(
+            json.dumps(storage, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        command.extend(["--shared-storage-json", str(storage_path)])
     if max_seconds is not None:
         command.extend(["--max-seconds", f"{max_seconds:g}"])
 
@@ -3060,6 +3089,7 @@ def _start_background_event_relay_if_needed(
         "poll_seconds": poll_seconds,
         "max_seconds": max_seconds,
         "log_path": str(log_path),
+        "shared_storage_path": str(storage_path) if storage_path is not None else None,
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     (run_dir / "event_relay.json").write_text(
@@ -3069,6 +3099,16 @@ def _start_background_event_relay_if_needed(
     console.print(
         "[green]Live event relay:[/green] keeping the local dashboard stream updated in the background."
     )
+
+
+def _shared_storage_metadata(manifest_dict: dict[str, Any]) -> dict[str, Any]:
+    metadata = (
+        manifest_dict.get("metadata")
+        if isinstance(manifest_dict.get("metadata"), dict)
+        else {}
+    )
+    storage = metadata.get("mn_storage") if isinstance(metadata, dict) else None
+    return storage if isinstance(storage, dict) else {}
 
 
 def _is_live_manifest(manifest_dict: dict[str, Any]) -> bool:

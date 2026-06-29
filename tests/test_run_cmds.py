@@ -1715,6 +1715,35 @@ def test_materialize_shared_storage_outputs_copies_host_runtime_path(tmp_path):
     assert (target / "company" / "analysis.md").read_text() == "# Company\n"
 
 
+def test_materialize_shared_storage_outputs_cleans_submission_after_copy(tmp_path):
+    host_root = tmp_path / "shared"
+    submission = host_root / "submissions" / "sub-clean"
+    source = submission / "outputs" / "user"
+    source.mkdir(parents=True)
+    (source / "result.json").write_text('{"ok": true}\n', encoding="utf-8")
+
+    target = tmp_path / "Downloads" / "vc_assistant"
+    copied = run_cmds._materialize_shared_storage_outputs(
+        {
+            "host_root": str(host_root),
+            "host_submission_path": str(submission),
+            "runtime_root": "/runtime/shared",
+            "cleanup_after_output_copy": True,
+            "output_copy": [
+                {
+                    "source_path": "/runtime/shared/submissions/sub-clean/outputs/user",
+                    "target_path": str(target),
+                    "kind": "directory",
+                }
+            ],
+        }
+    )
+
+    assert copied is True
+    assert json.loads((target / "result.json").read_text())["ok"] is True
+    assert not submission.exists()
+
+
 def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-auto")
@@ -2464,10 +2493,14 @@ def test_live_web_ui_run_starts_background_event_relay(mocker, tmp_path, monkeyp
     command = mock_popen.call_args.args[0]
     assert command[:3] == [sys.executable, "-m", "mn_sdk.blueprint_support.event_relay"]
     assert "--max-seconds" in command
+    assert "--shared-storage-json" in command
     pythonpath = mock_popen.call_args.kwargs["env"].get("PYTHONPATH", "")
     assert "mn-skills/blueprint_support_skill/src" not in pythonpath
     relay = json.loads((tmp_path / "runs" / "live-ui-run" / "event_relay.json").read_text())
     assert relay["pid"] == 4242
+    storage_path = Path(relay["shared_storage_path"])
+    assert storage_path.name == "shared_storage.json"
+    assert json.loads(storage_path.read_text())["output_copy_executor"] == "master_host"
 
 
 def test_run_uses_detach_log_seconds_env(mocker, tmp_path, monkeypatch):
