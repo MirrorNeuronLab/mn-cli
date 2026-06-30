@@ -60,6 +60,17 @@ build-backend = "setuptools.build_meta"
     )
 
 
+def test_workspace_root_infers_repo_from_cwd(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    nested = workspace / "otterdesk-blueprints" / "vc_assistant"
+    (workspace / "mn-skills").mkdir(parents=True)
+    nested.mkdir(parents=True)
+    monkeypatch.delenv("MN_WORKSPACE_ROOT", raising=False)
+    monkeypatch.chdir(nested)
+
+    assert workspace_root() == workspace.resolve()
+
+
 def test_prepare_manifest_for_submission_merges_runtime_env_and_metadata(tmp_path):
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()

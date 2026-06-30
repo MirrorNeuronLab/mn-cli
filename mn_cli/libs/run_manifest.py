@@ -67,6 +67,9 @@ def workspace_root() -> Path:
         value = os.getenv(name)
         if value:
             return Path(value).expanduser().resolve()
+    for candidate in (Path.cwd(), *Path.cwd().parents):
+        if (candidate / "mn-skills").is_dir():
+            return candidate.resolve()
     return Path(__file__).resolve().parents[3]
 
 
