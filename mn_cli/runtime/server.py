@@ -4648,13 +4648,26 @@ def _start_server(
                 env[key] = value
         env = _ensure_runtime_grpc_tokens(env, persist_compose=compose_runtime)
         env = _ensure_runtime_api_token(env, persist_compose=compose_runtime)
+        force_runtime_recreate = False
         if compose_runtime:
             env = _ensure_compose_native_port_settings(env)
+            if host:
+                env, force_runtime_recreate = _prepare_running_compose_exposure(
+                    env,
+                    host=host,
+                    token=token,
+                    redis_port=redis_port,
+                    docker_network_mode=docker_network_mode,
+                    docker_network_name=docker_network_name,
+                )
             core_running = _docker_container_running("mirror-neuron-core")
             if not core_running:
                 console.print("=> MirrorNeuron Core is not running; starting Docker runtime (Compose)...")
             try:
-                subprocess.run(runtime_compose_cmd("up", "-d"), check=True, stdout=subprocess.DEVNULL, env=env)
+                compose_args = ["up", "-d"]
+                if force_runtime_recreate:
+                    compose_args.extend(["--force-recreate", "redis", "mirror-neuron-core"])
+                subprocess.run(runtime_compose_cmd(*compose_args), check=True, stdout=subprocess.DEVNULL, env=env)
                 if not core_running:
                     console.print("   [green][Started][/green] Docker runtime (Compose project: mirror-neuron)")
             except (FileNotFoundError, subprocess.CalledProcessError):
@@ -5013,6 +5026,91 @@ def _start_server(
         logger.info("Wrote MirrorNeuron runtime endpoints: %s", endpoint_snapshot.get("api", {}))
 
     _print_service_endpoints(ip, web_ui_available)
+
+def _prepare_running_compose_exposure(
+    env: dict[str, str],
+    *,
+    host: str,
+    token: Optional[str],
+    redis_port: Optional[int],
+    docker_network_mode: Optional[str],
+    docker_network_name: Optional[str],
+) -> tuple[dict[str, str], bool]:
+    network_token = token or _resolve_network_token()
+    advertised_host = _advertised_network_host(host)
+    requested_mode = _docker_network_mode(
+        docker_network_mode or os.getenv("MN_DOCKER_NETWORK_MODE", "").strip() or None,
+        default="disabled",
+    )
+    network_name = _docker_network_name(docker_network_name)
+    use_internal_identity = _docker_network_uses_internal_identity(requested_mode)
+    node_alias = _resolve_node_alias(env) if requested_mode != "disabled" else ""
+
+    if requested_mode != "disabled":
+        _ensure_docker_network(requested_mode, network_name)
+        env.update(_docker_network_env(requested_mode, network_name, node_alias))
+    else:
+        env["MN_DOCKER_NETWORK_MODE"] = "disabled"
+
+    local_node_name = _docker_node_name(node_alias) if use_internal_identity else _network_node_name(advertised_host)
+    env.update(_shared_storage_env_from_runtime_env(env))
+    env = _ensure_syncthing_for_runtime(env, advertised_host=advertised_host)
+    env = _ensure_compose_cluster_bind_settings(env, advertised_host)
+
+    if use_internal_identity and node_alias:
+        env = _ensure_compose_internal_redis_settings(
+            env,
+            token=network_token,
+            network_redis_host=_docker_redis_alias(node_alias),
+            network_redis_port=REDIS_CONTAINER_PORT,
+        )
+    else:
+        env = _ensure_compose_cluster_port_settings(
+            env,
+            token=network_token,
+            advertised_host=advertised_host,
+            redis_port=redis_port,
+        )
+
+    env["MN_NETWORK_ADVERTISE_HOST"] = advertised_host
+    env["MN_NETWORK_JOIN_TOKEN"] = network_token
+    if _generated_node_setting_should_update("MN_NODE_NAME", env.get("MN_NODE_NAME"), local_node_name):
+        env["MN_NODE_NAME"] = local_node_name
+    if _generated_node_setting_should_update(
+        "MN_MODEL_SERVICE_NODE_NAME",
+        env.get("MN_MODEL_SERVICE_NODE_NAME"),
+        env["MN_NODE_NAME"],
+    ):
+        env["MN_MODEL_SERVICE_NODE_NAME"] = env["MN_NODE_NAME"]
+    if _generated_cluster_setting_should_update(env.get("MN_CLUSTER_NODES"), local_node_name):
+        env["MN_CLUSTER_NODES"] = local_node_name
+    env["MN_NODE_ROLE"] = env.get("MN_NODE_ROLE") or "runtime"
+    env["MN_DIST_PORT"] = str(env.get("MN_DIST_PORT") or DEFAULT_DIST_PORT)
+    env["MN_COOKIE"] = _derive_network_secret(network_token, "cookie")
+    if _erl_aflags_needs_update(env.get("ERL_AFLAGS"), env["MN_DIST_PORT"]):
+        env["ERL_AFLAGS"] = _erl_aflags(env["MN_DIST_PORT"])
+    env = _ensure_node_advertisement_settings(env)
+
+    _write_env_file_values(
+        RUNTIME_COMPOSE_ENV,
+        {
+            "MN_NETWORK_ADVERTISE_HOST": env["MN_NETWORK_ADVERTISE_HOST"],
+            "MN_NETWORK_JOIN_TOKEN": env["MN_NETWORK_JOIN_TOKEN"],
+            "MN_NODE_NAME": env["MN_NODE_NAME"],
+            "MN_MODEL_SERVICE_NODE_NAME": env["MN_MODEL_SERVICE_NODE_NAME"],
+            "MN_CLUSTER_NODES": env["MN_CLUSTER_NODES"],
+            "MN_NODE_ROLE": env["MN_NODE_ROLE"],
+            "MN_DIST_PORT": env["MN_DIST_PORT"],
+            "MN_COOKIE": env["MN_COOKIE"],
+            "ERL_AFLAGS": env["ERL_AFLAGS"],
+            "MN_DOCKER_NETWORK_MODE": requested_mode,
+            "MN_DOCKER_NETWORK_NAME": network_name,
+            **{key: env[key] for key in SHARED_STORAGE_ENV_KEYS if key in env},
+            **{key: env[key] for key in SYNCTHING_ENV_KEYS if key in env},
+            **{key: env[key] for key in REDIS_HA_ENV_KEYS if key in env},
+        },
+    )
+    return env, True
     network_args = _docker_network_command_args(requested_docker_mode, network_name)
     details = [
         ("Network token", network_token),

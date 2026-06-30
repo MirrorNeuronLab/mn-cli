@@ -1952,6 +1952,8 @@ def test_start_server_restarts_existing_api_when_runtime_blueprint_env_changes(m
     mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed', return_value=False)
     mocker.patch('mn_cli.server_cmds._write_runtime_endpoints_file', return_value={"api": {}})
     mocker.patch('mn_cli.server_cmds._print_service_endpoints')
+    mocker.patch('mn_cli.server_cmds._resolve_published_redis_port', return_value=56379)
+    mocker.patch('mn_cli.runtime.server._resolve_published_redis_port', return_value=56379)
 
     _start_server()
 
@@ -2079,6 +2081,8 @@ def test_start_server_existing_api_starts_missing_compose_core(mocker, tmp_path)
     mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed', return_value=False)
     mocker.patch('mn_cli.server_cmds._write_runtime_endpoints_file', return_value={"api": {}})
     mocker.patch('mn_cli.server_cmds._print_service_endpoints')
+    mocker.patch('mn_cli.server_cmds._resolve_published_redis_port', return_value=56379)
+    mocker.patch('mn_cli.runtime.server._resolve_published_redis_port', return_value=56379)
 
     calls = []
 
@@ -2092,8 +2096,16 @@ def test_start_server_existing_api_starts_missing_compose_core(mocker, tmp_path)
 
     _start_server(host="192.168.4.20")
 
-    compose_up = next(item for item in calls if item[0] == runtime_compose_cmd("up", "-d"))
+    compose_up = next(
+        item
+        for item in calls
+        if item[0] == runtime_compose_cmd("up", "-d", "--force-recreate", "redis", "mirror-neuron-core")
+    )
     assert compose_up[1]["env"]["ERL_AFLAGS"] == _erl_aflags("54370")
+    assert compose_up[1]["env"]["MN_DOCKER_NETWORK_MODE"] == "disabled"
+    assert compose_up[1]["env"]["MN_GRPC_BIND_HOST"] == "0.0.0.0"
+    assert compose_up[1]["env"]["MN_NETWORK_ADVERTISE_HOST"] == "192.168.4.20"
+    assert "MN_NETWORK_ADVERTISE_HOST=192.168.4.20" in compose_env.read_text(encoding="utf-8")
 
 def test_join_still_errors_when_local_api_already_running(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
