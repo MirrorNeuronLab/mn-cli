@@ -203,14 +203,17 @@ WEB_UI_PORT = DEFAULT_WEB_UI_PORT
 REDIS_CONTAINER_PORT = 6379
 REDIS_DYNAMIC_PORT_START = 56379
 REDIS_DYNAMIC_PORT_END = 56478
+DEFAULT_REDIS_SENTINEL_PORT = 26379
 NETWORK_TOKEN_FILE = DIR / "network.token"
 NETWORK_REDIS_ENV_FILE = DIR / "network-redis.env"
 DEFAULT_DOCKER_NETWORK_NAME = "mirror-neuron-runtime"
 NETWORK_DOCKER_NETWORK = DEFAULT_DOCKER_NETWORK_NAME
 LOCAL_CORE_CONTAINER = "mirror-neuron-core"
 COMPOSE_REDIS_CONTAINER = "mirror-neuron-redis"
+COMPOSE_SENTINEL_CONTAINER = "mirror-neuron-sentinel"
 NETWORK_CORE_CONTAINER = "mirror-neuron-network-core"
 NETWORK_REDIS_CONTAINER = "mirror-neuron-network-redis"
+NETWORK_SENTINEL_CONTAINER = "mirror-neuron-network-sentinel"
 RUNTIME_CLUSTER_OVERRIDE_FILE = "docker-compose.cluster.yml"
 DEPRECATED_RUNTIME_ENV_KEYS = {
     "MN_ARTIFACT_AUTH_TOKEN",
@@ -1345,6 +1348,115 @@ def _network_redis_url(token: str, redis_host: str, redis_port: int, password: O
     password = password or _resolve_redis_password()
     return f"redis://:{password}@{redis_host}:{redis_port}/0"
 
+REDIS_HA_ENV_KEYS = (
+    "MN_REDIS_HA_MODE",
+    "MN_REDIS_SENTINELS",
+    "MN_REDIS_SENTINEL_MASTER",
+    "MN_REDIS_SENTINEL_HOST_MAP",
+    "MN_REDIS_DB",
+    "MN_REDIS_USERNAME",
+    "MN_REDIS_PASSWORD",
+    "MN_REDIS_SENTINEL_USERNAME",
+    "MN_REDIS_SENTINEL_PASSWORD",
+    "MN_REDIS_SENTINEL_PORT",
+    "MN_REDIS_WAIT_REPLICAS",
+    "MN_REDIS_WAIT_TIMEOUT_MS",
+    "MN_REDIS_RECONNECT_ATTEMPTS",
+    "MN_REDIS_RECONNECT_BACKOFF_MS",
+    "MN_REDIS_RECONNECT_MAX_BACKOFF_MS",
+)
+
+def _redis_ha_mode(env: dict[str, str], *, cluster: bool = False) -> str:
+    configured = str(os.getenv("MN_REDIS_HA_MODE") or env.get("MN_REDIS_HA_MODE") or "").strip().lower()
+    if configured:
+        return configured
+    return "sentinel" if cluster else "single"
+
+def _redis_ha_enabled(env: dict[str, str], *, cluster: bool = False) -> bool:
+    return _redis_ha_mode(env, cluster=cluster) == "sentinel"
+
+def _redis_sentinel_port(env: dict[str, str]) -> int:
+    configured = (
+        os.getenv("MN_REDIS_SENTINEL_PORT", "").strip()
+        or str(env.get("MN_REDIS_SENTINEL_PORT") or "").strip()
+    )
+    return _parse_configured_port(configured) or DEFAULT_REDIS_SENTINEL_PORT
+
+def _redis_sentinel_master(env: dict[str, str]) -> str:
+    return (
+        os.getenv("MN_REDIS_SENTINEL_MASTER", "").strip()
+        or str(env.get("MN_REDIS_SENTINEL_MASTER") or "").strip()
+        or "mirror-neuron"
+    )
+
+def _redis_sentinels(env: dict[str, str], advertised_host: str) -> str:
+    configured = (
+        os.getenv("MN_REDIS_SENTINELS", "").strip()
+        or str(env.get("MN_REDIS_SENTINELS") or "").strip()
+    )
+    if configured:
+        return configured
+    return f"{advertised_host}:{_redis_sentinel_port(env)}"
+
+def _ensure_redis_ha_settings(
+    env: dict[str, str],
+    *,
+    advertised_host: str,
+    cluster: bool,
+) -> dict[str, str]:
+    adjusted = dict(env)
+    mode = _redis_ha_mode(adjusted, cluster=cluster)
+    adjusted["MN_REDIS_HA_MODE"] = mode
+    if mode != "sentinel":
+        return adjusted
+
+    redis_password = str(adjusted.get("MN_REDIS_PASSWORD") or "").strip() or _resolve_redis_password(adjusted)
+    adjusted["MN_REDIS_PASSWORD"] = redis_password
+    adjusted.setdefault("MN_REDIS_SENTINELS", _redis_sentinels(adjusted, advertised_host))
+    adjusted.setdefault("MN_REDIS_SENTINEL_MASTER", _redis_sentinel_master(adjusted))
+    adjusted.setdefault("MN_REDIS_DB", os.getenv("MN_REDIS_DB", "").strip() or "0")
+    adjusted.setdefault("MN_REDIS_SENTINEL_PORT", str(_redis_sentinel_port(adjusted)))
+    adjusted.setdefault("MN_REDIS_SENTINEL_PASSWORD", os.getenv("MN_REDIS_SENTINEL_PASSWORD", "").strip() or redis_password)
+    adjusted.setdefault("MN_REDIS_WAIT_REPLICAS", os.getenv("MN_REDIS_WAIT_REPLICAS", "").strip() or "1")
+    adjusted.setdefault("MN_REDIS_WAIT_TIMEOUT_MS", os.getenv("MN_REDIS_WAIT_TIMEOUT_MS", "").strip() or "1000")
+    for key in REDIS_HA_ENV_KEYS:
+        value = os.getenv(key, "").strip()
+        if value:
+            adjusted[key] = value
+    return adjusted
+
+def _redis_ha_env_from_handshake(handshake: Optional[dict]) -> dict[str, str]:
+    if not isinstance(handshake, dict):
+        return {}
+    node_info = handshake.get("node_info")
+    redis_ha = node_info.get("redis_ha") if isinstance(node_info, dict) else None
+    if not isinstance(redis_ha, dict):
+        return {}
+    updates: dict[str, str] = {}
+    mapping = {
+        "mode": "MN_REDIS_HA_MODE",
+        "sentinels": "MN_REDIS_SENTINELS",
+        "sentinel_master": "MN_REDIS_SENTINEL_MASTER",
+        "sentinel_host_map": "MN_REDIS_SENTINEL_HOST_MAP",
+        "db": "MN_REDIS_DB",
+        "sentinel_port": "MN_REDIS_SENTINEL_PORT",
+        "wait_replicas": "MN_REDIS_WAIT_REPLICAS",
+        "wait_timeout_ms": "MN_REDIS_WAIT_TIMEOUT_MS",
+        "reconnect_attempts": "MN_REDIS_RECONNECT_ATTEMPTS",
+        "reconnect_backoff_ms": "MN_REDIS_RECONNECT_BACKOFF_MS",
+        "reconnect_max_backoff_ms": "MN_REDIS_RECONNECT_MAX_BACKOFF_MS",
+    }
+    for source, target in mapping.items():
+        value = str(redis_ha.get(source) or "").strip()
+        if value:
+            updates[target] = value
+    if updates.get("MN_REDIS_HA_MODE") == "sentinel":
+        redis_password = _redis_password_from_url(str(handshake.get("redis_url") or ""))
+        if redis_password:
+            updates.setdefault("MN_REDIS_PASSWORD", redis_password)
+            updates.setdefault("MN_REDIS_SENTINEL_PASSWORD", redis_password)
+    return updates
+
 def _network_core_env(
     *,
     token: str,
@@ -1397,6 +1509,7 @@ def _network_core_env(
             "ERL_AFLAGS": _erl_aflags(dist_port),
         }
     )
+    env = _ensure_redis_ha_settings(env, advertised_host=host, cluster=True)
     env = _ensure_node_advertisement_settings(env)
     return env
 
@@ -1553,6 +1666,182 @@ def _force_compose_redis_primary() -> None:
         ),
     ]
     subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def _redis_conf_quote(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+def _start_redis_sentinel(
+    *,
+    container_name: str,
+    data_dir: Path,
+    advertised_host: str,
+    redis_host: str,
+    redis_port: int,
+    env: dict[str, str],
+    docker_network_mode: str,
+    docker_network_name: str,
+    sentinel_alias: str,
+    publish_host_port: bool,
+) -> None:
+    if not _redis_ha_enabled(env, cluster=True):
+        subprocess.run(["docker", "rm", "-f", container_name], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        return
+
+    subprocess.run(["docker", "rm", "-f", container_name], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    sentinel_port = _redis_sentinel_port(env)
+    redis_password = str(env.get("MN_REDIS_PASSWORD") or _resolve_redis_password(env))
+    sentinel_password = str(env.get("MN_REDIS_SENTINEL_PASSWORD") or redis_password)
+    master_name = _redis_sentinel_master(env)
+    quorum = str(env.get("MN_REDIS_SENTINEL_QUORUM") or os.getenv("MN_REDIS_SENTINEL_QUORUM") or "1")
+    publish_host = _network_publish_host(advertised_host)
+    sentinel_conf = "\n".join(
+        [
+            "port 26379",
+            "bind 0.0.0.0",
+            "protected-mode no",
+            "dir /data",
+            "sentinel resolve-hostnames yes",
+            "sentinel announce-hostnames no",
+            f"sentinel announce-ip {advertised_host}",
+            f"sentinel announce-port {sentinel_port}",
+            f"requirepass {_redis_conf_quote(sentinel_password)}",
+            f"sentinel sentinel-pass {_redis_conf_quote(sentinel_password)}",
+            f"sentinel monitor {master_name} {redis_host} {redis_port} {quorum}",
+            f"sentinel auth-pass {master_name} {_redis_conf_quote(redis_password)}",
+            f"sentinel down-after-milliseconds {master_name} 5000",
+            f"sentinel failover-timeout {master_name} 60000",
+            f"sentinel parallel-syncs {master_name} 1",
+            "",
+        ]
+    )
+    cmd = [
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        container_name,
+        *_docker_network_run_args(docker_network_mode, docker_network_name, sentinel_alias),
+        "-v",
+        f"{data_dir}:/data",
+        _network_redis_image(),
+        "sh",
+        "-c",
+        f"cat > /data/sentinel.conf <<'EOF'\n{sentinel_conf}EOF\nexec redis-server /data/sentinel.conf --sentinel",
+    ]
+    if publish_host_port:
+        volume_index = cmd.index("-v")
+        cmd[volume_index:volume_index] = ["-p", f"{publish_host}:{sentinel_port}:26379"]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
+
+def _start_network_sentinel(
+    host: str,
+    redis_port: int,
+    env: dict[str, str],
+    *,
+    docker_network_mode: str,
+    docker_network_name: str,
+    redis_alias: str,
+    publish_host_port: bool,
+) -> None:
+    redis_host = redis_alias if _docker_network_uses_internal_identity(docker_network_mode) else host
+    sentinel_alias = f"{redis_alias.rsplit('-redis', 1)[0]}-sentinel"
+    _start_redis_sentinel(
+        container_name=NETWORK_SENTINEL_CONTAINER,
+        data_dir=DIR / "network-sentinel",
+        advertised_host=host,
+        redis_host=redis_host,
+        redis_port=REDIS_CONTAINER_PORT if redis_host == redis_alias else redis_port,
+        env=env,
+        docker_network_mode=docker_network_mode,
+        docker_network_name=docker_network_name,
+        sentinel_alias=sentinel_alias,
+        publish_host_port=publish_host_port,
+    )
+
+def _start_compose_sentinel(advertised_host: str, env: dict[str, str]) -> None:
+    redis_port = _parse_configured_port(env.get("MN_REDIS_PORT")) or REDIS_DYNAMIC_PORT_START
+    _start_redis_sentinel(
+        container_name=COMPOSE_SENTINEL_CONTAINER,
+        data_dir=DIR / "compose-sentinel",
+        advertised_host=advertised_host,
+        redis_host=advertised_host,
+        redis_port=redis_port,
+        env=env,
+        docker_network_mode="disabled",
+        docker_network_name=NETWORK_DOCKER_NETWORK,
+        sentinel_alias="mirror-neuron-sentinel",
+        publish_host_port=True,
+    )
+
+def _configure_worker_sentinel_primary(
+    worker_host: str,
+    worker_handshake: dict,
+    *,
+    primary_host: str,
+    primary_port: int,
+    primary_password: str,
+) -> str | None:
+    node_info = worker_handshake.get("node_info")
+    redis_ha = node_info.get("redis_ha") if isinstance(node_info, dict) else None
+    if not isinstance(redis_ha, dict) or str(redis_ha.get("mode") or "").strip().lower() != "sentinel":
+        return None
+
+    sentinel_port = _parse_configured_port(redis_ha.get("sentinel_port")) or DEFAULT_REDIS_SENTINEL_PORT
+    sentinel_password = str(redis_ha.get("sentinel_password") or "").strip() or _redis_password_from_url(
+        str(worker_handshake.get("redis_url") or "")
+    )
+    master_name = str(redis_ha.get("sentinel_master") or "mirror-neuron").strip() or "mirror-neuron"
+    sentinel_host = _usable_remote_host(worker_host, worker_host)
+    try:
+        _redis_command(sentinel_host, sentinel_port, sentinel_password, "SENTINEL", "REMOVE", master_name)
+    except Exception:
+        logger.debug("Worker Sentinel remove before monitor failed", exc_info=True)
+    try:
+        _redis_command(
+            sentinel_host,
+            sentinel_port,
+            sentinel_password,
+            "SENTINEL",
+            "MONITOR",
+            master_name,
+            primary_host,
+            str(primary_port),
+            "1",
+        )
+        _redis_command(
+            sentinel_host,
+            sentinel_port,
+            sentinel_password,
+            "SENTINEL",
+            "SET",
+            master_name,
+            "auth-pass",
+            primary_password,
+        )
+        _redis_command(
+            sentinel_host,
+            sentinel_port,
+            sentinel_password,
+            "SENTINEL",
+            "SET",
+            master_name,
+            "down-after-milliseconds",
+            "5000",
+        )
+    except Exception as exc:
+        from mn_sdk.errors import AppError
+
+        raise AppError(
+            "MN_EXECUTION_FAILED",
+            "Could not configure worker Redis Sentinel.",
+            internal_message=str(exc),
+            hint="Check that the worker Sentinel port is reachable and retry the node join.",
+            exit_code=1,
+            http_status=500,
+            cause=exc,
+        ) from exc
+    return f"{sentinel_host}:{sentinel_port} -> {primary_host}:{primary_port}"
 
 def _start_network_core(
     env: dict[str, str],
@@ -1869,6 +2158,16 @@ def _start_network_seed(
         redis_public_port=redis_public_port,
     )
     env = _ensure_runtime_grpc_tokens(env, persist_compose=runtime_compose_available())
+    if not external_redis_url:
+        _start_network_sentinel(
+            host,
+            redis_public_port,
+            env,
+            docker_network_mode=container_network_mode,
+            docker_network_name=network_name,
+            redis_alias=redis_alias,
+            publish_host_port=not use_internal_identity,
+        )
     _ensure_nfs_export_for_cluster(env, advertised_host=host)
 
     console.print("=> Starting MirrorNeuron core-only exposed node...")
@@ -1906,7 +2205,6 @@ def _join_network(
     action: str = "Node join",
 ) -> dict:
     from mn_sdk import Client
-    from mn_cli.shared import client as local_client
 
     target = f"{seed_host}:{grpc_port}"
     local_host = (host or _detect_lan_ip()).strip()
@@ -1935,6 +2233,7 @@ def _join_network(
         _write_env_file_values(RUNTIME_COMPOSE_ENV, shared_storage_updates)
     remote_node = handshake.get("node_name") or _network_node_name(seed_host)
     redis_host, redis_port, redis_url = _validate_remote_redis_details(handshake, seed_host, token)
+    from mn_cli.shared import client as local_client
 
     console.print(f"=> Adding MirrorNeuron network node {remote_node} from {target}...")
     if _docker_network_uses_internal_identity(requested_mode):
@@ -2054,6 +2353,7 @@ def _ensure_local_cluster_runtime_for_join(
             env=compose_env,
         )
         _force_compose_redis_primary()
+        _start_compose_sentinel(local_host, compose_env)
         _wait_for_local_cluster_grpc()
     except (FileNotFoundError, subprocess.CalledProcessError) as exc:
         from mn_sdk.errors import AppError
@@ -3075,6 +3375,9 @@ def _ensure_compose_cluster_port_settings(
         "MN_DIST_BIND_HOST": publish_host,
     }
     adjusted.update(updates)
+    adjusted = _ensure_redis_ha_settings(adjusted, advertised_host=advertised_host, cluster=True)
+    if adjusted.get("MN_REDIS_HA_MODE") == "sentinel":
+        updates.update({key: adjusted[key] for key in REDIS_HA_ENV_KEYS if key in adjusted})
     _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
     _write_runtime_compose_cluster_override()
     return adjusted
@@ -3097,18 +3400,19 @@ def _ensure_compose_internal_redis_settings(
     adjusted.setdefault("MN_NETWORK_JOIN_TOKEN", token)
     adjusted["MN_NETWORK_REDIS_HOST"] = redis_host
     adjusted["MN_NETWORK_REDIS_PORT"] = str(redis_port)
+    adjusted = _ensure_redis_ha_settings(adjusted, advertised_host=str(adjusted.get("MN_NETWORK_ADVERTISE_HOST") or redis_host), cluster=True)
 
-    _write_env_file_values(
-        RUNTIME_COMPOSE_ENV,
-        {
+    updates = {
             "MN_NETWORK_JOIN_TOKEN": token,
             "MN_REDIS_PASSWORD": redis_password,
             "MN_REDIS_URL": adjusted["MN_REDIS_URL"],
             "MN_CONTEXT_REDIS_URL": adjusted["MN_CONTEXT_REDIS_URL"],
             "MN_NETWORK_REDIS_HOST": adjusted["MN_NETWORK_REDIS_HOST"],
             "MN_NETWORK_REDIS_PORT": adjusted["MN_NETWORK_REDIS_PORT"],
-        },
-    )
+    }
+    if adjusted.get("MN_REDIS_HA_MODE") == "sentinel":
+        updates.update({key: adjusted[key] for key in REDIS_HA_ENV_KEYS if key in adjusted})
+    _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
     return adjusted
 
 def _resolve_network_seed_redis_port(host: str, requested_port: Optional[int]) -> int:
@@ -3266,6 +3570,13 @@ def _configure_worker_redis_replica(
             "REPLICAOF",
             primary_host,
             str(primary_port),
+        )
+        _configure_worker_sentinel_primary(
+            worker_host,
+            worker_handshake,
+            primary_host=primary_host,
+            primary_port=primary_port,
+            primary_password=primary_password,
         )
         try:
             _redis_command(primary_host, primary_port, primary_password, "WAIT", "1", "1000")
@@ -4153,6 +4464,7 @@ def _start_server(
     if join_handshake:
         _validate_remote_redis_details(join_handshake, ip, network_token)
         env.update(_grpc_tokens_from_handshake(join_handshake))
+        env.update(_redis_ha_env_from_handshake(join_handshake))
         _ensure_nfs_mount_from_handshake(ip, join_handshake, env)
         env.update(_shared_storage_env_from_handshake(join_handshake))
     env = _ensure_runtime_api_token(env, persist_compose=compose_runtime)
@@ -4308,6 +4620,7 @@ def _start_server(
                     "MN_ARTIFACT_PUBLISH_HOST": env["MN_ARTIFACT_PUBLISH_HOST"],
                     "MN_ARTIFACT_PORT": env["MN_ARTIFACT_PORT"],
                     "MN_ARTIFACT_ADVERTISE_URL": env["MN_ARTIFACT_ADVERTISE_URL"],
+                    **{key: env[key] for key in REDIS_HA_ENV_KEYS if key in env},
                     **(
                         _docker_network_env(requested_docker_mode, network_name, node_alias)
                         if requested_docker_mode != "disabled" and node_alias
@@ -4358,6 +4671,7 @@ def _start_server(
                 "MN_NODE_RUNTIME_MODELS": env.get("MN_NODE_RUNTIME_MODELS", ""),
                 "MN_DOCKER_NETWORK_MODE": env.get("MN_DOCKER_NETWORK_MODE", "disabled"),
                 "MN_DOCKER_NETWORK_NAME": env.get("MN_DOCKER_NETWORK_NAME", network_name),
+                **{key: env[key] for key in REDIS_HA_ENV_KEYS if key in env},
                 **(
                     _docker_network_env(requested_docker_mode, network_name, node_alias)
                     if requested_docker_mode != "disabled" and node_alias
@@ -4377,6 +4691,7 @@ def _start_server(
             subprocess.run(runtime_compose_cmd("up", "-d"), check=True, stdout=subprocess.DEVNULL, env=env)
             if not ip and not reconnecting_joined_node:
                 _force_compose_redis_primary()
+                _start_compose_sentinel(advertised_host, env)
             console.print("   [green][Started][/green] Docker runtime (Compose project: mirror-neuron)")
         except (FileNotFoundError, subprocess.CalledProcessError):
             console.print("[red]Failed to start MirrorNeuron Docker Compose runtime.[/red]")

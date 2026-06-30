@@ -381,6 +381,57 @@ def test_network_core_env_preserves_configured_shared_storage(monkeypatch, tmp_p
     assert env["MN_CONTAINER_SHARED_STORAGE_ROOT"] == "/runtime/shared"
     assert env["MN_BUNDLE_CACHE_DIR"] == "/runtime/shared/bundle_cache"
 
+def test_network_core_env_defaults_cluster_redis_to_sentinel(monkeypatch):
+    monkeypatch.delenv("MN_REDIS_HA_MODE", raising=False)
+    monkeypatch.delenv("MN_REDIS_SENTINELS", raising=False)
+
+    env = server_cmds._network_core_env(
+        token="join-token",
+        host="192.168.1.10",
+        docker_network_mode="disabled",
+        docker_network_name="mirror-neuron-runtime",
+        node_alias="",
+        node_name="mirror_neuron@192.168.1.10",
+        cluster_nodes="mirror_neuron@192.168.1.10",
+        grpc_port=55051,
+        epmd_port=54369,
+        dist_port=54370,
+        redis_url="redis://:secret@192.168.1.10:56379/0",
+        redis_public_host="192.168.1.10",
+        redis_public_port=56379,
+    )
+
+    assert env["MN_REDIS_HA_MODE"] == "sentinel"
+    assert env["MN_REDIS_SENTINELS"] == "192.168.1.10:26379"
+    assert env["MN_REDIS_SENTINEL_MASTER"] == "mirror-neuron"
+    assert env["MN_REDIS_WAIT_REPLICAS"] == "1"
+    assert env["MN_REDIS_WAIT_TIMEOUT_MS"] == "1000"
+
+def test_redis_ha_env_from_handshake_adopts_sentinel_metadata():
+    updates = server_cmds._redis_ha_env_from_handshake(
+        {
+            "redis_url": "redis://:redis-secret@192.168.1.10:56379/0",
+            "node_info": {
+                "redis_ha": {
+                    "mode": "sentinel",
+                    "sentinels": "192.168.1.10:26379,192.168.1.20:26379",
+                    "sentinel_master": "mirror-neuron",
+                    "db": 0,
+                    "sentinel_port": 26379,
+                    "wait_replicas": 1,
+                    "wait_timeout_ms": 1000,
+                }
+            },
+        }
+    )
+
+    assert updates["MN_REDIS_HA_MODE"] == "sentinel"
+    assert updates["MN_REDIS_SENTINELS"] == "192.168.1.10:26379,192.168.1.20:26379"
+    assert updates["MN_REDIS_PASSWORD"] == "redis-secret"
+    assert updates["MN_REDIS_SENTINEL_PASSWORD"] == "redis-secret"
+    assert updates["MN_REDIS_WAIT_REPLICAS"] == "1"
+    assert updates["MN_REDIS_WAIT_TIMEOUT_MS"] == "1000"
+
 
 def test_network_core_bind_args_mounts_configured_shared_storage(tmp_path):
     host_shared = tmp_path / "nfs-shared"
@@ -1149,10 +1200,14 @@ def test_start_network_seed_default_disabled_ignores_stale_named_network(mocker,
     assert all(cmd[:3] != ["docker", "network", "inspect"] for cmd in commands)
     assert all(cmd[:3] != ["docker", "network", "create"] for cmd in commands)
     redis_run = next(cmd for cmd in commands if len(cmd) > 4 and cmd[:4] == ["docker", "run", "-d", "--name"] and cmd[4] == "mirror-neuron-network-redis")
+    sentinel_run = next(cmd for cmd in commands if len(cmd) > 4 and cmd[:4] == ["docker", "run", "-d", "--name"] and cmd[4] == "mirror-neuron-network-sentinel")
     core_run = next(cmd for cmd in commands if len(cmd) > 4 and cmd[:4] == ["docker", "run", "-d", "--name"] and cmd[4] == "mirror-neuron-network-core")
     assert "--network" not in redis_run
+    assert "--network" not in sentinel_run
     assert "--network" not in core_run
     assert f"0.0.0.0:{server_cmds.REDIS_DYNAMIC_PORT_START}:6379" in redis_run
+    assert f"0.0.0.0:{server_cmds.DEFAULT_REDIS_SENTINEL_PORT}:26379" in sentinel_run
+    assert "sentinel monitor mirror-neuron 192.168.4.173 56379 1" in sentinel_run[-1]
     assert f"0.0.0.0:{server_cmds.DEFAULT_EPMD_PORT}:{server_cmds.DEFAULT_EPMD_PORT}" in core_run
     assert f"ERL_EPMD_PORT={server_cmds.DEFAULT_EPMD_PORT}" in core_run
     assert "0.0.0.0:4369:4369" not in core_run
@@ -1160,6 +1215,8 @@ def test_start_network_seed_default_disabled_ignores_stale_named_network(mocker,
         f"MN_REDIS_URL=redis://:{server_cmds.DEV_REDIS_PASSWORD}"
         f"@192.168.4.173:{server_cmds.REDIS_DYNAMIC_PORT_START}/0"
     ) in core_run
+    assert "MN_REDIS_HA_MODE=sentinel" in core_run
+    assert f"MN_REDIS_SENTINELS=192.168.4.173:{server_cmds.DEFAULT_REDIS_SENTINEL_PORT}" in core_run
     assert "MN_NETWORK_REDIS_HOST=192.168.4.173" in core_run
     assert f"MN_NETWORK_REDIS_PORT={server_cmds.REDIS_DYNAMIC_PORT_START}" in core_run
     assert "MN_DOCKER_NETWORK_MODE=disabled" in core_run
@@ -1548,6 +1605,13 @@ def test_join_network_configures_worker_redis_replica(mocker, tmp_path, capsys):
                 "redis_host": "192.168.4.20",
                 "redis_port": 56380,
                 "redis_url": f"redis://:{worker_password}@192.168.4.20:56380/0",
+                "node_info": {
+                    "redis_ha": {
+                        "mode": "sentinel",
+                        "sentinel_port": 26379,
+                        "sentinel_master": "mirror-neuron",
+                    }
+                },
             }
 
     redis_calls = []
@@ -1582,6 +1646,18 @@ def test_join_network_configures_worker_redis_replica(mocker, tmp_path, capsys):
         56379,
         primary_password,
         ("WAIT", "1", "1000"),
+    ) in redis_calls
+    assert (
+        "192.168.4.20",
+        26379,
+        worker_password,
+        ("SENTINEL", "MONITOR", "mirror-neuron", "192.168.4.99", "56379", "1"),
+    ) in redis_calls
+    assert (
+        "192.168.4.20",
+        26379,
+        worker_password,
+        ("SENTINEL", "SET", "mirror-neuron", "auth-pass", primary_password),
     ) in redis_calls
     output = capsys.readouterr().out
     assert "Node join successful." in output
@@ -1843,6 +1919,7 @@ def test_start_network_seed_uses_primary_persisted_grpc_tokens(mocker, monkeypat
     mocker.patch('mn_cli.server_cmds._ensure_network_docker_network')
     mocker.patch('mn_cli.server_cmds._find_available_published_port', return_value=56379)
     mocker.patch('mn_cli.server_cmds._start_network_redis')
+    mocker.patch('mn_cli.server_cmds._start_network_sentinel')
     start_core = mocker.patch('mn_cli.server_cmds._start_network_core')
     mocker.patch('mn_cli.server_cmds._print_network_seed_ready')
 
@@ -2208,7 +2285,11 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
     assert runtime_compose_cmd("up", "-d") in commands
     assert all(cmd[:3] != ["docker", "network", "inspect"] for cmd in commands)
     assert ["docker", "network", "create", "--driver", "bridge", "mirror-neuron-runtime"] not in commands
-    assert all(cmd[:3] != ["docker", "run", "-d"] for cmd in commands)
+    sentinel_runs = [
+        cmd for cmd in commands
+        if len(cmd) > 4 and cmd[:4] == ["docker", "run", "-d", "--name"] and cmd[4] == "mirror-neuron-sentinel"
+    ]
+    assert len(sentinel_runs) == 1
     compose_call = next(item for item in calls if item[0] == runtime_compose_cmd("up", "-d"))
     env = compose_call[1]["env"]
     assert env["MN_DOCKER_NETWORK_MODE"] == "disabled"
