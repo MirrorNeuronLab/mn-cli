@@ -505,6 +505,36 @@ def test_ensure_nfs_mount_from_handshake_mounts_missing_primary_path(mocker, tmp
     ]
 
 
+def test_ensure_nfs_mount_required_fails_on_mount_error(mocker, tmp_path, monkeypatch):
+    host_shared = tmp_path / "primary-shared"
+    monkeypatch.setenv("MN_NFS_ENABLED", "auto")
+    monkeypatch.setenv("MN_NFS_REQUIRED", "1")
+    mocker.patch("mn_cli.server_cmds.os.uname", return_value=mocker.Mock(sysname="Linux"))
+    mocker.patch("mn_cli.server_cmds._path_is_mountpoint", return_value=False)
+    run = mocker.patch(
+        "mn_cli.server_cmds.subprocess.run",
+        side_effect=[
+            mocker.Mock(returncode=0),
+            subprocess.CalledProcessError(32, ["mount"]),
+        ],
+    )
+
+    with pytest.raises(typer.Exit) as exc:
+        server_cmds._ensure_nfs_mount_from_handshake(
+            "192.168.6.28",
+            {
+                "node_info": {
+                    "host_shared_storage_root": str(host_shared),
+                    "runtime_shared_storage_root": "/root/.mn/shared",
+                }
+            },
+            {},
+        )
+
+    assert exc.value.exit_code == 1
+    assert run.call_count == 2
+
+
 def test_deploy_compose_passes_host_shared_storage_to_core():
     compose_path = Path(__file__).resolve().parents[2] / "mn-deploy" / "docker-compose.yml"
     if not compose_path.exists():
@@ -1664,6 +1694,64 @@ def test_join_network_configures_worker_redis_replica(mocker, tmp_path, capsys):
     assert "Status: connected" in output
     assert "Replication: 192.168.4.20:56380 -> 192.168.4.99:56379" in output
 
+
+def test_join_network_recreates_compose_core_when_shared_storage_changes(mocker, tmp_path):
+    import mn_sdk
+    import mn_cli.shared
+
+    compose_file = server_cmds.RUNTIME_COMPOSE_FILE
+    compose_env = server_cmds.RUNTIME_COMPOSE_ENV
+    old_shared = tmp_path / "old-shared"
+    primary_shared = tmp_path / "primary-shared"
+    old_shared.mkdir()
+    primary_shared.mkdir()
+    compose_file.parent.mkdir(parents=True, exist_ok=True)
+    compose_file.write_text("services: {}\n")
+    compose_env.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_HOST_SHARED_STORAGE_ROOT={old}\n"
+        "MN_SHARED_STORAGE_ROOT={old}\n"
+        "MN_RUNTIME_SHARED_STORAGE_ROOT=/root/.mn/shared\n"
+        "MN_CONTAINER_SHARED_STORAGE_ROOT=/root/.mn/shared\n".format(old=old_shared)
+    )
+
+    class StubClient:
+        def __init__(self, target, auth_token, timeout):
+            assert target == "192.168.4.20:50055"
+
+        def network_handshake(self, token, node_name="", node_info=None):
+            assert node_info["host_shared_storage_root"] == str(old_shared)
+            return {
+                "node_name": "mirror_neuron@192.168.4.20",
+                "redis_host": "192.168.4.20",
+                "redis_port": 56380,
+                "redis_url": "redis://:worker@192.168.4.20:56380/0",
+                "node_info": {
+                    "host_shared_storage_root": str(primary_shared),
+                    "runtime_shared_storage_root": "/root/.mn/shared",
+                },
+            }
+
+    mocker.patch.object(mn_sdk, "Client", StubClient)
+    mocker.patch.object(mn_cli.shared.client, "add_node", return_value="connected")
+    mocker.patch("mn_cli.server_cmds._detect_host_gpu_count", return_value=0)
+    mocker.patch("mn_cli.server_cmds._ensure_local_cluster_runtime_for_join")
+    mocker.patch("mn_cli.server_cmds._configure_worker_redis_replica", return_value="")
+    recreate = mocker.patch("mn_cli.server_cmds._recreate_compose_core_for_shared_storage")
+    wait = mocker.patch("mn_cli.server_cmds._wait_for_local_cluster_grpc")
+
+    _join_network("192.168.4.20", "join-token", grpc_port=50055)
+
+    env = server_cmds._read_env_file(compose_env)
+    assert env["MN_HOST_SHARED_STORAGE_ROOT"] == str(primary_shared)
+    assert env["MN_SHARED_STORAGE_ROOT"] == str(primary_shared)
+    assert env["MN_RUNTIME_SHARED_STORAGE_ROOT"] == "/root/.mn/shared"
+    assert env["MN_CONTAINER_SHARED_STORAGE_ROOT"] == "/root/.mn/shared"
+    assert env["MN_BUNDLE_CACHE_DIR"] == "/root/.mn/shared/bundle_cache"
+    recreate.assert_called_once()
+    wait.assert_called_once_with()
+
+
 def test_join_promotes_local_compose_runtime_to_cluster_mode(mocker, tmp_path):
     compose_file = server_cmds.RUNTIME_COMPOSE_FILE
     compose_env = server_cmds.RUNTIME_COMPOSE_ENV
@@ -1682,6 +1770,7 @@ def test_join_promotes_local_compose_runtime_to_cluster_mode(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds._detect_host_cpu_model', return_value="")
     mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=0)
     mocker.patch('mn_cli.server_cmds._wait_for_local_cluster_grpc')
+    export_nfs = mocker.patch('mn_cli.server_cmds._ensure_nfs_export_for_cluster')
     mock_run = mocker.patch('mn_cli.server_cmds.subprocess.run')
 
     _ensure_local_cluster_runtime_for_join(
@@ -1697,6 +1786,8 @@ def test_join_promotes_local_compose_runtime_to_cluster_mode(mocker, tmp_path):
     assert "MN_CLUSTER_NODES=mirror_neuron@192.168.4.20" in env_text
     assert "MN_NETWORK_ADVERTISE_HOST=192.168.4.20" in env_text
     assert "MN_GRPC_BIND_HOST=0.0.0.0" in env_text
+    assert "MN_HOST_SHARED_STORAGE_ROOT=" in env_text
+    export_nfs.assert_called_once()
     assert mock_run.call_args_list[0].args[0] == runtime_compose_cmd(
         "up", "-d", "--force-recreate", "redis", "mirror-neuron-core"
     )
@@ -2371,6 +2462,74 @@ def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
     assert env["MN_COOKIE"] == _derive_network_secret("join-token", "cookie")
     assert env["MN_DIST_PORT"] == "54370"
     assert env["ERL_AFLAGS"] == _erl_aflags("54370")
+
+
+def test_start_server_join_mounts_primary_nfs_before_compose_up(mocker, tmp_path, monkeypatch):
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_env = tmp_path / "docker-compose.env"
+    primary_shared = tmp_path / "primary-shared"
+    primary_shared.mkdir()
+    compose_file.write_text("services: {}\n")
+    compose_env.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_HOST_SHARED_STORAGE_ROOT={local}\n"
+        "MN_SHARED_STORAGE_ROOT={local}\n".format(local=tmp_path / "local-shared")
+    )
+    monkeypatch.setenv("MN_NFS_ENABLED", "auto")
+
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_FILE', compose_file)
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
+    mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
+    mocker.patch('mn_cli.server_cmds.WEB_UI_DIRS', ())
+    mocker.patch('mn_cli.server_cmds.time.sleep')
+    mocker.patch('mn_cli.server_cmds.PID_DIR', tmp_path / ".pids")
+    mocker.patch('mn_cli.server_cmds.LOG_DIR', tmp_path / ".logs")
+    mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
+    mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
+    mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path)
+    mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.99")
+    mocker.patch(
+        'mn_cli.server_cmds._handshake_with_main_node',
+        return_value={
+            "node_name": "mirror_neuron@192.168.6.28",
+            "redis_host": "192.168.6.28",
+            "redis_port": 56379,
+            "redis_url": "redis://:primary@192.168.6.28:56379/0",
+            "node_info": {
+                "host_shared_storage_root": str(primary_shared),
+                "runtime_shared_storage_root": "/root/.mn/shared",
+            },
+        },
+    )
+
+    events = []
+
+    def mount_primary(*_args, **_kwargs):
+        events.append("mount")
+        return True
+
+    mocker.patch('mn_cli.server_cmds._ensure_nfs_mount_from_handshake', side_effect=mount_primary)
+
+    def mock_run(cmd, **kwargs):
+        if cmd == runtime_compose_cmd("up", "-d"):
+            events.append("compose-up")
+        m = mocker.Mock()
+        m.stdout = "false\n"
+        return m
+
+    mocker.patch('mn_cli.server_cmds.subprocess.run', side_effect=mock_run)
+    mocker.patch('mn_cli.server_cmds._find_available_published_port', return_value=56379)
+
+    _start_server(ip="192.168.6.28", token="join-token", host="192.168.4.173")
+
+    assert events.index("mount") < events.index("compose-up")
+    env = server_cmds._read_env_file(compose_env)
+    assert env["MN_HOST_SHARED_STORAGE_ROOT"] == str(primary_shared)
+    assert env["MN_SHARED_STORAGE_ROOT"] == str(primary_shared)
+    assert env["MN_RUNTIME_SHARED_STORAGE_ROOT"] == "/root/.mn/shared"
+    assert env["MN_CONTAINER_SHARED_STORAGE_ROOT"] == "/root/.mn/shared"
+    assert env["MN_BUNDLE_CACHE_DIR"] == "/root/.mn/shared/bundle_cache"
+
 
 def test_start_server_preserves_persisted_join_profile_on_restart(mocker, tmp_path):
     compose_file = tmp_path / "docker-compose.yml"

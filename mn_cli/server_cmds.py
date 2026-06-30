@@ -816,9 +816,32 @@ def _grpc_tokens_from_handshake(handshake: Optional[dict]) -> dict[str, str]:
         GRPC_ADMIN_TOKEN_ENV: FIXED_GRPC_ADMIN_TOKEN,
     }
 
-def _shared_storage_env_from_handshake(handshake: Optional[dict]) -> dict[str, str]:
+SHARED_STORAGE_ENV_KEYS = (
+    "MN_HOST_SHARED_STORAGE_ROOT",
+    "MN_SHARED_STORAGE_ROOT",
+    "MN_RUNTIME_SHARED_STORAGE_ROOT",
+    "MN_CONTAINER_SHARED_STORAGE_ROOT",
+    "MN_BUNDLE_CACHE_DIR",
+)
+
+def _shared_storage_env_values(host_root: str, runtime_root: str) -> dict[str, str]:
+    runtime_root = str(runtime_root or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT).strip() or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT
+    expanded_host_root = str(Path(host_root).expanduser())
+    return {
+        "MN_HOST_SHARED_STORAGE_ROOT": expanded_host_root,
+        "MN_SHARED_STORAGE_ROOT": expanded_host_root,
+        "MN_RUNTIME_SHARED_STORAGE_ROOT": runtime_root,
+        "MN_CONTAINER_SHARED_STORAGE_ROOT": runtime_root,
+        "MN_BUNDLE_CACHE_DIR": f"{runtime_root.rstrip('/')}/bundle_cache",
+    }
+
+def _shared_storage_env_from_runtime_env(env: dict[str, str]) -> dict[str, str]:
+    host_root, runtime_root, _bundle_cache = _network_shared_storage_roots(env)
+    return _shared_storage_env_values(host_root, runtime_root)
+
+def _shared_storage_roots_from_handshake(handshake: Optional[dict]) -> tuple[str, str]:
     if not isinstance(handshake, dict):
-        return {}
+        return "", DEFAULT_RUNTIME_SHARED_STORAGE_ROOT
 
     node_info = handshake.get("node_info")
     if not isinstance(node_info, dict):
@@ -833,7 +856,11 @@ def _shared_storage_env_from_handshake(handshake: Optional[dict]) -> dict[str, s
         handshake.get("runtime_shared_storage_root")
         or node_info.get("runtime_shared_storage_root")
         or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT
-    ).strip()
+    ).strip() or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT
+    return host_root, runtime_root
+
+def _shared_storage_env_from_handshake(handshake: Optional[dict]) -> dict[str, str]:
+    host_root, runtime_root = _shared_storage_roots_from_handshake(handshake)
     if not host_root:
         return {}
 
@@ -849,13 +876,7 @@ def _shared_storage_env_from_handshake(handshake: Optional[dict]) -> dict[str, s
         )
         return {}
 
-    return {
-        "MN_HOST_SHARED_STORAGE_ROOT": str(expanded_host_root),
-        "MN_SHARED_STORAGE_ROOT": str(expanded_host_root),
-        "MN_RUNTIME_SHARED_STORAGE_ROOT": runtime_root or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT,
-        "MN_CONTAINER_SHARED_STORAGE_ROOT": runtime_root or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT,
-        "MN_BUNDLE_CACHE_DIR": f"{(runtime_root or DEFAULT_RUNTIME_SHARED_STORAGE_ROOT).rstrip('/')}/bundle_cache",
-    }
+    return _shared_storage_env_values(str(expanded_host_root), runtime_root)
 
 def _truthy_env(value: object) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on", "required"}
@@ -946,22 +967,15 @@ def _ensure_nfs_export_for_cluster(env: dict[str, str], *, advertised_host: str)
             env,
         )
 
-def _ensure_nfs_mount_from_handshake(seed_host: str, handshake: Optional[dict], env: dict[str, str]) -> None:
+def _ensure_nfs_mount_from_handshake(seed_host: str, handshake: Optional[dict], env: dict[str, str]) -> bool:
     if not _nfs_enabled(env) or not isinstance(handshake, dict):
-        return
-    node_info = handshake.get("node_info")
-    if not isinstance(node_info, dict):
-        node_info = {}
-    host_root = str(
-        handshake.get("host_shared_storage_root")
-        or node_info.get("host_shared_storage_root")
-        or ""
-    ).strip()
+        return False
+    host_root, _runtime_root = _shared_storage_roots_from_handshake(handshake)
     if not host_root:
-        return
+        return False
     host_root = str(Path(host_root).expanduser())
     if _path_is_mountpoint(host_root):
-        return
+        return True
 
     system_name = os.uname().sysname
     source = f"{seed_host}:{host_root}"
@@ -976,13 +990,52 @@ def _ensure_nfs_mount_from_handshake(seed_host: str, handshake: Optional[dict], 
                 check=True,
             )
         else:
-            return
+            return False
         console.print(f"=> Mounted NFS shared storage {source} at {host_root}")
+        return True
     except (FileNotFoundError, subprocess.CalledProcessError) as exc:
         _nfs_warn_or_fail(
             f"could not mount NFS shared storage {source} at {host_root}; run with sudo or set MN_NFS_ENABLED=0. {exc}",
             env,
         )
+        return False
+
+def _compose_shared_storage_env_changed(updates: dict[str, str]) -> bool:
+    if not updates:
+        return False
+    current = _read_env_file(RUNTIME_COMPOSE_ENV)
+    return any(str(current.get(key) or "").strip() != str(value or "").strip() for key, value in updates.items())
+
+def _persist_compose_shared_storage_env(updates: dict[str, str]) -> bool:
+    if not updates or not runtime_compose_available():
+        return False
+    changed = _compose_shared_storage_env_changed(updates)
+    _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
+    return changed
+
+def _recreate_compose_core_for_shared_storage(env: dict[str, str]) -> None:
+    if not runtime_compose_available():
+        return
+    console.print("=> Recreating MirrorNeuron core so shared-storage mount changes are visible...")
+    try:
+        subprocess.run(
+            runtime_compose_cmd("up", "-d", "--force-recreate", "mirror-neuron-core"),
+            check=True,
+            stdout=subprocess.DEVNULL,
+            env=_compose_runtime_env(env, None),
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        from mn_sdk.errors import AppError
+
+        raise AppError(
+            "MN_EXECUTION_FAILED",
+            "Could not recreate MirrorNeuron core after shared-storage mount changed.",
+            internal_message=str(exc),
+            hint="Run 'mn runtime stop' and then restart the runtime after NFS is mounted.",
+            exit_code=1,
+            http_status=500,
+            cause=exc,
+        ) from exc
 
 def _runtime_grpc_tokens_from_running_container() -> dict[str, str]:
     return {
@@ -1263,12 +1316,15 @@ def _handshake_node_info(local_host: str, node_name: Optional[str] = None) -> di
         hostname = socket.gethostname().strip()
     except OSError:
         pass
+    shared_env = _shared_storage_env_from_runtime_env(_runtime_base_env(runtime_compose_available()))
 
     return {
         "node_name": node_name or _network_node_name(local_host),
         "display_name": _node_display_name(),
         "hostname": hostname,
         "gpu_count": _detect_host_gpu_count(),
+        "host_shared_storage_root": shared_env["MN_HOST_SHARED_STORAGE_ROOT"],
+        "runtime_shared_storage_root": shared_env["MN_RUNTIME_SHARED_STORAGE_ROOT"],
     }
 
 def _handshake_with_main_node(
@@ -2004,6 +2060,7 @@ def _stop_local_runtime_for_worker() -> None:
     _stop_network_runtime()
     if runtime_compose_available():
         subprocess.run(runtime_compose_cmd("down"), stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        subprocess.run(["docker", "rm", "-f", COMPOSE_SENTINEL_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
     else:
         subprocess.run(["docker", "rm", "-f", LOCAL_CORE_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
@@ -2211,6 +2268,8 @@ def _join_network(
     requested_mode = _docker_network_mode(docker_network_mode, default="disabled")
     network_name = _docker_network_name(docker_network_name)
     env = _runtime_base_env(runtime_compose_available())
+    env.update(_shared_storage_env_from_runtime_env(env))
+    _ensure_nfs_export_for_cluster(env, advertised_host=local_host)
     local_node_name = _network_node_name(local_host)
     if requested_mode != "disabled":
         _ensure_network_docker_network(requested_mode, network_name)
@@ -2229,8 +2288,10 @@ def _join_network(
     )
     _ensure_nfs_mount_from_handshake(seed_host, handshake, env)
     shared_storage_updates = _shared_storage_env_from_handshake(handshake)
-    if shared_storage_updates and runtime_compose_available():
-        _write_env_file_values(RUNTIME_COMPOSE_ENV, shared_storage_updates)
+    shared_storage_changed = False
+    if shared_storage_updates:
+        env.update(shared_storage_updates)
+        shared_storage_changed = _persist_compose_shared_storage_env(shared_storage_updates)
     remote_node = handshake.get("node_name") or _network_node_name(seed_host)
     redis_host, redis_port, redis_url = _validate_remote_redis_details(handshake, seed_host, token)
     from mn_cli.shared import client as local_client
@@ -2258,6 +2319,9 @@ def _join_network(
         ) from exc
     if runtime_compose_available():
         _persist_compose_cluster_node(remote_node)
+    if shared_storage_changed:
+        _recreate_compose_core_for_shared_storage(env)
+        _wait_for_local_cluster_grpc()
     details: list[tuple[str, str]] = [("Node", remote_node)]
     if runtime_compose_available() or os.getenv("MN_REDIS_URL", "").strip():
         replication = _configure_worker_redis_replica(seed_host, handshake, token)
@@ -2297,6 +2361,9 @@ def _ensure_local_cluster_runtime_for_join(
         return
 
     env = _runtime_base_env(True)
+    env.update(_shared_storage_env_from_runtime_env(env))
+    _ensure_nfs_export_for_cluster(env, advertised_host=local_host)
+    _persist_compose_shared_storage_env({key: env[key] for key in SHARED_STORAGE_ENV_KEYS if key in env})
     existing_node_name = str(env.get("MN_NODE_NAME") or "").strip()
     existing_advertise_host = str(env.get("MN_NETWORK_ADVERTISE_HOST") or "").strip()
     if (
@@ -2341,6 +2408,7 @@ def _ensure_local_cluster_runtime_for_join(
             "ERL_AFLAGS": env["ERL_AFLAGS"],
             "MN_DOCKER_NETWORK_MODE": docker_network_mode,
             "MN_DOCKER_NETWORK_NAME": docker_network_name,
+            **{key: env[key] for key in SHARED_STORAGE_ENV_KEYS if key in env},
         },
     )
 
@@ -2394,7 +2462,7 @@ def _wait_for_local_cluster_grpc(
     raise typer.Exit(1)
 
 def _stop_network_runtime() -> None:
-    for container in [NETWORK_CORE_CONTAINER, NETWORK_REDIS_CONTAINER]:
+    for container in [NETWORK_CORE_CONTAINER, NETWORK_REDIS_CONTAINER, NETWORK_SENTINEL_CONTAINER]:
         subprocess.run(["docker", "rm", "-f", container], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
 def _detach_local_docker_node_if_matches(node_name: str) -> bool:
@@ -4431,6 +4499,7 @@ def _start_server(
     if token:
         _write_network_token(network_token)
     env = _runtime_base_env(compose_runtime)
+    env.update(_shared_storage_env_from_runtime_env(env))
     mode_override = docker_network_mode or os.getenv("MN_DOCKER_NETWORK_MODE", "").strip()
     requested_docker_mode = _docker_network_mode(
         mode_override or None,
@@ -4620,6 +4689,7 @@ def _start_server(
                     "MN_ARTIFACT_PUBLISH_HOST": env["MN_ARTIFACT_PUBLISH_HOST"],
                     "MN_ARTIFACT_PORT": env["MN_ARTIFACT_PORT"],
                     "MN_ARTIFACT_ADVERTISE_URL": env["MN_ARTIFACT_ADVERTISE_URL"],
+                    **{key: env[key] for key in SHARED_STORAGE_ENV_KEYS if key in env},
                     **{key: env[key] for key in REDIS_HA_ENV_KEYS if key in env},
                     **(
                         _docker_network_env(requested_docker_mode, network_name, node_alias)
@@ -4671,6 +4741,7 @@ def _start_server(
                 "MN_NODE_RUNTIME_MODELS": env.get("MN_NODE_RUNTIME_MODELS", ""),
                 "MN_DOCKER_NETWORK_MODE": env.get("MN_DOCKER_NETWORK_MODE", "disabled"),
                 "MN_DOCKER_NETWORK_NAME": env.get("MN_DOCKER_NETWORK_NAME", network_name),
+                **{key: env[key] for key in SHARED_STORAGE_ENV_KEYS if key in env},
                 **{key: env[key] for key in REDIS_HA_ENV_KEYS if key in env},
                 **(
                     _docker_network_env(requested_docker_mode, network_name, node_alias)

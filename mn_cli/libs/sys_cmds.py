@@ -28,6 +28,7 @@ from mn_cli.server_cmds import (
     ensure_context_engine_runtime,
     kill_tree,
     BEAM_PID_FILE,
+    COMPOSE_SENTINEL_CONTAINER,
     DEFAULT_HOST,
     DEFAULT_API_PORT,
     DEFAULT_GRPC_PORT,
@@ -60,12 +61,30 @@ def start(
         "--host",
         help="Advertised host or IP for this node.",
     ),
+    join_host: Optional[str] = typer.Option(
+        None,
+        "--join-host",
+        help="Start this runtime already joined to a primary node at this host.",
+    ),
+    token: Optional[str] = typer.Option(
+        None,
+        "--token",
+        help="Network token from the primary node; required with --join-host.",
+    ),
     grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Core gRPC port."),
 ):
     """Start MirrorNeuron services"""
     console.print(format_banner("MirrorNeuron Local Runtime"))
+    if worker_node and join_host:
+        console.print("[red]Error: --worker-node and --join-host cannot be used together.[/red]")
+        raise typer.Exit(1)
+    if join_host and not token:
+        console.print("[red]Error: mn runtime start --join-host requires --token from the primary node.[/red]")
+        raise typer.Exit(1)
     if worker_node:
         _start_worker_node(host=host, grpc_port=grpc_port)
+    elif join_host:
+        _start_server(ip=join_host, token=token, host=host, grpc_port=grpc_port)
     else:
         _start_server(host=host, grpc_port=grpc_port)
 
@@ -191,6 +210,7 @@ def stop():
     if runtime_compose_available():
         console.print("   Stopping Docker runtime (Compose)...")
         subprocess.run(runtime_compose_cmd("down"), stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        subprocess.run(["docker", "rm", "-f", COMPOSE_SENTINEL_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
     else:
         console.print("   Stopping Core Service (Docker: mirror-neuron-core)...")
         subprocess.run(["docker", "stop", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
