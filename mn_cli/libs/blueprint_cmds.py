@@ -161,6 +161,9 @@ def _run_resolved_blueprint(
     auto_schedule: bool = False,
     schedule: Optional[str] = None,
     fake_llm: bool = False,
+    fake_skills: bool = False,
+    benchmark: bool = False,
+    debug: bool = False,
 ) -> None:
     shared_run_id = run_id or _make_blueprint_run_id(blueprint_id)
     _print_blueprint_run_phase(1, 4, "Prepare blueprint bundle")
@@ -172,6 +175,10 @@ def _run_resolved_blueprint(
         fake_overrides = _fake_llm_config_overrides(config or {})
         config_overrides = _deep_merge(config_overrides or {}, fake_overrides)
         config = _deep_merge(config or {}, fake_overrides)
+    testing_overrides = _testing_config_overrides(fake_skills=fake_skills, benchmark=benchmark, debug=debug)
+    if testing_overrides:
+        config_overrides = _deep_merge(config_overrides or {}, testing_overrides)
+        config = _deep_merge(config or {}, testing_overrides)
     model_manifest = _fake_llm_manifest_for_model_dependencies(manifest) if fake_llm else manifest
     _print_blueprint_run_phase(3, 4, "Ensure runtime models")
     model_summary = _install_blueprint_model_dependencies(
@@ -204,6 +211,9 @@ def _run_resolved_blueprint(
             "MN_BLUEPRINT_ID": blueprint_id,
             "MN_BLUEPRINT_REVISION": revision or "",
             **_fake_llm_env_overrides(fake_llm),
+            **_fake_skills_env_overrides(fake_skills),
+            **_benchmark_env_overrides(benchmark),
+            **_blueprint_debug_env_overrides(debug),
         },
         submission_metadata={
             "blueprint_id": blueprint_id,
@@ -211,6 +221,9 @@ def _run_resolved_blueprint(
             "blueprint_revision": revision,
             "blueprint_source": source_label,
             "fake_llm": fake_llm,
+            "fake_skills": fake_skills,
+            "benchmark": benchmark,
+            "debug": debug,
         },
         config_overrides=config_overrides,
         force=force,
@@ -256,6 +269,43 @@ def _fake_llm_config_overrides(config: dict[str, Any]) -> dict[str, Any]:
             "configs": {name: dict(fake_config) for name in config_names},
         }
     }
+
+
+def _fake_skills_env_overrides(enabled: bool) -> dict[str, str]:
+    if not enabled:
+        return {}
+    return {
+        "MN_BLUEPRINT_FAKE_SKILLS": "1",
+        "MN_FAKE_SKILLS": "1",
+    }
+
+
+def _benchmark_env_overrides(enabled: bool) -> dict[str, str]:
+    if not enabled:
+        return {}
+    return {
+        "MN_BLUEPRINT_BENCHMARK": "1",
+    }
+
+
+def _blueprint_debug_env_overrides(enabled: bool) -> dict[str, str]:
+    if not enabled:
+        return {}
+    return {
+        "MN_BLUEPRINT_DEBUG": "1",
+        "MN_DEBUG": "1",
+    }
+
+
+def _testing_config_overrides(*, fake_skills: bool = False, benchmark: bool = False, debug: bool = False) -> dict[str, Any]:
+    execution: dict[str, Any] = {}
+    if fake_skills:
+        execution["fake_skills"] = True
+    if benchmark:
+        execution["benchmark"] = True
+    if debug:
+        execution["debug"] = True
+    return {"execution": execution} if execution else {}
 
 
 def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
@@ -533,6 +583,9 @@ def run_catalog_blueprint(
     auto_schedule: bool = False,
     schedule: Optional[str] = None,
     fake_llm: bool = False,
+    fake_skills: bool = False,
+    benchmark: bool = False,
+    debug: bool = False,
 ) -> None:
     """Run a catalog blueprint by name through the shared blueprint runner."""
     _reject_local_blueprint_path(blueprint_name)
@@ -586,6 +639,9 @@ def run_catalog_blueprint(
         auto_schedule=auto_schedule,
         schedule=schedule,
         fake_llm=fake_llm,
+        fake_skills=fake_skills,
+        benchmark=benchmark,
+        debug=debug,
     )
 
 
@@ -600,6 +656,9 @@ def run_local_blueprint_folder(
     auto_schedule: bool = False,
     schedule: Optional[str] = None,
     fake_llm: bool = False,
+    fake_skills: bool = False,
+    benchmark: bool = False,
+    debug: bool = False,
 ) -> None:
     """Run a local Python source blueprint folder through the shared blueprint runner."""
     blueprint_dir = Path(folder).expanduser()
@@ -631,6 +690,9 @@ def run_local_blueprint_folder(
         auto_schedule=auto_schedule,
         schedule=schedule,
         fake_llm=fake_llm,
+        fake_skills=fake_skills,
+        benchmark=benchmark,
+        debug=debug,
     )
 
 
@@ -645,6 +707,9 @@ def _run_local_folder(
     auto_schedule: bool = False,
     schedule: Optional[str] = None,
     fake_llm: bool = False,
+    fake_skills: bool = False,
+    benchmark: bool = False,
+    debug: bool = False,
 ) -> None:
     bundle_dir = Path(folder).expanduser()
     manifest = _load_manifest_for_local_route(bundle_dir)
@@ -659,20 +724,42 @@ def _run_local_folder(
             auto_schedule=auto_schedule,
             schedule=schedule,
             fake_llm=fake_llm,
+            fake_skills=fake_skills,
+            benchmark=benchmark,
+            debug=debug,
         )
         return
 
     env_overrides = {"MN_RUN_ID": run_id} if run_id else {}
     env_overrides.update(_fake_llm_env_overrides(fake_llm))
+    env_overrides.update(_fake_skills_env_overrides(fake_skills))
+    env_overrides.update(_benchmark_env_overrides(benchmark))
+    env_overrides.update(_blueprint_debug_env_overrides(debug))
     submission_metadata = {"blueprint_run_id": run_id} if run_id else {}
     if fake_llm:
         submission_metadata["fake_llm"] = True
+    if fake_skills:
+        submission_metadata["fake_skills"] = True
+    if benchmark:
+        submission_metadata["benchmark"] = True
+    if debug:
+        submission_metadata["debug"] = True
+    config_overrides: dict[str, Any] = {}
+    if fake_llm:
+        config_overrides = _deep_merge(
+            config_overrides,
+            _fake_llm_config_overrides(_load_blueprint_config(bundle_dir) or {}),
+        )
+    config_overrides = _deep_merge(
+        config_overrides,
+        _testing_config_overrides(fake_skills=fake_skills, benchmark=benchmark, debug=debug),
+    )
     _run_bundle(
         str(bundle_dir),
         follow_seconds=follow_seconds,
         env_overrides=env_overrides or None,
         submission_metadata=submission_metadata or None,
-        config_overrides=_fake_llm_config_overrides(_load_blueprint_config(bundle_dir) or {}) if fake_llm else None,
+        config_overrides=config_overrides or None,
         force=force,
         detached=detached,
         web_ui=web_ui,
@@ -787,6 +874,27 @@ def blueprint_run(
             help="Replace blueprint LLM configuration with the deterministic fake LLM for this run.",
         ),
     ] = False,
+    fake_skills: Annotated[
+        bool,
+        typer.Option(
+            "--fake-skills",
+            help="Use deterministic mock outputs for supported external blueprint skills.",
+        ),
+    ] = False,
+    benchmark: Annotated[
+        bool,
+        typer.Option(
+            "--benchmark",
+            help="Write per-step and per-skill timing artifacts into the blueprint run folder.",
+        ),
+    ] = False,
+    debug: Annotated[
+        bool,
+        typer.Option(
+            "--debug",
+            help="Enable verbose blueprint runtime debug events and logs for this run.",
+        ),
+    ] = False,
 ):
     """Run a catalog blueprint, or a local folder with --folder."""
     if auto_schedule and schedule:
@@ -808,6 +916,9 @@ def blueprint_run(
             auto_schedule=auto_schedule,
             schedule=schedule,
             fake_llm=fake_llm,
+            fake_skills=fake_skills,
+            benchmark=benchmark,
+            debug=debug,
         )
         return
 
@@ -837,6 +948,9 @@ def blueprint_run(
         auto_schedule=auto_schedule,
         schedule=schedule,
         fake_llm=fake_llm,
+        fake_skills=fake_skills,
+        benchmark=benchmark,
+        debug=debug,
     )
 
 

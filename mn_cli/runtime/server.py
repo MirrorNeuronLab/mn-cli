@@ -1489,11 +1489,28 @@ def _generated_cluster_setting_should_update(value: object, desired: str) -> boo
 def _persisted_join_profile(env: dict[str, str]) -> bool:
     cluster_nodes = str(env.get("MN_CLUSTER_NODES") or "").strip()
     node_name = str(env.get("MN_NODE_NAME") or "").strip()
+    cluster_node_names = _split_env_list(cluster_nodes)
+    if _generated_network_node_name(node_name) and node_name in cluster_node_names:
+        return any(node != node_name for node in cluster_node_names)
     return (
         _generated_network_node_name(cluster_nodes)
         and _generated_network_node_name(node_name)
         and cluster_nodes != node_name
     )
+
+def _cluster_nodes_with(*node_names: object) -> str:
+    nodes: list[str] = []
+    for node_name in node_names:
+        for part in _split_env_list(node_name):
+            if part and part not in nodes:
+                nodes.append(part)
+    return ",".join(nodes)
+
+def _joined_cluster_seed_node(env: dict[str, str], local_node_name: str) -> str:
+    for node_name in _split_env_list(env.get("MN_CLUSTER_NODES")):
+        if node_name != local_node_name:
+            return node_name
+    return str(env.get("MN_CLUSTER_NODES") or "").strip()
 
 def _advertised_network_host(host: Optional[str] = None) -> str:
     configured = host or os.getenv("MN_NETWORK_ADVERTISE_HOST", "").strip()
@@ -4820,7 +4837,7 @@ def _start_server(
         seed_redis_host = join_handshake["redis_host"]
         seed_redis_port = redis_port or _parse_port(join_handshake["redis_port"], REDIS_CONTAINER_PORT)
     elif reconnecting_joined_node:
-        seed_node_name = str(env.get("MN_CLUSTER_NODES") or "").strip()
+        seed_node_name = _joined_cluster_seed_node(env, local_node_name)
         seed_redis_host = (
             str(env.get("MN_NETWORK_REDIS_HOST") or "").strip()
             or _network_node_host(seed_node_name)
@@ -4920,13 +4937,14 @@ def _start_server(
         )
         env["MN_REDIS_URL"] = redis_url
         env["MN_CONTEXT_REDIS_URL"] = _redis_url_with_database(redis_url, "1")
-        env["MN_CLUSTER_NODES"] = seed_node_name
+        cluster_nodes = _cluster_nodes_with(seed_node_name, local_node_name)
+        env["MN_CLUSTER_NODES"] = cluster_nodes
         if compose_runtime:
             _write_env_file_values(
                 RUNTIME_COMPOSE_ENV,
                 {
                     "MN_NODE_NAME": env["MN_NODE_NAME"],
-                    "MN_CLUSTER_NODES": seed_node_name,
+                    "MN_CLUSTER_NODES": cluster_nodes,
                     "MN_REDIS_URL": redis_url,
                     "MN_CONTEXT_REDIS_URL": env["MN_CONTEXT_REDIS_URL"],
                     "MN_NETWORK_REDIS_HOST": seed_redis_host,

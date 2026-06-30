@@ -782,6 +782,42 @@ def test_blueprint_run_fake_llm_flag_overrides_local_bundle(mocker, tmp_path):
     assert overrides["llm"]["configs"]["primary"]["runtime_model"] is None
 
 
+def test_blueprint_run_testing_flags_override_local_bundle(mocker, tmp_path):
+    bp_dir = tmp_path / "bundle"
+    bp_dir.mkdir()
+    (bp_dir / "manifest.json").write_text(json.dumps({}))
+    config_dir = bp_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(json.dumps({"execution": {"existing": True}}))
+    mock_run_bundle = mocker.patch("mn_cli.libs.blueprint_cmds._run_bundle")
+
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bp_dir), "--fake-skills", "--benchmark", "--debug"])
+
+    assert result.exit_code == 0
+    mock_run_bundle.assert_called_once()
+    kwargs = mock_run_bundle.call_args.kwargs
+    assert kwargs["env_overrides"]["MN_BLUEPRINT_FAKE_SKILLS"] == "1"
+    assert kwargs["env_overrides"]["MN_FAKE_SKILLS"] == "1"
+    assert kwargs["env_overrides"]["MN_BLUEPRINT_BENCHMARK"] == "1"
+    assert kwargs["env_overrides"]["MN_BLUEPRINT_DEBUG"] == "1"
+    assert kwargs["env_overrides"]["MN_DEBUG"] == "1"
+    assert kwargs["submission_metadata"]["fake_skills"] is True
+    assert kwargs["submission_metadata"]["benchmark"] is True
+    assert kwargs["submission_metadata"]["debug"] is True
+    assert kwargs["config_overrides"]["execution"]["fake_skills"] is True
+    assert kwargs["config_overrides"]["execution"]["benchmark"] is True
+    assert kwargs["config_overrides"]["execution"]["debug"] is True
+
+
+def test_blueprint_run_help_lists_testing_flags():
+    result = runner.invoke(app, ["blueprint", "run", "--help"])
+
+    assert result.exit_code == 0
+    assert "--fake-skills" in result.output
+    assert "--benchmark" in result.output
+    assert "--debug" in result.output
+
+
 def test_fake_llm_manifest_override_skips_live_runtime_model_requirement():
     manifest = {"runtime": {"models": {"primary": {"model": "default"}}}, "llm": {"require_live": True, "model": "default"}}
 
