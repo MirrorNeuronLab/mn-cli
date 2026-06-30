@@ -2755,13 +2755,18 @@ def _runtime_base_env(compose_runtime: bool) -> dict[str, str]:
     return env
 
 def _ensure_installed_runtime_model_env(env: dict[str, str]) -> dict[str, str]:
-    if str(env.get("MN_NODE_MODELS") or "").strip() or str(env.get("MN_NODE_RUNTIME_MODELS") or "").strip():
+    refs = _installed_catalog_runtime_models()
+    if not refs:
         return env
 
-    refs = _installed_catalog_runtime_models()
-    if refs:
-        env = dict(env)
-        env["MN_NODE_RUNTIME_MODELS"] = ",".join(refs)
+    env = dict(env)
+    existing = _split_env_list(env.get("MN_NODE_RUNTIME_MODELS"))
+    seen = {ref.lower() for ref in existing}
+    for ref in refs:
+        if ref.lower() not in seen:
+            existing.append(ref)
+            seen.add(ref.lower())
+    env["MN_NODE_RUNTIME_MODELS"] = ",".join(existing)
     return env
 
 def _installed_catalog_runtime_models() -> list[str]:

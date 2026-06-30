@@ -770,7 +770,7 @@ def test_runtime_base_env_advertises_installed_runtime_models(mocker):
 
     assert env["MN_NODE_RUNTIME_MODELS"] == "gemma4:e2b"
 
-def test_runtime_base_env_keeps_explicit_runtime_models(mocker):
+def test_runtime_base_env_merges_explicit_and_installed_runtime_models(mocker):
     mocker.patch(
         "mn_cli.server_cmds._installed_catalog_runtime_models",
         return_value=["gemma4:e2b"],
@@ -780,7 +780,7 @@ def test_runtime_base_env_keeps_explicit_runtime_models(mocker):
         {"MN_NODE_RUNTIME_MODELS": "custom:model"}
     )
 
-    assert env["MN_NODE_RUNTIME_MODELS"] == "custom:model"
+    assert env["MN_NODE_RUNTIME_MODELS"] == "custom:model,gemma4:e2b"
 
 def test_record_runtime_model_install_writes_compose_model_override():
     server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
