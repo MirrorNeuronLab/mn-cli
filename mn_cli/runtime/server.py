@@ -3868,6 +3868,11 @@ def _configure_worker_redis_replica(
     )
     worker_redis_host = _usable_remote_host(worker_redis_host, worker_host)
     worker_password = _redis_password_from_url(worker_redis_url)
+    if worker_redis_host == primary_host and int(worker_redis_port) == int(primary_port):
+        console.print(
+            "[yellow]Worker Redis replication skipped: worker advertised the primary Redis endpoint.[/yellow]"
+        )
+        return None
 
     try:
         _redis_command(

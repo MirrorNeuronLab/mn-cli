@@ -1706,6 +1706,58 @@ def test_join_network_configures_worker_redis_replica(mocker, tmp_path, capsys):
     assert "Replication: 192.168.4.20:56380 -> 192.168.4.99:56379" in output
 
 
+def test_join_network_skips_replication_when_worker_advertises_primary_redis(mocker, tmp_path, capsys):
+    import mn_sdk
+    import mn_cli.shared
+
+    compose_file = server_cmds.RUNTIME_COMPOSE_FILE
+    compose_env = server_cmds.RUNTIME_COMPOSE_ENV
+    primary_password = "primary-redis-password"
+    compose_file.parent.mkdir(parents=True, exist_ok=True)
+    compose_file.write_text("services: {}\n")
+    compose_env.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_NETWORK_JOIN_TOKEN=primary-token\n"
+        "MN_NETWORK_REDIS_HOST=192.168.4.99\n"
+        "MN_NETWORK_REDIS_PORT=56379\n"
+        f"MN_REDIS_PASSWORD={primary_password}\n"
+        f"MN_REDIS_URL=redis://:{primary_password}@redis:6379/0\n"
+    )
+
+    class StubClient:
+        def __init__(self, target, auth_token, timeout):
+            assert target == "192.168.4.20:50055"
+
+        def network_handshake(self, token, node_name="", node_info=None):
+            assert token == "join-token"
+            return {
+                "node_name": "mirror_neuron@192.168.4.20",
+                "redis_host": "192.168.4.99",
+                "redis_port": 56379,
+                "redis_url": f"redis://:{primary_password}@192.168.4.99:56379/0",
+                "node_info": {},
+            }
+
+    redis_calls = []
+
+    def redis_command(host, port, password, *args):
+        redis_calls.append((host, port, password, args))
+        return "OK"
+
+    mocker.patch.object(mn_sdk, "Client", StubClient)
+    mocker.patch.object(mn_cli.shared.client, "add_node", return_value="connected")
+    mocker.patch('mn_cli.server_cmds._redis_command', side_effect=redis_command)
+    mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=0)
+    mocker.patch('mn_cli.server_cmds._ensure_local_cluster_runtime_for_join')
+
+    _join_network("192.168.4.20", "join-token", grpc_port=50055)
+
+    assert not any(call[3][0] == "REPLICAOF" for call in redis_calls)
+    output = capsys.readouterr().out
+    assert "Worker Redis replication skipped: worker advertised the primary Redis endpoint." in output
+    assert "Replication:" not in output
+
+
 def test_join_network_keeps_local_shared_storage_and_connects_syncthing(mocker, tmp_path, monkeypatch):
     import mn_sdk
     import mn_cli.shared
