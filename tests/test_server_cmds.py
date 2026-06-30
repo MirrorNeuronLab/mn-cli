@@ -482,6 +482,7 @@ def test_ensure_syncthing_for_runtime_starts_sidecar_without_sudo(mocker, tmp_pa
     assert ["docker", "rm", "-f", server_cmds.SYNCTHING_CONTAINER] in run_commands
     docker_run = next(command for command in run_commands if command[:3] == ["docker", "run", "-d"])
     assert "sudo" not in docker_run
+    assert docker_run[docker_run.index("--user") + 1] == "0:0"
     assert server_cmds.DEFAULT_SYNCTHING_IMAGE in docker_run
     assert f"{host_shared}:{server_cmds.SYNCTHING_FOLDER_PATH}:rw" in docker_run
     assert f"0.0.0.0:{server_cmds.DEFAULT_SYNCTHING_GUI_PORT}:{server_cmds.SYNCTHING_CONTAINER_GUI_PORT}/tcp" in docker_run

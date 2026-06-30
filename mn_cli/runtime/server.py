@@ -1104,7 +1104,8 @@ def _ensure_syncthing_for_runtime(env: dict[str, str], *, advertised_host: str) 
     if not recreate:
         current_root = _docker_container_env_value(SYNCTHING_CONTAINER, "MN_HOST_SHARED_STORAGE_ROOT")
         current_api_key = _docker_container_env_value(SYNCTHING_CONTAINER, "MN_SYNCTHING_API_KEY")
-        if current_root != host_root or current_api_key != api_key:
+        current_user = _docker_container_user(SYNCTHING_CONTAINER)
+        if current_root != host_root or current_api_key != api_key or current_user != "0:0":
             recreate = True
     if recreate:
         subprocess.run(["docker", "rm", "-f", SYNCTHING_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
@@ -1116,6 +1117,8 @@ def _ensure_syncthing_for_runtime(env: dict[str, str], *, advertised_host: str) 
             SYNCTHING_CONTAINER,
             "--restart",
             "unless-stopped",
+            "--user",
+            "0:0",
             "-e",
             "STGUIADDRESS=0.0.0.0:8384",
             "-e",
@@ -1604,6 +1607,19 @@ def _docker_container_env_value(name: str, key: str) -> Optional[str]:
         if line.startswith(prefix):
             return line[len(prefix) :].strip() or None
     return None
+
+def _docker_container_user(name: str) -> Optional[str]:
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{.Config.User}}", name],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
 
 def _ensure_network_docker_network(mode: str = "bridge", name: Optional[str] = None) -> None:
     _ensure_docker_network(mode, name or NETWORK_DOCKER_NETWORK)
