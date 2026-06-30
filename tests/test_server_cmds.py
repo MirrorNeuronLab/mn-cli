@@ -68,9 +68,11 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_DOCKER_NETWORK_MODE", raising=False)
     monkeypatch.delenv("MN_DOCKER_NETWORK_NAME", raising=False)
     monkeypatch.delenv("MN_REDIS_IMAGE", raising=False)
-    monkeypatch.setenv("MN_NFS_ENABLED", "0")
-    monkeypatch.delenv("MN_NFS_REQUIRED", raising=False)
-    monkeypatch.delenv("MN_NFS_EXPORT_PATH", raising=False)
+    monkeypatch.setenv("MN_SYNCTHING_ENABLED", "0")
+    monkeypatch.delenv("MN_SYNCTHING_REQUIRED", raising=False)
+    monkeypatch.delenv("MN_SYNCTHING_API_KEY", raising=False)
+    monkeypatch.delenv("MN_SYNCTHING_GUI_PORT", raising=False)
+    monkeypatch.delenv("MN_SYNCTHING_SYNC_PORT", raising=False)
     monkeypatch.delenv("DOCKER_HOST_SOCKET", raising=False)
     monkeypatch.delenv("MN_NETWORK_JOIN_TOKEN", raising=False)
     state_dir = tmp_path / ".mn"
@@ -98,6 +100,8 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.RUNTIME_ENDPOINTS_FILE', state_dir / "runtime-endpoints.json")
     mocker.patch('mn_cli.server_cmds.NETWORK_TOKEN_FILE', state_dir / "network.token")
     mocker.patch('mn_cli.server_cmds.NETWORK_REDIS_ENV_FILE', state_dir / "network-redis.env")
+    mocker.patch('mn_cli.server_cmds.SYNCTHING_API_KEY_FILE', state_dir / "syncthing.api-key")
+    mocker.patch('mn_cli.server_cmds.SYNCTHING_CONFIG_DIR', state_dir / "syncthing")
     mocker.patch('mn_cli.server_cmds._published_container_port', return_value=None)
     mocker.patch(
         'mn_cli.server_cmds.WEB_UI_DIRS',
@@ -355,7 +359,7 @@ def test_shared_storage_env_from_handshake_ignores_missing_primary_mount(tmp_pat
 
 
 def test_network_core_env_preserves_configured_shared_storage(monkeypatch, tmp_path):
-    host_shared = tmp_path / "nfs-shared"
+    host_shared = tmp_path / "shared"
     monkeypatch.setenv("MN_HOST_SHARED_STORAGE_ROOT", str(host_shared))
     monkeypatch.setenv("MN_RUNTIME_SHARED_STORAGE_ROOT", "/runtime/shared")
 
@@ -434,7 +438,7 @@ def test_redis_ha_env_from_handshake_adopts_sentinel_metadata():
 
 
 def test_network_core_bind_args_mounts_configured_shared_storage(tmp_path):
-    host_shared = tmp_path / "nfs-shared"
+    host_shared = tmp_path / "shared"
 
     bind_args = server_cmds._network_core_bind_args(
         {
@@ -453,13 +457,18 @@ def test_network_core_bind_args_mounts_configured_shared_storage(tmp_path):
     ]
 
 
-def test_ensure_nfs_export_for_cluster_runs_platform_export(mocker, tmp_path, monkeypatch):
+def test_ensure_syncthing_for_runtime_starts_sidecar_without_sudo(mocker, tmp_path, monkeypatch):
     host_shared = tmp_path / "shared"
-    monkeypatch.setenv("MN_NFS_ENABLED", "auto")
-    mocker.patch("mn_cli.server_cmds.os.uname", return_value=mocker.Mock(sysname="Darwin"))
+    monkeypatch.setenv("MN_SYNCTHING_ENABLED", "auto")
+    mocker.patch("mn_cli.server_cmds.runtime_compose_available", return_value=True)
+    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
+    mocker.patch("mn_cli.server_cmds._port_available_or_owned", return_value=True)
+    mocker.patch("mn_cli.server_cmds._wait_for_syncthing_api")
+    mocker.patch("mn_cli.server_cmds._syncthing_status", return_value={"myID": "LOCALDEVICE"})
+    mocker.patch("mn_cli.server_cmds._ensure_syncthing_folder")
     run = mocker.patch("mn_cli.server_cmds.subprocess.run", return_value=mocker.Mock(returncode=0))
 
-    server_cmds._ensure_nfs_export_for_cluster(
+    env = server_cmds._ensure_syncthing_for_runtime(
         {
             "MN_HOST_SHARED_STORAGE_ROOT": str(host_shared),
             "MN_RUNTIME_SHARED_STORAGE_ROOT": "/root/.mn/shared",
@@ -468,71 +477,72 @@ def test_ensure_nfs_export_for_cluster_runs_platform_export(mocker, tmp_path, mo
     )
 
     assert host_shared.is_dir()
-    run.assert_called_once()
-    assert run.call_args.args[0][:4] == ["sudo", "-n", "sh", "-c"]
-    assert str(host_shared) in run.call_args.args[0][4]
+    assert env["MN_SYNCTHING_DEVICE_ID"] == "LOCALDEVICE"
+    run_commands = [call_args.args[0] for call_args in run.call_args_list]
+    assert ["docker", "rm", "-f", server_cmds.SYNCTHING_CONTAINER] in run_commands
+    docker_run = next(command for command in run_commands if command[:3] == ["docker", "run", "-d"])
+    assert "sudo" not in docker_run
+    assert server_cmds.DEFAULT_SYNCTHING_IMAGE in docker_run
+    assert f"{host_shared}:{server_cmds.SYNCTHING_FOLDER_PATH}:rw" in docker_run
+    assert f"0.0.0.0:{server_cmds.DEFAULT_SYNCTHING_GUI_PORT}:{server_cmds.SYNCTHING_CONTAINER_GUI_PORT}/tcp" in docker_run
+    compose_env = server_cmds._read_env_file(server_cmds.RUNTIME_COMPOSE_ENV)
+    assert compose_env["MN_SYNCTHING_DEVICE_ID"] == "LOCALDEVICE"
+    assert compose_env["MN_SYNCTHING_ADVERTISE_HOST"] == "192.168.6.28"
 
 
-def test_ensure_nfs_mount_from_handshake_mounts_missing_primary_path(mocker, tmp_path, monkeypatch):
-    host_shared = tmp_path / "primary-shared"
-    monkeypatch.setenv("MN_NFS_ENABLED", "auto")
-    mocker.patch("mn_cli.server_cmds.os.uname", return_value=mocker.Mock(sysname="Linux"))
-    mocker.patch("mn_cli.server_cmds._path_is_mountpoint", return_value=False)
-    run = mocker.patch("mn_cli.server_cmds.subprocess.run", return_value=mocker.Mock(returncode=0))
+def test_connect_syncthing_peers_configures_both_nodes(mocker):
+    configs = {
+        ("127.0.0.1", 58384): {"devices": [], "folders": []},
+        ("192.168.4.173", 58384): {"devices": [], "folders": []},
+    }
+    puts = []
 
-    server_cmds._ensure_nfs_mount_from_handshake(
-        "192.168.6.28",
+    def fake_request(host, port, api_key, method, path, body=None, **_kwargs):
+        if method == "GET" and path == "/rest/config":
+            return configs[(host, port)]
+        if method == "PUT" and path == "/rest/config":
+            puts.append((host, port, api_key, body))
+            return None
+        if method == "POST" and path == "/rest/system/restart":
+            return None
+        raise AssertionError((host, port, api_key, method, path))
+
+    mocker.patch("mn_cli.server_cmds._syncthing_request", side_effect=fake_request)
+    mocker.patch("mn_cli.server_cmds._wait_for_syncthing_api")
+
+    connected = server_cmds._connect_syncthing_peers(
         {
-            "node_info": {
-                "host_shared_storage_root": str(host_shared),
-                "runtime_shared_storage_root": "/root/.mn/shared",
-            }
+            "enabled": True,
+            "device_id": "LOCALDEVICE",
+            "api_key": "local-key",
+            "api_host": "127.0.0.1",
+            "host": "192.168.6.28",
+            "gui_port": 58384,
+            "sync_port": 22000,
+            "folder_id": server_cmds.SYNCTHING_FOLDER_ID,
+            "folder_path": server_cmds.SYNCTHING_FOLDER_PATH,
         },
-        {},
+        {
+            "enabled": True,
+            "device_id": "REMOTEDEVICE",
+            "api_key": "remote-key",
+            "api_host": "127.0.0.1",
+            "host": "192.168.4.173",
+            "gui_port": 58384,
+            "sync_port": 22000,
+            "folder_id": server_cmds.SYNCTHING_FOLDER_ID,
+            "folder_path": server_cmds.SYNCTHING_FOLDER_PATH,
+        },
     )
 
-    assert run.call_args_list[0].args[0] == ["sudo", "-n", "mkdir", "-p", str(host_shared)]
-    assert run.call_args_list[1].args[0] == [
-        "sudo",
-        "-n",
-        "mount",
-        "-t",
-        "nfs",
-        "-o",
-        "vers=3,tcp,nolock",
-        f"192.168.6.28:{host_shared}",
-        str(host_shared),
-    ]
-
-
-def test_ensure_nfs_mount_required_fails_on_mount_error(mocker, tmp_path, monkeypatch):
-    host_shared = tmp_path / "primary-shared"
-    monkeypatch.setenv("MN_NFS_ENABLED", "auto")
-    monkeypatch.setenv("MN_NFS_REQUIRED", "1")
-    mocker.patch("mn_cli.server_cmds.os.uname", return_value=mocker.Mock(sysname="Linux"))
-    mocker.patch("mn_cli.server_cmds._path_is_mountpoint", return_value=False)
-    run = mocker.patch(
-        "mn_cli.server_cmds.subprocess.run",
-        side_effect=[
-            mocker.Mock(returncode=0),
-            subprocess.CalledProcessError(32, ["mount"]),
-        ],
-    )
-
-    with pytest.raises(typer.Exit) as exc:
-        server_cmds._ensure_nfs_mount_from_handshake(
-            "192.168.6.28",
-            {
-                "node_info": {
-                    "host_shared_storage_root": str(host_shared),
-                    "runtime_shared_storage_root": "/root/.mn/shared",
-                }
-            },
-            {},
-        )
-
-    assert exc.value.exit_code == 1
-    assert run.call_count == 2
+    assert connected is True
+    assert len(puts) == 2
+    local_config = next(body for host, _port, _key, body in puts if host == "127.0.0.1")
+    remote_config = next(body for host, _port, _key, body in puts if host == "192.168.4.173")
+    assert local_config["devices"][0]["deviceID"] == "REMOTEDEVICE"
+    assert local_config["devices"][0]["addresses"] == ["tcp://192.168.4.173:22000"]
+    assert remote_config["devices"][0]["deviceID"] == "LOCALDEVICE"
+    assert remote_config["devices"][0]["addresses"] == ["tcp://192.168.6.28:22000"]
 
 
 def test_deploy_compose_passes_host_shared_storage_to_core():
@@ -1695,7 +1705,7 @@ def test_join_network_configures_worker_redis_replica(mocker, tmp_path, capsys):
     assert "Replication: 192.168.4.20:56380 -> 192.168.4.99:56379" in output
 
 
-def test_join_network_recreates_compose_core_when_shared_storage_changes(mocker, tmp_path):
+def test_join_network_keeps_local_shared_storage_and_connects_syncthing(mocker, tmp_path, monkeypatch):
     import mn_sdk
     import mn_cli.shared
 
@@ -1712,8 +1722,9 @@ def test_join_network_recreates_compose_core_when_shared_storage_changes(mocker,
         "MN_HOST_SHARED_STORAGE_ROOT={old}\n"
         "MN_SHARED_STORAGE_ROOT={old}\n"
         "MN_RUNTIME_SHARED_STORAGE_ROOT=/root/.mn/shared\n"
-        "MN_CONTAINER_SHARED_STORAGE_ROOT=/root/.mn/shared\n".format(old=old_shared)
+            "MN_CONTAINER_SHARED_STORAGE_ROOT=/root/.mn/shared\n".format(old=old_shared)
     )
+    monkeypatch.setenv("MN_SYNCTHING_ENABLED", "auto")
 
     class StubClient:
         def __init__(self, target, auth_token, timeout):
@@ -1729,6 +1740,16 @@ def test_join_network_recreates_compose_core_when_shared_storage_changes(mocker,
                 "node_info": {
                     "host_shared_storage_root": str(primary_shared),
                     "runtime_shared_storage_root": "/root/.mn/shared",
+                    "syncthing": {
+                        "enabled": True,
+                        "device_id": "PRIMARYDEVICE",
+                        "api_key": "primary-key",
+                        "host": "192.168.4.20",
+                        "gui_port": 58384,
+                        "sync_port": 22000,
+                        "folder_id": server_cmds.SYNCTHING_FOLDER_ID,
+                        "folder_path": server_cmds.SYNCTHING_FOLDER_PATH,
+                    },
                 },
             }
 
@@ -1737,19 +1758,36 @@ def test_join_network_recreates_compose_core_when_shared_storage_changes(mocker,
     mocker.patch("mn_cli.server_cmds._detect_host_gpu_count", return_value=0)
     mocker.patch("mn_cli.server_cmds._ensure_local_cluster_runtime_for_join")
     mocker.patch("mn_cli.server_cmds._configure_worker_redis_replica", return_value="")
-    recreate = mocker.patch("mn_cli.server_cmds._recreate_compose_core_for_shared_storage")
-    wait = mocker.patch("mn_cli.server_cmds._wait_for_local_cluster_grpc")
+
+    def ensure_syncthing(env, **_kwargs):
+        env.update(
+            {
+                "MN_SYNCTHING_ENABLED": "auto",
+                "MN_SYNCTHING_DEVICE_ID": "LOCALDEVICE",
+                "MN_SYNCTHING_API_KEY": "local-key",
+                "MN_SYNCTHING_ADVERTISE_HOST": "192.168.4.99",
+                "MN_SYNCTHING_GUI_PORT": "58384",
+                "MN_SYNCTHING_SYNC_PORT": "22000",
+                "MN_SYNCTHING_FOLDER_ID": server_cmds.SYNCTHING_FOLDER_ID,
+                "MN_SYNCTHING_FOLDER_PATH": server_cmds.SYNCTHING_FOLDER_PATH,
+            }
+        )
+        return env
+
+    mocker.patch("mn_cli.server_cmds._ensure_syncthing_for_runtime", side_effect=ensure_syncthing)
+    connect_syncthing = mocker.patch("mn_cli.server_cmds._connect_syncthing_peers", return_value=True)
 
     _join_network("192.168.4.20", "join-token", grpc_port=50055)
 
     env = server_cmds._read_env_file(compose_env)
-    assert env["MN_HOST_SHARED_STORAGE_ROOT"] == str(primary_shared)
-    assert env["MN_SHARED_STORAGE_ROOT"] == str(primary_shared)
+    assert env["MN_HOST_SHARED_STORAGE_ROOT"] == str(old_shared)
+    assert env["MN_SHARED_STORAGE_ROOT"] == str(old_shared)
     assert env["MN_RUNTIME_SHARED_STORAGE_ROOT"] == "/root/.mn/shared"
     assert env["MN_CONTAINER_SHARED_STORAGE_ROOT"] == "/root/.mn/shared"
-    assert env["MN_BUNDLE_CACHE_DIR"] == "/root/.mn/shared/bundle_cache"
-    recreate.assert_called_once()
-    wait.assert_called_once_with()
+    connect_syncthing.assert_called_once()
+    local_info, remote_info = connect_syncthing.call_args.args
+    assert local_info["device_id"] == "LOCALDEVICE"
+    assert remote_info["device_id"] == "PRIMARYDEVICE"
 
 
 def test_join_promotes_local_compose_runtime_to_cluster_mode(mocker, tmp_path):
@@ -1770,7 +1808,10 @@ def test_join_promotes_local_compose_runtime_to_cluster_mode(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds._detect_host_cpu_model', return_value="")
     mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=0)
     mocker.patch('mn_cli.server_cmds._wait_for_local_cluster_grpc')
-    export_nfs = mocker.patch('mn_cli.server_cmds._ensure_nfs_export_for_cluster')
+    ensure_syncthing = mocker.patch(
+        'mn_cli.server_cmds._ensure_syncthing_for_runtime',
+        side_effect=lambda env, **_kwargs: env,
+    )
     mock_run = mocker.patch('mn_cli.server_cmds.subprocess.run')
 
     _ensure_local_cluster_runtime_for_join(
@@ -1787,7 +1828,7 @@ def test_join_promotes_local_compose_runtime_to_cluster_mode(mocker, tmp_path):
     assert "MN_NETWORK_ADVERTISE_HOST=192.168.4.20" in env_text
     assert "MN_GRPC_BIND_HOST=0.0.0.0" in env_text
     assert "MN_HOST_SHARED_STORAGE_ROOT=" in env_text
-    export_nfs.assert_called_once()
+    ensure_syncthing.assert_called_once()
     assert mock_run.call_args_list[0].args[0] == runtime_compose_cmd(
         "up", "-d", "--force-recreate", "redis", "mirror-neuron-core"
     )
@@ -2464,18 +2505,17 @@ def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
     assert env["ERL_AFLAGS"] == _erl_aflags("54370")
 
 
-def test_start_server_join_mounts_primary_nfs_before_compose_up(mocker, tmp_path, monkeypatch):
+def test_start_server_join_connects_syncthing_before_compose_up(mocker, tmp_path, monkeypatch):
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
-    primary_shared = tmp_path / "primary-shared"
-    primary_shared.mkdir()
+    local_shared = tmp_path / "local-shared"
     compose_file.write_text("services: {}\n")
     compose_env.write_text(
         "COMPOSE_PROJECT_NAME=mirror-neuron\n"
         "MN_HOST_SHARED_STORAGE_ROOT={local}\n"
         "MN_SHARED_STORAGE_ROOT={local}\n".format(local=tmp_path / "local-shared")
     )
-    monkeypatch.setenv("MN_NFS_ENABLED", "auto")
+    monkeypatch.setenv("MN_SYNCTHING_ENABLED", "auto")
 
     mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_FILE', compose_file)
     mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
@@ -2496,19 +2536,47 @@ def test_start_server_join_mounts_primary_nfs_before_compose_up(mocker, tmp_path
             "redis_port": 56379,
             "redis_url": "redis://:primary@192.168.6.28:56379/0",
             "node_info": {
-                "host_shared_storage_root": str(primary_shared),
+                "host_shared_storage_root": str(tmp_path / "primary-shared"),
                 "runtime_shared_storage_root": "/root/.mn/shared",
+                "syncthing": {
+                    "enabled": True,
+                    "device_id": "PRIMARYDEVICE",
+                    "api_key": "primary-key",
+                    "host": "192.168.6.28",
+                    "gui_port": 58384,
+                    "sync_port": 22000,
+                    "folder_id": server_cmds.SYNCTHING_FOLDER_ID,
+                    "folder_path": server_cmds.SYNCTHING_FOLDER_PATH,
+                },
             },
         },
     )
 
     events = []
 
-    def mount_primary(*_args, **_kwargs):
-        events.append("mount")
+    def ensure_syncthing(env, **_kwargs):
+        events.append("syncthing-ready")
+        env.update(
+            {
+                "MN_SYNCTHING_ENABLED": "auto",
+                "MN_SYNCTHING_DEVICE_ID": "LOCALDEVICE",
+                "MN_SYNCTHING_API_KEY": "local-key",
+                "MN_SYNCTHING_ADVERTISE_HOST": "192.168.4.173",
+                "MN_SYNCTHING_GUI_PORT": "58384",
+                "MN_SYNCTHING_SYNC_PORT": "22000",
+                "MN_SYNCTHING_FOLDER_ID": server_cmds.SYNCTHING_FOLDER_ID,
+                "MN_SYNCTHING_FOLDER_PATH": server_cmds.SYNCTHING_FOLDER_PATH,
+            }
+        )
+        return env
+
+    mocker.patch('mn_cli.server_cmds._ensure_syncthing_for_runtime', side_effect=ensure_syncthing)
+
+    def connect_syncthing(*_args, **_kwargs):
+        events.append("syncthing-connect")
         return True
 
-    mocker.patch('mn_cli.server_cmds._ensure_nfs_mount_from_handshake', side_effect=mount_primary)
+    mocker.patch('mn_cli.server_cmds._connect_syncthing_peers', side_effect=connect_syncthing)
 
     def mock_run(cmd, **kwargs):
         if cmd == runtime_compose_cmd("up", "-d"):
@@ -2522,12 +2590,13 @@ def test_start_server_join_mounts_primary_nfs_before_compose_up(mocker, tmp_path
 
     _start_server(ip="192.168.6.28", token="join-token", host="192.168.4.173")
 
-    assert events.index("mount") < events.index("compose-up")
+    assert events.index("syncthing-ready") < events.index("syncthing-connect") < events.index("compose-up")
     env = server_cmds._read_env_file(compose_env)
-    assert env["MN_HOST_SHARED_STORAGE_ROOT"] == str(primary_shared)
-    assert env["MN_SHARED_STORAGE_ROOT"] == str(primary_shared)
+    assert env["MN_HOST_SHARED_STORAGE_ROOT"] == str(local_shared)
+    assert env["MN_SHARED_STORAGE_ROOT"] == str(local_shared)
     assert env["MN_RUNTIME_SHARED_STORAGE_ROOT"] == "/root/.mn/shared"
     assert env["MN_CONTAINER_SHARED_STORAGE_ROOT"] == "/root/.mn/shared"
+    assert env["MN_SYNCTHING_DEVICE_ID"] == "LOCALDEVICE"
     assert env["MN_BUNDLE_CACHE_DIR"] == "/root/.mn/shared/bundle_cache"
 
 

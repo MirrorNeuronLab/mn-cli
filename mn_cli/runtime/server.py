@@ -3,7 +3,6 @@ import json
 import hashlib
 import ipaddress
 import re
-import shlex
 import signal
 import secrets
 import shutil
@@ -193,6 +192,7 @@ DEFAULT_CONTAINER_BLOB_STORE_ROOT = "/root/.mn/blobs"
 DEFAULT_RUNTIME_SHARED_STORAGE_ROOT = "/root/.mn/shared"
 DEFAULT_RUNTIME_BUNDLE_CACHE_DIR = f"{DEFAULT_RUNTIME_SHARED_STORAGE_ROOT}/bundle_cache"
 DEFAULT_REDIS_IMAGE = "redis:8"
+DEFAULT_SYNCTHING_IMAGE = "syncthing/syncthing:latest"
 LEGACY_GRPC_PORT = "50051"
 LEGACY_API_PORT = "4001"
 LEGACY_EPMD_PORT = "4369"
@@ -204,13 +204,23 @@ REDIS_CONTAINER_PORT = 6379
 REDIS_DYNAMIC_PORT_START = 56379
 REDIS_DYNAMIC_PORT_END = 56478
 DEFAULT_REDIS_SENTINEL_PORT = 26379
+DEFAULT_SYNCTHING_GUI_PORT = 58384
+DEFAULT_SYNCTHING_SYNC_PORT = 22000
+SYNCTHING_CONTAINER_GUI_PORT = 8384
+SYNCTHING_CONTAINER_SYNC_PORT = 22000
+SYNCTHING_FOLDER_ID = "mirror-neuron-shared"
+SYNCTHING_FOLDER_LABEL = "MirrorNeuron shared storage"
+SYNCTHING_FOLDER_PATH = "/var/syncthing/MirrorNeuronShared"
 NETWORK_TOKEN_FILE = DIR / "network.token"
 NETWORK_REDIS_ENV_FILE = DIR / "network-redis.env"
+SYNCTHING_API_KEY_FILE = DIR / "syncthing.api-key"
+SYNCTHING_CONFIG_DIR = DIR / "syncthing"
 DEFAULT_DOCKER_NETWORK_NAME = "mirror-neuron-runtime"
 NETWORK_DOCKER_NETWORK = DEFAULT_DOCKER_NETWORK_NAME
 LOCAL_CORE_CONTAINER = "mirror-neuron-core"
 COMPOSE_REDIS_CONTAINER = "mirror-neuron-redis"
 COMPOSE_SENTINEL_CONTAINER = "mirror-neuron-sentinel"
+SYNCTHING_CONTAINER = "mirror-neuron-syncthing"
 NETWORK_CORE_CONTAINER = "mirror-neuron-network-core"
 NETWORK_REDIS_CONTAINER = "mirror-neuron-network-redis"
 NETWORK_SENTINEL_CONTAINER = "mirror-neuron-network-sentinel"
@@ -867,12 +877,12 @@ def _shared_storage_env_from_handshake(handshake: Optional[dict]) -> dict[str, s
     expanded_host_root = Path(host_root).expanduser()
     if not expanded_host_root.exists():
         console.print(
-            "[yellow]Warning: remote shared-storage root is not mounted locally:[/yellow] "
+            "[yellow]Warning: remote shared-storage root is not a local path:[/yellow] "
             f"{host_root}"
         )
         console.print(
-            "[yellow]         Mount the same NFS export at that path or set MN_HOST_SHARED_STORAGE_ROOT "
-            "to a shared mount before starting/joining nodes.[/yellow]"
+            "[yellow]         Joined nodes keep a local shared-storage root; use Syncthing replication "
+            "instead of mounting a remote host path.[/yellow]"
         )
         return {}
 
@@ -881,123 +891,320 @@ def _shared_storage_env_from_handshake(handshake: Optional[dict]) -> dict[str, s
 def _truthy_env(value: object) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on", "required"}
 
-def _nfs_enabled(env: dict[str, str]) -> bool:
-    value = str(env.get("MN_NFS_ENABLED") or os.getenv("MN_NFS_ENABLED") or "auto").strip().lower()
+SYNCTHING_ENV_KEYS = (
+    "MN_SYNCTHING_ENABLED",
+    "MN_SYNCTHING_IMAGE",
+    "MN_SYNCTHING_API_KEY",
+    "MN_SYNCTHING_DEVICE_ID",
+    "MN_SYNCTHING_ADVERTISE_HOST",
+    "MN_SYNCTHING_GUI_PORT",
+    "MN_SYNCTHING_SYNC_PORT",
+    "MN_SYNCTHING_FOLDER_ID",
+    "MN_SYNCTHING_FOLDER_PATH",
+)
+
+def _syncthing_enabled(env: dict[str, str]) -> bool:
+    value = str(env.get("MN_SYNCTHING_ENABLED") or os.getenv("MN_SYNCTHING_ENABLED") or "auto").strip().lower()
     return value not in {"0", "false", "no", "n", "off", "disabled"}
 
-def _nfs_required(env: dict[str, str]) -> bool:
-    return _truthy_env(env.get("MN_NFS_REQUIRED") or os.getenv("MN_NFS_REQUIRED"))
+def _syncthing_required(env: dict[str, str]) -> bool:
+    return _truthy_env(env.get("MN_SYNCTHING_REQUIRED") or os.getenv("MN_SYNCTHING_REQUIRED"))
 
-def _nfs_warn_or_fail(message: str, env: dict[str, str]) -> None:
-    if _nfs_required(env):
+def _syncthing_warn_or_fail(message: str, env: dict[str, str]) -> None:
+    if _syncthing_required(env):
         console.print(f"[red]Error: {message}[/red]")
         raise typer.Exit(1)
     console.print(f"[yellow]Warning: {message}[/yellow]")
 
-def _nfs_host_shared_root(env: dict[str, str]) -> str:
-    explicit = str(env.get("MN_NFS_EXPORT_PATH") or os.getenv("MN_NFS_EXPORT_PATH") or "").strip()
-    if explicit:
-        return str(Path(explicit).expanduser())
+def _syncthing_image(env: dict[str, str]) -> str:
+    return str(env.get("MN_SYNCTHING_IMAGE") or os.getenv("MN_SYNCTHING_IMAGE") or DEFAULT_SYNCTHING_IMAGE).strip()
+
+def _syncthing_api_key(env: dict[str, str]) -> str:
+    configured = str(env.get("MN_SYNCTHING_API_KEY") or os.getenv("MN_SYNCTHING_API_KEY") or "").strip()
+    if configured:
+        return configured
+    try:
+        existing = SYNCTHING_API_KEY_FILE.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing
+    except OSError:
+        pass
+    DIR.mkdir(parents=True, exist_ok=True)
+    generated = secrets.token_urlsafe(32)
+    write_private_text(SYNCTHING_API_KEY_FILE, f"{generated}\n")
+    return generated
+
+def _syncthing_host_shared_root(env: dict[str, str]) -> str:
     host_root, _runtime_root, _bundle_cache = _network_shared_storage_roots(env)
     return host_root
 
-def _command_succeeds(command: list[str]) -> bool:
+def _syncthing_folder_id(env: dict[str, str]) -> str:
+    return str(env.get("MN_SYNCTHING_FOLDER_ID") or os.getenv("MN_SYNCTHING_FOLDER_ID") or SYNCTHING_FOLDER_ID).strip()
+
+def _syncthing_folder_path(env: dict[str, str]) -> str:
+    return str(env.get("MN_SYNCTHING_FOLDER_PATH") or os.getenv("MN_SYNCTHING_FOLDER_PATH") or SYNCTHING_FOLDER_PATH).strip()
+
+def _resolve_syncthing_port(
+    env: dict[str, str],
+    *,
+    key: str,
+    default: int,
+    bind_host: str,
+    target_port: int,
+) -> int:
+    configured = _parse_configured_port(env.get(key) or os.getenv(key))
+    current = _published_container_port(SYNCTHING_CONTAINER, target_port)
+    if current and not configured:
+        return current
+    preferred = configured or default
+    if _port_available_or_owned(bind_host, preferred, SYNCTHING_CONTAINER, target_port):
+        return preferred
+    if configured:
+        console.print(f"[red]Error: {key}={configured} is already in use.[/red]")
+        raise typer.Exit(1)
+    for candidate in range(default + 1, default + 50):
+        if _port_available_or_owned(bind_host, candidate, SYNCTHING_CONTAINER, target_port):
+            return candidate
+    console.print(f"[red]Error: No Syncthing port is available near {default}.[/red]")
+    raise typer.Exit(1)
+
+def _syncthing_request(
+    host: str,
+    port: int,
+    api_key: str,
+    method: str,
+    path: str,
+    body: Optional[dict[str, Any]] = None,
+    *,
+    timeout: float = 5.0,
+) -> Any:
+    payload = None
+    headers = {"X-API-Key": api_key}
+    if body is not None:
+        payload = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    url = f"http://{host}:{port}{path}"
+    request = urllib.request.Request(url, data=payload, headers=headers, method=method)
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        raw = response.read()
+    if not raw:
+        return None
     try:
-        return subprocess.run(
-            command,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        ).returncode == 0
-    except FileNotFoundError:
-        return False
+        return json.loads(raw.decode("utf-8"))
+    except json.JSONDecodeError:
+        return raw.decode("utf-8", errors="replace")
 
-def _path_is_mountpoint(path: str) -> bool:
-    if sys.platform.startswith("linux"):
-        return _command_succeeds(["findmnt", "-T", path])
-    if sys.platform == "darwin":
+def _wait_for_syncthing_api(host: str, port: int, api_key: str, *, timeout_seconds: float = 20.0) -> None:
+    deadline = time.time() + timeout_seconds
+    last_error: Optional[Exception] = None
+    while time.time() < deadline:
         try:
-            resolved = str(Path(path).expanduser().resolve())
-        except OSError:
-            resolved = str(Path(path).expanduser())
-        try:
-            result = subprocess.run(["mount"], capture_output=True, text=True)
-        except FileNotFoundError:
-            return False
-        return any(f" on {resolved} " in line for line in result.stdout.splitlines())
-    return False
+            _syncthing_request(host, port, api_key, "GET", "/rest/system/ping", timeout=1.0)
+            return
+        except Exception as exc:
+            last_error = exc
+            time.sleep(0.5)
+    raise RuntimeError(f"Syncthing API at {host}:{port} did not become ready: {last_error}")
 
-def _ensure_nfs_export_for_cluster(env: dict[str, str], *, advertised_host: str) -> None:
-    if not _nfs_enabled(env):
+def _syncthing_status(host: str, port: int, api_key: str) -> dict[str, Any]:
+    status = _syncthing_request(host, port, api_key, "GET", "/rest/system/status")
+    return status if isinstance(status, dict) else {}
+
+def _ensure_syncthing_folder(info: dict[str, Any], peers: tuple[dict[str, Any], ...] = ()) -> None:
+    if not info.get("enabled"):
         return
-    host_root = _nfs_host_shared_root(env)
+    host = str(info["api_host"])
+    port = int(info["gui_port"])
+    api_key = str(info["api_key"])
+    folder_id = str(info["folder_id"])
+    folder_path = str(info["folder_path"])
+    device_id = str(info["device_id"])
+
+    config = _syncthing_request(host, port, api_key, "GET", "/rest/config")
+    if not isinstance(config, dict):
+        return
+
+    devices = config.setdefault("devices", [])
+    folders = config.setdefault("folders", [])
+    peer_devices = []
+    for peer in peers:
+        peer_id = str(peer.get("device_id") or "").strip()
+        if not peer_id:
+            continue
+        peer_devices.append({"deviceID": peer_id})
+        existing = next((item for item in devices if item.get("deviceID") == peer_id), None)
+        addresses = [f"tcp://{peer.get('host')}:{peer.get('sync_port')}"] if peer.get("host") and peer.get("sync_port") else ["dynamic"]
+        if existing is None:
+            devices.append({"deviceID": peer_id, "name": str(peer.get("name") or peer_id), "addresses": addresses})
+        else:
+            existing["addresses"] = addresses
+
+    folder = next((item for item in folders if item.get("id") == folder_id), None)
+    folder_devices = [{"deviceID": device_id}, *peer_devices]
+    if folder is None:
+        folders.append(
+            {
+                "id": folder_id,
+                "label": SYNCTHING_FOLDER_LABEL,
+                "path": folder_path,
+                "type": "sendreceive",
+                "rescanIntervalS": 15,
+                "devices": folder_devices,
+            }
+        )
+    else:
+        folder["path"] = folder_path
+        folder["type"] = "sendreceive"
+        existing_ids = {str(item.get("deviceID") or "") for item in folder.get("devices", [])}
+        for item in folder_devices:
+            if item["deviceID"] not in existing_ids:
+                folder.setdefault("devices", []).append(item)
+
+    _syncthing_request(host, port, api_key, "PUT", "/rest/config", config)
+    try:
+        _syncthing_request(host, port, api_key, "POST", "/rest/system/restart", timeout=2.0)
+    except Exception:
+        pass
+    try:
+        _wait_for_syncthing_api(host, port, api_key, timeout_seconds=15.0)
+    except Exception:
+        pass
+
+def _ensure_syncthing_for_runtime(env: dict[str, str], *, advertised_host: str) -> dict[str, str]:
+    if not _syncthing_enabled(env):
+        return env
+    host_root = _syncthing_host_shared_root(env)
     try:
         Path(host_root).expanduser().mkdir(parents=True, exist_ok=True)
+        SYNCTHING_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        _nfs_warn_or_fail(f"could not create NFS shared-storage export root {host_root}: {exc}", env)
-        return
+        _syncthing_warn_or_fail(f"could not create Syncthing shared-storage directories: {exc}", env)
+        return env
 
-    system_name = os.uname().sysname
+    api_key = _syncthing_api_key(env)
+    bind_host = _network_publish_host(advertised_host)
+    gui_port = _resolve_syncthing_port(
+        env,
+        key="MN_SYNCTHING_GUI_PORT",
+        default=DEFAULT_SYNCTHING_GUI_PORT,
+        bind_host=bind_host,
+        target_port=SYNCTHING_CONTAINER_GUI_PORT,
+    )
+    sync_port = _resolve_syncthing_port(
+        env,
+        key="MN_SYNCTHING_SYNC_PORT",
+        default=DEFAULT_SYNCTHING_SYNC_PORT,
+        bind_host=bind_host,
+        target_port=SYNCTHING_CONTAINER_SYNC_PORT,
+    )
+    image = _syncthing_image(env)
+    folder_id = _syncthing_folder_id(env)
+    folder_path = _syncthing_folder_path(env)
+    recreate = not _docker_container_running(SYNCTHING_CONTAINER)
+    if not recreate:
+        current_root = _docker_container_env_value(SYNCTHING_CONTAINER, "MN_HOST_SHARED_STORAGE_ROOT")
+        current_api_key = _docker_container_env_value(SYNCTHING_CONTAINER, "MN_SYNCTHING_API_KEY")
+        if current_root != host_root or current_api_key != api_key:
+            recreate = True
+    if recreate:
+        subprocess.run(["docker", "rm", "-f", SYNCTHING_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        command = [
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            SYNCTHING_CONTAINER,
+            "--restart",
+            "unless-stopped",
+            "-e",
+            "STGUIADDRESS=0.0.0.0:8384",
+            "-e",
+            f"STGUIAPIKEY={api_key}",
+            "-e",
+            "STHOMEDIR=/var/syncthing/config",
+            "-e",
+            f"MN_HOST_SHARED_STORAGE_ROOT={host_root}",
+            "-e",
+            f"MN_SYNCTHING_API_KEY={api_key}",
+            "-p",
+            f"{bind_host}:{gui_port}:{SYNCTHING_CONTAINER_GUI_PORT}/tcp",
+            "-p",
+            f"{bind_host}:{sync_port}:{SYNCTHING_CONTAINER_SYNC_PORT}/tcp",
+            "-v",
+            f"{SYNCTHING_CONFIG_DIR}:/var/syncthing/config:rw",
+            "-v",
+            f"{host_root}:{folder_path}:rw",
+            image,
+        ]
+        subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
+    else:
+        subprocess.run(["docker", "start", SYNCTHING_CONTAINER], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     try:
-        if system_name == "Darwin":
-            export_line = f"{host_root} -alldirs -mapall={os.getuid()}:{os.getgid()} -network 192.168.0.0 -mask 255.255.0.0 -insecure"
-            command = (
-                "exports=/etc/exports; "
-                f"line={shlex.quote(export_line)}; "
-                "grep -Fqx \"$line\" \"$exports\" 2>/dev/null || printf '%s\\n' \"$line\" >> \"$exports\"; "
-                "nfsd enable >/dev/null 2>&1 || true; "
-                "nfsd restart"
-            )
-            subprocess.run(["sudo", "-n", "sh", "-c", command], check=True)
-        elif system_name == "Linux":
-            export_line = f"{host_root} 192.168.0.0/16(rw,sync,no_subtree_check,no_root_squash)"
-            command = (
-                "exports=/etc/exports; "
-                f"line={shlex.quote(export_line)}; "
-                "grep -Fqx \"$line\" \"$exports\" 2>/dev/null || printf '%s\\n' \"$line\" >> \"$exports\"; "
-                "exportfs -ra; "
-                "(systemctl start nfs-server || systemctl start nfs-kernel-server || service nfs-kernel-server start || true)"
-            )
-            subprocess.run(["sudo", "-n", "sh", "-c", command], check=True)
-        else:
-            return
-        console.print(f"=> NFS shared storage exported from {advertised_host}:{host_root}")
-    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
-        _nfs_warn_or_fail(
-            f"could not export NFS shared storage at {host_root}; run with sudo or set MN_NFS_ENABLED=0. {exc}",
-            env,
-        )
+        _wait_for_syncthing_api("127.0.0.1", gui_port, api_key)
+        status = _syncthing_status("127.0.0.1", gui_port, api_key)
+    except Exception as exc:
+        _syncthing_warn_or_fail(f"Syncthing shared-storage sidecar is not reachable: {exc}", env)
+        return env
 
-def _ensure_nfs_mount_from_handshake(seed_host: str, handshake: Optional[dict], env: dict[str, str]) -> bool:
-    if not _nfs_enabled(env) or not isinstance(handshake, dict):
-        return False
-    host_root, _runtime_root = _shared_storage_roots_from_handshake(handshake)
-    if not host_root:
-        return False
-    host_root = str(Path(host_root).expanduser())
-    if _path_is_mountpoint(host_root):
-        return True
+    device_id = str(status.get("myID") or env.get("MN_SYNCTHING_DEVICE_ID") or "").strip()
+    updates = {
+        "MN_SYNCTHING_ENABLED": "auto",
+        "MN_SYNCTHING_IMAGE": image,
+        "MN_SYNCTHING_API_KEY": api_key,
+        "MN_SYNCTHING_DEVICE_ID": device_id,
+        "MN_SYNCTHING_ADVERTISE_HOST": advertised_host,
+        "MN_SYNCTHING_GUI_PORT": str(gui_port),
+        "MN_SYNCTHING_SYNC_PORT": str(sync_port),
+        "MN_SYNCTHING_FOLDER_ID": folder_id,
+        "MN_SYNCTHING_FOLDER_PATH": folder_path,
+    }
+    env.update(updates)
+    if runtime_compose_available():
+        _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
+    if device_id:
+        _ensure_syncthing_folder(_syncthing_node_info(env, advertised_host))
+    console.print(f"=> Syncthing shared storage ready at {advertised_host}:{sync_port} ({host_root})")
+    return env
 
-    system_name = os.uname().sysname
-    source = f"{seed_host}:{host_root}"
+def _syncthing_node_info(env: dict[str, str], advertised_host: str) -> dict[str, Any]:
+    if not _syncthing_enabled(env):
+        return {"enabled": False}
+    return {
+        "enabled": True,
+        "device_id": str(env.get("MN_SYNCTHING_DEVICE_ID") or "").strip(),
+        "api_key": str(env.get("MN_SYNCTHING_API_KEY") or "").strip(),
+        "api_host": "127.0.0.1",
+        "host": str(env.get("MN_SYNCTHING_ADVERTISE_HOST") or advertised_host).strip(),
+        "gui_port": _parse_configured_port(env.get("MN_SYNCTHING_GUI_PORT")) or DEFAULT_SYNCTHING_GUI_PORT,
+        "sync_port": _parse_configured_port(env.get("MN_SYNCTHING_SYNC_PORT")) or DEFAULT_SYNCTHING_SYNC_PORT,
+        "folder_id": _syncthing_folder_id(env),
+        "folder_path": _syncthing_folder_path(env),
+    }
+
+def _syncthing_info_from_handshake(handshake: Optional[dict]) -> dict[str, Any]:
+    if not isinstance(handshake, dict):
+        return {}
+    node_info = handshake.get("node_info")
+    if not isinstance(node_info, dict):
+        return {}
+    syncthing = node_info.get("syncthing")
+    return syncthing if isinstance(syncthing, dict) else {}
+
+def _connect_syncthing_peers(local_info: dict[str, Any], remote_info: dict[str, Any]) -> bool:
+    if not local_info.get("enabled") or not remote_info.get("enabled"):
+        return False
+    if not local_info.get("device_id") or not remote_info.get("device_id"):
+        return False
     try:
-        if system_name == "Darwin":
-            subprocess.run(["sudo", "-n", "mkdir", "-p", host_root], check=True)
-            subprocess.run(["sudo", "-n", "mount_nfs", "-o", "resvport", source, host_root], check=True)
-        elif system_name == "Linux":
-            subprocess.run(["sudo", "-n", "mkdir", "-p", host_root], check=True)
-            subprocess.run(
-                ["sudo", "-n", "mount", "-t", "nfs", "-o", "vers=3,tcp,nolock", source, host_root],
-                check=True,
-            )
-        else:
-            return False
-        console.print(f"=> Mounted NFS shared storage {source} at {host_root}")
+        _ensure_syncthing_folder(local_info, (remote_info,))
+        remote_api_info = dict(remote_info)
+        remote_api_info["api_host"] = str(remote_info.get("host") or "")
+        if remote_api_info["api_host"]:
+            _ensure_syncthing_folder(remote_api_info, (local_info,))
         return True
-    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
-        _nfs_warn_or_fail(
-            f"could not mount NFS shared storage {source} at {host_root}; run with sudo or set MN_NFS_ENABLED=0. {exc}",
-            env,
-        )
+    except Exception as exc:
+        console.print(f"[yellow]Warning: could not connect Syncthing shared-storage peers: {exc}[/yellow]")
         return False
 
 def _compose_shared_storage_env_changed(updates: dict[str, str]) -> bool:
@@ -1016,7 +1223,7 @@ def _persist_compose_shared_storage_env(updates: dict[str, str]) -> bool:
 def _recreate_compose_core_for_shared_storage(env: dict[str, str]) -> None:
     if not runtime_compose_available():
         return
-    console.print("=> Recreating MirrorNeuron core so shared-storage mount changes are visible...")
+    console.print("=> Recreating MirrorNeuron core so shared-storage changes are visible...")
     try:
         subprocess.run(
             runtime_compose_cmd("up", "-d", "--force-recreate", "mirror-neuron-core"),
@@ -1029,9 +1236,9 @@ def _recreate_compose_core_for_shared_storage(env: dict[str, str]) -> None:
 
         raise AppError(
             "MN_EXECUTION_FAILED",
-            "Could not recreate MirrorNeuron core after shared-storage mount changed.",
+            "Could not recreate MirrorNeuron core after shared-storage settings changed.",
             internal_message=str(exc),
-            hint="Run 'mn runtime stop' and then restart the runtime after NFS is mounted.",
+            hint="Run 'mn runtime stop' and then restart the runtime after shared-storage settings are corrected.",
             exit_code=1,
             http_status=500,
             cause=exc,
@@ -1325,6 +1532,7 @@ def _handshake_node_info(local_host: str, node_name: Optional[str] = None) -> di
         "gpu_count": _detect_host_gpu_count(),
         "host_shared_storage_root": shared_env["MN_HOST_SHARED_STORAGE_ROOT"],
         "runtime_shared_storage_root": shared_env["MN_RUNTIME_SHARED_STORAGE_ROOT"],
+        "syncthing": _syncthing_node_info(shared_env, local_host),
     }
 
 def _handshake_with_main_node(
@@ -2061,8 +2269,10 @@ def _stop_local_runtime_for_worker() -> None:
     if runtime_compose_available():
         subprocess.run(runtime_compose_cmd("down"), stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
         subprocess.run(["docker", "rm", "-f", COMPOSE_SENTINEL_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        subprocess.run(["docker", "rm", "-f", SYNCTHING_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
     else:
         subprocess.run(["docker", "rm", "-f", LOCAL_CORE_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        subprocess.run(["docker", "rm", "-f", SYNCTHING_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
     for pid_file, _name in [
         *web_ui_pid_files(),
@@ -2225,7 +2435,7 @@ def _start_network_seed(
             redis_alias=redis_alias,
             publish_host_port=not use_internal_identity,
         )
-    _ensure_nfs_export_for_cluster(env, advertised_host=host)
+    env = _ensure_syncthing_for_runtime(env, advertised_host=host)
 
     console.print("=> Starting MirrorNeuron core-only exposed node...")
     _start_network_core(
@@ -2269,7 +2479,7 @@ def _join_network(
     network_name = _docker_network_name(docker_network_name)
     env = _runtime_base_env(runtime_compose_available())
     env.update(_shared_storage_env_from_runtime_env(env))
-    _ensure_nfs_export_for_cluster(env, advertised_host=local_host)
+    env = _ensure_syncthing_for_runtime(env, advertised_host=local_host)
     local_node_name = _network_node_name(local_host)
     if requested_mode != "disabled":
         _ensure_network_docker_network(requested_mode, network_name)
@@ -2286,12 +2496,10 @@ def _join_network(
         node_name=local_node_name,
         node_info=_handshake_node_info(local_host, node_name=local_node_name),
     )
-    _ensure_nfs_mount_from_handshake(seed_host, handshake, env)
-    shared_storage_updates = _shared_storage_env_from_handshake(handshake)
-    shared_storage_changed = False
-    if shared_storage_updates:
-        env.update(shared_storage_updates)
-        shared_storage_changed = _persist_compose_shared_storage_env(shared_storage_updates)
+    _connect_syncthing_peers(
+        _syncthing_node_info(env, local_host),
+        _syncthing_info_from_handshake(handshake),
+    )
     remote_node = handshake.get("node_name") or _network_node_name(seed_host)
     redis_host, redis_port, redis_url = _validate_remote_redis_details(handshake, seed_host, token)
     from mn_cli.shared import client as local_client
@@ -2319,9 +2527,6 @@ def _join_network(
         ) from exc
     if runtime_compose_available():
         _persist_compose_cluster_node(remote_node)
-    if shared_storage_changed:
-        _recreate_compose_core_for_shared_storage(env)
-        _wait_for_local_cluster_grpc()
     details: list[tuple[str, str]] = [("Node", remote_node)]
     if runtime_compose_available() or os.getenv("MN_REDIS_URL", "").strip():
         replication = _configure_worker_redis_replica(seed_host, handshake, token)
@@ -2362,8 +2567,13 @@ def _ensure_local_cluster_runtime_for_join(
 
     env = _runtime_base_env(True)
     env.update(_shared_storage_env_from_runtime_env(env))
-    _ensure_nfs_export_for_cluster(env, advertised_host=local_host)
-    _persist_compose_shared_storage_env({key: env[key] for key in SHARED_STORAGE_ENV_KEYS if key in env})
+    env = _ensure_syncthing_for_runtime(env, advertised_host=local_host)
+    _persist_compose_shared_storage_env(
+        {
+            **{key: env[key] for key in SHARED_STORAGE_ENV_KEYS if key in env},
+            **{key: env[key] for key in SYNCTHING_ENV_KEYS if key in env},
+        }
+    )
     existing_node_name = str(env.get("MN_NODE_NAME") or "").strip()
     existing_advertise_host = str(env.get("MN_NETWORK_ADVERTISE_HOST") or "").strip()
     if (
@@ -2462,7 +2672,7 @@ def _wait_for_local_cluster_grpc(
     raise typer.Exit(1)
 
 def _stop_network_runtime() -> None:
-    for container in [NETWORK_CORE_CONTAINER, NETWORK_REDIS_CONTAINER, NETWORK_SENTINEL_CONTAINER]:
+    for container in [NETWORK_CORE_CONTAINER, NETWORK_REDIS_CONTAINER, NETWORK_SENTINEL_CONTAINER, SYNCTHING_CONTAINER]:
         subprocess.run(["docker", "rm", "-f", container], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
 def _detach_local_docker_node_if_matches(node_name: str) -> bool:
@@ -4519,6 +4729,7 @@ def _start_server(
         if use_internal_identity
         else _network_node_name(advertised_host)
     )
+    env = _ensure_syncthing_for_runtime(env, advertised_host=advertised_host)
     join_handshake = (
         _handshake_with_main_node(
             ip,
@@ -4534,8 +4745,10 @@ def _start_server(
         _validate_remote_redis_details(join_handshake, ip, network_token)
         env.update(_grpc_tokens_from_handshake(join_handshake))
         env.update(_redis_ha_env_from_handshake(join_handshake))
-        _ensure_nfs_mount_from_handshake(ip, join_handshake, env)
-        env.update(_shared_storage_env_from_handshake(join_handshake))
+        _connect_syncthing_peers(
+            _syncthing_node_info(env, advertised_host),
+            _syncthing_info_from_handshake(join_handshake),
+        )
     env = _ensure_runtime_api_token(env, persist_compose=compose_runtime)
     env = _ensure_runtime_grpc_tokens(env, persist_compose=compose_runtime)
     reconnecting_joined_node = bool(compose_runtime and not ip and _persisted_join_profile(env))
@@ -4636,7 +4849,7 @@ def _start_server(
     env["MN_ARTIFACT_PORT"] = artifact_port
     env["MN_ARTIFACT_ADVERTISE_URL"] = f"http://{advertised_host}:{artifact_port}"
     if not ip:
-        _ensure_nfs_export_for_cluster(env, advertised_host=advertised_host)
+        env = _ensure_syncthing_for_runtime(env, advertised_host=advertised_host)
     if requested_docker_mode != "disabled" and node_alias:
         env.update(_docker_network_env(requested_docker_mode, network_name, node_alias))
     if _generated_node_setting_should_update("MN_NODE_NAME", env.get("MN_NODE_NAME"), local_node_name):
@@ -4690,6 +4903,7 @@ def _start_server(
                     "MN_ARTIFACT_PORT": env["MN_ARTIFACT_PORT"],
                     "MN_ARTIFACT_ADVERTISE_URL": env["MN_ARTIFACT_ADVERTISE_URL"],
                     **{key: env[key] for key in SHARED_STORAGE_ENV_KEYS if key in env},
+                    **{key: env[key] for key in SYNCTHING_ENV_KEYS if key in env},
                     **{key: env[key] for key in REDIS_HA_ENV_KEYS if key in env},
                     **(
                         _docker_network_env(requested_docker_mode, network_name, node_alias)
@@ -4742,6 +4956,7 @@ def _start_server(
                 "MN_DOCKER_NETWORK_MODE": env.get("MN_DOCKER_NETWORK_MODE", "disabled"),
                 "MN_DOCKER_NETWORK_NAME": env.get("MN_DOCKER_NETWORK_NAME", network_name),
                 **{key: env[key] for key in SHARED_STORAGE_ENV_KEYS if key in env},
+                **{key: env[key] for key in SYNCTHING_ENV_KEYS if key in env},
                 **{key: env[key] for key in REDIS_HA_ENV_KEYS if key in env},
                 **(
                     _docker_network_env(requested_docker_mode, network_name, node_alias)

@@ -29,6 +29,7 @@ from mn_cli.server_cmds import (
     kill_tree,
     BEAM_PID_FILE,
     COMPOSE_SENTINEL_CONTAINER,
+    SYNCTHING_CONTAINER,
     DEFAULT_HOST,
     DEFAULT_API_PORT,
     DEFAULT_GRPC_PORT,
@@ -211,10 +212,12 @@ def stop():
         console.print("   Stopping Docker runtime (Compose)...")
         subprocess.run(runtime_compose_cmd("down"), stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
         subprocess.run(["docker", "rm", "-f", COMPOSE_SENTINEL_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        subprocess.run(["docker", "rm", "-f", SYNCTHING_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
     else:
         console.print("   Stopping Core Service (Docker: mirror-neuron-core)...")
         subprocess.run(["docker", "stop", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
         subprocess.run(["docker", "rm", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        subprocess.run(["docker", "rm", "-f", SYNCTHING_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
     for pid_file, name in [
         *web_ui_pid_files(),
