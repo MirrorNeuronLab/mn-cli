@@ -413,6 +413,63 @@ def test_prepare_manifest_stages_local_skill_dependencies_from_runtime_env(tmp_p
     )
 
 
+def test_prepare_manifest_stages_local_skill_dependencies_only_in_docker_workdir_upload(
+    tmp_path, monkeypatch
+):
+    bundle_dir = tmp_path / "bundle"
+    skills_root = tmp_path / "mn-skills"
+    bundle_dir.mkdir()
+    (bundle_dir / "config").mkdir()
+    (bundle_dir / "config" / "default.json").write_text(
+        json.dumps({"identity": {"blueprint_id": "workdir_skill_dev"}}),
+        encoding="utf-8",
+    )
+    _write_skill_pyproject(
+        skills_root,
+        "evidence_engine_skill",
+        "mirrorneuron-evidence-engine-skill",
+    )
+    skill_module = skills_root / "evidence_engine_skill" / "src" / "mn_evidence_engine_skill"
+    skill_module.mkdir(parents=True)
+    (skill_module / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+    monkeypatch.setenv("MN_ENV", "dev")
+    monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("MN_SKILLS_ROOT", str(skills_root))
+
+    manifest = {
+        "skill_dependencies": [
+            {
+                "type": "pip",
+                "source": "gar",
+                "name": "mirrorneuron-evidence-engine-skill",
+                "version": "1.2.7",
+            }
+        ],
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.DockerWorker",
+                    "docker_worker_image": "document_workflow/docker_worker",
+                    "workdir": "/mn/job/document_workflow",
+                    "upload_paths": [
+                        {"source": "document_workflow", "target": "document_workflow"},
+                        {"source": "examples/sample_inputs", "target": "vc_assistant/examples/sample_inputs"},
+                        {"source": "knowledge", "target": "knowledge"},
+                    ],
+                    "environment": {},
+                },
+            }
+        ],
+    }
+
+    prepared = prepare_manifest_for_submission(bundle_dir, manifest)
+    sources = prepared["metadata"]["mn_local_skill_dependencies"]["sources"]
+    targets = [source["target"] for source in sources]
+
+    assert targets == ["document_workflow/.mn-local-skills/evidence_engine_skill"]
+
+
 def test_prepare_manifest_keeps_gar_skill_dependencies_for_hostlocal_dev(tmp_path, monkeypatch):
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"

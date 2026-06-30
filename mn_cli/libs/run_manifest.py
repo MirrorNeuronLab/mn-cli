@@ -242,13 +242,37 @@ def _docker_worker_upload_roots(manifest: dict[str, Any]) -> list[str]:
         if config.get("runner_module") != DOCKER_WORKER_RUNNER:
             continue
         has_docker_worker = True
-        for source in _node_upload_sources(config):
+        sources = _node_upload_sources_for_workdir(config) or _node_upload_sources(config)
+        for source in sources:
             cleaned = source.strip("/")
             if cleaned and cleaned not in roots:
                 roots.append(cleaned)
     if not has_docker_worker:
         return []
     return roots or [""]
+
+
+def _node_upload_sources_for_workdir(config: dict[str, Any]) -> list[str]:
+    workdir = str(config.get("workdir") or "").strip().strip("/")
+    if not workdir.startswith("mn/job/"):
+        return []
+    workdir_target = workdir.removeprefix("mn/job/").strip("/")
+    if not workdir_target:
+        return []
+
+    upload_paths = config.get("upload_paths")
+    if not isinstance(upload_paths, list):
+        return []
+
+    sources: list[str] = []
+    for entry in upload_paths:
+        if not isinstance(entry, dict):
+            continue
+        source = str(entry.get("source") or "").strip().strip("/")
+        target = str(entry.get("target") or Path(source).name).strip().strip("/")
+        if source and target == workdir_target:
+            sources.append(source)
+    return sources
 
 
 def user_home_environment() -> dict[str, str]:
