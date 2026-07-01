@@ -20,6 +20,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 from mn_sdk.blueprint_source import DEFAULT_BLUEPRINT_REPO, normalize_blueprint_repo_value
+from mn_sdk.native_resources import node_resource_environment
 from mn_cli.config import CliConfig
 from mn_cli.libs.ui import print_confirmed, print_success_confirmation
 from mn_cli.logging_config import configure_logging
@@ -536,7 +537,12 @@ def _node_display_name() -> str:
 
 def _ensure_node_advertisement_settings(env: dict[str, str]) -> dict[str, str]:
     adjusted = dict(env)
-    if not os.getenv("MN_NODE_DISPLAY_NAME", "").strip():
+    try:
+        adjusted.update(node_resource_environment(env=adjusted))
+    except Exception:
+        logger.debug("Failed to build SDK node resource advertisement", exc_info=True)
+
+    if not str(adjusted.get("MN_NODE_DISPLAY_NAME") or os.getenv("MN_NODE_DISPLAY_NAME", "")).strip():
         adjusted["MN_NODE_DISPLAY_NAME"] = _node_display_name()
 
     if not str(adjusted.get("MN_NODE_CPU_MODEL") or "").strip():
@@ -839,6 +845,26 @@ SHARED_STORAGE_ENV_KEYS = (
     "MN_RUNTIME_SHARED_STORAGE_ROOT",
     "MN_CONTAINER_SHARED_STORAGE_ROOT",
     "MN_BUNDLE_CACHE_DIR",
+)
+NODE_ADVERTISEMENT_ENV_KEYS = (
+    "MN_NODE_HARDWARE_JSON",
+    "MN_NODE_DISPLAY_NAME",
+    "MN_NODE_CPU_CORES",
+    "MN_NODE_CPU_MODEL",
+    "MN_NODE_MEMORY_TOTAL_MB",
+    "MN_NODE_MEMORY_AVAILABLE_MB",
+    "MN_NODE_DISK_TOTAL_MB",
+    "MN_NODE_DISK_AVAILABLE_MB",
+    "MN_NODE_HOST_PATHS",
+    "MN_NODE_RUNTIME_DRIVERS",
+    "MN_NODE_GPU",
+    "MN_NODE_GPU_COUNT",
+    "MN_NODE_GPU_VENDOR",
+    "MN_NODE_GPU_DRIVER",
+    "MN_NODE_GPU_TYPE",
+    "MN_NODE_GPU_NAME",
+    "MN_NODE_GPU_API_VERSION",
+    "MN_NODE_GPU_DRIVER_VERSION",
 )
 
 def _shared_storage_env_values(host_root: str, runtime_root: str) -> dict[str, str]:
@@ -2993,17 +3019,25 @@ def _runtime_base_env(compose_runtime: bool) -> dict[str, str]:
 
 def _ensure_installed_runtime_model_env(env: dict[str, str]) -> dict[str, str]:
     refs = _installed_catalog_runtime_models()
+    services = _installed_catalog_runtime_services()
     if not refs:
-        return env
+        if not services:
+            return env
 
     env = dict(env)
-    existing = _split_env_list(env.get("MN_NODE_RUNTIME_MODELS"))
-    seen = {ref.lower() for ref in existing}
-    for ref in refs:
-        if ref.lower() not in seen:
-            existing.append(ref)
-            seen.add(ref.lower())
-    env["MN_NODE_RUNTIME_MODELS"] = ",".join(existing)
+    if refs:
+        existing = _split_env_list(env.get("MN_NODE_RUNTIME_MODELS"))
+        seen = {ref.lower() for ref in existing}
+        for ref in refs:
+            if ref.lower() not in seen:
+                existing.append(ref)
+                seen.add(ref.lower())
+        env["MN_NODE_RUNTIME_MODELS"] = ",".join(existing)
+    if services:
+        env["MN_MODEL_SERVICES_JSON"] = _merge_model_services_json(
+            env.get("MN_MODEL_SERVICES_JSON"),
+            services,
+        )
     return env
 
 def _installed_catalog_runtime_models() -> list[str]:
@@ -3034,6 +3068,35 @@ def _installed_catalog_runtime_models() -> list[str]:
         logger.debug("Could not infer installed runtime models", exc_info=True)
         return []
 
+def _installed_catalog_runtime_services() -> list[dict[str, Any]]:
+    try:
+        from mn_sdk import (
+            dmr_api_list_models,
+            docker_model_match_keys,
+            docker_model_name,
+            list_model_entries,
+            load_model_catalog,
+            model_service_instance,
+        )
+
+        installed_models = dmr_api_list_models(timeout=3)
+        installed_keys = {
+            key
+            for model in installed_models
+            for key in docker_model_match_keys(model)
+        }
+        services: list[dict[str, Any]] = []
+        for entry in list_model_entries(load_model_catalog()):
+            target = docker_model_name(entry)
+            if not target:
+                continue
+            if docker_model_match_keys(target) & installed_keys:
+                services.append(model_service_instance(entry))
+        return services
+    except Exception:
+        logger.debug("Could not infer installed runtime model services", exc_info=True)
+        return []
+
 def record_runtime_model_install(entry: dict[str, Any]) -> Optional[Path]:
     docker_model = str(entry.get("model") or entry.get("docker_model") or "").strip()
     if not docker_model:
@@ -3046,12 +3109,45 @@ def record_runtime_model_install(entry: dict[str, Any]) -> Optional[Path]:
         refs.append(model_id)
 
     updates = {"MN_NODE_RUNTIME_MODELS": ",".join(refs)}
+    try:
+        from mn_sdk import model_service_instance
+
+        updates["MN_MODEL_SERVICES_JSON"] = _merge_model_services_json(
+            existing.get("MN_MODEL_SERVICES_JSON"),
+            [model_service_instance(entry)],
+        )
+    except Exception:
+        logger.debug("Could not record runtime model service advertisement", exc_info=True)
     if _is_default_llm_model(entry) or not str(existing.get("MN_LLM_MODEL_RUNNER_MODEL") or "").strip():
         updates["MN_LLM_MODEL_RUNNER_MODEL"] = docker_model
 
     RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
     _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
     return _write_runtime_compose_models_override(docker_model)
+
+def _merge_model_services_json(existing: object, services: list[dict[str, Any]]) -> str:
+    merged: list[dict[str, Any]] = []
+    raw = str(existing or "").strip()
+    if raw:
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError:
+            decoded = []
+        values = decoded.get("services") if isinstance(decoded, dict) else decoded
+        if isinstance(values, dict):
+            values = list(values.values())
+        if isinstance(values, list):
+            merged.extend(item for item in values if isinstance(item, dict))
+    merged.extend(service for service in services if isinstance(service, dict))
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for service in merged:
+        key = json.dumps(service, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(service)
+    return json.dumps({"services": deduped}, sort_keys=True, separators=(",", ":"))
 
 def ensure_context_engine_runtime(*, force: bool = False) -> dict[str, str]:
     if not runtime_compose_available():
@@ -4770,20 +4866,9 @@ def _build_core_docker_run_command(
     if env.get("MN_DOCKER_NETWORK_NAME"):
         cmd.extend(["-e", f"MN_DOCKER_NETWORK_NAME={env['MN_DOCKER_NETWORK_NAME']}"])
     cmd.extend(["-e", f"MN_NODE_ROLE={env['MN_NODE_ROLE']}"])
-    cmd.extend(["-e", f"MN_NODE_DISPLAY_NAME={env['MN_NODE_DISPLAY_NAME']}"])
-    if env.get("MN_NODE_CPU_MODEL"):
-        cmd.extend(["-e", f"MN_NODE_CPU_MODEL={env['MN_NODE_CPU_MODEL']}"])
-    cmd.extend(["-e", f"MN_NODE_GPU_COUNT={env['MN_NODE_GPU_COUNT']}"])
-    for gpu_env_key in (
-        "MN_NODE_GPU_VENDOR",
-        "MN_NODE_GPU_DRIVER",
-        "MN_NODE_GPU_TYPE",
-        "MN_NODE_GPU_NAME",
-        "MN_NODE_GPU_API_VERSION",
-        "MN_NODE_GPU_DRIVER_VERSION",
-    ):
-        if env.get(gpu_env_key):
-            cmd.extend(["-e", f"{gpu_env_key}={env[gpu_env_key]}"])
+    for node_env_key in NODE_ADVERTISEMENT_ENV_KEYS:
+        if env.get(node_env_key):
+            cmd.extend(["-e", f"{node_env_key}={env[node_env_key]}"])
     cmd.extend(["-e", f"MN_GRPC_PORT={env['MN_GRPC_PORT']}"])
     cmd.extend(["-e", f"MN_DIST_PORT={env['MN_DIST_PORT']}"])
     cmd.extend(["-e", f"MN_RUNS_ROOT={env.get('MN_CONTAINER_RUNS_ROOT', DEFAULT_CONTAINER_RUNS_ROOT)}"])
@@ -5169,6 +5254,7 @@ def _start_server(
                     "MN_ARTIFACT_PUBLISH_HOST": env["MN_ARTIFACT_PUBLISH_HOST"],
                     "MN_ARTIFACT_PORT": env["MN_ARTIFACT_PORT"],
                     "MN_ARTIFACT_ADVERTISE_URL": env["MN_ARTIFACT_ADVERTISE_URL"],
+                    **{key: env[key] for key in NODE_ADVERTISEMENT_ENV_KEYS if key in env},
                     **{key: env[key] for key in SHARED_STORAGE_ENV_KEYS if key in env},
                     **{key: env[key] for key in SYNCTHING_ENV_KEYS if key in env},
                     **{key: env[key] for key in REDIS_HA_ENV_KEYS if key in env},
@@ -5209,15 +5295,7 @@ def _start_server(
                 "MN_ARTIFACT_PORT": env["MN_ARTIFACT_PORT"],
                 "MN_ARTIFACT_ADVERTISE_URL": env["MN_ARTIFACT_ADVERTISE_URL"],
                 "MN_DIST_PORT": env["MN_DIST_PORT"],
-                "MN_NODE_DISPLAY_NAME": env["MN_NODE_DISPLAY_NAME"],
-                "MN_NODE_CPU_MODEL": env.get("MN_NODE_CPU_MODEL", ""),
-                "MN_NODE_GPU_COUNT": env["MN_NODE_GPU_COUNT"],
-                "MN_NODE_GPU_VENDOR": env.get("MN_NODE_GPU_VENDOR", ""),
-                "MN_NODE_GPU_DRIVER": env.get("MN_NODE_GPU_DRIVER", ""),
-                "MN_NODE_GPU_TYPE": env.get("MN_NODE_GPU_TYPE", ""),
-                "MN_NODE_GPU_NAME": env.get("MN_NODE_GPU_NAME", ""),
-                "MN_NODE_GPU_API_VERSION": env.get("MN_NODE_GPU_API_VERSION", ""),
-                "MN_NODE_GPU_DRIVER_VERSION": env.get("MN_NODE_GPU_DRIVER_VERSION", ""),
+                **{key: env[key] for key in NODE_ADVERTISEMENT_ENV_KEYS if key in env},
                 "MN_NODE_MODELS": env.get("MN_NODE_MODELS", ""),
                 "MN_NODE_RUNTIME_MODELS": env.get("MN_NODE_RUNTIME_MODELS", ""),
                 "MN_DOCKER_NETWORK_MODE": env.get("MN_DOCKER_NETWORK_MODE", "disabled"),

@@ -6,7 +6,11 @@ import tomllib
 from pathlib import Path
 from typing import Any, Optional
 
-from mn_sdk import DOCKER_MODEL_RUNNER_CONTAINER_API_BASE, resolve_llm_environment
+from mn_sdk import (
+    DOCKER_MODEL_RUNNER_CONTAINER_API_BASE,
+    expand_manifest_model_service_requirements,
+    resolve_llm_environment,
+)
 from mn_sdk.runtime_modules import (
     default_registered_modules_root,
     ensure_runtime_modules_for_manifest,
@@ -351,6 +355,7 @@ def prepare_manifest_for_submission(
             if value is not None
         }
     )
+    expand_manifest_model_service_requirements(prepared, config or {}, env=runtime_env)
     if runtime_env:
         inject_node_environment(prepared, runtime_env)
         strip_docker_model_runner_placement_requirements(prepared, force=fake_llm)
