@@ -361,6 +361,9 @@ def test_prepare_runtime_models_schedules_runtime_install_on_capable_cluster_nod
     endpoint_env = json.loads(env_overrides["MN_MODEL_ENDPOINTS_JSON"])
     assert endpoint_env["nemotron3:latest"]["node"] == "spark"
     assert endpoint_env["ai/nemotron3:latest"]["node"] == "spark"
+    effective_config = json.loads(env_overrides["MN_BLUEPRINT_CONFIG_JSON"])
+    assert effective_config["llm"]["api_base"] == "http://spark:12434/engines/v1"
+    assert effective_config["llm"]["configs"]["primary"]["api_base"] == "http://spark:12434/engines/v1"
     assert "ai/nemotron3:latest" in json.loads(env_overrides["MN_PREPARED_RUNTIME_MODELS_JSON"])
     install_model.assert_not_called()
     prepare_model.assert_called_once()

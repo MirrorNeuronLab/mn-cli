@@ -294,11 +294,12 @@ def _prepare_runtime_models_for_run_or_exit(
     prepared_json = _prepared_runtime_models_json(summary)
     if prepared_json and env_overrides is not None:
         env_overrides["MN_PREPARED_RUNTIME_MODELS_JSON"] = prepared_json
-    fallback_config = _config_with_runtime_model_fallbacks(config, summary)
-    if fallback_config is not config and env_overrides is not None:
-        summary["config_overrides"] = fallback_config
-        env_overrides["MN_BLUEPRINT_CONFIG_JSON"] = json.dumps(fallback_config, sort_keys=True)
-        env_overrides.update(_runtime_model_fallback_llm_env(fallback_config))
+    materialized_config = _config_with_runtime_model_endpoints(config, summary)
+    materialized_config = _config_with_runtime_model_fallbacks(materialized_config, summary)
+    if materialized_config is not config and env_overrides is not None:
+        summary["config_overrides"] = materialized_config
+        env_overrides["MN_BLUEPRINT_CONFIG_JSON"] = json.dumps(materialized_config, sort_keys=True)
+        env_overrides.update(_runtime_model_fallback_llm_env(materialized_config))
     _print_runtime_model_install_summary(summary)
     if summary["errors"]:
         raise typer.Exit(1)
@@ -1803,6 +1804,86 @@ def _config_with_runtime_model_fallbacks(config: dict[str, Any], model_install_s
     return config_copy
 
 
+def _config_with_runtime_model_endpoints(config: dict[str, Any], model_install_summary: dict[str, Any]) -> dict[str, Any]:
+    endpoints = model_install_summary.get("endpoints") if isinstance(model_install_summary, dict) else {}
+    if not isinstance(endpoints, dict) or not endpoints:
+        return config
+    llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
+    if not llm:
+        return config
+
+    config_copy = json.loads(json.dumps(config))
+    copy_llm = config_copy.setdefault("llm", {})
+    if not isinstance(copy_llm, dict):
+        return config
+
+    changed = _apply_llm_endpoint_if_matching(copy_llm, endpoints)
+    configs = copy_llm.get("configs") if isinstance(copy_llm.get("configs"), dict) else {}
+    for profile in configs.values():
+        if isinstance(profile, dict):
+            changed = _apply_llm_endpoint_if_matching(profile, endpoints) or changed
+    return config_copy if changed else config
+
+
+def _apply_llm_endpoint_if_matching(llm: dict[str, Any], endpoints: dict[str, Any]) -> bool:
+    model_ref = str(llm.get("runtime_model") or llm.get("model") or "").strip()
+    endpoint = _endpoint_for_model_ref(model_ref, endpoints)
+    if not endpoint:
+        return False
+    api_base = str(endpoint.get("api_base") or "").strip()
+    if not api_base:
+        return False
+    llm["api_base"] = api_base
+    llm["provider"] = str(endpoint.get("provider") or llm.get("provider") or "docker_model_runner")
+    if endpoint.get("model"):
+        llm["model"] = str(endpoint["model"])
+    if endpoint.get("runtime_model"):
+        llm["runtime_model"] = str(endpoint["runtime_model"])
+    if endpoint.get("api_key"):
+        llm["api_key"] = str(endpoint["api_key"])
+    return True
+
+
+def _endpoint_for_model_ref(model_ref: str, endpoints: dict[str, Any]) -> dict[str, Any] | None:
+    if not model_ref:
+        return None
+    wanted = _runtime_model_match_keys(model_ref)
+    for key, endpoint in endpoints.items():
+        if not isinstance(endpoint, dict):
+            continue
+        endpoint_keys = _runtime_model_match_keys(str(key))
+        endpoint_keys.update(_runtime_model_match_keys(str(endpoint.get("model") or "")))
+        endpoint_keys.update(_runtime_model_match_keys(str(endpoint.get("runtime_model") or "")))
+        endpoint_keys.update(_runtime_model_match_keys(str(endpoint.get("api_model") or "")))
+        if wanted & endpoint_keys:
+            return endpoint
+    return None
+
+
+def _runtime_model_match_keys(value: str) -> set[str]:
+    text = str(value or "").strip().lower()
+    if not text:
+        return set()
+    keys = {text}
+    changed = True
+    while changed:
+        changed = False
+        for key in list(keys):
+            variants = {
+                key.removeprefix("docker.io/") if key.startswith("docker.io/") else key,
+                key.removeprefix("registry-1.docker.io/") if key.startswith("registry-1.docker.io/") else key,
+                key.removeprefix("ai/") if key.startswith("ai/") else key,
+                key.removesuffix(":latest") if key.endswith(":latest") else key,
+            }
+            if "/" not in key:
+                variants.add(f"ai/{key}")
+            for variant in variants:
+                if variant and variant not in keys:
+                    keys.add(variant)
+                    changed = True
+    return keys
+
+
 def _apply_llm_model_fallback(config: dict[str, Any], path: str, fallback: dict[str, Any]) -> None:
     llm = config.setdefault("llm", {})
     if not isinstance(llm, dict):
@@ -1865,6 +1946,10 @@ def _runtime_model_fallback_llm_env(config: dict[str, Any]) -> dict[str, str]:
     provider = str(primary.get("provider") or llm.get("provider") or "docker_model_runner").strip()
     if provider:
         env["MN_LLM_PROVIDER"] = provider
+    api_base = str(primary.get("api_base") or llm.get("api_base") or "").strip()
+    if api_base:
+        env["MN_LLM_API_BASE"] = api_base
+        env["LITELLM_API_BASE"] = api_base
     backend = str(primary.get("backend") or llm.get("backend") or "").strip()
     if backend:
         env["MN_LLM_BACKEND"] = backend
