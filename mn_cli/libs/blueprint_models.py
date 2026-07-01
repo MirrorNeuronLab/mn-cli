@@ -18,6 +18,7 @@ class BlueprintModelOps:
     install_model_entry: Callable[..., dict[str, Any]]
     resolve_model_endpoint: Callable[..., dict[str, Any] | None] | None = None
     resolve_cluster_model: Callable[..., dict[str, Any] | None] | None = None
+    install_cluster_model: Callable[..., dict[str, Any]] | None = None
     notify_model_install_start: Callable[[dict[str, Any]], Any] | None = None
     install_model_with_progress: Callable[..., dict[str, Any]] | None = None
 
@@ -86,6 +87,7 @@ def blueprint_model_dependency_summary(
                 str(endpoint.get("model") or "").strip(),
                 str(endpoint.get("runtime_model") or "").strip(),
             }
+            keys.update(str(alias or "").strip() for alias in entry.get("aliases") or [])
             for key in keys:
                 if key:
                     endpoints[key] = endpoint
@@ -96,7 +98,45 @@ def blueprint_model_dependency_summary(
         if ops.resolve_cluster_model is not None:
             cluster_model = ops.resolve_cluster_model(requirement=requirement, entry=entry)
         if cluster_model:
-            results.append({**base_result, "status": "runtime_node_install", "cluster": cluster_model})
+            if ops.install_cluster_model is None:
+                results.append({**base_result, "status": "runtime_node_install", "cluster": cluster_model})
+                continue
+            try:
+                install_result = ops.install_cluster_model(
+                    requirement=requirement,
+                    entry=entry,
+                    model=base_result,
+                    cluster=cluster_model,
+                    backend=backend,
+                    context_size=requirement.get("context_size"),
+                    force=force,
+                )
+                endpoint = install_result.get("endpoint") if isinstance(install_result, dict) else None
+                if isinstance(endpoint, dict):
+                    keys = {
+                        str(requirement.get("name") or "").strip(),
+                        str(requirement.get("model") or "").strip(),
+                        str(entry.get("id") or "").strip(),
+                        docker_model,
+                        str(endpoint.get("model") or "").strip(),
+                        str(endpoint.get("runtime_model") or "").strip(),
+                    }
+                    keys.update(str(alias or "").strip() for alias in entry.get("aliases") or [])
+                    for key in keys:
+                        if key:
+                            endpoints[key] = endpoint
+                results.append(
+                    {
+                        **base_result,
+                        "status": "runtime_node_installed",
+                        "cluster": cluster_model,
+                        **(install_result if isinstance(install_result, dict) else {}),
+                    }
+                )
+            except Exception as exc:
+                message = str(exc)
+                results.append({**base_result, "status": "failed", "cluster": cluster_model, "error": message})
+                errors.append(message)
             continue
 
         fallback_ref = str(entry.get("fallback_model") or "").strip()

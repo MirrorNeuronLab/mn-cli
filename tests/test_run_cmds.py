@@ -215,6 +215,7 @@ def test_prepare_runtime_models_uses_registered_nemotron_remote(
             "id": "nemotron3:latest",
             "model": "ai/nemotron3:latest",
             "api_model": "ai/nemotron3:latest",
+            "aliases": ["nemotron3", "ai/nemotron3:latest"],
             "provider": "docker_model_runner",
             "backend": "llama.cpp",
         }
@@ -329,17 +330,42 @@ def test_prepare_runtime_models_schedules_runtime_install_on_capable_cluster_nod
         return_value=json.dumps({"services": []}),
     )
     mocker.patch("mn_cli.libs.run_cmds.client.get_resource", return_value=json.dumps(resource_report))
+    prepare_model = mocker.patch(
+        "mn_cli.libs.run_cmds.client.prepare_runtime_model",
+        return_value=json.dumps(
+            {
+                "status": "installed",
+                "node": "spark",
+                "endpoint": {
+                    "provider": "docker_model_runner",
+                    "model": "ai/nemotron3:latest",
+                    "runtime_model": "ai/nemotron3:latest",
+                    "api_model": "ai/nemotron3:latest",
+                    "api_base": "http://spark:12434/engines/v1",
+                    "node": "spark",
+                    "source": "cluster_node_install",
+                },
+            }
+        ),
+    )
     install_model = mocker.patch("mn_cli.libs.run_cmds.install_model_entry")
 
     env_overrides = {}
     summary = run_cmds._prepare_runtime_models_for_run_or_exit(bundle_dir, manifest, env_overrides=env_overrides)
 
     assert summary["ok"] is True
-    assert summary["models"][0]["status"] == "runtime_node_install"
+    assert summary["models"][0]["status"] == "runtime_node_installed"
+    assert summary["models"][0]["node"] == "spark"
     assert summary["models"][0]["cluster"]["node"] == "spark"
+    assert summary["models"][0]["endpoint"]["api_base"] == "http://spark:12434/engines/v1"
+    endpoint_env = json.loads(env_overrides["MN_MODEL_ENDPOINTS_JSON"])
+    assert endpoint_env["nemotron3:latest"]["node"] == "spark"
+    assert endpoint_env["ai/nemotron3:latest"]["node"] == "spark"
     assert "ai/nemotron3:latest" in json.loads(env_overrides["MN_PREPARED_RUNTIME_MODELS_JSON"])
     install_model.assert_not_called()
-    assert "Installing runtime model" not in capsys.readouterr().out
+    prepare_model.assert_called_once()
+    assert prepare_model.call_args.args[0]["node"] == "spark"
+    assert "Installing runtime model nemotron3:latest on spark" in capsys.readouterr().out
     resolver = run_cmds._prepared_model_installed_resolver(summary)
     assert resolver("ai/nemotron3:latest", {"model": "nemotron3:latest"}) is True
     validation_manifest, validation_config = run_cmds._model_validation_inputs_with_prepared_models(

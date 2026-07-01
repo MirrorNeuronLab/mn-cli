@@ -140,7 +140,7 @@ def install_model(
     try:
         catalog = load_model_catalog()
         entry = resolve_model_entry(model, catalog=catalog)
-        result = install_model_entry(entry, backend=backend, context_size=context_size, force=force)
+        result = install_model_entry_with_progress(entry, backend=backend, context_size=context_size, force=force)
         compatibility = result["compatibility"]
         target = result["docker_model"]
         record_manual_model_install(entry, backend=compatibility["backend"])
@@ -623,13 +623,57 @@ def install_model_entry(
     backend: str = "auto",
     context_size: Optional[int] = None,
     force: bool = False,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     try:
-        return sdk_install_model_entry(entry, backend=backend, context_size=context_size, force=force)
+        return sdk_install_model_entry(
+            entry,
+            backend=backend,
+            context_size=context_size,
+            force=force,
+            progress_callback=progress_callback,
+        )
     except RuntimeError as exc:
         compatibility = assess_model_compatibility(entry, backend=backend, force=force)
         _print_compatibility(compatibility.to_dict())
         raise exc
+
+
+def install_model_entry_with_progress(
+    entry: dict[str, Any],
+    *,
+    backend: str = "auto",
+    context_size: Optional[int] = None,
+    force: bool = False,
+    label: str | None = None,
+) -> dict[str, Any]:
+    display = label or str(entry.get("id") or entry.get("model") or "runtime model")
+    with typer.progressbar(length=100, label=f"Pulling {display}") as progress:
+        completed = {"value": 0}
+
+        def on_progress(event: dict[str, Any]) -> None:
+            percent = event.get("percent")
+            if percent is None:
+                return
+            try:
+                value = int(max(0, min(100, round(float(percent)))))
+            except (TypeError, ValueError):
+                return
+            delta = value - completed["value"]
+            if delta > 0:
+                progress.update(delta)
+                completed["value"] = value
+
+        result = install_model_entry(
+            entry,
+            backend=backend,
+            context_size=context_size,
+            force=force,
+            progress_callback=on_progress,
+        )
+        if completed["value"] < 100:
+            progress.update(100 - completed["value"])
+        return result
 
 
 def _model_pull_timeout_seconds() -> float:
