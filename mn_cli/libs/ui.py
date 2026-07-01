@@ -5,6 +5,7 @@ import time
 
 from rich import box
 from rich.console import Group
+from rich.progress_bar import ProgressBar
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
@@ -25,7 +26,7 @@ class JobMonitorState:
         if key in {"q", "Q", "\x03"}:
             return False
         if key == "\x04":
-            return self.allow_ctrl_d
+            return not self.allow_ctrl_d
         if key in {"j", "J", "\t", "\x1b[B"}:
             self.selected_index = min(self.selected_index + 1, max(agent_count - 1, 0))
             return True
@@ -311,12 +312,6 @@ def _agent_token_count(agent: dict[str, Any], *, used: bool = False, budget: boo
                     return int(value)
                 except (TypeError, ValueError):
                     pass
-        value = agent.get("tokens")
-        if value is not None:
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                pass
     return None
 
 
@@ -352,6 +347,8 @@ def _workflow_phase_table(steps: list[dict[str, Any]], *, workflow_kind: str = "
         layer = int(step.get("layer") or 0)
         branch_prefix = f"L{layer + 1} " if has_graph_layers else ""
         label = f"{icon} {branch_prefix}{index} {step.get('label') or step.get('id') or 'Step'}"
+        if workflow_kind == "service" and status not in {"done", "completed"}:
+            label = f"{label} ({status})"
         ready_count = int(step.get("ready_count") or step.get("done_count") or 0)
         done_count = int(step.get("done_count") or 0)
         count_value = ready_count if workflow_kind == "service" else done_count
@@ -371,7 +368,7 @@ def _workflow_agent_table(
     table.add_column("#", justify="right", no_wrap=True)
     table.add_column("agent", no_wrap=True)
     table.add_column("working on")
-    table.add_column("progress", justify="right", no_wrap=True)
+    table.add_column("progress", justify="right", no_wrap=True, width=26)
     table.add_column("tokens", justify="right", no_wrap=True)
     table.add_column("mail", justify="right", no_wrap=True)
 
@@ -388,7 +385,7 @@ def _workflow_agent_table(
             f"{marker}{index + 1}",
             _agent_id(agent),
             _workflow_agent_summary(agent),
-            f"{_progress_text(agent)}",
+            _progress_renderable(agent),
             _agent_token_column(agent),
             str(_int_value(agent, "mailbox_depth", "queue_depth", "mailbox")),
             style=row_style,
@@ -403,18 +400,13 @@ def _workflow_agent_summary(agent: dict[str, Any]) -> str:
 def _agent_token_column(agent: dict[str, Any]) -> str:
     tokens_used = agent.get("tokens_used")
     token_budget = agent.get("token_budget")
-    tokens = agent.get("tokens")
     if tokens_used is not None:
         text = _format_tokens(tokens_used)
         if token_budget is not None and token_budget != tokens_used:
             return f"{text}/{_format_tokens(token_budget)} tok"
         return f"{text} tok"
     if token_budget is not None:
-        if token_budget == tokens:
-            return f"{_format_tokens(token_budget)} tok budget"
         return f"{_format_tokens(token_budget)} tok budget"
-    if tokens is not None:
-        return f"{_format_tokens(tokens)} tok"
     return "-"
 
 
@@ -477,7 +469,7 @@ def _agent_table(agents: list[dict[str, Any]], selected_index: int) -> Table:
     table.add_column("agent", no_wrap=True)
     table.add_column("status", no_wrap=True)
     table.add_column("working on")
-    table.add_column("progress", justify="right", no_wrap=True)
+    table.add_column("progress", justify="right", no_wrap=True, width=26)
     table.add_column("mail", justify="right", no_wrap=True)
 
     if not agents:
@@ -493,7 +485,7 @@ def _agent_table(agents: list[dict[str, Any]], selected_index: int) -> Table:
             _agent_id(agent),
             status,
             _working_on(agent),
-            _progress_text(agent),
+            _progress_renderable(agent),
             str(_int_value(agent, "mailbox_depth", "queue_depth", "mailbox")),
             style="reverse" if index == selected_index else _status_color(status),
         )
@@ -553,6 +545,36 @@ def _working_on(agent: dict[str, Any]) -> str:
 def _progress_text(agent: dict[str, Any]) -> str:
     progress = _agent_progress(agent)
     return f"{_bar(progress)} {progress * 100:>3.0f}%"
+
+
+def _progress_renderable(agent: dict[str, Any]):
+    progress = _agent_progress(agent)
+    grid = Table.grid(expand=False, padding=(0, 1))
+    grid.add_column(width=16, no_wrap=True)
+    grid.add_column(justify="right", width=5, no_wrap=True)
+    grid.add_row(
+        ProgressBar(
+            total=100,
+            completed=progress * 100,
+            width=16,
+            style="grey35",
+            complete_style=_progress_bar_color(agent),
+            finished_style=_progress_bar_color(agent),
+        ),
+        Text(f"{progress * 100:>3.0f}%"),
+    )
+    return grid
+
+
+def _progress_bar_color(agent: dict[str, Any]) -> str:
+    status = str(agent.get("status") or "").lower()
+    if status in {"failed", "cancelled"}:
+        return "red"
+    if status in {"partial", "skipped"}:
+        return "yellow"
+    if status in {"completed", "done", "finished", "succeeded"}:
+        return "green"
+    return "cyan"
 
 
 def _agent_progress(agent: dict[str, Any]) -> float:

@@ -268,15 +268,12 @@ def _agent_metrics(agent: AgentProgress) -> str:
         parts.append(f"{getattr(agent, 'items_done', 0) or 0}/{items_total} items")
     tokens_used = getattr(agent, "tokens_used", None)
     token_budget = getattr(agent, "token_budget", None)
-    legacy_tokens_are_budget = bool(token_budget and agent.tokens == token_budget and not tokens_used)
     if tokens_used and token_budget:
         parts.append(f"{_format_tokens(tokens_used)}/{_format_tokens(token_budget)} tok")
     elif tokens_used:
         parts.append(f"{_format_tokens(tokens_used)} tok")
     elif token_budget:
         parts.append(f"{_format_tokens(token_budget)} tok budget")
-    elif agent.tokens and not legacy_tokens_are_budget:
-        parts.append(f"{_format_tokens(agent.tokens)} tok")
     if agent.tools is not None:
         parts.append(f"{agent.tools} tools")
     if agent.started_at is not None:
@@ -450,7 +447,7 @@ def _agents_from_runtime_binding(
                 ),
                 tools=_optional_int(raw.get("tools")),
                 tokens=_optional_int(raw.get("tokens")),
-                token_budget=_optional_int(raw.get("token_budget") or raw.get("tokens")),
+                token_budget=_optional_int(raw.get("token_budget")),
                 live=live or _truthy(raw.get("live")),
             )
         )

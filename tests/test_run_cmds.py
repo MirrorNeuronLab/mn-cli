@@ -2638,7 +2638,7 @@ def test_workflow_token_tracking_prefers_usage_fields_and_ignores_budget_only_pa
     view = BlueprintWorkflowProgress(manifest, job_id="job-token")
     console = Console(record=True, width=120)
     console.print(generate_live_layout("job-token", {"workflow_progress": view.snapshot()}, JobMonitorState()))
-    assert "500 tok budget" in console.export_text()
+    assert "500 tok budget" not in console.export_text()
     assert "run used" not in console.export_text()
 
     view.record_event_token_usage(
@@ -2646,7 +2646,7 @@ def test_workflow_token_tracking_prefers_usage_fields_and_ignores_budget_only_pa
     )
     console = Console(record=True, width=120)
     console.print(generate_live_layout("job-token", {"workflow_progress": view.snapshot()}, JobMonitorState()))
-    assert "500 tok budget" in console.export_text()
+    assert "500 tok budget" not in console.export_text()
     assert "run used" not in console.export_text()
 
     view.record_event_token_usage(
@@ -2654,7 +2654,7 @@ def test_workflow_token_tracking_prefers_usage_fields_and_ignores_budget_only_pa
     )
     console.print(generate_live_layout("job-token", {"workflow_progress": view.snapshot()}, JobMonitorState()))
     output = console.export_text()
-    assert "run used 50 / budget 500 tok" in output
+    assert "run used 50 tok" in output
 
 
 def test_workflow_monitor_state_controls_with_shared_renderer():
