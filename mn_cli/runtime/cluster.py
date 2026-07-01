@@ -1,5 +1,14 @@
 """Focused runtime launcher exports for cluster."""
 
+from mn_cli.runtime.cluster_ops import (
+    ClusterCredentials,
+    ClusterOperationPlan,
+    ClusterTopology,
+    NodeIdentity,
+    NodeTopology,
+    network_node_name,
+    node_host,
+)
 from mn_cli.runtime.server import (
     _resolve_network_token,
     _refresh_network_token,
@@ -43,6 +52,13 @@ from mn_cli.runtime.server import (
 )
 
 __all__ = [
+    "ClusterCredentials",
+    "ClusterOperationPlan",
+    "ClusterTopology",
+    "NodeIdentity",
+    "NodeTopology",
+    "network_node_name",
+    "node_host",
     "_resolve_network_token",
     "_refresh_network_token",
     "_write_network_token",

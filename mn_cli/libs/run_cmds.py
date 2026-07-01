@@ -71,6 +71,7 @@ from mn_cli.shared import console, client, config, logger
 from mn_cli.terminal import use_progress
 from mn_cli.error_handler import handle_cli_error
 from mn_sdk import (
+    ModelEndpointMap,
     cluster_provided_model,
     docker_api_model_name,
     docker_model_name,
@@ -78,7 +79,6 @@ from mn_sdk import (
     load_model_catalog,
     load_model_ownership,
     make_validation_report,
-    model_endpoints_json,
     prepare_job_submission,
     record_model_owner,
     required_blueprint_models,
@@ -288,7 +288,7 @@ def _prepare_runtime_models_for_run_or_exit(
     )
     endpoints = summary.get("endpoints") if isinstance(summary.get("endpoints"), dict) else {}
     if endpoints and env_overrides is not None:
-        env_overrides["MN_MODEL_ENDPOINTS_JSON"] = model_endpoints_json(endpoints)
+        env_overrides.update(ModelEndpointMap(endpoints).to_env_overrides())
     prepared_json = _prepared_runtime_models_json(summary)
     if prepared_json and env_overrides is not None:
         env_overrides["MN_PREPARED_RUNTIME_MODELS_JSON"] = prepared_json
