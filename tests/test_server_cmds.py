@@ -1135,6 +1135,7 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     mocker.patch('mn_cli.server_cmds.NETWORK_TOKEN_FILE', token_file)
     mocker.patch('mn_cli.server_cmds.secrets.token_urlsafe', return_value="seed-token")
     mocker.patch('mn_cli.server_cmds._docker_container_running', return_value=False)
+    mocker.patch('mn_cli.server_cmds._installed_catalog_runtime_models', return_value=["nemotron3"])
     port_available = mocker.patch('mn_cli.server_cmds._port_available_or_owned', return_value=True)
     start_api = mocker.patch('mn_cli.server_cmds._start_api_if_installed')
     start_web_ui = mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed')
@@ -1181,6 +1182,7 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     assert any(value.startswith("MN_GRPC_ADMIN_TOKEN=") and value != "MN_GRPC_ADMIN_TOKEN=" for value in core_run)
     assert "MN_NETWORK_ONLY=true" in core_run
     assert "MN_REDIS_FORWARD_PRIMARY=true" in core_run
+    assert "MN_NODE_RUNTIME_MODELS=nemotron3" in core_run
     assert "MN_NODE_ALIAS=mn-seed" in core_run
     assert "MN_DOCKER_NETWORK_MODE=overlay" in core_run
     assert "MN_DOCKER_NETWORK_NAME=mirror-neuron-runtime" in core_run

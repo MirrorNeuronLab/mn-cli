@@ -2495,6 +2495,7 @@ def _start_network_seed(
         redis_public_host=redis_public_host,
         redis_public_port=redis_public_port,
     )
+    env = _ensure_installed_runtime_model_env(env)
     env = _ensure_runtime_grpc_tokens(env, persist_compose=runtime_compose_available())
     if not external_redis_url:
         _start_network_sentinel(
