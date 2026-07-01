@@ -28,6 +28,23 @@ def test_leave_does_not_rotate_grpc_tokens(monkeypatch, tmp_path):
     assert admin_file.read_text().strip() == "stable-admin-token"
 
 
+def test_stop_attempts_joined_cluster_leave_before_teardown(monkeypatch, mocker, tmp_path):
+    calls = []
+
+    monkeypatch.setattr(sys_cmds, "leave_joined_cluster_before_stop", lambda: calls.append("leave"))
+    monkeypatch.setattr(sys_cmds, "_stop_network_runtime", lambda: calls.append("network-runtime"))
+    monkeypatch.setattr(sys_cmds, "runtime_compose_available", lambda: False)
+    monkeypatch.setattr(sys_cmds, "web_ui_pid_files", lambda: ())
+    monkeypatch.setattr(sys_cmds, "api_pid_files", lambda: ())
+    monkeypatch.setattr(sys_cmds, "BEAM_PID_FILE", tmp_path / "beam.pid")
+    monkeypatch.setattr(sys_cmds, "_stop_matching_sidecar_processes", lambda *_args: None)
+    mocker.patch.object(sys_cmds.subprocess, "run")
+
+    sys_cmds.stop()
+
+    assert calls[:2] == ["leave", "network-runtime"]
+
+
 def test_restart_sidecars_api_only_restarts_api_without_web_ui(mocker, tmp_path):
     api_pid_files = ((tmp_path / "api-watchdog.pid", "REST API watchdog"),)
     mocker.patch.object(sys_cmds, "api_pid_files", return_value=api_pid_files)

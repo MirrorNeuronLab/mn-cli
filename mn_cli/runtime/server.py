@@ -225,6 +225,13 @@ NETWORK_CORE_CONTAINER = "mirror-neuron-network-core"
 NETWORK_REDIS_CONTAINER = "mirror-neuron-network-redis"
 NETWORK_SENTINEL_CONTAINER = "mirror-neuron-network-sentinel"
 RUNTIME_CLUSTER_OVERRIDE_FILE = "docker-compose.cluster.yml"
+JOIN_CLAIM_FILE = DIR / "cluster-join-claim.json"
+JOIN_OWNER_ENV_KEYS = {
+    "MN_JOIN_OWNER_NODE",
+    "MN_JOIN_OWNER_HOST",
+    "MN_JOIN_OWNER_GRPC_PORT",
+    "MN_JOIN_WORKER_NODE",
+}
 DEPRECATED_RUNTIME_ENV_KEYS = {
     "MN_ARTIFACT_AUTH_TOKEN",
     "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN",
@@ -1537,18 +1544,25 @@ def _redis_url_with_public_endpoint(redis_url: str, host: str, port: int) -> str
         userinfo = f"{parsed.netloc.rsplit('@', 1)[0]}@"
     return f"{scheme}://{userinfo}{host}:{port}{path}"
 
-def _handshake_node_info(local_host: str, node_name: Optional[str] = None) -> dict[str, object]:
+def _handshake_node_info(
+    local_host: str,
+    node_name: Optional[str] = None,
+    grpc_port: Optional[int | str] = None,
+) -> dict[str, object]:
     hostname = ""
     try:
         hostname = socket.gethostname().strip()
     except OSError:
         pass
     shared_env = _shared_storage_env_from_runtime_env(_runtime_base_env(runtime_compose_available()))
+    grpc_port_value = _parse_port(grpc_port or os.getenv("MN_GRPC_PORT") or DEFAULT_GRPC_PORT, int(DEFAULT_GRPC_PORT))
 
     return {
         "node_name": node_name or _network_node_name(local_host),
         "display_name": _node_display_name(),
         "hostname": hostname,
+        "grpc_host": local_host,
+        "grpc_port": grpc_port_value,
         "gpu_count": _detect_host_gpu_count(),
         "host_shared_storage_root": shared_env["MN_HOST_SHARED_STORAGE_ROOT"],
         "runtime_shared_storage_root": shared_env["MN_RUNTIME_SHARED_STORAGE_ROOT"],
@@ -1568,7 +1582,7 @@ def _handshake_with_main_node(
     target = f"{seed_host}:{grpc_port}"
     advertised_node_name = local_node_name or (_network_node_name(local_host) if local_host else "")
     local_node_info = (
-        _handshake_node_info(local_host, node_name=advertised_node_name)
+        _handshake_node_info(local_host, node_name=advertised_node_name, grpc_port=os.getenv("MN_GRPC_PORT"))
         if local_host
         else None
     )
@@ -1579,21 +1593,45 @@ def _handshake_with_main_node(
             node_info=local_node_info,
         )
     except Exception as exc:
-        from mn_sdk.errors import AppError
-
-        raise AppError(
-            "MN_EXECUTION_FAILED",
-            f"Could not join MirrorNeuron node at {target}.",
-            internal_message=str(exc),
-            hint="Check the host, gRPC port, and token printed by 'mn runtime start' on the main box.",
-            exit_code=1,
-            http_status=500,
-            cause=exc,
-        ) from exc
+        _raise_join_handshake_error(exc, target)
 
     if _node_name_unset(handshake.get("node_name")):
         handshake["node_name"] = _network_node_name(seed_host)
     return handshake
+
+def _raise_join_handshake_error(exc: Exception, target: str) -> None:
+    from mn_sdk.errors import AppError
+
+    text = str(exc)
+    code = None
+    code_fn = getattr(exc, "code", None)
+    if callable(code_fn):
+        try:
+            code = code_fn()
+        except Exception:
+            code = None
+    code_name = str(getattr(code, "name", code or "")).upper()
+
+    if "already join a cluster" in text or code_name == "ALREADY_EXISTS":
+        raise AppError(
+            "MN_ALREADY_JOINED",
+            "already join a cluster",
+            internal_message=text,
+            hint="Stop the worker runtime on that box before joining it to a different master.",
+            exit_code=1,
+            http_status=409,
+            cause=exc,
+        ) from exc
+
+    raise AppError(
+        "MN_EXECUTION_FAILED",
+        f"Could not join MirrorNeuron node at {target}.",
+        internal_message=text,
+        hint="Check the host, gRPC port, and token printed by 'mn runtime start' on the main box.",
+        exit_code=1,
+        http_status=500,
+        cause=exc,
+    ) from exc
 
 def _docker_container_running(name: str) -> bool:
     try:
@@ -2524,11 +2562,18 @@ def _join_network(
         docker_network_mode=requested_mode,
         docker_network_name=network_name,
     )
-    handshake = Client(target=target, auth_token="", timeout=10).network_handshake(
-        token,
-        node_name=local_node_name,
-        node_info=_handshake_node_info(local_host, node_name=local_node_name),
-    )
+    try:
+        handshake = Client(target=target, auth_token="", timeout=10).network_handshake(
+            token,
+            node_name=local_node_name,
+            node_info=_handshake_node_info(
+                local_host,
+                node_name=local_node_name,
+                grpc_port=env.get("MN_GRPC_PORT"),
+            ),
+        )
+    except Exception as exc:
+        _raise_join_handshake_error(exc, target)
     _connect_syncthing_peers(
         _syncthing_node_info(env, local_host),
         _syncthing_info_from_handshake(handshake),
@@ -2587,6 +2632,114 @@ def _persist_compose_cluster_node(node_name: str) -> None:
     if node_name not in nodes:
         nodes.append(node_name)
         _write_env_file_values(RUNTIME_COMPOSE_ENV, {"MN_CLUSTER_NODES": ",".join(nodes)})
+
+def _persist_join_owner_metadata(
+    *,
+    owner_node: str,
+    owner_host: str,
+    owner_grpc_port: int | str,
+    worker_node: str,
+) -> None:
+    owner_node = str(owner_node or "").strip()
+    owner_host = str(owner_host or "").strip()
+    worker_node = str(worker_node or "").strip()
+    if not owner_node or not worker_node:
+        return
+
+    _write_env_file_values(
+        RUNTIME_COMPOSE_ENV,
+        {
+            "MN_JOIN_OWNER_NODE": owner_node,
+            "MN_JOIN_OWNER_HOST": owner_host or _network_node_host(owner_node),
+            "MN_JOIN_OWNER_GRPC_PORT": str(owner_grpc_port or DEFAULT_GRPC_PORT),
+            "MN_JOIN_WORKER_NODE": worker_node,
+        },
+    )
+
+def _clear_join_owner_metadata() -> None:
+    _remove_env_file_keys(RUNTIME_COMPOSE_ENV, JOIN_OWNER_ENV_KEYS)
+    try:
+        JOIN_CLAIM_FILE.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+def _joined_cluster_owner_metadata() -> Optional[dict[str, str]]:
+    env = _read_env_file(RUNTIME_COMPOSE_ENV) if RUNTIME_COMPOSE_ENV.exists() else {}
+
+    metadata = _joined_cluster_owner_metadata_from_env(env)
+    if metadata:
+        return metadata
+    return _joined_cluster_owner_metadata_from_claim(env)
+
+def _joined_cluster_owner_metadata_from_env(env: dict[str, str]) -> Optional[dict[str, str]]:
+    owner_node = str(env.get("MN_JOIN_OWNER_NODE") or "").strip()
+    worker_node = str(env.get("MN_JOIN_WORKER_NODE") or env.get("MN_NODE_NAME") or "").strip()
+    if not owner_node or not worker_node:
+        return None
+
+    owner_host = str(env.get("MN_JOIN_OWNER_HOST") or "").strip() or _network_node_host(owner_node)
+    owner_port = str(env.get("MN_JOIN_OWNER_GRPC_PORT") or DEFAULT_GRPC_PORT).strip()
+    if not owner_host:
+        return None
+
+    return {
+        "owner_node": owner_node,
+        "owner_host": owner_host,
+        "owner_grpc_port": owner_port,
+        "worker_node": worker_node,
+        "auth_token": str(env.get("MN_GRPC_AUTH_TOKEN") or "").strip(),
+    }
+
+def _joined_cluster_owner_metadata_from_claim(env: dict[str, str]) -> Optional[dict[str, str]]:
+    try:
+        claim = json.loads(JOIN_CLAIM_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    owner_node = str(claim.get("owner_node") or "").strip()
+    worker_node = str(env.get("MN_NODE_NAME") or "").strip()
+    if not worker_node:
+        advertised_host = str(env.get("MN_NETWORK_ADVERTISE_HOST") or "").strip()
+        worker_node = _network_node_name(advertised_host) if advertised_host else ""
+    if not owner_node or not worker_node:
+        return None
+
+    owner_host = str(claim.get("owner_grpc_host") or "").strip() or _network_node_host(owner_node)
+    owner_port = str(claim.get("owner_grpc_port") or DEFAULT_GRPC_PORT).strip()
+    if not owner_host:
+        return None
+
+    return {
+        "owner_node": owner_node,
+        "owner_host": owner_host,
+        "owner_grpc_port": owner_port,
+        "worker_node": worker_node,
+        "auth_token": str(env.get("MN_GRPC_AUTH_TOKEN") or "").strip(),
+    }
+
+def leave_joined_cluster_before_stop() -> bool:
+    metadata = _joined_cluster_owner_metadata()
+    if not metadata:
+        return False
+
+    from mn_sdk import Client
+
+    target = f"{metadata['owner_host']}:{metadata['owner_grpc_port']}"
+    try:
+        Client(target=target, auth_token=metadata.get("auth_token") or "", timeout=3).remove_node(
+            metadata["worker_node"]
+        )
+        console.print(f"=> Removed {metadata['worker_node']} from cluster {metadata['owner_node']}.")
+        return True
+    except Exception as exc:
+        console.print(
+            f"[yellow]=> Could not notify cluster {metadata['owner_node']} before stopping; "
+            "heartbeat cleanup will remove this worker.[/yellow]"
+        )
+        logger.debug("Best-effort cluster leave before stop failed: %s", exc, exc_info=True)
+        return False
+    finally:
+        _clear_join_owner_metadata()
 
 def _ensure_local_cluster_runtime_for_join(
     *,
@@ -4944,6 +5097,12 @@ def _start_server(
         env["MN_CONTEXT_REDIS_URL"] = _redis_url_with_database(redis_url, "1")
         cluster_nodes = _cluster_nodes_with(seed_node_name, local_node_name)
         env["MN_CLUSTER_NODES"] = cluster_nodes
+        _persist_join_owner_metadata(
+            owner_node=seed_node_name,
+            owner_host=ip or _network_node_host(seed_node_name),
+            owner_grpc_port=grpc_port,
+            worker_node=local_node_name,
+        )
         if compose_runtime:
             _write_env_file_values(
                 RUNTIME_COMPOSE_ENV,
@@ -5155,22 +5314,3 @@ def _prepare_running_compose_exposure(
         },
     )
     return env, True
-    network_args = _docker_network_command_args(requested_docker_mode, network_name)
-    details = [
-        ("Network token", network_token),
-        ("Core log", BEAM_LOG),
-        ("API log", API_LOG),
-    ]
-    if WEB_UI_LOG.exists():
-        details.append(("Web log", WEB_UI_LOG))
-    print_success_confirmation(
-        console,
-        "Runtime start",
-        status=f"joining cluster at {ip}" if ip else "running",
-        details=details,
-        next_steps=(
-            "mn runtime start --worker-node",
-            f"mn node join <worker-host> --token <worker-token>{network_args}",
-            "mn runtime stop",
-        ),
-    )

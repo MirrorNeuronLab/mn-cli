@@ -20,6 +20,7 @@ from mn_cli.server_cmds import (
     _detach_local_docker_node_if_matches,
     _refresh_network_token,
     _stop_network_runtime,
+    leave_joined_cluster_before_stop,
     _runtime_base_env,
     _start_api_if_installed,
     _start_web_ui_if_installed,
@@ -206,6 +207,7 @@ def add_node(
 def stop():
     """Stop MirrorNeuron services"""
     console.print("=> Stopping MirrorNeuron Services...")
+    leave_joined_cluster_before_stop()
     _stop_network_runtime()
     
     if runtime_compose_available():

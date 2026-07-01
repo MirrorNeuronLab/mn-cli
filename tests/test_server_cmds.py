@@ -1432,6 +1432,81 @@ def test_persist_compose_cluster_node_appends_remote_once():
     assert env["MN_CLUSTER_NODES"] == "mirror_neuron@local,mirror_neuron@worker"
 
 
+def test_leave_joined_cluster_before_stop_uses_core_claim(mocker, tmp_path):
+    import mn_sdk
+
+    compose_env = tmp_path / "docker-compose.env"
+    claim_file = tmp_path / "cluster-join-claim.json"
+    compose_env.write_text("MN_NODE_NAME=mirror_neuron@192.168.4.173\n")
+    claim_file.write_text(
+        json.dumps(
+            {
+                "state": "confirmed",
+                "owner_node": "mirror_neuron@192.168.4.10",
+                "owner_grpc_host": "192.168.4.10",
+                "owner_grpc_port": 50055,
+            }
+        )
+    )
+
+    removed = []
+
+    class StubClient:
+        def __init__(self, target, auth_token="", timeout=0):
+            assert target == "192.168.4.10:50055"
+            assert auth_token == ""
+            assert timeout == 3
+
+        def remove_node(self, node_name):
+            removed.append(node_name)
+            return "disconnected"
+
+    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.server_cmds.JOIN_CLAIM_FILE", claim_file)
+    mocker.patch.object(mn_sdk, "Client", StubClient)
+
+    assert server_cmds.leave_joined_cluster_before_stop() is True
+    assert removed == ["mirror_neuron@192.168.4.173"]
+    assert not claim_file.exists()
+
+
+def test_leave_joined_cluster_before_stop_uses_persisted_owner_env(mocker, tmp_path):
+    import mn_sdk
+
+    compose_env = tmp_path / "docker-compose.env"
+    claim_file = tmp_path / "cluster-join-claim.json"
+    compose_env.write_text(
+        "MN_JOIN_OWNER_NODE=mirror_neuron@master.local\n"
+        "MN_JOIN_OWNER_HOST=master.local\n"
+        "MN_JOIN_OWNER_GRPC_PORT=50060\n"
+        "MN_JOIN_WORKER_NODE=mirror_neuron@worker.local\n"
+        "MN_GRPC_AUTH_TOKEN=auth-token\n"
+    )
+    claim_file.write_text("{}")
+
+    removed = []
+
+    class StubClient:
+        def __init__(self, target, auth_token="", timeout=0):
+            assert target == "master.local:50060"
+            assert auth_token == "auth-token"
+            assert timeout == 3
+
+        def remove_node(self, node_name):
+            removed.append(node_name)
+            return "disconnected"
+
+    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.server_cmds.JOIN_CLAIM_FILE", claim_file)
+    mocker.patch.object(mn_sdk, "Client", StubClient)
+
+    assert server_cmds.leave_joined_cluster_before_stop() is True
+    assert removed == ["mirror_neuron@worker.local"]
+    env = server_cmds._read_env_file(compose_env)
+    assert not (server_cmds.JOIN_OWNER_ENV_KEYS & set(env.keys()))
+    assert not claim_file.exists()
+
+
 def test_add_node_uses_handshake_and_local_core(mocker, tmp_path, capsys):
     import mn_sdk
     import mn_cli.shared
@@ -1452,6 +1527,8 @@ def test_add_node_uses_handshake_and_local_core(mocker, tmp_path, capsys):
             assert token == "join-token"
             assert node_name
             assert node_info["node_name"] == node_name
+            assert node_info["grpc_host"] == "192.168.4.99"
+            assert node_info["grpc_port"] == int(server_cmds.DEFAULT_GRPC_PORT)
             assert "display_name" in node_info
             return {
                 "node_name": "mirror_neuron@192.168.4.10",
@@ -1481,6 +1558,40 @@ def test_add_node_uses_handshake_and_local_core(mocker, tmp_path, capsys):
     assert "redis://:" in output
     assert "Next: mn node list" in output
     assert "Next: mn resource list" in output
+
+
+def test_add_node_surfaces_already_joined_worker(mocker):
+    import mn_sdk
+    from mn_sdk.errors import AppError
+
+    class AlreadyExists:
+        name = "ALREADY_EXISTS"
+
+    class AlreadyJoinedError(Exception):
+        def code(self):
+            return AlreadyExists()
+
+        def __str__(self):
+            return "already join a cluster"
+
+    class StubClient:
+        def __init__(self, target, auth_token, timeout):
+            assert target == "192.168.4.10:50055"
+
+        def network_handshake(self, token, node_name="", node_info=None):
+            raise AlreadyJoinedError()
+
+    mocker.patch.object(mn_sdk, "Client", StubClient)
+    mocker.patch("mn_cli.server_cmds._ensure_local_cluster_runtime_for_join")
+    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.99")
+
+    with pytest.raises(AppError) as exc:
+        _join_network("192.168.4.10", "join-token", grpc_port=50055)
+
+    assert exc.value.code == "MN_ALREADY_JOINED"
+    assert exc.value.user_message == "already join a cluster"
+    assert exc.value.http_status == 409
+
 
 def test_add_node_overlay_uses_local_alias_in_handshake(mocker, tmp_path, monkeypatch):
     import mn_sdk
@@ -2665,6 +2776,10 @@ def test_start_server_join_connects_syncthing_before_compose_up(mocker, tmp_path
     assert env["MN_CONTAINER_SHARED_STORAGE_ROOT"] == "/root/.mn/shared"
     assert env["MN_SYNCTHING_DEVICE_ID"] == "LOCALDEVICE"
     assert env["MN_BUNDLE_CACHE_DIR"] == "/root/.mn/shared/bundle_cache"
+    assert env["MN_JOIN_OWNER_NODE"] == "mirror_neuron@192.168.6.28"
+    assert env["MN_JOIN_OWNER_HOST"] == "192.168.6.28"
+    assert env["MN_JOIN_OWNER_GRPC_PORT"] == server_cmds.DEFAULT_GRPC_PORT
+    assert env["MN_JOIN_WORKER_NODE"] == "mirror_neuron@192.168.4.173"
 
 
 def test_start_server_preserves_persisted_join_profile_on_restart(mocker, tmp_path):
