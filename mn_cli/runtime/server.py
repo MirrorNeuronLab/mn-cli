@@ -2604,6 +2604,7 @@ def _join_network(
             http_status=500,
             cause=exc,
         ) from exc
+    status = _confirm_joined_node(local_client, remote_node, token, status)
     if runtime_compose_available():
         _persist_compose_cluster_node(remote_node)
     details: list[tuple[str, str]] = [("Node", remote_node)]
@@ -2622,6 +2623,55 @@ def _join_network(
         next_steps=("mn node list", "mn resource list"),
     )
     return handshake
+
+
+def _confirm_joined_node(
+    local_client: Any,
+    remote_node: str,
+    token: str,
+    status: str,
+    *,
+    attempts: int = 4,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> str:
+    for attempt in range(max(1, attempts)):
+        if _summary_has_active_node(local_client, remote_node):
+            return status
+        if attempt >= attempts - 1:
+            break
+        sleep_fn(0.75)
+        try:
+            status = local_client.add_node(remote_node, token=token)
+        except TypeError:
+            status = local_client.add_node(remote_node)
+
+    from mn_sdk.errors import AppError
+
+    raise AppError(
+        "MN_EXECUTION_FAILED",
+        f"Could not confirm {remote_node} joined the local cluster.",
+        hint="Run 'mn node list' and retry the join if the worker is still not visible as healthy.",
+        exit_code=1,
+        http_status=500,
+    )
+
+
+def _summary_has_active_node(local_client: Any, remote_node: str) -> bool:
+    try:
+        summary = json.loads(local_client.get_system_summary())
+    except Exception:
+        return False
+
+    for node in summary.get("nodes") or []:
+        if not isinstance(node, dict) or node.get("name") != remote_node:
+            continue
+        status = str(node.get("status") or "").strip().lower()
+        return (
+            status in {"healthy", "joining"}
+            and node.get("scheduling_eligible") is not False
+            and node.get("operator_disconnect") is not True
+        )
+    return False
 
 def _persist_compose_cluster_node(node_name: str) -> None:
     node_name = str(node_name or "").strip()

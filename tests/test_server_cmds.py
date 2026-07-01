@@ -1541,6 +1541,21 @@ def test_add_node_uses_handshake_and_local_core(mocker, tmp_path, capsys):
 
     mocker.patch.object(mn_sdk, "Client", StubClient)
     mock_add_node = mocker.patch.object(mn_cli.shared.client, "add_node", return_value="connected")
+    mocker.patch.object(
+        mn_cli.shared.client,
+        "get_system_summary",
+        return_value=json.dumps(
+            {
+                "nodes": [
+                    {
+                        "name": "mirror_neuron@192.168.4.10",
+                        "status": "healthy",
+                        "scheduling_eligible": True,
+                    }
+                ]
+            }
+        ),
+    )
     mock_run = mocker.patch('mn_cli.server_cmds.subprocess.run')
 
     _join_network(
@@ -1560,6 +1575,54 @@ def test_add_node_uses_handshake_and_local_core(mocker, tmp_path, capsys):
     assert "redis://:" in output
     assert "Next: mn node list" in output
     assert "Next: mn resource list" in output
+
+
+def test_confirm_joined_node_retries_add_until_summary_is_active():
+    class LocalClient:
+        def __init__(self):
+            self.add_calls = []
+            self.summaries = [
+                {
+                    "nodes": [
+                        {
+                            "name": "mirror_neuron@worker",
+                            "status": "disconnected",
+                            "operator_disconnect": True,
+                            "scheduling_eligible": False,
+                        }
+                    ]
+                },
+                {
+                    "nodes": [
+                        {
+                            "name": "mirror_neuron@worker",
+                            "status": "healthy",
+                            "operator_disconnect": False,
+                            "scheduling_eligible": True,
+                        }
+                    ]
+                },
+            ]
+
+        def get_system_summary(self):
+            return json.dumps(self.summaries.pop(0))
+
+        def add_node(self, node_name, token=""):
+            self.add_calls.append((node_name, token))
+            return "connected"
+
+    client = LocalClient()
+
+    status = server_cmds._confirm_joined_node(
+        client,
+        "mirror_neuron@worker",
+        "join-token",
+        "connected",
+        sleep_fn=lambda _seconds: None,
+    )
+
+    assert status == "connected"
+    assert client.add_calls == [("mirror_neuron@worker", "join-token")]
 
 
 def test_add_node_surfaces_already_joined_worker(mocker):
