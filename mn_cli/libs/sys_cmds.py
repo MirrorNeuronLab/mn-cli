@@ -213,6 +213,12 @@ def stop():
     if runtime_compose_available():
         console.print("   Stopping Docker runtime (Compose)...")
         subprocess.run(runtime_compose_cmd("down"), stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        try:
+            from mn_sdk.native_resources import cleanup_docker_worker_services
+
+            cleanup_docker_worker_services(all_services=True)
+        except Exception:
+            logger.debug("Failed to prune DockerWorker Compose services during runtime stop", exc_info=True)
         subprocess.run(["docker", "rm", "-f", COMPOSE_SENTINEL_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
         subprocess.run(["docker", "rm", "-f", SYNCTHING_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
     else:

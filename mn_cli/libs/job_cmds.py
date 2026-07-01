@@ -15,7 +15,7 @@ from mn_cli.libs.ui import print_confirmed, print_success_confirmation
 import typer
 
 from mn_sdk.runtime_config import default_runs_root
-from mn_sdk import ValidationError, parse_duration_ms as sdk_parse_duration_ms
+from mn_sdk import RuntimeService, ValidationError, parse_duration_ms as sdk_parse_duration_ms
 
 
 def submit(
@@ -34,7 +34,12 @@ def submit(
         with open(manifest_path, "r") as f:
             manifest = f.read()
 
-        job_id = client.submit_job(manifest, {})
+        result = RuntimeService(client).submit_job(
+            manifest,
+            {},
+            bundle_dir=str(Path(manifest_path).expanduser().resolve().parent),
+        )
+        job_id = result["job_id"]
         logger.info("Submitted job id=%s from manifest=%s", job_id, manifest_path)
         print_success_confirmation(
             console,

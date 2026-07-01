@@ -115,6 +115,7 @@ RUNTIME_COMPOSE_FILE = DIR / "docker-compose.yml"
 RUNTIME_COMPOSE_ENV = DIR / "docker-compose.env"
 RUNTIME_ENDPOINTS_FILE = DIR / "runtime-endpoints.json"
 RUNTIME_MODELS_OVERRIDE_FILE = "docker-compose.models.yml"
+RUNTIME_WORKERS_OVERRIDE_FILE = "docker-compose.workers.yml"
 DEFAULT_LLM_MODEL_RUNNER_MODEL = "ai/gemma4:E2B"
 DEFAULT_CONTEXT_MODEL_RUNNER_MODEL = "hf.co/homerquan/mn-context-engine-model-v-Q4_K_M"
 DEFAULT_MEMBRANE_REPO = "MirrorNeuronLab/Membrane"
@@ -2365,6 +2366,12 @@ def _stop_local_runtime_for_worker() -> None:
     _stop_network_runtime()
     if runtime_compose_available():
         subprocess.run(runtime_compose_cmd("down"), stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        try:
+            from mn_sdk.native_resources import cleanup_docker_worker_services
+
+            cleanup_docker_worker_services(all_services=True)
+        except Exception:
+            logger.debug("Failed to prune DockerWorker Compose services during local runtime stop", exc_info=True)
         subprocess.run(["docker", "rm", "-f", COMPOSE_SENTINEL_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
         subprocess.run(["docker", "rm", "-f", SYNCTHING_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
     else:
@@ -4237,8 +4244,14 @@ def runtime_compose_cmd(*args: str) -> list[str]:
     models_override = _runtime_compose_models_override_file()
     if models_override.exists():
         cmd.extend(["-f", str(models_override)])
+    workers_override = RUNTIME_COMPOSE_FILE.parent / RUNTIME_WORKERS_OVERRIDE_FILE
+    if workers_override.exists() and _runtime_compose_args_need_worker_override(args):
+        cmd.extend(["-f", str(workers_override)])
     cmd.extend(args)
     return cmd
+
+def _runtime_compose_args_need_worker_override(args: tuple[str, ...]) -> bool:
+    return bool(args) and args[0] in {"down", "stop", "rm", "ps", "logs"}
 
 def _legacy_checkout_pid_dir() -> Path:
     checkout_dir = Path(__file__).resolve().parents[2]
