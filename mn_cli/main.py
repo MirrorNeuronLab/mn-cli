@@ -5,6 +5,7 @@ import typer
 from rich.console import Console
 
 from mn_cli.config import bootstrap_environment
+from mn_cli.terminal import ui_width
 
 bootstrap_environment()
 
@@ -17,7 +18,7 @@ from mn_cli.runtime_mode import local_runtime_mode
 
 PACKAGE_NAME = "mirrorneuron-cli"
 FALLBACK_VERSION = "0.0.0"
-CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"], "max_content_width": 120}
+CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"], "max_content_width": ui_width()}
 ROOT_HELP = """Run and operate MirrorNeuron workflows, blueprints, jobs, and local runtime services.
 
 Examples:
@@ -79,7 +80,7 @@ def get_version() -> str:
 
 
 def format_version() -> str:
-    lines = [format_banner("MirrorNeuron CLI"), f"version {get_version()}"]
+    lines = [format_banner("MirrorNeuron CLI", width=ui_width()), f"version {get_version()}"]
     mode = _runtime_mode_line(capitalize=False)
     if mode:
         lines.append(mode)
@@ -115,8 +116,9 @@ def main(
     ),
 ):
     set_debug(debug or verbose)
+    ctx.max_content_width = ui_width()
     if ctx.invoked_subcommand is None:
-        typer.echo(format_banner("MirrorNeuron CLI"))
+        typer.echo(format_banner("MirrorNeuron CLI", width=ui_width()))
         mode = _runtime_mode_line()
         if mode:
             typer.echo(mode)

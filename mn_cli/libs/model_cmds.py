@@ -12,7 +12,7 @@ import typer
 from rich.table import Table
 
 from mn_cli.error_handler import handle_cli_error
-from mn_cli.libs.ui import print_confirmed, print_success_confirmation
+from mn_cli.libs.ui import print_confirmation, print_confirmed, print_success_confirmation
 from mn_cli.shared import console
 from mn_sdk import (
     DEFAULT_MODEL_ID,
@@ -85,8 +85,6 @@ def list_models(
                 return True
             return bool(docker_model_match_keys(docker_model_name(entry)) & installed_model_keys)
 
-        if installed:
-            entries = [entry for entry in entries if is_installed(entry)]
         payload = {
             "models": [
                 _entry_payload(
@@ -97,6 +95,8 @@ def list_models(
                 for entry in entries
             ]
         }
+        if installed:
+            payload["models"] = [entry for entry in payload["models"] if entry.get("installed")]
         if json_output:
             console.print_json(data=payload)
             return
@@ -720,16 +720,27 @@ def _print_model_table(models: list[dict[str, Any]]) -> None:
 
 
 def _print_model_detail(payload: dict[str, Any]) -> None:
-    console.print(f"[bold]{payload.get('id')}[/bold] - {payload.get('name')}")
-    console.print(f"  Model: {payload.get('model')}")
-    console.print(f"  Backend: {payload.get('backend')}")
-    console.print(f"  Installed: {'yes' if payload.get('installed') else 'no'}")
+    title = f"{payload.get('id')}" if payload.get('id') else "Model"
+    if payload.get('name'):
+        title = f"{title} - {payload.get('name')}"
+    details = [
+        ("Model", payload.get('model')),
+        ("Backend", payload.get('backend')),
+        ("Installed", "yes" if payload.get('installed') else "no"),
+        ("Owners", payload.get('owner_count', 0)),
+    ]
     if payload.get("default"):
-        console.print("  Status: default")
-    console.print(f"  Owners: {payload.get('owner_count', 0)}")
+        details.append(("Status", "default"))
     requirements = payload.get("requirements") or {}
     if requirements:
-        console.print(f"  Requirements: {json.dumps(requirements, sort_keys=True)}")
+        details.append(("Requirements", json.dumps(requirements, sort_keys=True)))
+    console.print(f"[bold]{title}[/bold]")
+    print_confirmation(
+        console,
+        "Model detail",
+        status="installed" if payload.get('installed') else "not installed",
+        details=details,
+    )
     if payload.get("compatibility"):
         _print_compatibility(payload["compatibility"])
 
@@ -745,19 +756,19 @@ def _print_compatibility(payload: dict[str, Any]) -> None:
 def _print_doctor(payload: dict[str, Any]) -> None:
     model = payload["model"]
     runner = payload["docker_model_runner"]
-    console.print(f"[bold]Model doctor: {model.get('id')}[/bold]")
-    console.print(f"  Installed: {'yes' if model.get('installed') else 'no'}")
-    console.print(f"  Runner: {'running' if runner.get('running') else 'not running'}")
-    console.print(f"  Endpoint: {'ok' if runner.get('endpoint_ok') else 'not reachable'}")
+    print_confirmed(
+        console,
+        "Model doctor",
+        status="ready" if payload.get("ok") else "attention needed",
+        details={
+            "Model": model.get("id"),
+            "Installed": "yes" if model.get('installed') else "no",
+            "Runner": "running" if runner.get('running') else "not running",
+            "Endpoint": "ok" if runner.get('endpoint_ok') else "not reachable",
+        },
+    )
     _print_compatibility(payload["compatibility"])
-    if payload.get("ok"):
-        print_confirmed(
-            console,
-            "Model runtime",
-            status="ready",
-            details={"Model": model.get("id")},
-        )
-    else:
+    if payload.get("ok") is not True:
         console.print("[yellow]Model runtime needs attention.[/yellow]")
 
 

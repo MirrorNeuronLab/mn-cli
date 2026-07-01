@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import time
+import textwrap
 
 from rich import box
 from rich.console import Group
@@ -9,8 +11,11 @@ from rich.progress_bar import ProgressBar
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
+import typer
 from collections.abc import Iterable, Mapping
 from typing import Dict, Any, Optional, Union
+
+from mn_cli.terminal import truncate_for_width, ui_width
 
 
 ConfirmationDetails = Union[Mapping[str, Any], Iterable[tuple[str, Any]]]
@@ -101,13 +106,77 @@ def print_confirmation(
     details: ConfirmationDetails | None = None,
     next_steps: str | Iterable[str] | None = None,
 ) -> None:
-    console.print(f"[green]{action} {verb}.[/green]")
+    if _is_plain_confirmation_mode():
+        _print_confirmation_plain(console, action, verb=verb, status=status, details=details, next_steps=next_steps)
+        return
+
+    rows: list[tuple[str, Any]] = []
     if _present(status):
-        console.print(f"Status: {status}", markup=False)
-    for label, value in _confirmation_detail_items(details):
-        console.print(f"{label}: {value}", markup=False)
+        rows.append(("Status", status))
+    rows.extend(_confirmation_detail_items(details))
     for next_step in _confirmation_next_steps(next_steps):
-        console.print(f"Next: {next_step}", markup=False)
+        rows.append(("Next", next_step))
+
+    console.print(f"[green]{action} {verb}.[/green]")
+    if not rows:
+        return
+    console.print(_confirmation_panel(rows))
+
+
+def _is_plain_confirmation_mode() -> bool:
+    return os.getenv("MN_CLI_OUTPUT", "").lower() == "plain"
+
+
+def _print_confirmation_plain(
+    console,
+    action: str,
+    *,
+    verb: str,
+    status: Any,
+    details: ConfirmationDetails | None,
+    next_steps: str | Iterable[str] | None,
+) -> None:
+    lines = [f"{action} {verb}."]
+    if _present(status):
+        lines.append(f"Status: {status}")
+    for label, value in _confirmation_detail_items(details):
+        lines.append(f"{label}: {value}")
+    for next_step in _confirmation_next_steps(next_steps):
+        lines.append(f"Next: {next_step}")
+
+    output = getattr(console, "file", None)
+    width = ui_width()
+    for line in lines:
+        wrapped = textwrap.wrap(
+            str(line),
+            width=width,
+            break_long_words=True,
+            break_on_hyphens=False,
+        ) or [""]
+        for item in wrapped:
+            if output is None:
+                typer.secho(item, color=None)
+            else:
+                typer.secho(item, color=None, file=output)
+
+
+def _confirmation_panel(rows: list[tuple[str, Any]]) -> Panel:
+    table = Table(
+        show_header=False,
+        box=box.SIMPLE,
+        show_lines=False,
+        padding=(0, 1),
+        expand=True,
+    )
+    table.add_column("Field", no_wrap=False, ratio=0, overflow="fold")
+    table.add_column("Value", overflow="fold", ratio=1)
+    for label, value in rows:
+        table.add_row(f"{label}", _confirmation_value(value))
+    return Panel(table, border_style="green", title="Details", title_align="left")
+
+
+def _confirmation_value(value: Any) -> str:
+    return truncate_for_width(value, ui_width() - 12)
 
 
 def _confirmation_detail_items(details: ConfirmationDetails | None) -> list[tuple[str, Any]]:

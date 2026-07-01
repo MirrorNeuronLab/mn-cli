@@ -89,6 +89,16 @@ def test_no_args_prints_banner_above_help(mocker):
     mock_update_prompt.assert_not_called()
 
 
+def test_no_args_help_remains_readable_on_narrow_terminal(monkeypatch):
+    result = runner.invoke(app, [], env={"COLUMNS": "48"})
+
+    assert result.exit_code == 0
+    assert "Usage:" in result.stdout
+    assert "Examples:" in result.stdout
+    assert "mn blueprint list" in result.stdout
+    assert max(len(line.rstrip("\n")) for line in result.stdout.splitlines() if line) <= 80
+
+
 def test_no_args_prints_worker_mode_above_help(mocker, no_local_runtime_mode):
     no_local_runtime_mode.return_value = "worker"
     mock_update_prompt = mocker.patch("mn_cli.update_cmds.maybe_prompt_for_update")

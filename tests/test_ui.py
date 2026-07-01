@@ -21,18 +21,18 @@ def test_print_success_confirmation_outputs_structured_lines():
         next_steps=("mn node list", "mn resource list"),
     )
 
-    assert stream.getvalue().splitlines() == [
-        "Node join successful.",
-        "Status: connected",
-        "Node: mirror_neuron@192.168.4.173",
-        "Remote Redis: 192.168.4.173:56380",
-        "Next: mn node list",
-        "Next: mn resource list",
-    ]
+    output = [line.strip() for line in stream.getvalue().splitlines() if line.strip()]
+    assert any(line == "Node join successful." for line in output)
+    assert any("Status:" in line and "connected" in line for line in output)
+    assert any("Node: mirror_neuron@192.168.4.173" in line for line in output)
+    assert any("Remote Redis: 192.168.4.173:56380" in line for line in output)
+    assert any("Next:" in line for line in output)
 
 
-def test_print_confirmed_skips_empty_values_and_supports_plain_output():
+def test_print_confirmed_skips_empty_values_and_supports_plain_mode(monkeypatch):
     console, stream = _capture_console(no_color=True)
+
+    monkeypatch.setenv("MN_CLI_OUTPUT", "plain")
 
     print_confirmed(
         console,

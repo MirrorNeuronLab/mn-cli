@@ -467,27 +467,35 @@ def _print_run_table(runs: list[dict[str, Any]]) -> None:
     if not runs:
         console.print("[yellow]No blueprint runs found.[/yellow]")
         return
-    console.print(f"{'Run ID':<28} {'Job ID':<18} {'Status':<12} {'Ended':<25} {'Blueprint':<42} Web UI", markup=False)
-    console.print(f"{'-' * 28} {'-' * 18} {'-' * 12} {'-' * 25} {'-' * 42} {'-' * 6}", markup=False)
+    table = Table("Run ID", "Job ID", "Status", "Ended", "Blueprint", "Web UI", show_header=True)
     for run in runs:
-        console.print(
-            f"{_display(run.get('run_id')):<28} "
-            f"{_display(_job_id(run), max_length=17):<18} "
-            f"{_display(run.get('status')):<12} "
-            f"{_display(run.get('ended_at'), max_length=24):<25} "
-            f"{_display(run.get('blueprint_id'), max_length=42):<42} "
-            f"{_display(_web_ui_url(run), max_length=70)}",
-            markup=False,
+        table.add_row(
+            _display(run.get("run_id")),
+            _display(_job_id(run)),
+            _display(run.get("status")),
+            _display(run.get("ended_at")),
+            _display(run.get("blueprint_id")),
+            _display(_web_ui_url(run)),
         )
+    for column in table.columns:
+        column.overflow = "fold"
+        column.no_wrap = False
+    console.print(table)
 
 
 def _print_log_records(records: list[dict[str, Any]]) -> None:
+    table = Table("Timestamp", "Level", "Component", "Message", show_header=True)
     for record in records:
-        timestamp = _display(record.get("ts") or record.get("timestamp"), max_length=28)
-        level = _display(record.get("level"), max_length=8)
-        component = _display(record.get("component"), max_length=28)
-        message = _display(record.get("message"), max_length=160)
-        console.print(f"{timestamp:<28} {level:<8} {component:<28} {message}", markup=False)
+        table.add_row(
+            _display(record.get("ts") or record.get("timestamp"), max_length=28),
+            _display(record.get("level"), max_length=8),
+            _display(record.get("component"), max_length=32),
+            _display(record.get("message"), max_length=1000),
+        )
+    for column in table.columns:
+        column.overflow = "fold"
+        column.no_wrap = False
+    console.print(table)
 
 
 def _observability_cursor(record: dict[str, Any]) -> str:

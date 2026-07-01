@@ -1,6 +1,8 @@
 import pytest
 import json
 from pathlib import Path
+from io import StringIO
+from rich.console import Console
 import typer
 from typer.testing import CliRunner
 from mn_cli.main import app
@@ -58,6 +60,11 @@ def _write_generated_bundle(path: Path, blueprint_id: str) -> None:
 
 def _write_bundle_cache(path: Path, blueprint_id: str) -> None:
     _write_generated_bundle(path, blueprint_id)
+
+
+def _capture_console(*, width: int = 120) -> tuple[Console, StringIO]:
+    stream = StringIO()
+    return Console(file=stream, force_terminal=False, no_color=True, width=width), stream
 
 
 def _runtime_model_manifest(
@@ -314,6 +321,50 @@ def test_blueprint_list_error(monkeypatch, tmp_path):
     result = runner.invoke(app, ["blueprint", "list"])
     assert result.exit_code == 1
     assert "Error reading blueprints index" in result.stdout
+
+
+def test_print_run_table_wraps_on_narrow_console(monkeypatch):
+    console, stream = _capture_console(width=52)
+    monkeypatch.setattr(blueprint_cmds, "console", console)
+
+    blueprint_cmds._print_run_table(
+        [
+            {
+                "run_id": "run-with-a-very-long-identifier-that-might-wrap",
+                "job_id": "job-with-an-astonishingly-long-identifier",
+                "status": "completed",
+                "ended_at": "2026-06-01T12:34:56Z",
+                "blueprint_id": "blueprint-with-an-extraordinarily-long-name-that-wraps",
+                "web_ui": "https://example.example/tools/blueprints/that/can/be/very/long",
+            }
+        ]
+    )
+
+    output_lines = [line for line in stream.getvalue().splitlines() if line.strip()]
+    assert any("Run ID" in line for line in output_lines)
+    assert all(len(line) <= 60 for line in output_lines)
+
+
+def test_print_log_records_wraps_on_narrow_console(monkeypatch):
+    console, stream = _capture_console(width=52)
+    monkeypatch.setattr(blueprint_cmds, "console", console)
+
+    blueprint_cmds._print_log_records(
+        [
+            {
+                "ts": "2026-06-01T12:34:56.123456Z",
+                "level": "WARNING",
+                "component": "worker",
+                "message": "A very long log message that should wrap cleanly across lines when output width is narrow and remain readable",
+            }
+        ]
+    )
+
+    output = stream.getvalue()
+    output_lines = [line for line in output.splitlines() if line.strip()]
+    assert any("Timestamp" in line for line in output_lines)
+    assert "very long log message" in output
+    assert all(len(line) <= 60 for line in output_lines)
 
 
 def test_blueprint_observability_commands_read_shared_run_store(tmp_path):
