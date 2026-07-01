@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from mn_sdk.workflow_progress import (
@@ -13,6 +12,8 @@ from rich.console import Group
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+from mn_cli.libs.ui import generate_workflow_progress_layout
+from mn_cli.libs.ui import JobMonitorState
 
 
 class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
@@ -89,6 +90,42 @@ class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._apply_run_binding_aliases()
+        self._monitor_state: JobMonitorState | None = None
+        self._workflow_token_usage: dict[str, int] = {}
+        self._resource_token_total: int | None = None
+
+    def set_monitor_state(self, state: JobMonitorState | None) -> None:
+        self._monitor_state = state
+
+    def set_resource_token_total(self, total: int | None) -> None:
+        self._resource_token_total = _optional_int(total)
+
+    def has_token_usage(self) -> bool:
+        return bool(self._workflow_token_usage)
+
+    def _apply_event_token_usage(self, event: dict[str, Any]) -> None:
+        if not isinstance(event, dict):
+            return
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else event
+        token_count = _extract_token_count(payload)
+        if token_count is None:
+            return
+        agent_ids = _extract_workflow_agent_ids(payload)
+        for agent_id in agent_ids:
+            previous = self._workflow_token_usage.get(agent_id, 0)
+            self._workflow_token_usage[agent_id] = previous + token_count
+
+    def record_event_token_usage(self, event: dict[str, Any]) -> None:
+        self._apply_event_token_usage(event)
+
+    def snapshot(self) -> dict[str, Any]:
+        snapshot = super().snapshot()
+        if self._resource_token_total is not None:
+            snapshot["resource_tokens"] = self._resource_token_total
+        if not self._workflow_token_usage:
+            return snapshot
+        _attach_workflow_token_usage(snapshot, self._workflow_token_usage)
+        return snapshot
 
     def _apply_run_binding_aliases(self) -> None:
         workflow = (
@@ -129,32 +166,11 @@ class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
             }
 
     def render(self) -> Panel:
-        elapsed = time.time() - self.started_at
-        shown_steps, total_steps = self._summary_step_counts()
-        elapsed_label = f"{elapsed:.0f}s" if elapsed < 60 else f"{elapsed / 60:.1f}m"
-        header = Text(self.workflow_id, style="bold bright_blue")
-        meta = f"{shown_steps}/{total_steps} steps  |  {elapsed_label}  |  {self.status_label}"
-        phases = self._phase_table()
-        agents = self._agent_table()
-        body = Table.grid(expand=True)
-        body.add_column()
-        body.add_row(phases)
-        body.add_row(agents)
-        messages = Text("\n".join(self.messages[-3:]), style="dim")
-        top = Table.grid(expand=True)
-        top.add_column(ratio=2)
-        top.add_column(justify="right")
-        top.add_row(header, Text(meta, style="bold"))
-        footer = Text("keys: Ctrl+D or Ctrl+C detach monitor; job keeps running", style="dim")
-        if self.description:
-            subtitle: Any = Text(self.description, style="dim")
-            content = Group(top, subtitle, body, messages, footer)
-        else:
-            content = Group(top, body, messages, footer)
-        title = "mn blueprint run"
-        if self.job_id:
-            title += f"  {self.job_id}"
-        return Panel(content, title=title, border_style="cyan", box=box.ROUNDED)
+        return generate_workflow_progress_layout(
+            self.job_id or "workflow",
+            self.snapshot(),
+            state=self._monitor_state,
+        )
 
     def _summary_step_counts(self) -> tuple[int, int]:
         total_steps = len(self.steps)
@@ -279,6 +295,132 @@ def _format_tokens(value: float) -> str:
     if value >= 1000:
         return f"{value / 1000:.1f}k".replace(".0k", "k")
     return str(int(value))
+
+
+def _extract_workflow_agent_ids(payload: Any) -> set[str]:
+    agent_ids: set[str] = set()
+    if not isinstance(payload, dict):
+        return agent_ids
+    for value_key in ("worker", "worker_id", "agent", "agent_id", "node_id"):
+        candidate = payload.get(value_key)
+        if isinstance(candidate, str) and candidate.strip():
+            agent_ids.add(candidate.strip())
+
+    for key, value in payload.items():
+        if key in {"agent", "worker", "step", "step_id", "current_step", "step_attempt"}:
+            continue
+        if isinstance(value, dict):
+            agent_ids.update(_extract_workflow_agent_ids(value))
+        elif isinstance(value, list):
+            for item in value:
+                agent_ids.update(_extract_workflow_agent_ids(item))
+    if not agent_ids:
+        direct_agent = payload.get("id")
+        if isinstance(direct_agent, str) and direct_agent.strip():
+            agent_ids.add(direct_agent.strip())
+    return agent_ids
+
+
+def _extract_token_count(payload: Any) -> int | None:
+    if isinstance(payload, (int, float)):
+        if int(payload) > 0:
+            return int(payload)
+        return None
+
+    if not isinstance(payload, dict):
+        if isinstance(payload, list):
+            total = 0
+            found = False
+            for item in payload:
+                value = _extract_token_count(item)
+                if value is not None:
+                    found = True
+                    total += value
+            return total if found else None
+        return None
+
+    # Prefer explicit total usage fields.
+    explicit_total = _optional_int(payload.get("total_tokens"))
+    if explicit_total is not None:
+        return explicit_total
+
+    has_budget_field = any(
+        key in payload
+        for key in ("token_budget", "max_tokens", "budget", "budget_tokens")
+    )
+    if not has_budget_field:
+        direct = _optional_int(payload.get("tokens"))
+        if direct is not None:
+            return direct
+
+    direct = _optional_int(payload.get("tokens_used"))
+    if direct is not None:
+        return direct
+
+    direct = _optional_int(payload.get("token_count"))
+    if direct is not None:
+        return direct
+
+    direct = _optional_int(payload.get("used_tokens"))
+    if direct is not None:
+        return direct
+
+    # Usage component sums.
+    usage_parts = [
+        _optional_int(payload.get("input_tokens")),
+        _optional_int(payload.get("output_tokens")),
+        _optional_int(payload.get("prompt_tokens")),
+        _optional_int(payload.get("completion_tokens")),
+    ]
+    usage_sum = sum(value for value in usage_parts if value is not None)
+    if usage_sum:
+        return usage_sum
+
+    nested_keys = ("usage", "llm", "llm_usage", "token_usage")
+    for key in nested_keys:
+        nested = payload.get(key)
+        if isinstance(nested, (dict, list)):
+            value = _extract_token_count(nested)
+            if value is not None:
+                return value
+
+    total = 0
+    found = False
+    skip_keys = {"token_budget", "max_tokens", "budget", "budget_tokens"}
+    if has_budget_field:
+        skip_keys.add("tokens")
+    for key, value in payload.items():
+        if key in skip_keys:
+            continue
+        nested = _extract_token_count(value)
+        if nested is not None:
+            total += nested
+            found = True
+    return total if found else None
+
+
+def _attach_workflow_token_usage(
+    snapshot: dict[str, Any],
+    token_usage: dict[str, int],
+) -> None:
+    steps = snapshot.get("steps")
+    if not isinstance(steps, list):
+        return
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        agents = step.get("agents")
+        if not isinstance(agents, list):
+            continue
+        for agent in agents:
+            if not isinstance(agent, dict):
+                continue
+            agent_id = str(agent.get("id") or agent.get("agent") or "")
+            if not agent_id:
+                continue
+            used = _optional_int(token_usage.get(agent_id))
+            if used is not None:
+                agent["tokens_used"] = used
 
 
 def _agents_from_runtime_binding(

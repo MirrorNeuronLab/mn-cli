@@ -13,7 +13,7 @@ import time
 import urllib.parse
 from pathlib import Path
 from typing import Annotated, Any, Optional
-from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.live import Live
 from mn_cli.libs.ui import (
     JobMonitorState,
@@ -60,6 +60,7 @@ from mn_cli.libs.workflow_validation import (
     _validate_workflow_schema_issues,
 )
 from mn_cli.libs.blueprint_observability import (
+    load_observability_tools,
     make_blueprint_run_id as _make_blueprint_run_id,
 )
 from mn_cli.libs.blueprint_models import BlueprintModelOps, blueprint_model_dependency_summary
@@ -93,6 +94,9 @@ from mn_sdk import (
     validate_resource_spec_issues,
     validate_service_spec_issues,
     workflow_progress_snapshot,
+)
+from mn_sdk.blueprint_support.shared_outputs import (
+    materialize_shared_storage_outputs as _sdk_materialize_shared_storage_outputs,
 )
 from mn_sdk.context_engine import blueprint_requires_context_engine
 from mn_sdk.runtime_config import default_runs_root
@@ -663,86 +667,14 @@ def _materialize_completed_blueprint_outputs(log_dir: Path, manifest: dict[str, 
 def _materialize_shared_storage_outputs(storage: dict[str, Any]) -> bool:
     if not isinstance(storage, dict):
         return False
-    copied_any = False
-    for spec in storage.get("output_copy") or []:
-        if not isinstance(spec, dict):
-            continue
-        source_path = spec.get("source_path") or spec.get("source")
-        target_path = spec.get("target_path") or spec.get("target")
-        if not isinstance(source_path, str) or not isinstance(target_path, str):
-            continue
-        source = _host_shared_path_for_runtime_path(storage, source_path)
-        target = Path(target_path).expanduser()
-        if source is None or not source.exists():
-            continue
-        try:
-            copied = _copy_output_path_to_host(source, target)
-        except Exception:
-            logger.exception("Failed to copy shared storage output %s to %s", source, target)
-            copied = False
-        if copied:
-            copied_any = True
-            console.print(f"[green]Materialized shared outputs:[/green] {target}")
-    if copied_any and storage.get("cleanup_after_output_copy") is True:
-        _cleanup_shared_storage_submission(storage)
-    return copied_any
-
-
-def _cleanup_shared_storage_submission(storage: dict[str, Any]) -> None:
-    host_root = storage.get("host_root")
-    submission_path = storage.get("host_submission_path")
-    if not isinstance(host_root, str) or not isinstance(submission_path, str):
-        return
-    root = Path(host_root).expanduser().resolve()
-    submission = Path(submission_path).expanduser().resolve()
-    submissions_root = root / "submissions"
-    try:
-        submission.relative_to(submissions_root)
-    except ValueError:
-        logger.warning("Skipping shared storage cleanup outside submissions root: %s", submission)
-        return
-    if submission.name in {"", ".", ".."}:
-        return
-    shutil.rmtree(submission, ignore_errors=True)
-
-
-def _host_shared_path_for_runtime_path(storage: dict[str, Any], runtime_path: str) -> Optional[Path]:
-    host_root = storage.get("host_root")
-    runtime_root = storage.get("runtime_root")
-    if not isinstance(host_root, str) or not isinstance(runtime_root, str):
-        return None
-    normalized_runtime_root = runtime_root.rstrip("/")
-    normalized_runtime_path = runtime_path.rstrip("/")
-    if normalized_runtime_path == normalized_runtime_root:
-        return Path(host_root).expanduser()
-    prefix = normalized_runtime_root + "/"
-    if not normalized_runtime_path.startswith(prefix):
-        return None
-    return Path(host_root).expanduser() / normalized_runtime_path[len(prefix) :]
-
-
-def _copy_output_path_to_host(source: Path, target: Path) -> bool:
-    if source.is_dir():
-        entries = list(source.iterdir())
-        if not entries:
-            return False
-        target.mkdir(parents=True, exist_ok=True)
-        for entry in entries:
-            _copy_path_to_host(entry, target / entry.name)
-        return True
-    if source.is_file():
-        target.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target / source.name)
-        return True
-    return False
-
-
-def _copy_path_to_host(source: Path, target: Path) -> None:
-    if source.is_dir():
-        shutil.copytree(source, target, dirs_exist_ok=True)
-    elif source.is_file():
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+    result = _sdk_materialize_shared_storage_outputs(storage) or {}
+    for warning in result.get("warnings") or []:
+        logger.warning("Shared output materialization warning: %s", warning)
+    for error in result.get("errors") or []:
+        logger.error("Shared output materialization error: %s", error)
+    for target in result.get("target_paths") or []:
+        console.print(f"[green]Materialized shared outputs:[/green] {target}")
+    return bool(result.get("copied"))
 
 
 def _stream_and_format_events(
@@ -752,7 +684,7 @@ def _stream_and_format_events(
     web_ui_url: Optional[str] = None,
     manifest: Optional[dict[str, Any]] = None,
 ) -> str:
-    if manifest is not None:
+    if manifest is not None and _is_workflow_manifest(manifest):
         return _stream_and_format_workflow_events(
             job_id,
             manifest,
@@ -772,16 +704,26 @@ def _stream_and_format_events(
 
     status_text = "Unknown / Detached"
     msg_count = 0
+    stage_map = {
+        "job_pending": 12,
+        "job_validated": 25,
+        "job_scheduled": 50,
+        "job_running": 62,
+        "job_completed": 100,
+        "job_failed": 100,
+        "job_cancelled": 100,
+    }
 
     try:
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
             TimeElapsedColumn(),
             console=console,
             disable=not use_progress(),
         ) as progress:
-            job_task = progress.add_task("[cyan]Submitting job bundle...", total=None)
+            job_task = progress.add_task("[cyan]Submitting job bundle...", total=100)
 
             try:
                 for event_json in client.stream_events(job_id, follow=True, timeout=None, heartbeat_interval_ms=5000):
@@ -803,21 +745,25 @@ def _stream_and_format_events(
                             progress.update(
                                 job_task,
                                 description="[cyan]Preparing: job accepted, waiting for validation...",
+                                completed=stage_map.get("job_pending", 0),
                             )
                         elif event_type == "job_validated":
                             progress.update(
                                 job_task,
                                 description="[cyan]Preparing: manifest validated, scheduling agents...",
+                                completed=stage_map.get("job_validated", 0),
                             )
                         elif event_type == "job_scheduled":
                             progress.update(
                                 job_task,
                                 description="[cyan]Starting: agents scheduled, waiting for runtime to report running...",
+                                completed=stage_map.get("job_scheduled", 0),
                             )
                         elif event_type == "job_running":
                             progress.update(
                                 job_task,
                                 description="[green]Running: streaming live job events...",
+                                completed=stage_map.get("job_running", 0),
                             )
                         elif event_type in [
                             "agent_message_received",
@@ -827,6 +773,10 @@ def _stream_and_format_events(
                             progress.update(
                                 job_task,
                                 description=f"[green]Running: {msg_count} routed messages, {log_writer.event_count} events logged...",
+                                completed=min(
+                                    stage_map.get("job_running", 62) + (log_writer.event_count % 35),
+                                    90,
+                                ),
                             )
                         elif event_type == "job_completed":
                             result = event.get("result")
@@ -837,21 +787,31 @@ def _stream_and_format_events(
                             progress.update(
                                 job_task,
                                 description="[green]Completed successfully.",
+                                completed=stage_map.get("job_completed", 100),
                             )
                             status_text = "Success"
                             break
                         elif event_type == "job_failed":
-                            progress.update(job_task, description="[red]Job failed.")
+                            progress.update(
+                                job_task,
+                                description="[red]Job failed.",
+                                completed=stage_map.get("job_failed", 100),
+                            )
                             status_text = "Failed"
                             break
                         elif event_type == "job_cancelled":
-                            progress.update(job_task, description="[red]Job cancelled.")
+                            progress.update(
+                                job_task,
+                                description="[red]Job cancelled.",
+                                completed=stage_map.get("job_cancelled", 100),
+                            )
                             status_text = "Cancelled"
                             break
                         else:
                             progress.update(
                                 job_task,
                                 description=f"[cyan]Observing: latest event {event_type}, {log_writer.event_count} events logged...",
+                                completed=stage_map.get("job_running", 62),
                             )
                     except Exception:
                         log_writer.run_logger.exception("Failed to process streamed event")
@@ -876,6 +836,7 @@ def _stream_and_format_events(
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
                 TimeElapsedColumn(),
                 console=console,
                 disable=not use_progress(),
@@ -943,18 +904,33 @@ def _stream_and_format_workflow_events(
         else follow_seconds
     )
     view = BlueprintWorkflowProgress(manifest, job_id=job_id)
+    monitor_state = JobMonitorState(allow_ctrl_d=False)
+    view.set_monitor_state(monitor_state)
     progress_stream = ProgressSnapshotStream(view)
     status_text = "running"
     live: Live | None = None
+    is_tty = _interactive_live_output()
+    old_settings = None
+    if is_tty:
+        import select
+        import termios
+        import tty
+
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
+        select_module = select
+    else:
+        select_module = None
 
     try:
-        if _interactive_live_output():
+        if is_tty:
             live = Live(
                 view.render(),
                 console=console,
                 refresh_per_second=6,
                 transient=True,
-                screen=True,
+                screen=bool(is_tty and getattr(console, "is_terminal", False)),
             )
             live.start()
         try:
@@ -969,6 +945,7 @@ def _stream_and_format_workflow_events(
                         web_ui_url = log_writer.record_web_ui_url(event)
                         if web_ui_url:
                             view._remember(f"Blueprint Web UI: {web_ui_url}")
+                        view.record_event_token_usage(event)
                         should_render = progress_stream.observe_event(event)
                         if live is not None and should_render:
                             live.update(view.render())
@@ -987,6 +964,15 @@ def _stream_and_format_workflow_events(
                         if event_type == "job_cancelled":
                             status_text = "cancelled"
                             break
+
+                        if select_module is not None and not _handle_live_workflow_key(
+                            monitor_state,
+                            {"workflow_progress": view.snapshot()},
+                            select_module=select_module,
+                            is_tty=True,
+                        ):
+                            status_text = "unknown"
+                            break
                     except Exception:
                         log_writer.run_logger.exception("Failed to process streamed event")
                     if live is not None and progress_stream.flush_due():
@@ -1003,13 +989,21 @@ def _stream_and_format_workflow_events(
                     follow_seconds,
                     view,
                     live,
+                    monitor_state=monitor_state if is_tty else None,
                 )
         finally:
             if live is not None:
                 live.stop()
+            if old_settings is not None:
+                import termios
+
+                termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
     except (KeyboardInterrupt, EOFError):
         console.print(f"[yellow]{DETACHED_AFTER_INTERRUPT_MESSAGE}[/yellow]")
         status_text, _data = _follow_job_events(job_id, log_writer, 0)
+
+    if not view.has_token_usage():
+        _attach_workflow_resource_tokens(view, job_id)
 
     if live is None:
         console.print(view.render())
@@ -1041,12 +1035,14 @@ def _follow_workflow_job_events(
     follow_seconds: float,
     view: BlueprintWorkflowProgress,
     live: Live | None,
+    monitor_state: JobMonitorState | None = None,
 ) -> str:
     started = time.monotonic()
     last_status, data = _follow_job_events(job_id, log_writer, follow_seconds)
     if isinstance(data, dict):
         for event in reversed(data.get("recent_events", [])):
             if isinstance(event, dict):
+                view.record_event_token_usage(event)
                 view.update(event)
     remaining = max(follow_seconds - (time.monotonic() - started), 0)
     view.update_follow_status(last_status, log_writer.event_count, remaining)
@@ -1059,6 +1055,75 @@ def _interactive_live_output() -> bool:
     if os.getenv("MN_RUN_DISABLE_LIVE_SCREEN", "").strip().lower() in {"1", "true", "yes", "on"}:
         return False
     return bool(getattr(console, "is_terminal", False) and sys.stdout.isatty())
+
+
+def _extract_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _run_id_from_payload(payload: Any) -> str | None:
+    if isinstance(payload, dict):
+        for key in ("run_id", "runId"):
+            candidate = payload.get(key)
+            if isinstance(candidate, str) and candidate:
+                return candidate
+        nested = payload.get("job") or payload.get("summary") or payload.get("metadata") or payload.get("manifest") or payload.get("payload")
+        if isinstance(nested, (dict, list)):
+            return _run_id_from_payload(nested)
+        if isinstance(payload.get("recent_events"), list):
+            for event in payload.get("recent_events"):
+                if isinstance(event, dict):
+                    candidate = _run_id_from_payload(event)
+                    if candidate:
+                        return candidate
+    if isinstance(payload, list):
+        for item in payload:
+            candidate = _run_id_from_payload(item)
+            if candidate:
+                return candidate
+    return None
+
+
+def _read_workflow_resource_tokens(run_id: str) -> int | None:
+    try:
+        resource_reader = load_observability_tools().get("read_run_resources")
+        if not callable(resource_reader):
+            return None
+        usage = resource_reader(run_id, runs_root=default_runs_root())
+    except Exception:
+        return None
+    if not isinstance(usage, dict):
+        return None
+    llm_usage = usage.get("llm")
+    if isinstance(llm_usage, dict):
+        total = _extract_int(llm_usage.get("total_tokens"))
+        if total is not None:
+            return total
+        input_tokens = _extract_int(llm_usage.get("input_tokens"))
+        output_tokens = _extract_int(llm_usage.get("output_tokens"))
+        if input_tokens is not None or output_tokens is not None:
+            return (input_tokens or 0) + (output_tokens or 0)
+    total = _extract_int(usage.get("total_tokens"))
+    return total
+
+
+def _attach_workflow_resource_tokens(view: BlueprintWorkflowProgress, job_id: str) -> None:
+    try:
+        job_json = client.get_job(job_id)
+        payload = json.loads(job_json)
+        run_id = _run_id_from_payload(payload)
+    except Exception:
+        run_id = None
+    if not run_id:
+        return
+    resource_tokens = _read_workflow_resource_tokens(run_id)
+    if resource_tokens is not None:
+        view.set_resource_token_total(resource_tokens)
 
 
 def _follow_job_events(
@@ -2217,7 +2282,7 @@ def run_bundle(
             )
         )
         if detached:
-            if web_ui and blueprint_run_dir is not None:
+            if blueprint_run_dir is not None:
                 _start_background_event_relay_if_needed(
                     bundle_dir,
                     submitted_manifest or manifest_dict,
@@ -2249,15 +2314,14 @@ def run_bundle(
             if not materialized_shared:
                 _materialize_completed_blueprint_outputs(log_writer.log_dir, manifest_dict)
         if blueprint_run_dir is not None:
-            if web_ui:
-                _start_background_event_relay_if_needed(
-                    bundle_dir,
-                    submitted_manifest or manifest_dict,
-                    job_id,
-                    blueprint_run_dir,
-                    final_status,
-                    config_overrides=config_overrides,
-                )
+            _start_background_event_relay_if_needed(
+                bundle_dir,
+                submitted_manifest or manifest_dict,
+                job_id,
+                blueprint_run_dir,
+                final_status,
+                config_overrides=config_overrides,
+            )
             if final_status in FINAL_STATUSES:
                 cleanup_blueprint_host_hooks(
                     blueprint_run_dir,
@@ -2294,15 +2358,14 @@ def run_bundle(
                 and submitted_bundle_dir is not None
                 and submitted_manifest is not None
             ):
-                if web_ui:
-                    _start_background_event_relay_if_needed(
-                        submitted_bundle_dir,
-                        submitted_manifest,
-                        submitted_job_id,
-                        submitted_run_dir,
-                        status,
-                        config_overrides=submitted_config_overrides,
-                    )
+                _start_background_event_relay_if_needed(
+                    submitted_bundle_dir,
+                    submitted_manifest,
+                    submitted_job_id,
+                    submitted_run_dir,
+                    status,
+                    config_overrides=submitted_config_overrides,
+                )
             console.print(
                 generate_detached_panel(
                     submitted_job_id,
@@ -3038,7 +3101,10 @@ def _start_background_event_relay_if_needed(
 ) -> None:
     if final_status in FINAL_STATUSES:
         return
-    if not _is_live_manifest(manifest_dict):
+    storage = _shared_storage_metadata(manifest_dict)
+    has_output_copy = bool(storage.get("output_copy")) if isinstance(storage, dict) else False
+    is_live_manifest = _is_live_manifest(manifest_dict)
+    if not is_live_manifest and not has_output_copy:
         return
     if os.getenv("MN_RUN_BACKGROUND_EVENT_RELAY", "1").strip().lower() in {
         "0",
@@ -3050,7 +3116,7 @@ def _start_background_event_relay_if_needed(
 
     config = load_blueprint_config(bundle_dir, config_overrides=config_overrides) or {}
     web_ui = config.get("web_ui") if isinstance(config.get("web_ui"), dict) else {}
-    if not isinstance(web_ui, dict) or web_ui.get("enabled") is False:
+    if not has_output_copy and (not isinstance(web_ui, dict) or web_ui.get("enabled") is False):
         return
 
     max_seconds = _background_event_relay_max_seconds(config)
@@ -3068,7 +3134,6 @@ def _start_background_event_relay_if_needed(
         "--poll-seconds",
         f"{poll_seconds:g}",
     ]
-    storage = _shared_storage_metadata(manifest_dict)
     storage_path: Path | None = None
     if storage:
         storage_path = run_dir / "shared_storage.json"
@@ -3106,9 +3171,14 @@ def _start_background_event_relay_if_needed(
         json.dumps(relay_info, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    console.print(
-        "[green]Live event relay:[/green] keeping the local dashboard stream updated in the background."
-    )
+    if is_live_manifest:
+        console.print(
+            "[green]Live event relay:[/green] keeping the local dashboard stream updated in the background."
+        )
+    elif storage_path is not None:
+        console.print(
+            "[green]Output event relay:[/green] will copy shared outputs when the job completes."
+        )
 
 
 def _shared_storage_metadata(manifest_dict: dict[str, Any]) -> dict[str, Any]:
@@ -3704,8 +3774,8 @@ def _live_monitor_api_stream(job_id: str) -> bool:
 
     import queue
     import threading
-    import sys
     import select
+    import sys
 
     event_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
 
@@ -3741,7 +3811,7 @@ def _live_monitor_api_stream(job_id: str) -> bool:
     view = MonitorView(monitor_state)
     worker = threading.Thread(target=reader, daemon=True)
     worker.start()
-    is_tty = sys.stdin.isatty()
+    is_tty = _interactive_live_output()
     old_settings = None
     if is_tty:
         import tty
@@ -3764,13 +3834,13 @@ def _live_monitor_api_stream(job_id: str) -> bool:
                 try:
                     kind, payload = event_queue.get(timeout=0.5)
                 except queue.Empty:
-                    if is_tty:
-                        i, _o, _e = select.select([sys.stdin], [], [], 0)
-                        if i:
-                            key = _read_monitor_key(sys.stdin, select)
-                            agent_count = _workflow_progress_agent_count(view.data)
-                            if not monitor_state.handle_key(key, agent_count):
-                                break
+                    if not _handle_live_workflow_key(
+                        monitor_state,
+                        view.data,
+                        is_tty=is_tty,
+                        select_module=select,
+                    ):
+                        return False
                     continue
                 if kind == "error":
                     if not saw_snapshot:
@@ -3800,9 +3870,58 @@ def _workflow_progress_agent_count(data: dict[str, Any] | None) -> int:
     progress = data.get("workflow_progress") if isinstance(data, dict) else None
     if not isinstance(progress, dict):
         return 0
-    current_step = progress.get("current_step") if isinstance(progress.get("current_step"), dict) else {}
-    agents = current_step.get("agents") if isinstance(current_step, dict) else []
+    current_step_ids = {
+        str(step_id)
+        for step_id in progress.get("current_step_ids", [])
+        if str(step_id).strip()
+    }
+    step = progress.get("current_step") if isinstance(progress.get("current_step"), dict) else {}
+    if isinstance(step, dict):
+        step_id = str(step.get("id") or "")
+        if step_id:
+            current_step_ids.add(step_id)
+    steps = progress.get("steps") if isinstance(progress.get("steps"), list) else []
+    if not current_step_ids:
+        current_step = progress.get("current_step") if isinstance(progress.get("current_step"), dict) else {}
+        current_agents = current_step.get("agents") if isinstance(current_step, dict) else []
+        return len(current_agents) if isinstance(current_agents, list) else 0
+
+    total_agents = 0
+    for step_data in steps:
+        if not isinstance(step_data, dict):
+            continue
+        if str(step_data.get("id") or "") not in current_step_ids:
+            continue
+        agents = step_data.get("agents")
+        if isinstance(agents, list):
+            total_agents += len(agents)
+    return total_agents
+
+
+def _workflow_layout_agent_count(data: dict[str, Any] | None) -> int:
+    if not isinstance(data, dict):
+        return 0
+    if isinstance(data.get("workflow_progress"), dict):
+        return _workflow_progress_agent_count(data)
+    agents = data.get("agents")
     return len(agents) if isinstance(agents, list) else 0
+
+
+def _handle_live_workflow_key(
+    monitor_state: JobMonitorState,
+    data: dict[str, Any] | None,
+    *,
+    is_tty: bool,
+    select_module,
+    block_seconds: float = 0.0,
+) -> bool:
+    if not is_tty:
+        return True
+    readable, _, _ = select_module.select([sys.stdin], [], [], block_seconds)
+    if not readable:
+        return True
+    key = _read_monitor_key(sys.stdin, select_module)
+    return monitor_state.handle_key(key, _workflow_layout_agent_count(data))
 
 
 def _live_monitor(job_id: str):
@@ -3814,7 +3933,7 @@ def _live_monitor(job_id: str):
     import time
     from rich.live import Live
 
-    is_tty = sys.stdin.isatty()
+    is_tty = _interactive_live_output()
     old_settings = None
     if is_tty:
         import tty
@@ -3869,14 +3988,15 @@ def _live_monitor(job_id: str):
                         final_status = status
                         break
 
-                if is_tty:
-                    i, o, e = select.select([sys.stdin], [], [], 0.5)
-                    if i:
-                        key = _read_monitor_key(sys.stdin, select)
-                        agent_count = len(data.get("agents", [])) if isinstance(data.get("agents"), list) else 0
-                        if not monitor_state.handle_key(key, agent_count):
-                            break
-                else:
+                if not _handle_live_workflow_key(
+                    monitor_state,
+                    data,
+                    is_tty=is_tty,
+                    select_module=select,
+                    block_seconds=0.5,
+                ):
+                    break
+                if not is_tty:
                     time.sleep(0.5)
                     break
 

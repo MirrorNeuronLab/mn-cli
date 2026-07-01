@@ -16,13 +16,16 @@ ConfirmationDetails = Union[Mapping[str, Any], Iterable[tuple[str, Any]]]
 
 
 class JobMonitorState:
-    def __init__(self) -> None:
+    def __init__(self, allow_ctrl_d: bool = True) -> None:
         self.selected_index = 0
         self.detail_mode = False
+        self.allow_ctrl_d = allow_ctrl_d
 
     def handle_key(self, key: str, agent_count: int) -> bool:
-        if key in {"q", "Q", "\x03", "\x04"}:
+        if key in {"q", "Q", "\x03"}:
             return False
+        if key == "\x04":
+            return self.allow_ctrl_d
         if key in {"j", "J", "\t", "\x1b[B"}:
             self.selected_index = min(self.selected_index + 1, max(agent_count - 1, 0))
             return True
@@ -42,6 +45,14 @@ class JobMonitorState:
 
     def clamp(self, agent_count: int) -> None:
         self.selected_index = min(self.selected_index, max(agent_count - 1, 0))
+
+
+def _monitor_footer_text(state: Optional[JobMonitorState] = None) -> str:
+    allow_ctrl_d = True
+    if state is not None:
+        allow_ctrl_d = bool(getattr(state, "allow_ctrl_d", True))
+    detach_text = "q or Ctrl+C detach" if not allow_ctrl_d else "q or Ctrl+D/Ctrl+C detach"
+    return f"keys: j/k or arrows select agent, Enter/d details, 1-9 jump, o overview, {detach_text}"
 
 
 def print_success_confirmation(
@@ -127,7 +138,7 @@ def _present(value: Any) -> bool:
 def generate_live_layout(job_id: str, data: Dict[str, Any], state: Optional[JobMonitorState] = None) -> Panel:
     workflow_progress = data.get("workflow_progress")
     if isinstance(workflow_progress, dict) and workflow_progress.get("steps"):
-        return _generate_workflow_progress_layout(job_id, workflow_progress, state=state)
+        return generate_workflow_progress_layout(job_id, workflow_progress, state=state)
 
     summary = data.get("summary", {})
     job = data.get("job", {})
@@ -166,10 +177,7 @@ def generate_live_layout(job_id: str, data: Dict[str, Any], state: Optional[JobM
         _agent_detail_panel(selected_agent) if state.detail_mode else _agent_table(agents, state.selected_index),
     )
 
-    footer = Text(
-        "keys: j/k or arrows select agent, Enter/d details, 1-9 jump, o overview, q or Ctrl+D/Ctrl+C detach",
-        style="dim",
-    )
+    footer = Text(_monitor_footer_text(state), style="dim")
     last_event = summary.get("last_event")
     if last_event:
         footer.append(f"\nlatest event: {last_event}", style="dim")
@@ -182,7 +190,12 @@ def generate_live_layout(job_id: str, data: Dict[str, Any], state: Optional[JobM
     )
 
 
-def _generate_workflow_progress_layout(job_id: str, progress: dict[str, Any], state: Optional[JobMonitorState] = None) -> Panel:
+def generate_workflow_progress_layout(
+    job_id: str,
+    progress: dict[str, Any],
+    *,
+    state: Optional[JobMonitorState] = None,
+) -> Panel:
     state = state or JobMonitorState()
     steps = [step for step in progress.get("steps", []) if isinstance(step, dict)]
     current_step_ids = [
@@ -224,20 +237,29 @@ def _generate_workflow_progress_layout(job_id: str, progress: dict[str, Any], st
     body = Table.grid(expand=True)
     body.add_column(ratio=1)
     body.add_column(ratio=3)
+    agent_title = "Agents"
+    if active_steps:
+        first_step = active_steps[0]
+        if isinstance(first_step, dict):
+            agent_title = str(first_step.get("label") or first_step.get("id") or "Agents")
     body.add_row(
         _workflow_phase_table(steps, workflow_kind=workflow_kind),
         _agent_detail_panel(agents[state.selected_index] if agents and state.detail_mode else None)
         if state.detail_mode
-        else _agent_table(agents, state.selected_index),
+        else _workflow_agent_table(agents, state.selected_index, title_prefix=agent_title),
     )
 
-    footer = Text(
-        "keys: j/k or arrows select agent, Enter/d details, 1-9 jump, o overview, q or Ctrl+D/Ctrl+C detach",
-        style="dim",
-    )
+    footer = Text(_monitor_footer_text(state), style="dim")
     messages = [str(message) for message in progress.get("messages", []) if message]
     if messages:
         footer.append(f"\nlatest event: {messages[-1]}", style="dim")
+    run_tokens = progress.get("resource_tokens")
+    if run_tokens:
+        footer.append(f"\nrun tokens (resource): {_format_tokens(run_tokens)}", style="dim")
+
+    token_summary = _workflow_agent_token_summary(agents)
+    if token_summary:
+        footer.append(f"\n{token_summary}", style="dim")
 
     return Panel(
         Group(header, subtitle, body, footer),
@@ -245,6 +267,57 @@ def _generate_workflow_progress_layout(job_id: str, progress: dict[str, Any], st
         border_style=color,
         box=box.ROUNDED,
     )
+
+
+def _generate_workflow_progress_layout(job_id: str, progress: dict[str, Any], state: Optional[JobMonitorState] = None) -> Panel:
+    # Backward-compatible wrapper for existing callsites.
+    return generate_workflow_progress_layout(job_id, progress, state=state)
+
+
+def _workflow_agent_token_summary(agents: list[dict[str, Any]]) -> str:
+    total_used = 0
+    total_budget = 0
+    for agent in agents:
+        tokens_used = _agent_token_count(agent, used=True)
+        if tokens_used is not None:
+            total_used += tokens_used
+        token_budget = _agent_token_count(agent, budget=True)
+        if token_budget is not None:
+            total_budget += token_budget
+
+    if total_used:
+        if total_budget and total_budget != total_used:
+            return f"run used {_format_tokens(total_used)} / budget {_format_tokens(total_budget)} tok"
+        return f"run used {_format_tokens(total_used)} tok"
+    if total_budget:
+        return f"run budget {_format_tokens(total_budget)} tok"
+    return ""
+
+
+def _agent_token_count(agent: dict[str, Any], *, used: bool = False, budget: bool = False) -> int | None:
+    if used:
+        value = agent.get("tokens_used")
+        if value is not None:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                pass
+        return None
+    if budget:
+        for key in ("token_budget",):
+            value = agent.get(key)
+            if value is not None:
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    pass
+        value = agent.get("tokens")
+        if value is not None:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                pass
+    return None
 
 
 def _workflow_summary_step_counts(
@@ -268,7 +341,7 @@ def _workflow_summary_step_counts(
 
 
 def _workflow_phase_table(steps: list[dict[str, Any]], *, workflow_kind: str = "batch") -> Table:
-    table = Table(title="Steps", box=box.SIMPLE, show_header=False, expand=True)
+    table = Table(title="Phases", box=box.SIMPLE, show_header=False, expand=True)
     table.add_column("step")
     table.add_column("agents", justify="right", no_wrap=True)
     has_graph_layers = any("layer" in step or step.get("parents") or step.get("children") for step in steps)
@@ -287,6 +360,68 @@ def _workflow_phase_table(steps: list[dict[str, Any]], *, workflow_kind: str = "
     if not steps:
         table.add_row(". 1 Runtime", "0/0", style="cyan")
     return table
+
+
+def _workflow_agent_table(
+    agents: list[dict[str, Any]],
+    selected_index: int,
+    title_prefix: str = "Agents",
+) -> Table:
+    table = Table(title=f"{title_prefix}  |  {len(agents)} agents", box=box.SIMPLE, expand=True)
+    table.add_column("#", justify="right", no_wrap=True)
+    table.add_column("agent", no_wrap=True)
+    table.add_column("working on")
+    table.add_column("progress", justify="right", no_wrap=True)
+    table.add_column("tokens", justify="right", no_wrap=True)
+    table.add_column("mail", justify="right", no_wrap=True)
+
+    if not agents:
+        table.add_row("-", "none", "No agents reported by the runtime yet.", "-", "-", "-")
+        return table
+
+    start = 0 if selected_index < 20 else selected_index - 19
+    for index, agent in enumerate(agents[start : start + 20], start=start):
+        status = str(agent.get("status") or "unknown")
+        marker = ">" if index == selected_index else " "
+        row_style = "reverse" if index == selected_index else _status_color(status)
+        table.add_row(
+            f"{marker}{index + 1}",
+            _agent_id(agent),
+            _workflow_agent_summary(agent),
+            f"{_progress_text(agent)}",
+            _agent_token_column(agent),
+            str(_int_value(agent, "mailbox_depth", "queue_depth", "mailbox")),
+            style=row_style,
+        )
+    return table
+
+
+def _workflow_agent_summary(agent: dict[str, Any]) -> str:
+    return _working_on(agent)
+
+
+def _agent_token_column(agent: dict[str, Any]) -> str:
+    tokens_used = agent.get("tokens_used")
+    token_budget = agent.get("token_budget")
+    tokens = agent.get("tokens")
+    if tokens_used is not None:
+        text = _format_tokens(tokens_used)
+        if token_budget is not None and token_budget != tokens_used:
+            return f"{text}/{_format_tokens(token_budget)} tok"
+        return f"{text} tok"
+    if token_budget is not None:
+        if token_budget == tokens:
+            return f"{_format_tokens(token_budget)} tok budget"
+        return f"{_format_tokens(token_budget)} tok budget"
+    if tokens is not None:
+        return f"{_format_tokens(tokens)} tok"
+    return "-"
+
+
+def _format_tokens(value: float) -> str:
+    if value >= 1000:
+        return f"{value / 1000:.1f}k".replace(".0k", "k")
+    return str(int(value))
 
 
 def _sorted_agents(raw_agents: Any) -> list[dict[str, Any]]:
@@ -378,6 +513,7 @@ def _agent_detail_panel(agent: dict[str, Any] | None) -> Panel:
         ("Status", str(agent.get("status") or "unknown")),
         ("Node", str(agent.get("node_id") or agent.get("node") or "-")),
         ("Working On", _working_on(agent)),
+        ("Tokens", _agent_token_column(agent)),
         ("Progress", _progress_text(agent)),
         ("Processed", str(_int_value(agent, "processed_messages", "messages_processed", "processed"))),
         ("Mailbox", str(_int_value(agent, "mailbox_depth", "queue_depth", "mailbox"))),

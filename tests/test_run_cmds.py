@@ -13,7 +13,7 @@ from rich.console import Console
 from mn_cli.main import app
 from mn_cli.libs import run_cmds
 from mn_cli.libs.ui import JobMonitorState, generate_live_layout
-from mn_cli.libs.workflow_progress import _agent_progress_detail
+from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress, _agent_progress_detail
 from mn_cli.libs.run_manifest import prepare_manifest_for_submission
 from mn_sdk import AgentProgress, load_model_ownership, upsert_model_remote
 
@@ -2315,7 +2315,28 @@ def test_run_displays_workflow_steps_and_agents(mocker, tmp_path):
         json.dumps({"type": "job_scheduled"}),
         json.dumps({"type": "workflow_step_started", "payload": {"step": "research"}}),
         json.dumps({"type": "workflow_worker_started", "payload": {"step": "research", "worker": "research:docs"}}),
-        json.dumps({"type": "workflow_step_attempt_completed", "payload": {"step": "research", "worker": "research:docs", "tokens": 1200, "tools": 3}}),
+        json.dumps(
+            {
+                "type": "workflow_step_attempt_completed",
+                "payload": {
+                    "step": "research",
+                    "worker": "research:docs",
+                    "tokens": 1200,
+                    "tools": 3,
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "type": "workflow_step_attempt_completed",
+                "payload": {
+                    "step": "research",
+                    "worker": "research:docs",
+                    "llm": {"usage": {"input_tokens": 350, "output_tokens": 250}},
+                    "tools": 1,
+                },
+            }
+        ),
         json.dumps({"type": "research_done", "payload": {"step": "research"}}),
         json.dumps({"type": "job_completed"}),
     ])
@@ -2382,6 +2403,7 @@ def test_run_displays_workflow_steps_and_agents(mocker, tmp_path):
     assert "Analyze docs" in " ".join(result.stdout.split())
     assert "1/1 steps" in result.stdout
     assert "Research  |  2 agents" in result.stdout
+    assert "run used 1.8k / budget 2.1k tok" in result.stdout
 
 
 def test_workflow_monitor_renders_service_idle_and_ready_counts():
@@ -2476,6 +2498,220 @@ def test_workflow_monitor_renders_graph_layers_and_multiple_active_steps():
     assert "property_agent" in rendered
 
 
+def test_workflow_renderer_shared_between_live_monitor_and_blueprint_run_paths():
+    manifest = {
+        "apiVersion": "mn.workflow/v1",
+        "kind": "Workflow",
+        "id": "workflow-shared-blueprint",
+        "name": "Workflow Shared Blueprint",
+        "workflow": {
+            "workflow_id": "workflow_shared_v1",
+            "entrypoint": "research",
+            "steps": [
+                {
+                    "id": "research",
+                    "label": "Research",
+                    "run": "research_team",
+                    "on": {"research_done": "completed"},
+                    "emits": "research_done",
+                }
+            ],
+        },
+        "runtime": {
+            "bindings": {
+                "research_team": {
+                    "type": "team",
+                    "workers": [
+                        {
+                            "id": "research:docs",
+                            "role": "Analyze docs",
+                            "model": "opus",
+                            "tokens": 1200,
+                        }
+                    ],
+                }
+            },
+        },
+    }
+
+    view = BlueprintWorkflowProgress(manifest, job_id="job-shared")
+    view.record_event_token_usage(
+        {"type": "workflow_step_attempt_completed", "payload": {"step": "research", "worker": "research:docs", "llm": {"usage": {"input_tokens": 80, "output_tokens": 20}}}}
+    )
+    snapshot = view.snapshot()
+
+    monitor_console = Console(record=True, width=140)
+    monitor_console.print(view.render())
+    workflow_view = monitor_console.export_text()
+
+    job_console = Console(record=True, width=140)
+    job_console.print(
+        generate_live_layout(
+            "job-shared",
+            {"workflow_progress": snapshot},
+            JobMonitorState(),
+        )
+    )
+    job_monitor_view = job_console.export_text()
+
+    assert "Workflow Job Monitor" in workflow_view
+    assert "Workflow Job Monitor" in job_monitor_view
+    assert "1/1 steps" in workflow_view
+    assert "1/1 steps" in job_monitor_view
+    assert "Research" in workflow_view
+    assert "Research" in job_monitor_view
+    assert "run used 100 tok / budget 1.2k tok" in workflow_view
+    assert "run used 100 tok / budget 1.2k tok" in job_monitor_view
+
+
+def test_blueprint_workflow_monitor_disables_ctrl_d():
+    progress = {
+        "workflow_id": "blueprint-no-ctrld",
+        "workflow_kind": "batch",
+        "status": "running",
+        "elapsed_seconds": 10,
+        "steps": [
+            {
+                "id": "step-a",
+                "label": "Step A",
+                "status": "running",
+                "current": True,
+                "running_count": 1,
+                "total_count": 1,
+                "agents": [],
+            }
+        ],
+    }
+
+    state = JobMonitorState(allow_ctrl_d=False)
+    console = Console(record=True, width=140)
+    console.print(
+        generate_live_layout(
+            "job-blueprint",
+            {"workflow_progress": progress},
+            state=state,
+        )
+    )
+    output = console.export_text()
+
+    assert state.handle_key("\x04", 0) is True
+    assert "q or Ctrl+C detach" in output
+    assert "Ctrl+D/Ctrl+C" not in output
+
+
+def test_workflow_token_tracking_prefers_usage_fields_and_ignores_budget_only_payloads():
+    manifest = {
+        "apiVersion": "mn.workflow/v1",
+        "kind": "Workflow",
+        "id": "workflow-token-blueprint",
+        "name": "Workflow Token Blueprint",
+        "workflow": {
+            "workflow_id": "workflow_token_v1",
+            "entrypoint": "step",
+            "steps": [
+                {
+                    "id": "step",
+                    "label": "Step",
+                    "run": "team",
+                    "on": {"step_done": "completed"},
+                    "emits": "step_done",
+                }
+            ],
+        },
+        "runtime": {
+            "bindings": {
+                "team": {
+                    "type": "team",
+                    "workers": [
+                        {
+                            "id": "agent-1",
+                            "role": "Operator",
+                            "model": "opus",
+                            "tokens": 500,
+                        }
+                    ],
+                }
+            },
+        },
+    }
+
+    view = BlueprintWorkflowProgress(manifest, job_id="job-token")
+    console = Console(record=True, width=120)
+    console.print(generate_live_layout("job-token", {"workflow_progress": view.snapshot()}, JobMonitorState()))
+    assert "500 tok budget" in console.export_text()
+    assert "run used" not in console.export_text()
+
+    view.record_event_token_usage(
+        {"type": "workflow_step_attempt_completed", "payload": {"step": "step", "worker": "agent-1", "token_budget": 500}}
+    )
+    console = Console(record=True, width=120)
+    console.print(generate_live_layout("job-token", {"workflow_progress": view.snapshot()}, JobMonitorState()))
+    assert "500 tok budget" in console.export_text()
+    assert "run used" not in console.export_text()
+
+    view.record_event_token_usage(
+        {"type": "workflow_step_attempt_completed", "payload": {"step": "step", "worker": "agent-1", "tokens": {"count": 12}, "usage": {"total_tokens": 50}}}
+    )
+    console.print(generate_live_layout("job-token", {"workflow_progress": view.snapshot()}, JobMonitorState()))
+    output = console.export_text()
+    assert "run used 50 / budget 500 tok" in output
+
+
+def test_workflow_monitor_state_controls_with_shared_renderer():
+    state = JobMonitorState()
+    assert state.handle_key("j", 2) is True
+    assert state.selected_index == 1
+    assert state.handle_key("d", 2) is True
+    assert state.detail_mode is True
+
+    console = Console(record=True, width=180, force_terminal=False)
+    console.print(
+        generate_live_layout(
+            "job-workflow-interactive",
+            {
+                "workflow_progress": {
+                    "workflow_id": "interactive-workflow",
+                    "workflow_kind": "batch",
+                    "status": "running",
+                    "elapsed_seconds": 5,
+                    "steps": [
+                        {
+                            "id": "step-a",
+                            "label": "Step A",
+                            "status": "running",
+                            "current": True,
+                            "running_count": 1,
+                            "total_count": 1,
+                            "agents": [
+                                {"id": "agent-a", "status": "running", "working_on": "Analyze A", "progress": 0.7, "tokens": 50},
+                            ],
+                        },
+                        {
+                            "id": "step-b",
+                            "label": "Step B",
+                            "status": "done",
+                            "done_count": 1,
+                            "total_count": 1,
+                            "agents": [
+                                {"id": "agent-b", "status": "done", "working_on": "Finish B", "progress": 1.0, "tokens": 30},
+                            ],
+                        },
+                    ],
+                    "current_step_ids": ["step-a", "step-b"],
+                }
+            },
+            state=state,
+        )
+    )
+    output = console.export_text()
+    assert "Agent Detail" in output
+    assert "agent-b" in output
+    assert "Finish B" in output
+    assert state.handle_key("o", 2) is True
+    assert state.detail_mode is False
+    assert state.handle_key("\x04", 2) is False
+
+
 def test_live_manifest_detection_accepts_scheduler_job_type():
     assert run_cmds._is_live_manifest(
         {"policies": {"scheduler": {"job_type": "service"}}}
@@ -2539,6 +2775,74 @@ def test_live_web_ui_run_starts_background_event_relay(mocker, tmp_path, monkeyp
     storage_path = Path(relay["shared_storage_path"])
     assert storage_path.name == "shared_storage.json"
     assert json.loads(storage_path.read_text())["output_copy_executor"] == "master_host"
+
+
+def test_detached_batch_run_starts_output_event_relay_for_shared_storage(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", str(tmp_path / "shared"))
+    monkeypatch.setenv("MN_RUNTIME_SHARED_STORAGE_ROOT", "/runtime/shared")
+    mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="batch-output-run")
+    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-batch-output")
+    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
+        json.dumps({"type": "job_pending"}),
+        json.dumps({"type": "job_running"}),
+    ])
+    mocker.patch(
+        'mn_cli.libs.run_cmds.client.get_job',
+        return_value=json.dumps({
+            "summary": {"status": "running"},
+            "job": {"status": "running"},
+            "recent_events": [],
+        }),
+    )
+    mock_process = mocker.Mock(pid=4343)
+    mock_popen = mocker.patch('mn_cli.libs.run_cmds.subprocess.Popen', return_value=mock_process)
+
+    bundle_dir = tmp_path / "batch_bundle"
+    bundle_dir.mkdir()
+    target_path = tmp_path / "Downloads" / "vc_assistant"
+    runtime_config = {
+        "document_sources": {"folder_path": ""},
+        "outputs": {"folder_path": str(target_path)},
+    }
+    (bundle_dir / "manifest.json").write_text(json.dumps({
+        "nodes": [
+            {
+                "node_id": "worker",
+                "agent_type": "executor",
+                "config": {
+                    "environment": {
+                        "MN_BLUEPRINT_CONFIG_JSON": json.dumps(runtime_config),
+                    }
+                },
+            }
+        ],
+        "initial_inputs": {
+            "worker": {
+                "output_folder": str(target_path),
+            }
+        },
+    }))
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(json.dumps({
+        "identity": {"blueprint_id": "vc_assistant"},
+        "outputs": {"folder_path": str(target_path)},
+    }))
+
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--follow-seconds", "0"])
+
+    assert result.exit_code == 0
+    assert "Output event relay" in result.stdout
+    mock_popen.assert_called_once()
+    command = mock_popen.call_args.args[0]
+    assert command[:3] == [sys.executable, "-m", "mn_sdk.blueprint_support.event_relay"]
+    assert "--shared-storage-json" in command
+    relay = json.loads((tmp_path / "runs" / "batch-output-run" / "event_relay.json").read_text())
+    storage_path = Path(relay["shared_storage_path"])
+    storage = json.loads(storage_path.read_text())
+    assert storage["output_copy_executor"] == "master_host"
+    assert storage["output_copy"][0]["target_path"] == str(target_path)
 
 
 def test_run_uses_detach_log_seconds_env(mocker, tmp_path, monkeypatch):

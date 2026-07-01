@@ -809,6 +809,18 @@ def test_blueprint_run_testing_flags_override_local_bundle(mocker, tmp_path):
     assert kwargs["config_overrides"]["execution"]["debug"] is True
 
 
+def test_blueprint_run_passes_follow_seconds_to_bundle(mocker, tmp_path):
+    bp_dir = tmp_path / "bundle"
+    bp_dir.mkdir()
+    (bp_dir / "manifest.json").write_text(json.dumps({}))
+    mock_run_bundle = mocker.patch("mn_cli.libs.blueprint_cmds._run_bundle")
+
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bp_dir), "--follow-seconds", "2.5"])
+
+    assert result.exit_code == 0
+    assert mock_run_bundle.call_args.kwargs["follow_seconds"] == 2.5
+
+
 def test_blueprint_run_help_lists_testing_flags():
     result = runner.invoke(app, ["blueprint", "run", "--help"])
 
