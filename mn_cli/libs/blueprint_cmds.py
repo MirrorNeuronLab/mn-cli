@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Annotated, Any, Optional
 
 import typer
+from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 from mn_cli.libs.blueprint_observability import (
     artifact_headline as _artifact_headline,
@@ -49,6 +50,7 @@ from mn_cli.libs.blueprint_resources import (
 )
 from mn_cli.libs.ui import print_confirmed, print_success_confirmation
 from mn_cli.shared import console, logger
+from mn_cli.terminal import use_progress
 from mn_cli.libs.blueprint_models import BlueprintModelOps, blueprint_model_dependency_summary
 from mn_cli.libs.run_cmds import run_bundle as _run_bundle
 from mn_cli.libs.run_manifest import load_blueprint_config as _load_blueprint_config
@@ -1103,6 +1105,7 @@ def _install_blueprint_model_dependencies(
             model_installed=_model_installed,
             install_model_entry=_install_model_entry,
             notify_model_install_start=_print_model_install_start,
+            install_model_with_progress=_install_model_with_progress,
         ),
     )
     if summary["errors"]:
@@ -1120,6 +1123,37 @@ def _print_model_install_start(model: dict[str, Any]) -> None:
         f"[yellow]Runtime model {detail} is not installed. "
         f"Installing with backend {backend}; this may take a few minutes the first time.[/yellow]"
     )
+
+
+def _install_model_with_progress(
+    entry: dict[str, Any],
+    *,
+    model: dict[str, Any],
+    backend: str,
+    context_size: Any,
+    force: bool,
+) -> dict[str, Any]:
+    label = str(model.get("id") or model.get("model") or entry.get("id") or entry.get("model") or "runtime model")
+    docker_model = str(model.get("model") or entry.get("model") or "")
+    detail = f"{label} ({docker_model})" if docker_model and docker_model != label else label
+    console.print(f"[cyan]Installing runtime model {detail} with Docker Model Runner...[/cyan]")
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+        disable=not use_progress(),
+    ) as progress:
+        progress.add_task(
+            f"[cyan]Pulling and starting {detail} with backend {backend}...",
+            total=None,
+        )
+        return _install_model_entry(
+            entry,
+            backend=backend,
+            context_size=context_size,
+            force=force,
+        )
 
 
 def _print_model_install_summary(summary: dict[str, Any]) -> None:

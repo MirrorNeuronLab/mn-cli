@@ -124,6 +124,8 @@ def test_prepare_runtime_models_installs_missing_model_for_run(
     assert record["owners"]["vc_assistant"]["blueprint_revision"] == "rev-1"
     output = capsys.readouterr().out
     assert "Runtime model gemma4:e2b (ai/gemma4:E2B) is not installed." in output
+    assert "Installing runtime model gemma4:e2b (ai/gemma4:E2B)" in output
+    assert "Docker Model Runner" in output
     assert "Runtime models ready: gemma4:e2b" in output
 
 
@@ -250,6 +252,7 @@ def test_prepare_runtime_models_schedules_runtime_install_on_capable_cluster_nod
     mocker,
     tmp_path,
     monkeypatch,
+    capsys,
 ):
     monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
     bundle_dir = tmp_path / "assistant"
@@ -336,6 +339,7 @@ def test_prepare_runtime_models_schedules_runtime_install_on_capable_cluster_nod
     assert summary["models"][0]["cluster"]["node"] == "spark"
     assert "ai/nemotron3:latest" in json.loads(env_overrides["MN_PREPARED_RUNTIME_MODELS_JSON"])
     install_model.assert_not_called()
+    assert "Installing runtime model" not in capsys.readouterr().out
     resolver = run_cmds._prepared_model_installed_resolver(summary)
     assert resolver("ai/nemotron3:latest", {"model": "nemotron3:latest"}) is True
     validation_manifest, validation_config = run_cmds._model_validation_inputs_with_prepared_models(

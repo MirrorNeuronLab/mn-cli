@@ -161,6 +161,7 @@ def _print_confirmation_plain(
 
 
 def _confirmation_panel(rows: list[tuple[str, Any]]) -> Panel:
+    label_width = min(max(len(str(label)) + 1 for label, _ in rows), max(12, ui_width() // 3))
     table = Table(
         show_header=False,
         box=box.SIMPLE,
@@ -168,10 +169,10 @@ def _confirmation_panel(rows: list[tuple[str, Any]]) -> Panel:
         padding=(0, 1),
         expand=True,
     )
-    table.add_column("Field", no_wrap=False, ratio=0, overflow="fold")
-    table.add_column("Value", overflow="fold", ratio=1)
+    table.add_column("Field", min_width=label_width, no_wrap=True, overflow="ellipsis")
+    table.add_column("Value", overflow="fold", ratio=1, no_wrap=False)
     for label, value in rows:
-        table.add_row(f"{label}", _confirmation_value(value))
+        table.add_row(f"{label}:", _confirmation_value(value))
     return Panel(table, border_style="green", title="Details", title_align="left")
 
 

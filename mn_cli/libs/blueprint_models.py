@@ -19,6 +19,7 @@ class BlueprintModelOps:
     resolve_model_endpoint: Callable[..., dict[str, Any] | None] | None = None
     resolve_cluster_model: Callable[..., dict[str, Any] | None] | None = None
     notify_model_install_start: Callable[[dict[str, Any]], Any] | None = None
+    install_model_with_progress: Callable[..., dict[str, Any]] | None = None
 
 
 def blueprint_model_dependency_summary(
@@ -139,8 +140,10 @@ def blueprint_model_dependency_summary(
                 continue
             if ops.notify_model_install_start is not None:
                 ops.notify_model_install_start(base_result)
-            install_result = ops.install_model_entry(
+            install_result = _install_model_entry(
+                ops,
                 entry,
+                model=base_result,
                 backend=backend,
                 context_size=requirement.get("context_size"),
                 force=force,
@@ -209,8 +212,10 @@ def _prepare_fallback_model(
         }
         if ops.notify_model_install_start is not None:
             ops.notify_model_install_start(fallback_base)
-        install_result = ops.install_model_entry(
+        install_result = _install_model_entry(
+            ops,
             fallback_entry,
+            model=fallback_base,
             backend=fallback_backend,
             context_size=fallback_entry.get("context_size") or requirement.get("context_size"),
             force=force,
@@ -241,3 +246,29 @@ def _prepare_fallback_model(
         "fallback": fallback,
         "effective": fallback,
     }
+
+
+def _install_model_entry(
+    ops: BlueprintModelOps,
+    entry: dict[str, Any],
+    *,
+    model: dict[str, Any],
+    backend: str,
+    context_size: Any,
+    force: bool,
+) -> dict[str, Any]:
+    install = ops.install_model_with_progress or ops.install_model_entry
+    if ops.install_model_with_progress is not None:
+        return install(
+            entry,
+            model=model,
+            backend=backend,
+            context_size=context_size,
+            force=force,
+        )
+    return install(
+        entry,
+        backend=backend,
+        context_size=context_size,
+        force=force,
+    )

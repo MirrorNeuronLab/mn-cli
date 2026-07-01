@@ -180,6 +180,8 @@ def test_blueprint_model_dependency_installs_missing_model_with_feedback(
     assert summary["models"][0]["status"] == "installed"
     output = capsys.readouterr().out
     assert "Runtime model custom-runtime:default (custom/runtime:latest) is not installed." in output
+    assert "Installing runtime model custom-runtime:default (custom/runtime:latest)" in output
+    assert "Docker Model Runner" in output
     assert "this may take a few minutes the first time" in output
 
 
@@ -217,6 +219,8 @@ def test_blueprint_model_dependency_install_failure_does_not_record_owner(
     assert load_model_ownership()["models"] == {}
     output = capsys.readouterr().out
     assert "this may take a few minutes the first time" in output
+    assert "Installing runtime model custom-runtime:default (custom/runtime:latest)" in output
+    assert "Docker Model Runner" in output
 
 
 def test_blueprint_model_dependency_service_model_records_owner_without_docker_install(
@@ -296,7 +300,9 @@ def test_blueprint_model_dependency_cluster_provided_skips_local_install(
     assert summary["ok"] is True
     assert summary["models"][0]["status"] == "cluster_provided"
     assert load_model_ownership()["models"] == {}
-    assert "this may take a few minutes" not in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "this may take a few minutes" not in output
+    assert "Installing runtime model" not in output
 
 
 def test_blueprint_list_not_initialized(monkeypatch, tmp_path):

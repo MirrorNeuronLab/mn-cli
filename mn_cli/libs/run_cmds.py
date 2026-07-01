@@ -284,6 +284,7 @@ def _prepare_runtime_models_for_run_or_exit(
             resolve_model_endpoint=_resolve_runtime_model_endpoint,
             resolve_cluster_model=_resolve_cluster_model_for_requirement,
             notify_model_install_start=_print_runtime_model_install_start,
+            install_model_with_progress=_install_runtime_model_with_progress,
         ),
     )
     endpoints = summary.get("endpoints") if isinstance(summary.get("endpoints"), dict) else {}
@@ -409,6 +410,37 @@ def _print_runtime_model_install_start(model: dict[str, Any]) -> None:
         f"[yellow]Runtime model {detail} is not installed. "
         f"Installing with backend {backend}; this may take a few minutes the first time.[/yellow]"
     )
+
+
+def _install_runtime_model_with_progress(
+    entry: dict[str, Any],
+    *,
+    model: dict[str, Any],
+    backend: str,
+    context_size: Any,
+    force: bool,
+) -> dict[str, Any]:
+    label = str(model.get("id") or model.get("model") or entry.get("id") or entry.get("model") or "runtime model")
+    docker_model = str(model.get("model") or entry.get("model") or "")
+    detail = f"{label} ({docker_model})" if docker_model and docker_model != label else label
+    console.print(f"[cyan]Installing runtime model {detail} with Docker Model Runner...[/cyan]")
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+        disable=not use_progress(),
+    ) as progress:
+        progress.add_task(
+            f"[cyan]Pulling and starting {detail} with backend {backend}...",
+            total=None,
+        )
+        return install_model_entry(
+            entry,
+            backend=backend,
+            context_size=context_size,
+            force=force,
+        )
 
 
 def _print_runtime_model_install_summary(summary: dict[str, Any]) -> None:
