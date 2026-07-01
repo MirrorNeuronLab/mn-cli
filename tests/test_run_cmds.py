@@ -941,6 +941,43 @@ def test_run_success(mocker, tmp_path, monkeypatch):
     mock_stream.assert_called_once_with("job-123", follow=True, timeout=None, heartbeat_interval_ms=5000)
 
 
+def test_run_stream_error_falls_back_to_status_polling(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    mocker.patch("mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="run-stream-fallback")
+    mocker.patch("mn_cli.libs.run_cmds.client.submit_job", return_value="job-stream-fallback")
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.stream_events",
+        side_effect=RuntimeError("resource exhausted by event stream"),
+    )
+    mock_get = mocker.patch(
+        "mn_cli.libs.run_cmds.client.get_job",
+        return_value=json.dumps(
+            {
+                "job": {"status": "completed", "result": {"ok": True}},
+                "summary": {"status": "completed"},
+                "recent_events": [
+                    {
+                        "type": "job_completed",
+                        "result": {"ok": True},
+                    }
+                ],
+            }
+        ),
+    )
+
+    bundle_dir = tmp_path / "run_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text('{"nodes": []}')
+
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--follow-seconds", "0"])
+
+    assert result.exit_code == 0
+    assert "Job submit successful" in result.stdout
+    assert "Completed" in result.stdout
+    assert "result.txt" in result.stdout
+    mock_get.assert_called_once_with("job-stream-fallback")
+
+
 def test_run_prepares_runtime_models_before_model_validation(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="run-order")

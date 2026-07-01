@@ -783,77 +783,82 @@ def _stream_and_format_events(
         ) as progress:
             job_task = progress.add_task("[cyan]Submitting job bundle...", total=None)
 
-            for event_json in client.stream_events(job_id, follow=True, timeout=None, heartbeat_interval_ms=5000):
-                try:
-                    event = json.loads(event_json)
-                    event_type = event.get("type")
-                    if event_type == "stream_heartbeat":
-                        continue
-                    log_writer.write_event_json(event_json)
+            try:
+                for event_json in client.stream_events(job_id, follow=True, timeout=None, heartbeat_interval_ms=5000):
+                    try:
+                        event = json.loads(event_json)
+                        event_type = event.get("type")
+                        if event_type == "stream_heartbeat":
+                            continue
+                        log_writer.write_event_json(event_json)
 
-                    _write_result_stream_event(log_dir, event)
-                    web_ui_url = log_writer.record_web_ui_url(event)
-                    if web_ui_url:
-                        progress.console.print(
-                            f"[green]Blueprint Web UI:[/green] {web_ui_url}"
-                        )
+                        _write_result_stream_event(log_dir, event)
+                        web_ui_url = log_writer.record_web_ui_url(event)
+                        if web_ui_url:
+                            progress.console.print(
+                                f"[green]Blueprint Web UI:[/green] {web_ui_url}"
+                            )
 
-                    if event_type == "job_pending":
-                        progress.update(
-                            job_task,
-                            description="[cyan]Preparing: job accepted, waiting for validation...",
-                        )
-                    elif event_type == "job_validated":
-                        progress.update(
-                            job_task,
-                            description="[cyan]Preparing: manifest validated, scheduling agents...",
-                        )
-                    elif event_type == "job_scheduled":
-                        progress.update(
-                            job_task,
-                            description="[cyan]Starting: agents scheduled, waiting for runtime to report running...",
-                        )
-                    elif event_type == "job_running":
-                        progress.update(
-                            job_task,
-                            description="[green]Running: streaming live job events...",
-                        )
-                    elif event_type in [
-                        "agent_message_received",
-                        "aggregator_received",
-                    ]:
-                        msg_count += 1
-                        progress.update(
-                            job_task,
-                            description=f"[green]Running: {msg_count} routed messages, {log_writer.event_count} events logged...",
-                        )
-                    elif event_type == "job_completed":
-                        result = event.get("result")
-                        if result is not None:
-                            with open(log_dir / "result.txt", "w") as f_res:
-                                json.dump(result, f_res, indent=2)
+                        if event_type == "job_pending":
+                            progress.update(
+                                job_task,
+                                description="[cyan]Preparing: job accepted, waiting for validation...",
+                            )
+                        elif event_type == "job_validated":
+                            progress.update(
+                                job_task,
+                                description="[cyan]Preparing: manifest validated, scheduling agents...",
+                            )
+                        elif event_type == "job_scheduled":
+                            progress.update(
+                                job_task,
+                                description="[cyan]Starting: agents scheduled, waiting for runtime to report running...",
+                            )
+                        elif event_type == "job_running":
+                            progress.update(
+                                job_task,
+                                description="[green]Running: streaming live job events...",
+                            )
+                        elif event_type in [
+                            "agent_message_received",
+                            "aggregator_received",
+                        ]:
+                            msg_count += 1
+                            progress.update(
+                                job_task,
+                                description=f"[green]Running: {msg_count} routed messages, {log_writer.event_count} events logged...",
+                            )
+                        elif event_type == "job_completed":
+                            result = event.get("result")
+                            if result is not None:
+                                with open(log_dir / "result.txt", "w") as f_res:
+                                    json.dump(result, f_res, indent=2)
 
-                        progress.update(
-                            job_task,
-                            description="[green]Completed successfully.",
-                        )
-                        status_text = "Success"
-                        break
-                    elif event_type == "job_failed":
-                        progress.update(job_task, description="[red]Job failed.")
-                        status_text = "Failed"
-                        break
-                    elif event_type == "job_cancelled":
-                        progress.update(job_task, description="[red]Job cancelled.")
-                        status_text = "Cancelled"
-                        break
-                    else:
-                        progress.update(
-                            job_task,
-                            description=f"[cyan]Observing: latest event {event_type}, {log_writer.event_count} events logged...",
-                        )
-                except Exception:
-                    log_writer.run_logger.exception("Failed to process streamed event")
+                            progress.update(
+                                job_task,
+                                description="[green]Completed successfully.",
+                            )
+                            status_text = "Success"
+                            break
+                        elif event_type == "job_failed":
+                            progress.update(job_task, description="[red]Job failed.")
+                            status_text = "Failed"
+                            break
+                        elif event_type == "job_cancelled":
+                            progress.update(job_task, description="[red]Job cancelled.")
+                            status_text = "Cancelled"
+                            break
+                        else:
+                            progress.update(
+                                job_task,
+                                description=f"[cyan]Observing: latest event {event_type}, {log_writer.event_count} events logged...",
+                            )
+                    except Exception:
+                        log_writer.run_logger.exception("Failed to process streamed event")
+            except Exception:
+                log_writer.run_logger.exception(
+                    "Job event stream failed; falling back to status polling"
+                )
 
         terminal_status = {
             "Success": "completed",
@@ -953,38 +958,43 @@ def _stream_and_format_workflow_events(
             )
             live.start()
         try:
-            for event_json in client.stream_events(job_id, follow=True, timeout=None, heartbeat_interval_ms=5000):
-                try:
-                    event = json.loads(event_json)
-                    if event.get("type") == "stream_heartbeat":
-                        continue
-                    log_writer.write_event_json(event_json)
-                    _write_result_stream_event(log_dir, event)
-                    web_ui_url = log_writer.record_web_ui_url(event)
-                    if web_ui_url:
-                        view._remember(f"Blueprint Web UI: {web_ui_url}")
-                    should_render = progress_stream.observe_event(event)
-                    if live is not None and should_render:
-                        live.update(view.render())
+            try:
+                for event_json in client.stream_events(job_id, follow=True, timeout=None, heartbeat_interval_ms=5000):
+                    try:
+                        event = json.loads(event_json)
+                        if event.get("type") == "stream_heartbeat":
+                            continue
+                        log_writer.write_event_json(event_json)
+                        _write_result_stream_event(log_dir, event)
+                        web_ui_url = log_writer.record_web_ui_url(event)
+                        if web_ui_url:
+                            view._remember(f"Blueprint Web UI: {web_ui_url}")
+                        should_render = progress_stream.observe_event(event)
+                        if live is not None and should_render:
+                            live.update(view.render())
 
-                    event_type = event.get("type")
-                    if event_type == "job_completed":
-                        result = event.get("result")
-                        if result is not None:
-                            with open(log_dir / "result.txt", "w") as f_res:
-                                json.dump(result, f_res, indent=2)
-                        status_text = "completed"
-                        break
-                    if event_type == "job_failed":
-                        status_text = "failed"
-                        break
-                    if event_type == "job_cancelled":
-                        status_text = "cancelled"
-                        break
-                except Exception:
-                    log_writer.run_logger.exception("Failed to process streamed event")
-                if live is not None and progress_stream.flush_due():
-                    live.update(view.render())
+                        event_type = event.get("type")
+                        if event_type == "job_completed":
+                            result = event.get("result")
+                            if result is not None:
+                                with open(log_dir / "result.txt", "w") as f_res:
+                                    json.dump(result, f_res, indent=2)
+                            status_text = "completed"
+                            break
+                        if event_type == "job_failed":
+                            status_text = "failed"
+                            break
+                        if event_type == "job_cancelled":
+                            status_text = "cancelled"
+                            break
+                    except Exception:
+                        log_writer.run_logger.exception("Failed to process streamed event")
+                    if live is not None and progress_stream.flush_due():
+                        live.update(view.render())
+            except Exception:
+                log_writer.run_logger.exception(
+                    "Workflow event stream failed; falling back to status polling"
+                )
 
             if status_text not in FINAL_STATUSES:
                 status_text = _follow_workflow_job_events(
@@ -3331,8 +3341,6 @@ def _launch_blueprint_web_ui_command(
             "MN_BLUEPRINT_WEB_UI_BASE_URL": base_url,
         }
     )
-    _inject_local_blueprint_support_pythonpath(env)
-
     command = command_prefix + [
         "--run-id",
         blueprint_run_id,
