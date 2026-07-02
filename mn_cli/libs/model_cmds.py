@@ -13,10 +13,12 @@ from rich.table import Table
 
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.ui import print_confirmation, print_confirmed, print_success_confirmation
-from mn_cli.shared import console
+from mn_cli.shared import client, config as cli_config, console
 from mn_sdk import (
+    Client,
     DEFAULT_MODEL_ID,
     DOCKER_MODEL_RUNNER_HOST_API_BASE,
+    build_litellm_gateway_config,
     assess_model_compatibility,
     default_model_proxies_path,
     detect_host_hardware,
@@ -25,9 +27,12 @@ from mn_sdk import (
     dmr_api_pull_model,
     dmr_api_remove_model,
     docker_model_match_keys,
+    docker_model_runner_endpoint,
     docker_model_name,
     docker_runner_command,
     default_model_remotes_path,
+    litellm_gateway_health,
+    litellm_gateway_internal_api_base,
     list_model_entries,
     load_model_catalog,
     load_model_ownership,
@@ -36,9 +41,13 @@ from mn_sdk import (
     model_ownership_metadata,
     proxy_model_ids,
     record_manual_model_install,
+    remove_litellm_gateway_route,
     remove_model_proxy,
     remove_model_remote,
     remove_model_record,
+    save_model_remotes,
+    sync_litellm_gateway,
+    validate_litellm_gateway_config_file,
     resolve_model_entry,
     upsert_model_proxy,
     upsert_model_remote,
@@ -95,6 +104,9 @@ def list_models(
                 for entry in entries
             ]
         }
+        for model_payload in payload["models"]:
+            model_payload["route_source"] = _route_source_for_model_payload(model_payload)
+        payload["models"].extend(_remote_model_payloads(existing_ids={str(item.get("id") or "") for item in payload["models"]}))
         if installed:
             payload["models"] = [entry for entry in payload["models"] if entry.get("installed")]
         if json_output:
@@ -135,21 +147,41 @@ def install_model(
     backend: Annotated[str, typer.Option("--backend", help="Backend: auto, llama.cpp, or vllm.")] = "auto",
     context_size: Annotated[Optional[int], typer.Option("--context-size", help="Override model context size.")] = None,
     force: Annotated[bool, typer.Option("--force", help="Install even when hardware compatibility fails.")] = False,
+    node: Annotated[Optional[str], typer.Option("--node", help="Install on a named runtime cluster node.")] = None,
+    local: Annotated[bool, typer.Option("--local", help="Force local Docker Model Runner install.")] = False,
 ):
     """Pull and start a Docker Model Runner model."""
     try:
+        if local and node:
+            raise ValueError("--local and --node cannot be used together")
         catalog = load_model_catalog()
         entry = resolve_model_entry(model, catalog=catalog)
-        result = install_model_entry_with_progress(entry, backend=backend, context_size=context_size, force=force)
+        selected_node = None if local else (node or _selected_model_install_node())
+        if selected_node:
+            result = _install_model_on_cluster_node(
+                entry,
+                node=selected_node,
+                backend=backend,
+                context_size=context_size,
+                force=force,
+            )
+        else:
+            result = install_model_entry_with_progress(entry, backend=backend, context_size=context_size, force=force)
         compatibility = result["compatibility"]
         target = result["docker_model"]
         record_manual_model_install(entry, backend=compatibility["backend"])
+        _sync_installed_model_gateway_route(entry, result=result, node=selected_node)
         _record_runtime_model_install(entry)
         print_success_confirmation(
             console,
             "Model install",
             status="running",
-            details=[("Model", entry.get("id")), ("Docker model", target), ("Backend", compatibility.get("backend"))],
+            details=[
+                ("Model", entry.get("id")),
+                ("Docker model", target),
+                ("Backend", compatibility.get("backend")),
+                ("Route", "remote-dmr" if selected_node else "local-dmr"),
+            ],
             next_steps=f"mn model doctor {entry.get('id')}",
         )
         if compatibility.get("warnings"):
@@ -208,26 +240,55 @@ def update_model(
 def remove_model(
     model: Annotated[str, typer.Argument(help="Model id, alias, or Docker model reference.")],
     force: Annotated[bool, typer.Option("--force", help="Force removal when Docker supports it.")] = False,
+    node: Annotated[Optional[str], typer.Option("--node", help="Remove this model route from a named runtime cluster node and reconcile all node gateways.")] = None,
 ):
     """Remove a Docker Model Runner model."""
     try:
+        if node:
+            _remove_gateway_route_on_cluster_node(model, node=node, restart=True)
+            removed_remotes = _remove_remote_model_records_for_node(model, node=node)
+            remove_litellm_gateway_route(model)
+            for removed_remote in removed_remotes:
+                remove_litellm_gateway_route(str(removed_remote.get("name") or ""))
+                remove_litellm_gateway_route(str(removed_remote.get("model") or ""))
+                remove_litellm_gateway_route(str(removed_remote.get("api_model") or ""))
+            _sync_gateway_best_effort(restart=True)
+            _remove_gateway_route_across_cluster(model, origin_node=node, restart=True)
+            print_success_confirmation(
+                console,
+                "Model route remove",
+                status="removed",
+                details={"Model": model, "Node": node},
+                next_steps="mn model list --installed",
+            )
+            return
         try:
             entry = resolve_model_entry(model)
         except KeyError:
             entry = None
-        if _is_proxy_entry(entry):
-            removed = remove_model_proxy(str(entry.get("id") or model))
-            print_success_confirmation(
-                console,
-                "Model proxy",
-                status="removed",
-                details={"Model": str(entry.get("id") or model), "Backend": "proxy"},
-                next_steps="mn model list --installed",
-            )
-            return
+        if _is_proxy_entry(entry) or entry is None:
+            proxy_name = str(entry.get("id") or model) if entry else model
+            removed = remove_model_proxy(proxy_name)
+            if removed is not None or _is_proxy_entry(entry):
+                remove_litellm_gateway_route(proxy_name)
+                _remove_gateway_route_across_cluster(proxy_name, restart=True)
+                print_success_confirmation(
+                    console,
+                    "Model proxy",
+                    status="removed",
+                    details={"Model": proxy_name, "Backend": "proxy"},
+                    next_steps="mn model list --installed",
+                )
+                return
         target = docker_model_name(entry) if entry else _resolve_or_raw_model(model)
         remove_model_ref(target, force=force)
         remove_model_record(target)
+        remove_litellm_gateway_route(target)
+        if entry:
+            remove_litellm_gateway_route(str(entry.get("id") or ""))
+        _remove_gateway_route_across_cluster(target, restart=True)
+        if entry:
+            _remove_gateway_route_across_cluster(str(entry.get("id") or ""), restart=True)
         print_success_confirmation(
             console,
             "Model remove",
@@ -249,26 +310,47 @@ def proxy_model(
     container_name: Annotated[Optional[str], typer.Option("--container-name", help="Docker container name.")] = None,
     no_start: Annotated[bool, typer.Option("--no-start", help="Only generate config and register proxy models.")] = False,
     replace: Annotated[bool, typer.Option("--replace", help="Replace an existing proxy container with the same name.")] = False,
+    standalone: Annotated[bool, typer.Option("--standalone", help="Use the legacy standalone LiteLLM container instead of the runtime gateway.")] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ):
     """Create a LiteLLM proxy and register its models as installed runtime models."""
     try:
         config_path = config.expanduser().resolve()
         proxy_spec = _build_proxy_spec(config_path, host=host, port=port)
-        resolved_container = container_name or proxy_spec["container_name"]
-        generated_config = _write_litellm_proxy_config(proxy_spec["litellm_config"], resolved_container)
-        if not no_start:
-            _start_litellm_proxy(
-                generated_config,
-                container_name=resolved_container,
-                host=host,
-                port=port,
-                image=image,
-                env_names=proxy_spec["env_names"],
-                replace=replace,
+        if standalone:
+            resolved_container = container_name or proxy_spec["container_name"]
+            generated_config = _write_litellm_proxy_config(proxy_spec["litellm_config"], resolved_container)
+            if not no_start:
+                _start_litellm_proxy(
+                    generated_config,
+                    container_name=resolved_container,
+                    host=host,
+                    port=port,
+                    image=image,
+                    env_names=proxy_spec["env_names"],
+                    replace=replace,
+                )
+            base_url = f"http://{host}:{port}/v1"
+            service_name = resolved_container
+            resolved_image = image
+        else:
+            gateway = sync_litellm_gateway(
+                external_litellm_config=proxy_spec["litellm_config"],
+                external_source_path=config_path,
+                restart=not no_start,
             )
+            _sync_external_litellm_config_across_cluster(
+                proxy_spec["litellm_config"],
+                source_path=config_path,
+                restart=not no_start,
+                quiet=json_output,
+            )
+            generated_config = Path(str(gateway["config_path"]))
+            base_url = litellm_gateway_internal_api_base()
+            service_name = "mn-litellm-proxy"
+            resolved_container = "mn-litellm-proxy"
+            resolved_image = "mirror-neuron-core:latest"
 
-        base_url = f"http://{host}:{port}/v1"
         proxies = [
             upsert_model_proxy(
                 model["id"],
@@ -279,9 +361,9 @@ def proxy_model(
                 config_path=config_path,
                 litellm_config_path=generated_config,
                 container_name=resolved_container,
-                image=image,
-                port=port,
-                host=host,
+                image=resolved_image,
+                port=port if standalone else 4000,
+                host=host if standalone else "mn-litellm-proxy",
             )
             for model in proxy_spec["models"]
         ]
@@ -289,6 +371,7 @@ def proxy_model(
             "status": "registered" if no_start else "running",
             "models": proxies,
             "container_name": resolved_container,
+            "service": service_name,
             "base_url": base_url,
             "config": str(generated_config),
             "ledger": str(default_model_proxies_path()),
@@ -328,6 +411,9 @@ def doctor_model(
         status = _docker_status()
         installed = _model_installed(target)
         endpoint_ok = _endpoint_responds()
+        gateway_health = litellm_gateway_health()
+        gateway_config = build_litellm_gateway_config()
+        gateway_config_file = validate_litellm_gateway_config_file()
         runner_running = bool(status.get("running")) or "running" in json.dumps(status).lower()
         payload = {
             "model": _entry_payload(entry, installed=installed),
@@ -338,8 +424,18 @@ def doctor_model(
                 "endpoint": DOCKER_MODEL_RUNNER_HOST_API_BASE,
                 "endpoint_ok": endpoint_ok,
             },
+            "litellm_gateway": {
+                "service": "mn-litellm-proxy",
+                "endpoint": gateway_health["url"].removesuffix("/models"),
+                "endpoint_ok": bool(gateway_health.get("ok")),
+                "models": gateway_health.get("models") or [],
+                "config_model_count": int(gateway_config_file.get("model_count") or len(gateway_config.get("model_list") or [])),
+                "config_ok": bool(gateway_config_file.get("ok")) and isinstance(gateway_config.get("model_list"), list),
+                "config_path": gateway_config_file.get("path"),
+                "config_error": gateway_config_file.get("error"),
+            },
             "hardware": detect_host_hardware().to_dict(),
-            "ok": compatibility.ok and installed and runner_running and endpoint_ok,
+            "ok": compatibility.ok and installed and runner_running and endpoint_ok and bool(gateway_health.get("ok")),
         }
         if json_output:
             console.print_json(data=payload)
@@ -378,6 +474,38 @@ def add_remote_model(
             api_key=api_key,
             api_model=resolved_api_model,
             node=node,
+        )
+        _sync_gateway_best_effort(
+            runtime_endpoints={
+                remote["model"]: {
+                    "provider": remote.get("provider") or "docker_model_runner",
+                    "model": remote.get("api_model") or remote.get("model"),
+                    "runtime_model": remote.get("model") or remote.get("api_model"),
+                    "api_model": remote.get("api_model") or remote.get("model"),
+                    "api_base": remote.get("base_url"),
+                    "api_key": remote.get("api_key") or "not-needed",
+                    "node": remote.get("node") or "",
+                    "source": "manual-remote",
+                }
+            },
+            restart=True,
+            quiet=json_output,
+        )
+        _sync_gateway_runtime_endpoints_across_cluster(
+            {
+                remote["model"]: {
+                    "provider": remote.get("provider") or "docker_model_runner",
+                    "model": remote.get("api_model") or remote.get("model"),
+                    "runtime_model": remote.get("model") or remote.get("api_model"),
+                    "api_model": remote.get("api_model") or remote.get("model"),
+                    "api_base": remote.get("base_url"),
+                    "api_key": remote.get("api_key") or "not-needed",
+                    "node": remote.get("node") or "",
+                    "source": "manual-remote",
+                }
+            },
+            restart=True,
+            quiet=json_output,
         )
         payload = {"remote": remote, "path": str(default_model_remotes_path())}
         if json_output:
@@ -437,6 +565,13 @@ def remove_remote_model(
     """Remove a declared remote model endpoint."""
     try:
         removed = remove_model_remote(name)
+        remove_litellm_gateway_route(name)
+        if removed:
+            remove_litellm_gateway_route(str(removed.get("model") or ""))
+        _sync_gateway_best_effort(restart=True, quiet=json_output)
+        _remove_gateway_route_across_cluster(name, restart=True, quiet=json_output)
+        if removed:
+            _remove_gateway_route_across_cluster(str(removed.get("model") or ""), restart=True, quiet=json_output)
         payload = {"removed": removed, "path": str(default_model_remotes_path())}
         if json_output:
             console.print_json(data=payload)
@@ -454,6 +589,509 @@ def remove_remote_model(
     except Exception as exc:
         handle_cli_error(exc, console, "model remote remove")
         raise typer.Exit(1)
+
+
+def _install_model_on_cluster_node(
+    entry: dict[str, Any],
+    *,
+    node: str,
+    backend: str,
+    context_size: Optional[int],
+    force: bool,
+) -> dict[str, Any]:
+    node_endpoint = _cluster_node_endpoint(node)
+    native_endpoint = _cluster_node_native_sdk_endpoint(node, node_endpoint["node"])
+    runtime_client = Client(
+        target=native_endpoint["target"],
+        timeout=_runtime_model_prepare_timeout_seconds(),
+        auth_token=cli_config.grpc_auth_token,
+        admin_token=cli_config.grpc_admin_token,
+    )
+    docker_model = docker_model_name(entry)
+    response = runtime_client.prepare_runtime_model(
+        {
+            "node": node,
+            "model": docker_model,
+            "id": entry.get("id"),
+            "provider": str(entry.get("provider") or "docker_model_runner"),
+            "backend": backend,
+            "context_size": context_size,
+            "force": force,
+            "source": "mn-cli",
+        }
+    )
+    try:
+        payload = json.loads(response)
+    except Exception as exc:
+        raise RuntimeError(f"runtime model prepare returned invalid JSON: {response}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("runtime model prepare returned a non-object response")
+    if str(payload.get("status") or "").lower() in {"failed", "error"}:
+        raise RuntimeError(str(payload.get("error") or payload.get("message") or "runtime model prepare failed"))
+    install = payload.get("install") if isinstance(payload.get("install"), dict) else {}
+    compatibility = install.get("compatibility") if isinstance(install.get("compatibility"), dict) else {}
+    if not compatibility:
+        compatibility = {"backend": backend, "warnings": []}
+    remote_endpoint = _cluster_gateway_endpoint(entry, node_endpoint=node_endpoint, payload=payload)
+    _sync_gateway_best_effort(
+        runtime_endpoints={key: remote_endpoint for key in _model_route_keys(entry)},
+        restart=True,
+    )
+    upsert_model_remote(
+        f"{node}-{str(entry.get('id') or docker_model)}",
+        docker_model,
+        remote_endpoint["api_base"],
+        api_key=remote_endpoint.get("api_key") or "not-needed",
+        api_model=remote_endpoint.get("api_model") or remote_endpoint.get("model") or docker_model,
+        node=node,
+    )
+    return {
+        "entry": entry,
+        "docker_model": str(payload.get("docker_model") or docker_model),
+        "compatibility": compatibility,
+        "transport": "runtime_node_grpc",
+        "prepare": payload,
+        "endpoint": remote_endpoint,
+    }
+
+
+def _selected_model_install_node() -> str:
+    for name in (
+        "MN_MODEL_INSTALL_NODE",
+        "MN_RUNTIME_MODEL_NODE",
+        "MN_SELECTED_RUNTIME_NODE",
+        "MN_RUNTIME_SELECTED_NODE",
+    ):
+        value = str(os.environ.get(name) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _cluster_gateway_endpoint(
+    entry: dict[str, Any],
+    *,
+    node_endpoint: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    endpoint = payload.get("endpoint") if isinstance(payload.get("endpoint"), dict) else {}
+    docker_model = docker_model_name(entry)
+    api_model = str(endpoint.get("api_model") or endpoint.get("model") or entry.get("api_model") or docker_model)
+    return {
+        "provider": str(endpoint.get("provider") or entry.get("provider") or "docker_model_runner"),
+        "model": api_model,
+        "runtime_model": str(endpoint.get("runtime_model") or docker_model),
+        "api_model": api_model,
+        "api_base": _node_litellm_gateway_api_base(node_endpoint, payload),
+        "api_key": str(endpoint.get("api_key") or "not-needed"),
+        "node": str(endpoint.get("node") or node_endpoint.get("node_name") or ""),
+        "source": "remote-dmr",
+    }
+
+
+def _node_litellm_gateway_api_base(node_endpoint: dict[str, Any], payload: dict[str, Any]) -> str:
+    gateway = payload.get("gateway") if isinstance(payload.get("gateway"), dict) else {}
+    host_base = str(gateway.get("host_api_base") or "").strip()
+    host = str(node_endpoint.get("host") or "").strip()
+    if host_base and host:
+        parsed = re.match(r"^(https?://)([^/:]+)(?::([0-9]+))?(/.*)?$", host_base)
+        if parsed:
+            port = parsed.group(3) or "4000"
+            path = parsed.group(4) or "/v1"
+            return f"{parsed.group(1)}{host}:{port}{path}".rstrip("/")
+    port = os.getenv("MN_LITELLM_GATEWAY_PORT", "4000")
+    return f"http://{host}:{port}/v1".rstrip("/")
+
+
+def _cluster_node_endpoint(node_name: str) -> dict[str, Any]:
+    node_name = str(node_name or "").strip()
+    if not node_name:
+        raise RuntimeError("runtime node name is required")
+    try:
+        summary = json.loads(client.get_system_summary())
+    except Exception as exc:
+        raise RuntimeError(f"could not inspect cluster nodes for {node_name}: {exc}") from exc
+    nodes = summary.get("nodes") if isinstance(summary, dict) else None
+    for node in nodes or []:
+        if not isinstance(node, dict):
+            continue
+        if str(node.get("name") or node.get("node") or "").strip() != node_name:
+            continue
+        host = str(node.get("grpc_host") or node.get("address") or "").strip()
+        port = str(node.get("grpc_port") or "").strip()
+        if not host or not port:
+            raise RuntimeError(f"cluster node {node_name} does not advertise grpc_host/grpc_port")
+        return {"grpc_target": f"{host}:{port}", "host": host, "port": port, "node": node, "node_name": node_name}
+    raise RuntimeError(f"cluster node {node_name} was not found in runtime summary")
+
+
+def _cluster_node_endpoint_optional(node_name: str) -> dict[str, Any] | None:
+    try:
+        return _cluster_node_endpoint(node_name)
+    except Exception:
+        return None
+
+
+def _cluster_node_endpoints(*, quiet: bool = False) -> list[dict[str, Any]]:
+    try:
+        summary = json.loads(client.get_system_summary())
+    except Exception as exc:
+        if not quiet:
+            console.print(f"[yellow]Warning: could not inspect cluster nodes for LiteLLM gateway sync: {exc}[/yellow]")
+        return []
+    nodes = summary.get("nodes") if isinstance(summary, dict) else None
+    endpoints: list[dict[str, Any]] = []
+    for node in nodes or []:
+        if not isinstance(node, dict):
+            continue
+        node_name = str(node.get("name") or node.get("node") or "").strip()
+        host = str(node.get("grpc_host") or node.get("address") or "").strip()
+        port = str(node.get("grpc_port") or "").strip()
+        if not node_name or not host or not port:
+            continue
+        endpoints.append(
+            {
+                "grpc_target": f"{host}:{port}",
+                "host": host,
+                "port": port,
+                "node": node,
+                "node_name": node_name,
+                "self": bool(node.get("self?") is True or node.get("self") is True),
+            }
+        )
+    return endpoints
+
+
+def _local_cluster_node_endpoint() -> dict[str, Any] | None:
+    for node_endpoint in _cluster_node_endpoints(quiet=True):
+        if node_endpoint.get("self"):
+            return node_endpoint
+    return None
+
+
+def _local_runtime_node_name() -> str:
+    endpoint = _local_cluster_node_endpoint()
+    return str((endpoint or {}).get("node_name") or "")
+
+
+def _native_runtime_client_for_node(node_endpoint: dict[str, Any]) -> Client:
+    node_name = str(node_endpoint.get("node_name") or "")
+    native_endpoint = _cluster_node_native_sdk_endpoint(node_name, node_endpoint["node"])
+    return Client(
+        target=native_endpoint["target"],
+        timeout=_runtime_model_prepare_timeout_seconds(),
+        auth_token=cli_config.grpc_auth_token,
+        admin_token=cli_config.grpc_admin_token,
+    )
+
+
+def _node_native_sdk_grpc_info(node: dict[str, Any]) -> dict[str, Any] | None:
+    candidates: list[Any] = [node.get("native_sdk_grpc")]
+    hardware = node.get("hardware")
+    if isinstance(hardware, dict):
+        candidates.append(hardware.get("native_sdk_grpc"))
+    node_info = node.get("node_info")
+    if isinstance(node_info, dict):
+        candidates.append(node_info.get("native_sdk_grpc"))
+    for candidate in candidates:
+        if isinstance(candidate, dict) and candidate:
+            return candidate
+    return None
+
+
+def _cluster_node_native_sdk_endpoint(node_name: str, node: dict[str, Any]) -> dict[str, str]:
+    native = _node_native_sdk_grpc_info(node)
+    if not native:
+        raise RuntimeError(
+            f"cluster node {node_name} does not advertise native SDK gRPC; "
+            "restart that worker with an updated `mn runtime start --worker-node`"
+        )
+    if native.get("enabled") is False:
+        raise RuntimeError(f"cluster node {node_name} advertises native SDK gRPC as disabled")
+    target = str(native.get("target") or "").strip()
+    host = str(native.get("host") or "").strip()
+    port = str(native.get("port") or "").strip()
+    if target and (not host or not port) and ":" in target:
+        parsed_host, parsed_port = target.rsplit(":", 1)
+        host = host or parsed_host.strip()
+        port = port or parsed_port.strip()
+    if not target and host and port:
+        target = f"{host}:{port}"
+    if not target or not host or not port:
+        raise RuntimeError(f"cluster node {node_name} advertises incomplete native SDK gRPC metadata")
+    return {"target": target, "host": host, "port": port}
+
+
+def _runtime_model_prepare_timeout_seconds() -> float:
+    raw = str(os.environ.get("MN_RUNTIME_MODEL_PREPARE_TIMEOUT_SECONDS") or "").strip()
+    if raw:
+        try:
+            value = float(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    return 1200.0
+
+
+def _sync_installed_model_gateway_route(
+    entry: dict[str, Any],
+    *,
+    result: dict[str, Any],
+    node: str | None,
+) -> None:
+    endpoint = result.get("endpoint") if isinstance(result.get("endpoint"), dict) else None
+    if endpoint is None:
+        endpoint = docker_model_runner_endpoint(entry, node=node, source="local-dmr")
+    _sync_gateway_best_effort(runtime_endpoints={key: endpoint for key in _model_route_keys(entry)}, restart=True)
+    _sync_model_route_across_cluster(entry, endpoint=endpoint, origin_node=node, restart=True)
+
+
+def _sync_gateway_best_effort(
+    *,
+    runtime_endpoints: dict[str, dict[str, Any]] | None = None,
+    restart: bool,
+    quiet: bool = False,
+) -> None:
+    try:
+        sync_litellm_gateway(runtime_endpoints=runtime_endpoints or {}, restart=restart)
+    except Exception as exc:
+        if not quiet:
+            console.print(f"[yellow]Warning: could not sync LiteLLM gateway: {exc}[/yellow]")
+
+
+def _sync_external_litellm_config_across_cluster(
+    litellm_config: dict[str, Any],
+    *,
+    source_path: Path,
+    restart: bool,
+    quiet: bool = False,
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for node_endpoint in _cluster_node_endpoints(quiet=True):
+        node_name = str(node_endpoint.get("node_name") or "")
+        try:
+            runtime_client = _native_runtime_client_for_node(node_endpoint)
+            response = runtime_client.sync_litellm_gateway(
+                {
+                    "node": node_name,
+                    "external_litellm_config": litellm_config,
+                    "external_source_path": str(source_path),
+                    "restart": restart,
+                    "source": "mn-cli-proxy-fanout",
+                }
+            )
+            results.append({"node": node_name, "status": "ok", "response": response})
+        except Exception as exc:
+            results.append({"node": node_name, "status": "error", "error": str(exc)})
+            if not quiet:
+                console.print(f"[yellow]Warning: could not sync LiteLLM proxy config on {node_name}: {exc}[/yellow]")
+    return results
+
+
+def _sync_gateway_runtime_endpoints_across_cluster(
+    runtime_endpoints: dict[str, dict[str, Any]],
+    *,
+    restart: bool,
+    quiet: bool = False,
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for node_endpoint in _cluster_node_endpoints(quiet=True):
+        node_name = str(node_endpoint.get("node_name") or "")
+        try:
+            runtime_client = _native_runtime_client_for_node(node_endpoint)
+            response = runtime_client.sync_litellm_gateway(
+                {
+                    "node": node_name,
+                    "runtime_endpoints": runtime_endpoints,
+                    "restart": restart,
+                    "source": "mn-cli-runtime-endpoint-fanout",
+                }
+            )
+            results.append({"node": node_name, "status": "ok", "response": response})
+        except Exception as exc:
+            results.append({"node": node_name, "status": "error", "error": str(exc)})
+            if not quiet:
+                console.print(f"[yellow]Warning: could not sync LiteLLM gateway on {node_name}: {exc}[/yellow]")
+    return results
+
+
+def _sync_model_route_across_cluster(
+    entry: dict[str, Any],
+    *,
+    endpoint: dict[str, Any],
+    origin_node: str | None,
+    restart: bool,
+    quiet: bool = False,
+) -> list[dict[str, Any]]:
+    owner_node = str(origin_node or _local_runtime_node_name() or "").strip()
+    owner_endpoint = None
+    if owner_node:
+        owner_endpoint = _cluster_node_endpoint_optional(owner_node)
+    if owner_endpoint is None and not origin_node:
+        owner_endpoint = _local_cluster_node_endpoint()
+        owner_node = str((owner_endpoint or {}).get("node_name") or owner_node)
+    remote_endpoint = _public_gateway_endpoint_for_owner(entry, owner_endpoint, endpoint)
+    if not remote_endpoint:
+        return []
+    routes = {key: remote_endpoint for key in _model_route_keys(entry)}
+    results: list[dict[str, Any]] = []
+    for node_endpoint in _cluster_node_endpoints(quiet=True):
+        node_name = str(node_endpoint.get("node_name") or "")
+        if owner_node and node_name == owner_node:
+            continue
+        try:
+            runtime_client = _native_runtime_client_for_node(node_endpoint)
+            response = runtime_client.sync_litellm_gateway(
+                {
+                    "node": node_name,
+                    "runtime_endpoints": routes,
+                    "restart": restart,
+                    "source": "mn-cli-model-route-fanout",
+                }
+            )
+            results.append({"node": node_name, "status": "ok", "response": response})
+        except Exception as exc:
+            results.append({"node": node_name, "status": "error", "error": str(exc)})
+            if not quiet:
+                console.print(f"[yellow]Warning: could not sync model route on {node_name}: {exc}[/yellow]")
+    return results
+
+
+def _remove_gateway_route_on_cluster_node(model: str, *, node: str, restart: bool) -> str:
+    node_endpoint = _cluster_node_endpoint(node)
+    runtime_client = _native_runtime_client_for_node(node_endpoint)
+    return runtime_client.remove_litellm_gateway_route(
+        {"node": node, "model": model, "restart": restart, "source": "mn-cli-remove-route"}
+    )
+
+
+def _remove_remote_model_records_for_node(model: str, *, node: str) -> list[dict[str, Any]]:
+    wanted = docker_model_match_keys(model)
+    ledger = load_model_remotes()
+    remotes = ledger.setdefault("remotes", {})
+    removed: list[dict[str, Any]] = []
+    for key, remote in list(remotes.items()):
+        if not isinstance(remote, dict):
+            continue
+        if str(remote.get("node") or "").strip() != str(node or "").strip():
+            continue
+        candidates = {
+            str(key or "").strip(),
+            str(remote.get("name") or "").strip(),
+            str(remote.get("model") or "").strip(),
+            str(remote.get("api_model") or "").strip(),
+            str(remote.get("runtime_model") or "").strip(),
+        }
+        if any(candidate == model or docker_model_match_keys(candidate) & wanted for candidate in candidates if candidate):
+            removed.append(remotes.pop(key))
+    if removed:
+        save_model_remotes(ledger)
+    return removed
+
+
+def _remove_gateway_route_across_cluster(
+    model: str,
+    *,
+    origin_node: str | None = None,
+    restart: bool,
+    quiet: bool = False,
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for node_endpoint in _cluster_node_endpoints(quiet=True):
+        node_name = str(node_endpoint.get("node_name") or "")
+        if origin_node and node_name == origin_node:
+            continue
+        try:
+            runtime_client = _native_runtime_client_for_node(node_endpoint)
+            response = runtime_client.remove_litellm_gateway_route(
+                {
+                    "node": node_name,
+                    "model": model,
+                    "origin_node": origin_node or "",
+                    "restart": restart,
+                    "source": "mn-cli-remove-route-fanout",
+                }
+            )
+            results.append({"node": node_name, "status": "ok", "response": response})
+        except Exception as exc:
+            results.append({"node": node_name, "status": "error", "error": str(exc)})
+            if not quiet:
+                console.print(f"[yellow]Warning: could not remove LiteLLM route on {node_name}: {exc}[/yellow]")
+    return results
+
+
+def _public_gateway_endpoint_for_owner(
+    entry: dict[str, Any],
+    owner_endpoint: dict[str, Any] | None,
+    endpoint: dict[str, Any],
+) -> dict[str, Any] | None:
+    if endpoint.get("source") == "remote-dmr":
+        return endpoint
+    if owner_endpoint is None:
+        return None
+    host = str(owner_endpoint.get("host") or "").strip()
+    if not host:
+        return None
+    docker_model = docker_model_name(entry)
+    api_model = str(entry.get("api_model") or endpoint.get("api_model") or endpoint.get("model") or docker_model)
+    port = os.getenv("MN_LITELLM_GATEWAY_PORT", "4000")
+    return {
+        "provider": str(entry.get("provider") or "docker_model_runner"),
+        "model": api_model,
+        "runtime_model": docker_model,
+        "api_model": api_model,
+        "api_base": f"http://{host}:{port}/v1",
+        "api_key": "not-needed",
+        "node": str(owner_endpoint.get("node_name") or endpoint.get("node") or ""),
+        "source": "remote-dmr" if endpoint.get("source") == "local-dmr" else str(endpoint.get("source") or "gateway-fanout"),
+    }
+
+
+def _model_route_keys(entry: dict[str, Any]) -> set[str]:
+    keys = {
+        str(entry.get("id") or "").strip(),
+        docker_model_name(entry),
+        str(entry.get("api_model") or "").strip(),
+    }
+    keys.update(str(alias or "").strip() for alias in entry.get("aliases") or [])
+    return {key for key in keys if key}
+
+
+def _route_source_for_model_payload(payload: dict[str, Any]) -> str:
+    provider = str(payload.get("provider") or "").strip().lower()
+    backend = str(payload.get("backend") or "").strip().lower()
+    if provider == "litellm_proxy" or backend == "proxy":
+        return "external-proxy"
+    if payload.get("installed"):
+        return "local-dmr"
+    return ""
+
+
+def _remote_model_payloads(*, existing_ids: set[str]) -> list[dict[str, Any]]:
+    remotes = []
+    for remote in load_model_remotes().get("remotes", {}).values():
+        if not isinstance(remote, dict):
+            continue
+        model_id = str(remote.get("name") or remote.get("model") or "").strip()
+        if not model_id or model_id in existing_ids:
+            continue
+        remotes.append(
+            {
+                "id": model_id,
+                "name": model_id,
+                "provider": remote.get("provider") or "docker_model_runner",
+                "model": remote.get("model"),
+                "api_model": remote.get("api_model") or remote.get("model"),
+                "backend": "remote-dmr" if remote.get("node") else "remote",
+                "installed": True,
+                "status": "remote",
+                "owner_count": 0,
+                "route_source": "remote-dmr" if remote.get("node") else "manual-remote",
+                "node": remote.get("node") or "",
+            }
+        )
+    return sorted(remotes, key=lambda item: str(item.get("id") or ""))
 
 
 def _build_proxy_spec(config_path: Path, *, host: str, port: int) -> dict[str, Any]:
@@ -748,6 +1386,7 @@ def _print_model_table(models: list[dict[str, Any]]) -> None:
     table.add_column("ID")
     table.add_column("Model")
     table.add_column("Backend")
+    table.add_column("Route")
     table.add_column("Installed")
     table.add_column("Status")
     table.add_column("Owners")
@@ -756,6 +1395,7 @@ def _print_model_table(models: list[dict[str, Any]]) -> None:
             str(model.get("id") or ""),
             str(model.get("model") or ""),
             str(model.get("backend") or ""),
+            str(model.get("route_source") or ""),
             "yes" if model.get("installed") else "no",
             str(model.get("status") or ""),
             str(model.get("owner_count") or 0),
@@ -800,6 +1440,7 @@ def _print_compatibility(payload: dict[str, Any]) -> None:
 def _print_doctor(payload: dict[str, Any]) -> None:
     model = payload["model"]
     runner = payload["docker_model_runner"]
+    gateway = payload.get("litellm_gateway") or {}
     print_confirmed(
         console,
         "Model doctor",
@@ -809,6 +1450,8 @@ def _print_doctor(payload: dict[str, Any]) -> None:
             "Installed": "yes" if model.get('installed') else "no",
             "Runner": "running" if runner.get('running') else "not running",
             "Endpoint": "ok" if runner.get('endpoint_ok') else "not reachable",
+            "LiteLLM gateway": "ok" if gateway.get("endpoint_ok") else "not reachable",
+            "Gateway config": "ok" if gateway.get("config_ok") else str(gateway.get("config_error") or "invalid"),
         },
     )
     _print_compatibility(payload["compatibility"])

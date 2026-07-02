@@ -27,6 +27,11 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_RUNTIME_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_CONTAINER_SHARED_STORAGE_ROOT", raising=False)
+    monkeypatch.setattr(
+        run_cmds,
+        "sync_litellm_gateway",
+        lambda **_kwargs: {"status": "running", "api_base": "http://mn-litellm-proxy:4000/v1"},
+    )
 
 
 def test_manifest_for_model_validation_filters_dmr_models_for_fake_llm():
@@ -235,7 +240,7 @@ def test_prepare_runtime_models_uses_cluster_model_endpoint(
     assert summary["models"][0]["status"] == "service_registry"
     install_model.assert_not_called()
     endpoints = json.loads(env_overrides["MN_MODEL_ENDPOINTS_JSON"])
-    assert endpoints["qwen3-coder"]["api_base"] == "http://192.168.4.173:12434/v1"
+    assert endpoints["qwen3-coder"]["api_base"] == "http://mn-litellm-proxy:4000/v1"
     assert "MN_LLM_API_BASE" not in env_overrides
     assert "MN_LLM_MODEL" not in env_overrides
 
@@ -296,7 +301,7 @@ def test_prepare_runtime_models_uses_registered_nemotron_remote(
     assert summary["models"][0]["status"] == "model_remote"
     install_model.assert_not_called()
     endpoints = json.loads(env_overrides["MN_MODEL_ENDPOINTS_JSON"])
-    assert endpoints["nemotron3:latest"]["api_base"] == "http://192.168.4.173:12434/v1"
+    assert endpoints["nemotron3:latest"]["api_base"] == "http://mn-litellm-proxy:4000/v1"
     assert endpoints["nemotron3:latest"]["node"] == "spark"
 
 
@@ -453,9 +458,9 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
                 "model": "nemotron3",
                 "runtime_model": "nemotron3",
                 "api_model": "nemotron3",
-                "api_base": "http://host.docker.internal:12434/engines/v1",
+                "api_base": "http://mn-litellm-proxy:4000/v1",
                 "node": "mirror_neuron@192.168.4.173",
-                "source": "sdk_native_runtime_service",
+                "source": "litellm_gateway",
             },
         }
     )
@@ -484,7 +489,7 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
     assert payload["model"] == "nemotron3"
     assert payload["backend"] == "llama.cpp"
     assert result["endpoint"]["node"] == "mirror_neuron@192.168.4.173"
-    assert result["endpoint"]["api_base"] == "http://192.168.4.173:12435/engines/v1"
+    assert result["endpoint"]["api_base"] == "http://mn-litellm-proxy:4000/v1"
 
 
 def test_runtime_cluster_model_install_requires_native_sdk_grpc_metadata(mocker):

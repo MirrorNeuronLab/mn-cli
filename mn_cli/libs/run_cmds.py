@@ -75,7 +75,9 @@ from mn_sdk import (
     ModelEndpointMap,
     cluster_provided_model,
     docker_api_model_name,
+    docker_model_runner_endpoint,
     docker_model_name,
+    gateway_endpoint_map,
     load_model_remotes,
     load_model_catalog,
     load_model_ownership,
@@ -95,6 +97,7 @@ from mn_sdk import (
     validate_requirements_spec_issues,
     validate_resource_spec_issues,
     validate_service_spec_issues,
+    sync_litellm_gateway,
     workflow_progress_snapshot,
 )
 from mn_sdk.blueprint_support.shared_outputs import (
@@ -292,7 +295,7 @@ def _prepare_runtime_models_for_run_or_exit(
             install_cluster_model=_install_runtime_cluster_model,
         ),
     )
-    endpoints = summary.get("endpoints") if isinstance(summary.get("endpoints"), dict) else {}
+    endpoints = _sync_litellm_gateway_for_runtime_models(summary)
     if endpoints and env_overrides is not None:
         env_overrides.update(ModelEndpointMap(endpoints).to_env_overrides())
     prepared_json = _prepared_runtime_models_json(summary)
@@ -308,6 +311,56 @@ def _prepare_runtime_models_for_run_or_exit(
     if summary["errors"]:
         raise typer.Exit(1)
     return summary
+
+
+def _sync_litellm_gateway_for_runtime_models(summary: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    endpoints = summary.get("endpoints") if isinstance(summary.get("endpoints"), dict) else {}
+    upstream_endpoints = dict(endpoints)
+    upstream_endpoints.update(_local_runtime_model_endpoints(summary))
+    if not upstream_endpoints:
+        return {}
+    gateway = sync_litellm_gateway(
+        runtime_endpoints=upstream_endpoints,
+        restart=_runtime_litellm_gateway_restart_enabled(),
+    )
+    gateway_endpoints = gateway_endpoint_map(upstream_endpoints)
+    summary["gateway"] = gateway
+    summary["endpoints"] = gateway_endpoints
+    return gateway_endpoints
+
+
+def _runtime_litellm_gateway_restart_enabled() -> bool:
+    return str(os.environ.get("MN_LITELLM_GATEWAY_RESTART", "true")).strip().lower() not in FALSE_VALUES
+
+
+def _local_runtime_model_endpoints(summary: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    endpoints: dict[str, dict[str, Any]] = {}
+    prepared_statuses = {"installed", "already_installed"}
+    for item in summary.get("models") or []:
+        if not isinstance(item, dict) or str(item.get("status") or "") not in prepared_statuses:
+            continue
+        if str(item.get("provider") or "docker_model_runner") != "docker_model_runner":
+            continue
+        model_ref = str(item.get("id") or item.get("model") or "").strip()
+        try:
+            entry = resolve_model_entry(model_ref)
+        except Exception:
+            entry = {
+                "id": model_ref,
+                "provider": "docker_model_runner",
+                "model": str(item.get("model") or model_ref),
+                "api_model": str(item.get("model") or model_ref),
+            }
+        endpoint = docker_model_runner_endpoint(entry, source="local-dmr")
+        for key in {
+            model_ref,
+            str(item.get("model") or "").strip(),
+            str(entry.get("id") or "").strip(),
+            str(entry.get("api_model") or "").strip(),
+        }:
+            if key:
+                endpoints[key] = endpoint
+    return endpoints
 
 
 def _resolve_runtime_model_endpoint(*, requirement: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any] | None:
