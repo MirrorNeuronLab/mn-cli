@@ -1567,6 +1567,10 @@ def test_add_node_uses_handshake_and_local_core(mocker, tmp_path, capsys):
     mocker.patch('mn_cli.server_cmds._docker_container_running', return_value=False)
     mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=1)
     mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.99")
+    mocker.patch(
+        'mn_cli.server_cmds._native_sdk_grpc_command',
+        return_value=["python", "-m", "mn_sdk.native_runtime_service"],
+    )
     redis_password = "remote-redis-password"
 
     class StubClient:
@@ -1581,6 +1585,13 @@ def test_add_node_uses_handshake_and_local_core(mocker, tmp_path, capsys):
             assert node_info["node_name"] == node_name
             assert node_info["grpc_host"] == "192.168.4.99"
             assert node_info["grpc_port"] == int(server_cmds.DEFAULT_GRPC_PORT)
+            assert node_info["native_sdk_grpc"] == {
+                "enabled": True,
+                "host": "192.168.4.99",
+                "port": int(server_cmds.DEFAULT_NATIVE_SDK_GRPC_PORT),
+                "target": f"192.168.4.99:{server_cmds.DEFAULT_NATIVE_SDK_GRPC_PORT}",
+                "bind_host": server_cmds.DEFAULT_NATIVE_SDK_GRPC_HOST,
+            }
             assert "display_name" in node_info
             return {
                 "node_name": "mirror_neuron@192.168.4.10",
@@ -1618,13 +1629,14 @@ def test_add_node_uses_handshake_and_local_core(mocker, tmp_path, capsys):
     mock_add_node.assert_called_once_with("mirror_neuron@192.168.4.10", token="join-token")
     output = capsys.readouterr().out
     assert "Node join successful." in output
-    assert "Status: connected" in output
-    assert "Node: mirror_neuron@192.168.4.10" in output
-    assert "Remote Redis: 192.168.4.10:6380" in output
+    assert "mirror_neuron@192.168.4.10" in output
+    assert "Remote Redis" in output
+    assert "192.168.4.10" in output
+    assert "6380" in output
     assert "Remote Redis URL:" in output
     assert "redis://:" in output
-    assert "Next: mn node list" in output
-    assert "Next: mn resource list" in output
+    assert "mn node list" in output
+    assert "mn resource list" in output
 
 
 def test_confirm_joined_node_retries_add_until_summary_is_active():

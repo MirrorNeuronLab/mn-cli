@@ -449,7 +449,7 @@ def _cluster_node_grpc_target(node_name: str) -> str:
     return _cluster_node_endpoint(node_name)["grpc_target"]
 
 
-def _cluster_node_endpoint(node_name: str) -> dict[str, str]:
+def _cluster_node_endpoint(node_name: str) -> dict[str, Any]:
     node_name = str(node_name or "").strip()
     if not node_name:
         raise RuntimeError("cluster model placement did not return a target node")
@@ -467,8 +467,50 @@ def _cluster_node_endpoint(node_name: str) -> dict[str, str]:
         port = str(node.get("grpc_port") or "").strip()
         if not host or not port:
             raise RuntimeError(f"cluster node {node_name} does not advertise grpc_host/grpc_port")
-        return {"grpc_target": f"{host}:{port}", "host": host, "port": port}
+        return {"grpc_target": f"{host}:{port}", "host": host, "port": port, "node": node}
     raise RuntimeError(f"cluster node {node_name} was not found in runtime summary")
+
+
+def _node_native_sdk_grpc_info(node: dict[str, Any]) -> dict[str, Any] | None:
+    candidates: list[Any] = [node.get("native_sdk_grpc")]
+    hardware = node.get("hardware")
+    if isinstance(hardware, dict):
+        candidates.append(hardware.get("native_sdk_grpc"))
+    node_info = node.get("node_info")
+    if isinstance(node_info, dict):
+        candidates.append(node_info.get("native_sdk_grpc"))
+    for candidate in candidates:
+        if isinstance(candidate, dict) and candidate:
+            return candidate
+    return None
+
+
+def _cluster_node_native_sdk_endpoint(node_name: str, node: dict[str, Any]) -> dict[str, str]:
+    native = _node_native_sdk_grpc_info(node)
+    if not native:
+        raise RuntimeError(
+            f"cluster node {node_name} does not advertise native SDK gRPC; "
+            "restart that worker with an updated `mn runtime start --worker-node` "
+            "so runtime model preparation can run outside Core"
+        )
+    if native.get("enabled") is False:
+        raise RuntimeError(
+            f"cluster node {node_name} advertises native SDK gRPC as disabled; "
+            "start the node-local mn-python-sdk native runtime service before preparing models"
+        )
+
+    target = str(native.get("target") or "").strip()
+    host = str(native.get("host") or "").strip()
+    port = str(native.get("port") or "").strip()
+    if target and (not host or not port) and ":" in target:
+        parsed_host, parsed_port = target.rsplit(":", 1)
+        host = host or parsed_host.strip()
+        port = port or parsed_port.strip()
+    if not target and host and port:
+        target = f"{host}:{port}"
+    if not target or not host or not port:
+        raise RuntimeError(f"cluster node {node_name} advertises incomplete native SDK gRPC metadata")
+    return {"target": target, "host": host, "port": port}
 
 
 def _container_local_api_base_to_node_host(api_base: str, node_host: str) -> str:
@@ -566,7 +608,8 @@ def _install_runtime_cluster_model(
     model_ref = str(model.get("model") or docker_model_name(entry))
     console.print(f"[cyan]Installing runtime model {model.get('id') or model_ref} on {node or 'selected runtime node'}...[/cyan]")
     node_endpoint = _cluster_node_endpoint(node)
-    target = node_endpoint["grpc_target"]
+    native_endpoint = _cluster_node_native_sdk_endpoint(node, node_endpoint["node"])
+    target = native_endpoint["target"]
     runtime_client = Client(
         target=target,
         timeout=_runtime_model_prepare_timeout_seconds(),

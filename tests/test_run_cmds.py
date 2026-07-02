@@ -422,7 +422,7 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
     assert validation_config["llm"]["configs"]["primary"]["install_mode"] == "cluster_provided"
 
 
-def test_runtime_cluster_model_install_uses_target_node_grpc_forwarder_not_ssh(mocker):
+def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_or_core(mocker):
     mocker.patch(
         "mn_cli.libs.run_cmds.client.get_system_summary",
         return_value=json.dumps(
@@ -432,6 +432,12 @@ def test_runtime_cluster_model_install_uses_target_node_grpc_forwarder_not_ssh(m
                         "name": "mirror_neuron@192.168.4.173",
                         "grpc_host": "192.168.4.173",
                         "grpc_port": 55051,
+                        "native_sdk_grpc": {
+                            "enabled": True,
+                            "host": "192.168.4.173",
+                            "port": 55052,
+                            "target": "192.168.4.173:55052",
+                        },
                     }
                 ]
             }
@@ -467,7 +473,7 @@ def test_runtime_cluster_model_install_uses_target_node_grpc_forwarder_not_ssh(m
 
     shell.assert_not_called()
     remote_client_class.assert_called_once_with(
-        target="192.168.4.173:55051",
+        target="192.168.4.173:55052",
         timeout=run_cmds.DEFAULT_RUNTIME_MODEL_PREPARE_TIMEOUT_SECONDS,
         auth_token=run_cmds.config.grpc_auth_token,
         admin_token=run_cmds.config.grpc_admin_token,
@@ -479,6 +485,39 @@ def test_runtime_cluster_model_install_uses_target_node_grpc_forwarder_not_ssh(m
     assert payload["backend"] == "llama.cpp"
     assert result["endpoint"]["node"] == "mirror_neuron@192.168.4.173"
     assert result["endpoint"]["api_base"] == "http://192.168.4.173:12435/engines/v1"
+
+
+def test_runtime_cluster_model_install_requires_native_sdk_grpc_metadata(mocker):
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.get_system_summary",
+        return_value=json.dumps(
+            {
+                "nodes": [
+                    {
+                        "name": "mirror_neuron@192.168.4.173",
+                        "grpc_host": "192.168.4.173",
+                        "grpc_port": 55051,
+                    }
+                ]
+            }
+        ),
+    )
+    remote_client_class = mocker.patch("mn_cli.libs.run_cmds.Client")
+    shell = mocker.patch("mn_cli.libs.run_cmds.subprocess.run")
+
+    with pytest.raises(RuntimeError, match="does not advertise native SDK gRPC"):
+        run_cmds._install_runtime_cluster_model(
+            requirement={"context_size": 8192},
+            entry={"id": "nemotron3", "model": "nemotron3", "provider": "docker_model_runner"},
+            model={"id": "nemotron3", "model": "nemotron3"},
+            cluster={"node": "mirror_neuron@192.168.4.173"},
+            backend="llama.cpp",
+            context_size=8192,
+            force=False,
+        )
+
+    shell.assert_not_called()
+    remote_client_class.assert_not_called()
 
 
 def test_prepare_runtime_models_uses_default_model_fallback_without_capable_cluster_node(

@@ -121,6 +121,7 @@ RUNTIME_ENDPOINTS_FILE = DIR / "runtime-endpoints.json"
 RUNTIME_MODELS_OVERRIDE_FILE = "docker-compose.models.yml"
 RUNTIME_WORKERS_OVERRIDE_FILE = "docker-compose.workers.yml"
 RUNTIME_MODEL_RUNNER_PROXY_OVERRIDE_FILE = "docker-compose.model-runner-proxy.yml"
+RUNTIME_SYNCTHING_OVERRIDE_FILE = "docker-compose.syncthing.yml"
 DEFAULT_LLM_MODEL_RUNNER_MODEL = "ai/gemma4:E2B"
 DEFAULT_CONTEXT_MODEL_RUNNER_MODEL = "hf.co/homerquan/mn-context-engine-model-v-Q4_K_M"
 DEFAULT_MODEL_RUNNER_PROXY_PORT = "12435"
@@ -229,6 +230,7 @@ SYNCTHING_CONTAINER_SYNC_PORT = 22000
 SYNCTHING_FOLDER_ID = "mirror-neuron-shared"
 SYNCTHING_FOLDER_LABEL = "MirrorNeuron shared storage"
 SYNCTHING_FOLDER_PATH = "/var/syncthing/MirrorNeuronShared"
+SYNCTHING_COMPOSE_SERVICE = "syncthing"
 NETWORK_TOKEN_FILE = DIR / "network.token"
 NETWORK_REDIS_ENV_FILE = DIR / "network-redis.env"
 SYNCTHING_API_KEY_FILE = DIR / "syncthing.api-key"
@@ -954,6 +956,7 @@ SYNCTHING_ENV_KEYS = (
     "MN_SYNCTHING_API_KEY",
     "MN_SYNCTHING_DEVICE_ID",
     "MN_SYNCTHING_ADVERTISE_HOST",
+    "MN_SYNCTHING_BIND_HOST",
     "MN_SYNCTHING_GUI_PORT",
     "MN_SYNCTHING_SYNC_PORT",
     "MN_SYNCTHING_FOLDER_ID",
@@ -1000,6 +1003,69 @@ def _syncthing_folder_id(env: dict[str, str]) -> str:
 
 def _syncthing_folder_path(env: dict[str, str]) -> str:
     return str(env.get("MN_SYNCTHING_FOLDER_PATH") or os.getenv("MN_SYNCTHING_FOLDER_PATH") or SYNCTHING_FOLDER_PATH).strip()
+
+def _runtime_compose_syncthing_override_file() -> Path:
+    return RUNTIME_COMPOSE_FILE.parent / RUNTIME_SYNCTHING_OVERRIDE_FILE
+
+def _compose_file_has_syncthing(path: Path) -> bool:
+    try:
+        return bool(re.search(r"(?m)^  syncthing:\s*$", path.read_text(encoding="utf-8")))
+    except OSError:
+        return False
+
+def _write_runtime_compose_syncthing_override() -> Path:
+    path = _runtime_compose_syncthing_override_file()
+    override = """services:
+  syncthing:
+    image: ${MN_SYNCTHING_IMAGE:-syncthing/syncthing:latest}
+    container_name: mirror-neuron-syncthing
+    profiles:
+      - syncthing
+    restart: unless-stopped
+    user: "0:0"
+    environment:
+      STGUIADDRESS: 0.0.0.0:8384
+      STGUIAPIKEY: ${MN_SYNCTHING_API_KEY:-}
+      STHOMEDIR: /var/syncthing/config
+      MN_HOST_SHARED_STORAGE_ROOT: ${MN_HOST_SHARED_STORAGE_ROOT:-${MN_SHARED_STORAGE_ROOT:-${MN_HOST_SHARED_ARTIFACT_ROOT:-./mn/shared}}}
+      MN_SYNCTHING_API_KEY: ${MN_SYNCTHING_API_KEY:-}
+    ports:
+      - "${MN_SYNCTHING_BIND_HOST:-0.0.0.0}:${MN_SYNCTHING_GUI_PORT:-58384}:8384/tcp"
+      - "${MN_SYNCTHING_BIND_HOST:-0.0.0.0}:${MN_SYNCTHING_SYNC_PORT:-22000}:22000/tcp"
+    volumes:
+      - ${MN_HOST_HOME_DIR:-${MN_HOST_MN_DIR:-./mn}}/syncthing:/var/syncthing/config:rw
+      - ${MN_HOST_SHARED_STORAGE_ROOT:-${MN_SHARED_STORAGE_ROOT:-${MN_HOST_SHARED_ARTIFACT_ROOT:-./mn/shared}}}:${MN_SYNCTHING_FOLDER_PATH:-/var/syncthing/MirrorNeuronShared}:rw
+    networks:
+      - runtime
+"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(override, encoding="utf-8")
+    return path
+
+def _ensure_compose_syncthing_service_definition() -> bool:
+    if not runtime_compose_available():
+        return False
+    if _compose_file_has_syncthing(RUNTIME_COMPOSE_FILE):
+        return True
+    if _compose_file_has_syncthing(_runtime_compose_syncthing_override_file()):
+        return True
+    _write_runtime_compose_syncthing_override()
+    return True
+
+def _start_compose_syncthing_service(env: dict[str, str], updates: dict[str, str]) -> None:
+    _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
+    compose_env = _compose_runtime_env({**env, **updates}, None)
+    compose_env["COMPOSE_PROFILES"] = _compose_profiles_with(
+        compose_env.get("COMPOSE_PROFILES"),
+        "syncthing",
+    )
+    _remove_non_mirror_neuron_container(SYNCTHING_CONTAINER)
+    subprocess.run(
+        runtime_compose_cmd("up", "-d", SYNCTHING_COMPOSE_SERVICE),
+        check=True,
+        stdout=subprocess.DEVNULL,
+        env=compose_env,
+    )
 
 def _resolve_syncthing_port(
     env: dict[str, str],
@@ -1157,48 +1223,67 @@ def _ensure_syncthing_for_runtime(env: dict[str, str], *, advertised_host: str) 
     image = _syncthing_image(env)
     folder_id = _syncthing_folder_id(env)
     folder_path = _syncthing_folder_path(env)
-    recreate = not _docker_container_running(SYNCTHING_CONTAINER)
-    if not recreate:
-        current_root = _docker_container_env_value(SYNCTHING_CONTAINER, "MN_HOST_SHARED_STORAGE_ROOT")
-        current_api_key = _docker_container_env_value(SYNCTHING_CONTAINER, "MN_SYNCTHING_API_KEY")
-        current_user = _docker_container_user(SYNCTHING_CONTAINER)
-        if current_root != host_root or current_api_key != api_key or current_user != "0:0":
-            recreate = True
-    if recreate:
-        subprocess.run(["docker", "rm", "-f", SYNCTHING_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-        command = [
-            "docker",
-            "run",
-            "-d",
-            "--name",
-            SYNCTHING_CONTAINER,
-            "--restart",
-            "unless-stopped",
-            "--user",
-            "0:0",
-            "-e",
-            "STGUIADDRESS=0.0.0.0:8384",
-            "-e",
-            f"STGUIAPIKEY={api_key}",
-            "-e",
-            "STHOMEDIR=/var/syncthing/config",
-            "-e",
-            f"MN_HOST_SHARED_STORAGE_ROOT={host_root}",
-            "-e",
-            f"MN_SYNCTHING_API_KEY={api_key}",
-            "-p",
-            f"{bind_host}:{gui_port}:{SYNCTHING_CONTAINER_GUI_PORT}/tcp",
-            "-p",
-            f"{bind_host}:{sync_port}:{SYNCTHING_CONTAINER_SYNC_PORT}/tcp",
-            "-v",
-            f"{SYNCTHING_CONFIG_DIR}:/var/syncthing/config:rw",
-            "-v",
-            f"{host_root}:{folder_path}:rw",
-            image,
-        ]
-        subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
+    updates = {
+        "MN_SYNCTHING_ENABLED": "auto",
+        "MN_SYNCTHING_IMAGE": image,
+        "MN_SYNCTHING_API_KEY": api_key,
+        "MN_SYNCTHING_ADVERTISE_HOST": advertised_host,
+        "MN_SYNCTHING_BIND_HOST": bind_host,
+        "MN_SYNCTHING_GUI_PORT": str(gui_port),
+        "MN_SYNCTHING_SYNC_PORT": str(sync_port),
+        "MN_SYNCTHING_FOLDER_ID": folder_id,
+        "MN_SYNCTHING_FOLDER_PATH": folder_path,
+    }
+
+    if _ensure_compose_syncthing_service_definition():
+        try:
+            _start_compose_syncthing_service(env, updates)
+        except Exception as exc:
+            _syncthing_warn_or_fail(f"could not start Compose Syncthing sidecar: {exc}", env)
+            return env
     else:
-        subprocess.run(["docker", "start", SYNCTHING_CONTAINER], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        recreate = not _docker_container_running(SYNCTHING_CONTAINER)
+        if not recreate:
+            current_root = _docker_container_env_value(SYNCTHING_CONTAINER, "MN_HOST_SHARED_STORAGE_ROOT")
+            current_api_key = _docker_container_env_value(SYNCTHING_CONTAINER, "MN_SYNCTHING_API_KEY")
+            current_user = _docker_container_user(SYNCTHING_CONTAINER)
+            if current_root != host_root or current_api_key != api_key or current_user != "0:0":
+                recreate = True
+        if recreate:
+            subprocess.run(["docker", "rm", "-f", SYNCTHING_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+            command = [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                SYNCTHING_CONTAINER,
+                "--restart",
+                "unless-stopped",
+                "--user",
+                "0:0",
+                "-e",
+                "STGUIADDRESS=0.0.0.0:8384",
+                "-e",
+                f"STGUIAPIKEY={api_key}",
+                "-e",
+                "STHOMEDIR=/var/syncthing/config",
+                "-e",
+                f"MN_HOST_SHARED_STORAGE_ROOT={host_root}",
+                "-e",
+                f"MN_SYNCTHING_API_KEY={api_key}",
+                "-p",
+                f"{bind_host}:{gui_port}:{SYNCTHING_CONTAINER_GUI_PORT}/tcp",
+                "-p",
+                f"{bind_host}:{sync_port}:{SYNCTHING_CONTAINER_SYNC_PORT}/tcp",
+                "-v",
+                f"{SYNCTHING_CONFIG_DIR}:/var/syncthing/config:rw",
+                "-v",
+                f"{host_root}:{folder_path}:rw",
+                image,
+            ]
+            subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
+        else:
+            subprocess.run(["docker", "start", SYNCTHING_CONTAINER], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     try:
         _wait_for_syncthing_api("127.0.0.1", gui_port, api_key)
@@ -1208,17 +1293,7 @@ def _ensure_syncthing_for_runtime(env: dict[str, str], *, advertised_host: str) 
         return env
 
     device_id = str(status.get("myID") or env.get("MN_SYNCTHING_DEVICE_ID") or "").strip()
-    updates = {
-        "MN_SYNCTHING_ENABLED": "auto",
-        "MN_SYNCTHING_IMAGE": image,
-        "MN_SYNCTHING_API_KEY": api_key,
-        "MN_SYNCTHING_DEVICE_ID": device_id,
-        "MN_SYNCTHING_ADVERTISE_HOST": advertised_host,
-        "MN_SYNCTHING_GUI_PORT": str(gui_port),
-        "MN_SYNCTHING_SYNC_PORT": str(sync_port),
-        "MN_SYNCTHING_FOLDER_ID": folder_id,
-        "MN_SYNCTHING_FOLDER_PATH": folder_path,
-    }
+    updates["MN_SYNCTHING_DEVICE_ID"] = device_id
     env.update(updates)
     if runtime_compose_available():
         _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
@@ -1594,6 +1669,33 @@ def _redis_url_with_public_endpoint(redis_url: str, host: str, port: int) -> str
         userinfo = f"{parsed.netloc.rsplit('@', 1)[0]}@"
     return f"{scheme}://{userinfo}{host}:{port}{path}"
 
+def _native_sdk_grpc_node_info(
+    advertised_host: str,
+    env: Optional[dict[str, str]] = None,
+) -> dict[str, object]:
+    values = env or _runtime_base_env(runtime_compose_available())
+    host = str(
+        values.get("MN_NATIVE_SDK_GRPC_ADVERTISE_HOST")
+        or values.get("MN_NETWORK_ADVERTISE_HOST")
+        or advertised_host
+        or ""
+    ).strip()
+    port = _parse_port(
+        values.get("MN_NATIVE_SDK_GRPC_ADVERTISE_PORT")
+        or values.get("MN_NATIVE_SDK_GRPC_PORT")
+        or DEFAULT_NATIVE_SDK_GRPC_PORT,
+        int(DEFAULT_NATIVE_SDK_GRPC_PORT),
+    )
+    bind_host = str(values.get("MN_NATIVE_SDK_GRPC_HOST") or DEFAULT_NATIVE_SDK_GRPC_HOST).strip()
+    target = f"{host}:{port}" if host and port else ""
+    return {
+        "enabled": bool(host and port and _native_sdk_grpc_command() is not None),
+        "host": host,
+        "port": port,
+        "target": target,
+        "bind_host": bind_host,
+    }
+
 def _handshake_node_info(
     local_host: str,
     node_name: Optional[str] = None,
@@ -1604,7 +1706,8 @@ def _handshake_node_info(
         hostname = socket.gethostname().strip()
     except OSError:
         pass
-    shared_env = _shared_storage_env_from_runtime_env(_runtime_base_env(runtime_compose_available()))
+    runtime_env = _runtime_base_env(runtime_compose_available())
+    shared_env = _shared_storage_env_from_runtime_env(runtime_env)
     grpc_port_value = _parse_port(
         grpc_port
         or os.getenv("MN_GRPC_ADVERTISE_PORT")
@@ -1619,6 +1722,7 @@ def _handshake_node_info(
         "hostname": hostname,
         "grpc_host": local_host,
         "grpc_port": grpc_port_value,
+        "native_sdk_grpc": _native_sdk_grpc_node_info(local_host, runtime_env),
         "gpu_count": _detect_host_gpu_count(),
         "host_shared_storage_root": shared_env["MN_HOST_SHARED_STORAGE_ROOT"],
         "runtime_shared_storage_root": shared_env["MN_RUNTIME_SHARED_STORAGE_ROOT"],
@@ -2998,8 +3102,15 @@ def _wait_for_local_cluster_grpc(
     raise typer.Exit(1)
 
 def _stop_network_runtime() -> None:
-    for container in [NETWORK_CORE_CONTAINER, NETWORK_REDIS_CONTAINER, NETWORK_SENTINEL_CONTAINER, SYNCTHING_CONTAINER]:
+    for container in [NETWORK_CORE_CONTAINER, NETWORK_REDIS_CONTAINER, NETWORK_SENTINEL_CONTAINER]:
         subprocess.run(["docker", "rm", "-f", container], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+    if runtime_compose_available():
+        try:
+            _remove_non_mirror_neuron_container(SYNCTHING_CONTAINER)
+        except RuntimeError:
+            pass
+    else:
+        subprocess.run(["docker", "rm", "-f", SYNCTHING_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
 def _detach_local_docker_node_if_matches(node_name: str) -> bool:
     alias = _configured_node_alias(_runtime_base_env(runtime_compose_available()))
@@ -4361,6 +4472,9 @@ def runtime_compose_cmd(*args: str) -> list[str]:
     model_runner_proxy_override = RUNTIME_COMPOSE_FILE.parent / RUNTIME_MODEL_RUNNER_PROXY_OVERRIDE_FILE
     if model_runner_proxy_override.exists():
         cmd.extend(["-f", str(model_runner_proxy_override)])
+    syncthing_override = _runtime_compose_syncthing_override_file()
+    if syncthing_override.exists():
+        cmd.extend(["-f", str(syncthing_override)])
     workers_override = RUNTIME_COMPOSE_FILE.parent / RUNTIME_WORKERS_OVERRIDE_FILE
     if workers_override.exists() and _runtime_compose_args_need_worker_override(args):
         cmd.extend(["-f", str(workers_override)])
@@ -5266,6 +5380,10 @@ def _start_server(
         force_runtime_recreate = False
         if compose_runtime:
             env = _ensure_compose_native_port_settings(env)
+            env = _ensure_syncthing_for_runtime(
+                env,
+                advertised_host=_advertised_network_host(host),
+            )
             if host:
                 env, force_runtime_recreate = _prepare_running_compose_exposure(
                     env,
