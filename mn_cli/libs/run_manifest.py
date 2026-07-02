@@ -1448,11 +1448,16 @@ def strip_docker_model_runner_placement_requirements(manifest: dict[str, Any], *
         return
 
     _strip_service_list_field(manifest, "required_services")
+    _strip_docker_model_runner_model_placement_requirements(manifest)
     _strip_docker_model_runner_runtime_models(manifest)
     _strip_runtime_binding_worker_models(manifest)
     for node in _service_requirement_nodes(manifest):
         _strip_service_list_field(node, "requires_services")
         _strip_service_list_field(node, "services")
+        _strip_docker_model_runner_model_placement_requirements(node)
+        config = node.get("config") if isinstance(node.get("config"), dict) else None
+        if config is not None:
+            _strip_docker_model_runner_model_placement_requirements(config)
 
 
 def _manifest_uses_docker_model_runner_http_endpoint(manifest: dict[str, Any]) -> bool:
@@ -1460,6 +1465,12 @@ def _manifest_uses_docker_model_runner_http_endpoint(manifest: dict[str, Any]) -
         config = node.get("config") if isinstance(node.get("config"), dict) else {}
         environment = config.get("environment") if isinstance(config.get("environment"), dict) else {}
         if str(environment.get("MN_MODEL_ENDPOINTS_JSON") or "").strip():
+            return True
+        provider = str(environment.get("MN_LLM_PROVIDER") or "").strip().lower()
+        api_base = str(environment.get("MN_LLM_API_BASE") or "").strip().lower()
+        if provider in {"docker_model_runner", "docker-model-runner", "dmr"} and api_base:
+            return True
+        if "host.docker.internal:12434" in api_base or "127.0.0.1:12434" in api_base:
             return True
     return False
 
@@ -1498,6 +1509,34 @@ def _strip_service_list_field(target: dict[str, Any], field: str) -> None:
         return
     if _is_docker_model_runner_service(value):
         target.pop(field, None)
+
+
+def _strip_docker_model_runner_model_placement_requirements(target: dict[str, Any]) -> None:
+    placement = target.get("placement_requirements")
+    if not isinstance(placement, dict):
+        return
+
+    models = placement.get("models")
+    if isinstance(models, list):
+        retained = [model for model in models if not _is_docker_model_runner_model_placement(model)]
+        if retained:
+            placement["models"] = retained
+        else:
+            placement.pop("models", None)
+    elif _is_docker_model_runner_model_placement(models):
+        placement.pop("models", None)
+
+    if not placement:
+        target.pop("placement_requirements", None)
+
+
+def _is_docker_model_runner_model_placement(model: Any) -> bool:
+    if not isinstance(model, dict):
+        return False
+    provider = str(model.get("provider") or "").strip().lower()
+    if provider in {"docker_model_runner", "docker-model-runner", "dmr"}:
+        return True
+    return _is_docker_model_runner_service(model.get("service"))
 
 
 def _strip_docker_model_runner_runtime_models(manifest: dict[str, Any]) -> None:

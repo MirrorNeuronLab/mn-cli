@@ -1163,6 +1163,20 @@ def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_h
                     },
                     {"name": "redis"},
                 ],
+                "placement_requirements": {
+                    "models": [
+                        {
+                            "id": "gemma4:e2b",
+                            "provider": "docker_model_runner",
+                            "service": {"name": "docker-model-runner"},
+                        },
+                        {
+                            "id": "remote-service-model",
+                            "provider": "nvidia_service",
+                            "service": {"name": "nvidia-service"},
+                        },
+                    ]
+                },
                 "config": {"environment": {}},
             }
         ],
@@ -1174,6 +1188,15 @@ def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_h
     assert prepared["runtime"]["models"] == {"service_model": {"provider": "nvidia_service", "model": "remote/model"}}
     assert "model" not in prepared["runtime"]["bindings"]["startup_folder_watcher"]["workers"][0]
     assert prepared["nodes"][0]["requires_services"] == [{"name": "redis"}]
+    assert prepared["nodes"][0]["placement_requirements"] == {
+        "models": [
+            {
+                "id": "remote-service-model",
+                "provider": "nvidia_service",
+                "service": {"name": "nvidia-service"},
+            }
+        ]
+    }
     env = prepared["nodes"][0]["config"]["environment"]
     assert env["MN_LLM_PROVIDER"] == "docker_model_runner"
     assert env["MN_LLM_API_BASE"] == "http://host.docker.internal:12434/engines/v1"
@@ -1214,6 +1237,15 @@ def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_f
             {
                 "node_id": "worker",
                 "requires_services": [{"name": "docker-model-runner", "model": "gemma4:e2b"}],
+                "placement_requirements": {
+                    "models": [
+                        {
+                            "id": "gemma4:e2b",
+                            "provider": "docker_model_runner",
+                            "service": {"name": "docker-model-runner"},
+                        }
+                    ]
+                },
                 "config": {"environment": {}},
             }
         ],
@@ -1230,6 +1262,7 @@ def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_f
     assert "models" not in prepared["runtime"]
     assert "model" not in prepared["runtime"]["bindings"]["worker"]["workers"][0]
     assert "requires_services" not in prepared["nodes"][0]
+    assert "placement_requirements" not in prepared["nodes"][0]
     assert prepared["nodes"][0]["config"]["environment"]["MN_LLM_PROVIDER"] == "fake"
 
 

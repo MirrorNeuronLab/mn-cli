@@ -46,6 +46,57 @@ def test_manifest_for_model_validation_filters_dmr_models_for_fake_llm():
     assert set(manifest["runtime"]["models"]) == {"primary", "secondary", "external"}
 
 
+def test_prefer_default_single_node_agent_placement_uses_local_runtime_node(monkeypatch):
+    monkeypatch.delenv("MN_BLUEPRINT_SINGLE_NODE_AGENTS", raising=False)
+    monkeypatch.setattr(
+        run_cmds.client,
+        "get_system_summary",
+        lambda: json.dumps(
+            {
+                "nodes": [
+                    {"name": "mirror_neuron@local", "self?": True},
+                    {"name": "mirror_neuron@spark", "self?": False},
+                ]
+            }
+        ),
+    )
+    manifest = {
+        "nodes": [
+            {"node_id": "default_worker", "config": {}},
+            {
+                "node_id": "remote_worker",
+                "policies": {"scheduler": {"preferred_node": "mirror_neuron@spark"}},
+                "config": {},
+            },
+            {
+                "node_id": "constrained_worker",
+                "constraints": [{"attribute": "node.name", "operator": "==", "value": "mirror_neuron@spark"}],
+                "config": {},
+            },
+        ]
+    }
+
+    run_cmds._prefer_default_single_node_agent_placement(manifest)
+
+    assert manifest["nodes"][0]["policies"]["scheduler"]["preferred_node"] == "mirror_neuron@local"
+    assert manifest["nodes"][1]["policies"]["scheduler"]["preferred_node"] == "mirror_neuron@spark"
+    assert "policies" not in manifest["nodes"][2]
+
+
+def test_prefer_default_single_node_agent_placement_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("MN_BLUEPRINT_SINGLE_NODE_AGENTS", "0")
+    monkeypatch.setattr(
+        run_cmds.client,
+        "get_system_summary",
+        lambda: json.dumps({"nodes": [{"name": "mirror_neuron@local", "self?": True}]}),
+    )
+    manifest = {"nodes": [{"node_id": "worker", "config": {}}]}
+
+    run_cmds._prefer_default_single_node_agent_placement(manifest)
+
+    assert "policies" not in manifest["nodes"][0]
+
+
 def test_cli_agent_progress_detail_marks_estimates_and_token_budgets():
     estimated = AgentProgress(
         id="worker",
@@ -371,7 +422,7 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
     assert validation_config["llm"]["configs"]["primary"]["install_mode"] == "cluster_provided"
 
 
-def test_runtime_cluster_model_install_uses_grpc_not_ssh(mocker):
+def test_runtime_cluster_model_install_uses_target_node_grpc_forwarder_not_ssh(mocker):
     mocker.patch(
         "mn_cli.libs.run_cmds.client.get_system_summary",
         return_value=json.dumps(
@@ -417,7 +468,7 @@ def test_runtime_cluster_model_install_uses_grpc_not_ssh(mocker):
     shell.assert_not_called()
     remote_client_class.assert_called_once_with(
         target="192.168.4.173:55051",
-        timeout=run_cmds.config.grpc_timeout_seconds,
+        timeout=run_cmds.DEFAULT_RUNTIME_MODEL_PREPARE_TIMEOUT_SECONDS,
         auth_token=run_cmds.config.grpc_auth_token,
         admin_token=run_cmds.config.grpc_admin_token,
     )
@@ -427,6 +478,7 @@ def test_runtime_cluster_model_install_uses_grpc_not_ssh(mocker):
     assert payload["model"] == "nemotron3"
     assert payload["backend"] == "llama.cpp"
     assert result["endpoint"]["node"] == "mirror_neuron@192.168.4.173"
+    assert result["endpoint"]["api_base"] == "http://192.168.4.173:12435/engines/v1"
 
 
 def test_prepare_runtime_models_uses_default_model_fallback_without_capable_cluster_node(

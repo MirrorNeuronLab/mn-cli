@@ -1010,11 +1010,16 @@ def test_runtime_compose_cmd_includes_models_override():
     server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
     models_override = server_cmds._runtime_compose_models_override_file()
     models_override.write_text("services: {}\n", encoding="utf-8")
+    model_runner_proxy_override = (
+        server_cmds.RUNTIME_COMPOSE_FILE.parent / server_cmds.RUNTIME_MODEL_RUNNER_PROXY_OVERRIDE_FILE
+    )
+    model_runner_proxy_override.write_text("services: {}\n", encoding="utf-8")
 
     command = runtime_compose_cmd("up", "-d")
 
     assert "-f" in command
     assert str(models_override) in command
+    assert str(model_runner_proxy_override) in command
     assert command[-2:] == ["up", "-d"]
 
 def test_resolve_network_token_generates_and_reuses_persistent_token(tmp_path, mocker):
@@ -1137,12 +1142,14 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     token_file = tmp_path / "network.token"
     mocker.patch('mn_cli.server_cmds.DIR', tmp_path)
     mocker.patch('mn_cli.server_cmds.NETWORK_TOKEN_FILE', token_file)
+    monkeypatch.setattr(server_cmds.os, "uname", lambda: type("Uname", (), {"sysname": "Linux"})())
     mocker.patch('mn_cli.server_cmds.secrets.token_urlsafe', return_value="seed-token")
     mocker.patch('mn_cli.server_cmds._docker_container_running', return_value=False)
     mocker.patch('mn_cli.server_cmds._installed_catalog_runtime_models', return_value=["nemotron3"])
     port_available = mocker.patch('mn_cli.server_cmds._port_available_or_owned', return_value=True)
     start_api = mocker.patch('mn_cli.server_cmds._start_api_if_installed')
     start_web_ui = mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed')
+    start_native_sdk = mocker.patch('mn_cli.server_cmds._start_native_sdk_grpc_if_installed', return_value=True)
 
     commands = []
 
@@ -1186,6 +1193,7 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     assert any(value.startswith("MN_GRPC_ADMIN_TOKEN=") and value != "MN_GRPC_ADMIN_TOKEN=" for value in core_run)
     assert "MN_NETWORK_ONLY=true" in core_run
     assert "MN_REDIS_FORWARD_PRIMARY=true" in core_run
+    assert "MN_NATIVE_SDK_GRPC_TARGET=host.docker.internal:55052" in core_run
     assert "MN_NODE_RUNTIME_MODELS=nemotron3" in core_run
     assert "MN_NODE_ALIAS=mn-seed" in core_run
     assert "MN_DOCKER_NETWORK_MODE=overlay" in core_run
@@ -1193,6 +1201,9 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     assert "MN_NODE_NAME=mirror_neuron@mn-seed" in core_run
     assert "MN_CLUSTER_NODES=mirror_neuron@mn-seed" in core_run
     assert "--network" in core_run
+    assert "--add-host" in core_run
+    assert "host.docker.internal:host-gateway" in core_run
+    start_native_sdk.assert_called_once()
     assert "mirror-neuron-runtime" in core_run
     assert "--network-alias" in core_run
     assert "mn-seed" in core_run

@@ -114,6 +114,8 @@ CONTEXT_ENGINE_EXPECTATION = (
     "This blueprint uses context memory. First launch may download the context model "
     "and start the Membrane context engine; keep Docker running and be patient."
 )
+DEFAULT_RUNTIME_MODEL_PREPARE_TIMEOUT_SECONDS = 1200.0
+FALSE_VALUES = {"0", "false", "no", "off"}
 _HELPER_COMPAT = (
     _add_mn_llm_aliases,
     _blueprint_runtime_environment,
@@ -444,6 +446,10 @@ def _runtime_resource_report() -> dict[str, Any]:
 
 
 def _cluster_node_grpc_target(node_name: str) -> str:
+    return _cluster_node_endpoint(node_name)["grpc_target"]
+
+
+def _cluster_node_endpoint(node_name: str) -> dict[str, str]:
     node_name = str(node_name or "").strip()
     if not node_name:
         raise RuntimeError("cluster model placement did not return a target node")
@@ -461,8 +467,89 @@ def _cluster_node_grpc_target(node_name: str) -> str:
         port = str(node.get("grpc_port") or "").strip()
         if not host or not port:
             raise RuntimeError(f"cluster node {node_name} does not advertise grpc_host/grpc_port")
-        return f"{host}:{port}"
+        return {"grpc_target": f"{host}:{port}", "host": host, "port": port}
     raise RuntimeError(f"cluster node {node_name} was not found in runtime summary")
+
+
+def _container_local_api_base_to_node_host(api_base: str, node_host: str) -> str:
+    base = str(api_base or "").strip()
+    host = str(node_host or "").strip()
+    if not base or not host:
+        return base
+    parsed = urllib.parse.urlparse(base)
+    hostname = (parsed.hostname or "").lower()
+    if hostname not in {"host.docker.internal", "localhost", "127.0.0.1", "0.0.0.0"}:
+        return base
+    netloc = host
+    port = parsed.port
+    if port == 12434:
+        try:
+            port = int(os.environ.get("MN_DOCKER_MODEL_RUNNER_PROXY_PORT", "12435"))
+        except ValueError:
+            port = 12435
+    if port:
+        netloc = f"{host}:{port}"
+    return urllib.parse.urlunparse(
+        (
+            parsed.scheme or "http",
+            netloc,
+            parsed.path or "",
+            parsed.params or "",
+            parsed.query or "",
+            parsed.fragment or "",
+        )
+    )
+
+
+def _prefer_default_single_node_agent_placement(manifest: dict[str, Any]) -> None:
+    if str(os.environ.get("MN_BLUEPRINT_SINGLE_NODE_AGENTS", "1")).strip().lower() in FALSE_VALUES:
+        return
+    node_name = _local_runtime_node_name()
+    if not node_name:
+        return
+    for node in manifest_nodes(manifest):
+        if _node_has_explicit_node_placement(node):
+            continue
+        policies = node.get("policies") if isinstance(node.get("policies"), dict) else {}
+        scheduler = policies.get("scheduler") if isinstance(policies.get("scheduler"), dict) else {}
+        scheduler.setdefault("preferred_node", node_name)
+        policies["scheduler"] = scheduler
+        node["policies"] = policies
+
+
+def _local_runtime_node_name() -> str:
+    try:
+        summary = json.loads(client.get_system_summary())
+    except Exception:
+        return ""
+    nodes = summary.get("nodes") if isinstance(summary, dict) else None
+    for node in nodes or []:
+        if not isinstance(node, dict):
+            continue
+        if node.get("self?") is True or node.get("self") is True:
+            return str(node.get("name") or node.get("node") or "").strip()
+    return ""
+
+
+def _node_has_explicit_node_placement(node: dict[str, Any]) -> bool:
+    policies = node.get("policies") if isinstance(node.get("policies"), dict) else {}
+    scheduler = policies.get("scheduler") if isinstance(policies.get("scheduler"), dict) else {}
+    if str(scheduler.get("preferred_node") or scheduler.get("preferredNode") or "").strip():
+        return True
+    if str(policies.get("preferred_node") or policies.get("preferredNode") or "").strip():
+        return True
+    constraints = node.get("constraints") if isinstance(node.get("constraints"), list) else []
+    return any(_is_node_name_constraint(constraint) for constraint in constraints if isinstance(constraint, dict))
+
+
+def _is_node_name_constraint(constraint: dict[str, Any]) -> bool:
+    attribute = str(
+        constraint.get("attribute")
+        or constraint.get("target")
+        or constraint.get("l_target")
+        or ""
+    ).strip("${}")
+    return attribute in {"node", "node.name", "node.unique.name"}
 
 
 def _install_runtime_cluster_model(
@@ -478,10 +565,11 @@ def _install_runtime_cluster_model(
     node = str(cluster.get("node") or "").strip()
     model_ref = str(model.get("model") or docker_model_name(entry))
     console.print(f"[cyan]Installing runtime model {model.get('id') or model_ref} on {node or 'selected runtime node'}...[/cyan]")
-    target = _cluster_node_grpc_target(node)
+    node_endpoint = _cluster_node_endpoint(node)
+    target = node_endpoint["grpc_target"]
     runtime_client = Client(
         target=target,
-        timeout=config.grpc_timeout_seconds,
+        timeout=_runtime_model_prepare_timeout_seconds(),
         auth_token=config.grpc_auth_token,
         admin_token=config.grpc_admin_token,
     )
@@ -508,6 +596,10 @@ def _install_runtime_cluster_model(
     docker_model = docker_model_name(entry)
     api_model = str(entry.get("api_model") or docker_model)
     endpoint = payload.get("endpoint") if isinstance(payload.get("endpoint"), dict) else {}
+    api_base = _container_local_api_base_to_node_host(
+        str(endpoint.get("api_base") or "http://host.docker.internal:12434/engines/v1"),
+        node_endpoint.get("host", ""),
+    )
     return {
         "install": payload,
         "endpoint": {
@@ -515,11 +607,23 @@ def _install_runtime_cluster_model(
             "model": str(endpoint.get("model") or api_model),
             "runtime_model": str(endpoint.get("runtime_model") or docker_model),
             "api_model": str(endpoint.get("api_model") or api_model),
-            "api_base": str(endpoint.get("api_base") or "http://host.docker.internal:12434/engines/v1"),
+            "api_base": api_base,
             "node": str(endpoint.get("node") or node),
             "source": str(endpoint.get("source") or "cluster_node_install"),
         },
     }
+
+
+def _runtime_model_prepare_timeout_seconds() -> float:
+    raw = str(os.environ.get("MN_RUNTIME_MODEL_PREPARE_TIMEOUT_SECONDS") or "").strip()
+    if raw:
+        try:
+            value = float(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    return DEFAULT_RUNTIME_MODEL_PREPARE_TIMEOUT_SECONDS
 
 
 def _print_runtime_model_install_summary(summary: dict[str, Any]) -> None:
@@ -2399,6 +2503,7 @@ def run_bundle(
         if force:
             _mark_manifest_force(manifest_dict)
         _prepare_openshell_custom_images(bundle_dir, manifest_dict)
+        _prefer_default_single_node_agent_placement(manifest_dict)
 
         payloads = _stage_bundle_payloads(bundle_dir, manifest_dict, web_ui=web_ui)
 

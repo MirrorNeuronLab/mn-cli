@@ -120,8 +120,10 @@ RUNTIME_COMPOSE_ENV = DIR / "docker-compose.env"
 RUNTIME_ENDPOINTS_FILE = DIR / "runtime-endpoints.json"
 RUNTIME_MODELS_OVERRIDE_FILE = "docker-compose.models.yml"
 RUNTIME_WORKERS_OVERRIDE_FILE = "docker-compose.workers.yml"
+RUNTIME_MODEL_RUNNER_PROXY_OVERRIDE_FILE = "docker-compose.model-runner-proxy.yml"
 DEFAULT_LLM_MODEL_RUNNER_MODEL = "ai/gemma4:E2B"
 DEFAULT_CONTEXT_MODEL_RUNNER_MODEL = "hf.co/homerquan/mn-context-engine-model-v-Q4_K_M"
+DEFAULT_MODEL_RUNNER_PROXY_PORT = "12435"
 DEFAULT_MEMBRANE_REPO = "MirrorNeuronLab/Membrane"
 DEFAULT_MEMBRANE_ENGINE_IMAGE_REPOSITORY = (
     "us-central1-docker.pkg.dev/mirrorneuron-public-packages/"
@@ -880,6 +882,13 @@ NODE_ADVERTISEMENT_ENV_KEYS = (
     "MN_NODE_GPU_NAME",
     "MN_NODE_GPU_API_VERSION",
     "MN_NODE_GPU_DRIVER_VERSION",
+    "MN_NODE_GPU_MEMORY_TOTAL_MB",
+    "MN_NODE_GPU_MEMORY_FREE_MB",
+    "MN_NODE_GPU_MEMORY_USED_MB",
+    "MN_NODE_GPU_SHARED_MEMORY",
+    "MN_NODE_GPU_INTEGRATED",
+    "MN_NODE_GPU_UNIFIED_MEMORY",
+    "MN_NODE_GPU_UNIFIED_MEMORY_MB",
 )
 
 def _shared_storage_env_values(host_root: str, runtime_root: str) -> dict[str, str]:
@@ -1890,14 +1899,31 @@ def _network_core_env(
             "MN_COOKIE": _derive_network_secret(token, "cookie"),
             "MN_GRPC_AUTH_TOKEN": FIXED_GRPC_AUTH_TOKEN,
             GRPC_ADMIN_TOKEN_ENV: FIXED_GRPC_ADMIN_TOKEN,
+            "MN_NATIVE_SDK_GRPC_HOST": env.get("MN_NATIVE_SDK_GRPC_HOST") or "0.0.0.0",
+            "MN_NATIVE_SDK_GRPC_PORT": _valid_port_text(
+                str(env.get("MN_NATIVE_SDK_GRPC_PORT") or DEFAULT_NATIVE_SDK_GRPC_PORT),
+                DEFAULT_NATIVE_SDK_GRPC_PORT,
+            ),
             "ERL_EPMD_ADDRESS": "0.0.0.0",
             "ERL_EPMD_PORT": str(epmd_port),
             "ERL_AFLAGS": _erl_aflags(dist_port),
         }
     )
+    env["MN_NATIVE_SDK_GRPC_TARGET"] = env.get("MN_NATIVE_SDK_GRPC_TARGET") or _network_native_sdk_grpc_target(
+        env,
+        docker_network_mode=docker_network_mode,
+    )
     env = _ensure_redis_ha_settings(env, advertised_host=host, cluster=True)
     env = _ensure_node_advertisement_settings(env)
     return env
+
+
+def _network_native_sdk_grpc_target(env: dict[str, str], *, docker_network_mode: str) -> str:
+    native_port = _valid_port_text(
+        str(env.get("MN_NATIVE_SDK_GRPC_PORT") or DEFAULT_NATIVE_SDK_GRPC_PORT),
+        DEFAULT_NATIVE_SDK_GRPC_PORT,
+    )
+    return f"{DEFAULT_NATIVE_SDK_GRPC_TARGET_HOST}:{native_port}"
 
 
 def _network_shared_storage_roots(env: dict[str, str]) -> tuple[str, str, str]:
@@ -2260,6 +2286,7 @@ def _start_network_core(
         "-d",
         "--name",
         NETWORK_CORE_CONTAINER,
+        *([] if os.uname().sysname == "Darwin" else ["--add-host", "host.docker.internal:host-gateway"]),
         *_docker_network_run_args(docker_network_mode, docker_network_name, node_alias),
         *port_args,
         *_network_core_bind_args(env),
@@ -2566,6 +2593,7 @@ def _start_network_seed(
             publish_host_port=not use_internal_identity,
         )
     env = _ensure_syncthing_for_runtime(env, advertised_host=host)
+    _start_native_sdk_grpc_if_installed(env)
 
     console.print("=> Starting MirrorNeuron core-only exposed node...")
     _start_network_core(
@@ -2913,6 +2941,7 @@ def _ensure_local_cluster_runtime_for_join(
             "ERL_AFLAGS": env["ERL_AFLAGS"],
             "MN_DOCKER_NETWORK_MODE": docker_network_mode,
             "MN_DOCKER_NETWORK_NAME": docker_network_name,
+            **{key: env[key] for key in NODE_ADVERTISEMENT_ENV_KEYS if key in env},
             **{key: env[key] for key in SHARED_STORAGE_ENV_KEYS if key in env},
         },
     )
@@ -3986,6 +4015,18 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
         "MN_NATIVE_SDK_GRPC_PROXY_PORT": native_sdk_proxy_port,
         "MN_NATIVE_SDK_GRPC_PROXY_TARGET_HOST": native_sdk_proxy_target_host,
         "MN_NATIVE_SDK_GRPC_PROXY_TARGET_PORT": native_sdk_proxy_target_port,
+        "MN_DOCKER_MODEL_RUNNER_PROXY_ENABLED": adjusted.get("MN_DOCKER_MODEL_RUNNER_PROXY_ENABLED") or "true",
+        "MN_DOCKER_MODEL_RUNNER_PROXY_BIND_HOST": adjusted.get("MN_DOCKER_MODEL_RUNNER_PROXY_BIND_HOST") or "0.0.0.0",
+        "MN_DOCKER_MODEL_RUNNER_PROXY_PORT": _valid_port_text(
+            str(adjusted.get("MN_DOCKER_MODEL_RUNNER_PROXY_PORT") or DEFAULT_MODEL_RUNNER_PROXY_PORT),
+            DEFAULT_MODEL_RUNNER_PROXY_PORT,
+        ),
+        "MN_DOCKER_MODEL_RUNNER_PROXY_TARGET_HOST": adjusted.get("MN_DOCKER_MODEL_RUNNER_PROXY_TARGET_HOST")
+        or "host.docker.internal",
+        "MN_DOCKER_MODEL_RUNNER_PROXY_TARGET_PORT": _valid_port_text(
+            str(adjusted.get("MN_DOCKER_MODEL_RUNNER_PROXY_TARGET_PORT") or "12434"),
+            "12434",
+        ),
         "MN_DIST_PORT": dist_port,
         "MN_WEB_UI_HOST": adjusted.get("MN_WEB_UI_HOST") or DEFAULT_HOST,
         "MN_WEB_UI_PORT": web_ui_port,
@@ -4315,6 +4356,9 @@ def runtime_compose_cmd(*args: str) -> list[str]:
     models_override = _runtime_compose_models_override_file()
     if models_override.exists():
         cmd.extend(["-f", str(models_override)])
+    model_runner_proxy_override = RUNTIME_COMPOSE_FILE.parent / RUNTIME_MODEL_RUNNER_PROXY_OVERRIDE_FILE
+    if model_runner_proxy_override.exists():
+        cmd.extend(["-f", str(model_runner_proxy_override)])
     workers_override = RUNTIME_COMPOSE_FILE.parent / RUNTIME_WORKERS_OVERRIDE_FILE
     if workers_override.exists() and _runtime_compose_args_need_worker_override(args):
         cmd.extend(["-f", str(workers_override)])
@@ -4549,6 +4593,13 @@ def _native_sdk_grpc_command() -> Optional[list[str]]:
         return [str(native_bin)]
     if os.getenv("MN_NATIVE_SDK_GRPC_SOURCE", "").strip().lower() in {"1", "true", "yes", "on"}:
         return [sys.executable, "-m", "mn_sdk.native_runtime_service"]
+    try:
+        import importlib.util
+
+        if importlib.util.find_spec("mn_sdk.native_runtime_service") is not None:
+            return [sys.executable, "-m", "mn_sdk.native_runtime_service"]
+    except (ImportError, ValueError):
+        pass
     return None
 
 def _start_native_sdk_grpc_watchdog(env: dict[str, str]) -> subprocess.Popen:
@@ -5108,6 +5159,8 @@ def _build_core_docker_run_command(
     system_name = os.uname().sysname
     if requested_docker_mode != "disabled" and node_alias:
         cmd.extend(_docker_network_run_args(requested_docker_mode, network_name, node_alias))
+    if system_name != "Darwin":
+        cmd.extend(["--add-host", "host.docker.internal:host-gateway"])
 
     if system_name == "Darwin":
         cmd.extend(["-p", f"{core_publish_host}:{env['MN_GRPC_PORT']}:{env['MN_GRPC_PORT']}"])
@@ -5683,6 +5736,7 @@ def _prepare_running_compose_exposure(
             "ERL_AFLAGS": env["ERL_AFLAGS"],
             "MN_DOCKER_NETWORK_MODE": requested_mode,
             "MN_DOCKER_NETWORK_NAME": network_name,
+            **{key: env[key] for key in NODE_ADVERTISEMENT_ENV_KEYS if key in env},
             **{key: env[key] for key in SHARED_STORAGE_ENV_KEYS if key in env},
             **{key: env[key] for key in SYNCTHING_ENV_KEYS if key in env},
             **{key: env[key] for key in REDIS_HA_ENV_KEYS if key in env},

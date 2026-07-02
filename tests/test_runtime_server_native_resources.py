@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from mn_cli.runtime import server
 
@@ -38,6 +39,25 @@ def test_compose_env_includes_sdk_node_resource_advertisement(monkeypatch):
     assert env["MN_NODE_RUNTIME_DRIVERS"] == "host_local"
 
 
+def test_runtime_compose_template_passes_node_advertisement_contract():
+    root = Path(__file__).resolve().parents[2]
+    compose_text = (root / "mn-deploy" / "docker-compose.yml").read_text(encoding="utf-8")
+
+    for key in (
+        "MN_NODE_HARDWARE_JSON",
+        "MN_NODE_CPU_CORES",
+        "MN_NODE_MEMORY_TOTAL_MB",
+        "MN_NODE_MEMORY_AVAILABLE_MB",
+        "MN_NODE_DISK_TOTAL_MB",
+        "MN_NODE_DISK_AVAILABLE_MB",
+        "MN_NODE_HOST_PATHS",
+        "MN_NODE_RUNTIME_DRIVERS",
+        "MN_NODE_GPU_UNIFIED_MEMORY_MB",
+    ):
+        assert f"{key}: ${{{key}:-}}" in compose_text
+        assert key in server.NODE_ADVERTISEMENT_ENV_KEYS
+
+
 def test_compose_env_includes_native_sdk_grpc_forwarding_target(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "RUNTIME_COMPOSE_ENV", tmp_path / "docker-compose.env")
 
@@ -60,3 +80,63 @@ def test_compose_env_migrates_legacy_native_sdk_grpc_target(monkeypatch, tmp_pat
     )
 
     assert env["MN_NATIVE_SDK_GRPC_TARGET"] == "mn-native-sdk-grpc:55052"
+
+
+def test_network_core_env_includes_native_sdk_target_for_worker_core(monkeypatch):
+    monkeypatch.setattr(server.os, "uname", lambda: type("Uname", (), {"sysname": "Linux"})())
+    monkeypatch.setattr(server, "_ensure_redis_ha_settings", lambda env, **_kwargs: env)
+    monkeypatch.setattr(server, "_ensure_node_advertisement_settings", lambda env: env)
+
+    env = server._network_core_env(
+        token="join-token",
+        host="192.168.4.173",
+        docker_network_mode="disabled",
+        docker_network_name="mirror-neuron-runtime",
+        node_alias="spark",
+        node_name="mirror_neuron@192.168.4.173",
+        cluster_nodes="mirror_neuron@192.168.4.173",
+        grpc_port=55051,
+        epmd_port=54369,
+        dist_port=54370,
+        redis_url="redis://127.0.0.1:6379/0",
+        redis_public_host="192.168.4.173",
+        redis_public_port=56379,
+    )
+
+    assert env["MN_NATIVE_SDK_GRPC_HOST"] == "0.0.0.0"
+    assert env["MN_NATIVE_SDK_GRPC_PORT"] == "55052"
+    assert env["MN_NATIVE_SDK_GRPC_TARGET"] == "host.docker.internal:55052"
+
+
+def test_network_core_env_uses_host_docker_internal_for_networked_container(monkeypatch):
+    monkeypatch.setattr(server.os, "uname", lambda: type("Uname", (), {"sysname": "Linux"})())
+    monkeypatch.setattr(server, "_ensure_redis_ha_settings", lambda env, **_kwargs: env)
+    monkeypatch.setattr(server, "_ensure_node_advertisement_settings", lambda env: env)
+
+    env = server._network_core_env(
+        token="join-token",
+        host="192.168.4.173",
+        docker_network_mode="overlay",
+        docker_network_name="mirror-neuron-runtime",
+        node_alias="spark",
+        node_name="mirror_neuron@spark",
+        cluster_nodes="mirror_neuron@spark",
+        grpc_port=55051,
+        epmd_port=54369,
+        dist_port=54370,
+        redis_url="redis://redis:6379/0",
+        redis_public_host="redis",
+        redis_public_port=6379,
+    )
+
+    assert env["MN_NATIVE_SDK_GRPC_TARGET"] == "host.docker.internal:55052"
+
+
+def test_native_sdk_grpc_command_falls_back_to_importable_source_module(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "VENV_DIR", tmp_path / "venv")
+    monkeypatch.delenv("MN_NATIVE_SDK_GRPC_SOURCE", raising=False)
+
+    command = server._native_sdk_grpc_command()
+
+    assert command is not None
+    assert command[-2:] == ["-m", "mn_sdk.native_runtime_service"]
