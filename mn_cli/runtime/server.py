@@ -122,7 +122,7 @@ RUNTIME_MODELS_OVERRIDE_FILE = "docker-compose.models.yml"
 RUNTIME_WORKERS_OVERRIDE_FILE = "docker-compose.workers.yml"
 RUNTIME_MODEL_RUNNER_PROXY_OVERRIDE_FILE = "docker-compose.model-runner-proxy.yml"
 RUNTIME_SYNCTHING_OVERRIDE_FILE = "docker-compose.syncthing.yml"
-DEFAULT_LLM_MODEL_RUNNER_MODEL = "ai/gemma4:E2B"
+DEFAULT_LLM_MODEL_RUNNER_MODEL = "gemma4:e2b"
 DEFAULT_CONTEXT_MODEL_RUNNER_MODEL = "hf.co/homerquan/mn-context-engine-model-v-Q4_K_M"
 DEFAULT_MODEL_RUNNER_PROXY_PORT = "12435"
 DEFAULT_MEMBRANE_REPO = "MirrorNeuronLab/Membrane"
@@ -3244,6 +3244,7 @@ def _runtime_base_env(compose_runtime: bool) -> dict[str, str]:
     if compose_runtime:
         _remove_env_file_keys(RUNTIME_COMPOSE_ENV, DEPRECATED_RUNTIME_ENV_KEYS)
         _remove_compose_file_env_keys(RUNTIME_COMPOSE_FILE, DEPRECATED_RUNTIME_ENV_KEYS)
+        _remove_runtime_compose_models_override()
     env = _read_env_file(RUNTIME_COMPOSE_ENV) if compose_runtime else {}
     env.update(os.environ)
     env = _ensure_installed_runtime_model_env(env)
@@ -3353,11 +3354,12 @@ def record_runtime_model_install(entry: dict[str, Any]) -> Optional[Path]:
     except Exception:
         logger.debug("Could not record runtime model service advertisement", exc_info=True)
     if _is_default_llm_model(entry) or not str(existing.get("MN_LLM_MODEL_RUNNER_MODEL") or "").strip():
-        updates["MN_LLM_MODEL_RUNNER_MODEL"] = docker_model
+        updates["MN_LLM_MODEL_RUNNER_MODEL"] = DEFAULT_LLM_MODEL_RUNNER_MODEL
 
     RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
     _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
-    return _write_runtime_compose_models_override(docker_model)
+    _remove_runtime_compose_models_override()
+    return None
 
 def _merge_model_services_json(existing: object, services: list[dict[str, Any]]) -> str:
     merged: list[dict[str, Any]] = []
@@ -3791,23 +3793,12 @@ def _ensure_docker_model_runner() -> None:
 def _runtime_compose_models_override_file() -> Path:
     return RUNTIME_COMPOSE_FILE.parent / RUNTIME_MODELS_OVERRIDE_FILE
 
-def _write_runtime_compose_models_override(default_model: str = DEFAULT_LLM_MODEL_RUNNER_MODEL) -> Path:
+def _remove_runtime_compose_models_override() -> None:
     path = _runtime_compose_models_override_file()
-    model = _yaml_double_quote_value(default_model or DEFAULT_LLM_MODEL_RUNNER_MODEL)
-    override = f"""services:
-  mirror-neuron-core:
-    models:
-      llm-runtime-model:
-        endpoint_var: MN_DOCKER_MODEL_RUNNER_API_BASE
-        model_var: MN_DOCKER_MODEL_RUNNER_MODEL
-
-models:
-  llm-runtime-model:
-    model: "${{MN_LLM_MODEL_RUNNER_MODEL:-{model}}}"
-"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(override, encoding="utf-8")
-    return path
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
 
 def _is_default_llm_model(entry: dict[str, Any]) -> bool:
     values = [
@@ -3825,6 +3816,7 @@ def _is_default_llm_model(entry: dict[str, Any]) -> bool:
             "gemma4",
             "gemma4:e2b",
             "gemma4-e2b",
+            "ai/gemma4:e2b",
             "gemme4",
             "gemme4:e2b",
             DEFAULT_LLM_MODEL_RUNNER_MODEL.lower(),
@@ -4526,9 +4518,6 @@ def runtime_compose_cmd(*args: str) -> list[str]:
     cluster_override = _runtime_compose_cluster_override_file()
     if cluster_override.exists():
         cmd.extend(["-f", str(cluster_override)])
-    models_override = _runtime_compose_models_override_file()
-    if models_override.exists():
-        cmd.extend(["-f", str(models_override)])
     model_runner_proxy_override = RUNTIME_COMPOSE_FILE.parent / RUNTIME_MODEL_RUNNER_PROXY_OVERRIDE_FILE
     if model_runner_proxy_override.exists():
         cmd.extend(["-f", str(model_runner_proxy_override)])

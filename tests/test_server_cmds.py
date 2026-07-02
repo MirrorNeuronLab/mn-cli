@@ -787,13 +787,15 @@ def test_runtime_base_env_merges_explicit_and_installed_runtime_models(mocker):
 
     assert env["MN_NODE_RUNTIME_MODELS"] == "custom:model,gemma4:e2b"
 
-def test_record_runtime_model_install_writes_compose_model_override():
+def test_record_runtime_model_install_advertises_model_without_compose_override():
     server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
     server_cmds.RUNTIME_COMPOSE_ENV.write_text(
         "COMPOSE_PROJECT_NAME=mirror-neuron\n"
         "MN_NODE_RUNTIME_MODELS=\n",
         encoding="utf-8",
     )
+    models_override = server_cmds._runtime_compose_models_override_file()
+    models_override.write_text("services: {}\n", encoding="utf-8")
 
     path = server_cmds.record_runtime_model_install(
         {
@@ -805,13 +807,42 @@ def test_record_runtime_model_install_writes_compose_model_override():
 
     env = server_cmds._read_env_file(server_cmds.RUNTIME_COMPOSE_ENV)
     assert env["MN_NODE_RUNTIME_MODELS"] == "gemma4:e2b"
-    assert env["MN_LLM_MODEL_RUNNER_MODEL"] == "ai/gemma4:E2B"
-    assert path == server_cmds._runtime_compose_models_override_file()
-    override = path.read_text(encoding="utf-8")
-    assert "mirror-neuron-core:" in override
-    assert "endpoint_var: MN_DOCKER_MODEL_RUNNER_API_BASE" in override
-    assert "model_var: MN_DOCKER_MODEL_RUNNER_MODEL" in override
-    assert 'model: "${MN_LLM_MODEL_RUNNER_MODEL:-ai/gemma4:E2B}"' in override
+    assert env["MN_LLM_MODEL_RUNNER_MODEL"] == "gemma4:e2b"
+    assert path is None
+    assert not models_override.exists()
+
+
+def test_record_non_default_runtime_model_keeps_default_llm_model_runner_env():
+    server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
+    server_cmds.RUNTIME_COMPOSE_ENV.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_NODE_RUNTIME_MODELS=\n",
+        encoding="utf-8",
+    )
+
+    server_cmds.record_runtime_model_install(
+        {
+            "id": "nemotron3",
+            "model": "nemotron3",
+            "aliases": [],
+        }
+    )
+
+    env = server_cmds._read_env_file(server_cmds.RUNTIME_COMPOSE_ENV)
+    assert env["MN_NODE_RUNTIME_MODELS"] == "nemotron3"
+    assert env["MN_LLM_MODEL_RUNNER_MODEL"] == "gemma4:e2b"
+
+
+def test_runtime_base_env_removes_stale_models_override():
+    server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
+    server_cmds.RUNTIME_COMPOSE_ENV.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n", encoding="utf-8")
+    server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
+    models_override = server_cmds._runtime_compose_models_override_file()
+    models_override.write_text("services: {}\n", encoding="utf-8")
+
+    server_cmds._runtime_base_env(True)
+
+    assert not models_override.exists()
 
 def test_ensure_context_engine_runtime_persists_profile_and_starts_compose(mocker, tmp_path):
     membrane_dir = tmp_path / "Membrane"
@@ -1004,7 +1035,7 @@ def test_ensure_context_engine_runtime_installs_missing_model_without_compose_re
     assert run.call_args_list[1].args[0] == ["docker", "model", "run", "--detach", "hf.co/acme/context"]
     assert len(run.call_args_list) == 2
 
-def test_runtime_compose_cmd_includes_models_override():
+def test_runtime_compose_cmd_ignores_models_override():
     server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
     server_cmds.RUNTIME_COMPOSE_ENV.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n", encoding="utf-8")
     server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
@@ -1018,7 +1049,7 @@ def test_runtime_compose_cmd_includes_models_override():
     command = runtime_compose_cmd("up", "-d")
 
     assert "-f" in command
-    assert str(models_override) in command
+    assert str(models_override) not in command
     assert str(model_runner_proxy_override) in command
     assert command[-2:] == ["up", "-d"]
 

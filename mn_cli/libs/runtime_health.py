@@ -23,6 +23,8 @@ from mn_cli.server_cmds import (
     LEGACY_API_PORT,
     LEGACY_GRPC_PORT,
     LEGACY_WEB_UI_PORT,
+    RUNTIME_COMPOSE_FILE,
+    RUNTIME_MODELS_OVERRIDE_FILE,
     _start_api_if_installed,
     _start_web_ui_if_installed,
     _runtime_base_env,
@@ -100,6 +102,7 @@ def collect_runtime_status(timeout: float = 3.0, *, core_client: Any | None = No
 def collect_runtime_doctor(timeout: float = 3.0, *, core_client: Any | None = None) -> dict[str, Any]:
     status_report = collect_runtime_status(timeout, core_client=core_client)
     foundation = [
+        _runtime_compose_model_override_component(),
         _docker_model_runner_component(timeout),
         _litellm_gateway_component(timeout),
     ]
@@ -236,6 +239,7 @@ def print_doctor_report(report: dict[str, Any]) -> None:
         ("core_grpc", "Core gRPC"),
         ("api", "REST API"),
         ("web_ui", "Web UI"),
+        ("runtime_compose_model_override", "Compose model override"),
         ("docker_model_runner", "Docker Model Runner"),
         ("litellm_gateway", "LiteLLM gateway"),
     ):
@@ -296,6 +300,47 @@ def _docker_model_runner_component(timeout: float) -> dict[str, Any]:
         "running": running,
         "endpoint_ok": endpoint_ok,
         "models": models,
+        "detail": detail,
+    }
+
+
+def _runtime_compose_model_override_component() -> dict[str, Any]:
+    path = RUNTIME_COMPOSE_FILE.parent / RUNTIME_MODELS_OVERRIDE_FILE
+    if not path.exists():
+        return {
+            "name": "runtime_compose_model_override",
+            "status": "passing",
+            "target": str(path),
+            "detail": "no legacy Compose model override present",
+        }
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return {
+            "name": "runtime_compose_model_override",
+            "status": "critical",
+            "target": str(path),
+            "detail": f"legacy Compose model override exists but could not be inspected: {exc}",
+        }
+
+    marker_found = (
+        "llm-runtime-model" in text
+        or "endpoint_var:" in text
+        or "model_var:" in text
+        or text.lstrip().startswith("models:")
+        or "\nmodels:" in text
+    )
+    detail = (
+        "legacy docker-compose.models.yml exists and can trigger eager Docker Model Runner model pulls; "
+        "delete it or rerun runtime install/start with the updated CLI"
+    )
+    if not marker_found:
+        detail = "unexpected docker-compose.models.yml exists; current runtime no longer uses this override"
+    return {
+        "name": "runtime_compose_model_override",
+        "status": "critical",
+        "target": str(path),
         "detail": detail,
     }
 

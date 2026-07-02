@@ -31,7 +31,6 @@ from mn_cli.runtime.server import (
     _docker_model_command_available,
     _ensure_docker_model_runner,
     _runtime_compose_models_override_file,
-    _write_runtime_compose_models_override,
     _is_default_llm_model,
 )
 
@@ -66,6 +65,5 @@ __all__ = [
     "_docker_model_command_available",
     "_ensure_docker_model_runner",
     "_runtime_compose_models_override_file",
-    "_write_runtime_compose_models_override",
     "_is_default_llm_model",
 ]

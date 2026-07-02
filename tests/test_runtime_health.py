@@ -262,6 +262,48 @@ def test_runtime_doctor_detects_stale_litellm_gateway_config(mocker):
     assert "stale config" in gateway["detail"]
 
 
+def test_runtime_doctor_detects_legacy_compose_model_override(mocker, tmp_path):
+    compose_file = tmp_path / ".mn" / "docker-compose.yml"
+    compose_file.parent.mkdir(parents=True)
+    compose_file.write_text("services: {}\n", encoding="utf-8")
+    (compose_file.parent / "docker-compose.models.yml").write_text(
+        "services:\n"
+        "  mirror-neuron-core:\n"
+        "    models:\n"
+        "      llm-runtime-model:\n"
+        "        endpoint_var: MN_DOCKER_MODEL_RUNNER_API_BASE\n"
+        "        model_var: MN_DOCKER_MODEL_RUNNER_MODEL\n"
+        "\n"
+        "models:\n"
+        "  llm-runtime-model:\n"
+        "    model: \"${MN_LLM_MODEL_RUNNER_MODEL:-nemotron3}\"\n",
+        encoding="utf-8",
+    )
+    mocker.patch("mn_cli.libs.runtime_health.RUNTIME_COMPOSE_FILE", compose_file)
+    mocker.patch(
+        "mn_cli.libs.runtime_health.collect_runtime_status",
+        return_value=_status_report(overall="passing"),
+    )
+    mocker.patch("mn_cli.libs.runtime_health.docker_status", return_value={"running": True})
+    mocker.patch("mn_cli.libs.runtime_health.dmr_api_list_models", return_value=[])
+    mocker.patch(
+        "mn_cli.libs.runtime_health.validate_litellm_gateway_config_file",
+        return_value={"ok": True, "path": str(tmp_path / "gateway.yaml"), "model_count": 0, "models": []},
+    )
+    mocker.patch(
+        "mn_cli.libs.runtime_health.litellm_gateway_health",
+        return_value={"ok": True, "url": "http://127.0.0.1:4000/v1/models", "models": []},
+    )
+
+    report = runtime_health.collect_runtime_doctor(timeout=1)
+
+    component = report["foundation"]["runtime_compose_model_override"]
+    assert report["overall"] == "critical"
+    assert component["status"] == "critical"
+    assert "eager Docker Model Runner model pulls" in component["detail"]
+    assert component["target"].endswith("docker-compose.models.yml")
+
+
 def test_runtime_doctor_command_json_exits_nonzero_for_stale_gateway(mocker):
     mocker.patch(
         "mn_cli.libs.runtime_health.collect_runtime_doctor",

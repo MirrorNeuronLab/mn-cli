@@ -1363,7 +1363,7 @@ def _record_runtime_model_install(entry: dict[str, Any]) -> None:
 
         record_runtime_model_install(entry)
     except Exception as exc:
-        console.print(f"[yellow]Warning: could not update runtime model Compose wiring: {exc}[/yellow]")
+        console.print(f"[yellow]Warning: could not update runtime model advertisement: {exc}[/yellow]")
 
 
 def _entry_payload(
