@@ -2008,6 +2008,15 @@ def _network_core_env(
                 str(env.get("MN_NATIVE_SDK_GRPC_PORT") or DEFAULT_NATIVE_SDK_GRPC_PORT),
                 DEFAULT_NATIVE_SDK_GRPC_PORT,
             ),
+            "MN_NATIVE_SDK_GRPC_ADVERTISE_HOST": env.get("MN_NATIVE_SDK_GRPC_ADVERTISE_HOST") or host,
+            "MN_NATIVE_SDK_GRPC_ADVERTISE_PORT": _valid_port_text(
+                str(
+                    env.get("MN_NATIVE_SDK_GRPC_ADVERTISE_PORT")
+                    or env.get("MN_NATIVE_SDK_GRPC_PORT")
+                    or DEFAULT_NATIVE_SDK_GRPC_PORT
+                ),
+                DEFAULT_NATIVE_SDK_GRPC_PORT,
+            ),
             "ERL_EPMD_ADDRESS": "0.0.0.0",
             "ERL_EPMD_PORT": str(epmd_port),
             "ERL_AFLAGS": _erl_aflags(dist_port),
@@ -2028,6 +2037,55 @@ def _network_native_sdk_grpc_target(env: dict[str, str], *, docker_network_mode:
         DEFAULT_NATIVE_SDK_GRPC_PORT,
     )
     return f"{DEFAULT_NATIVE_SDK_GRPC_TARGET_HOST}:{native_port}"
+
+
+def _persist_worker_compose_foundation_env(env: dict[str, str]) -> None:
+    if not runtime_compose_available():
+        return
+    updates = {
+        "MN_NETWORK_ADVERTISE_HOST": env.get("MN_NETWORK_ADVERTISE_HOST", ""),
+        "MN_NATIVE_SDK_GRPC_HOST": env.get("MN_NATIVE_SDK_GRPC_HOST", DEFAULT_NATIVE_SDK_GRPC_HOST),
+        "MN_NATIVE_SDK_GRPC_PORT": env.get("MN_NATIVE_SDK_GRPC_PORT", DEFAULT_NATIVE_SDK_GRPC_PORT),
+        "MN_NATIVE_SDK_GRPC_ADVERTISE_HOST": env.get("MN_NATIVE_SDK_GRPC_ADVERTISE_HOST", ""),
+        "MN_NATIVE_SDK_GRPC_ADVERTISE_PORT": env.get(
+            "MN_NATIVE_SDK_GRPC_ADVERTISE_PORT",
+            env.get("MN_NATIVE_SDK_GRPC_PORT", DEFAULT_NATIVE_SDK_GRPC_PORT),
+        ),
+        "MN_NATIVE_SDK_GRPC_TARGET": env.get("MN_NATIVE_SDK_GRPC_TARGET", ""),
+        "MN_NODE_NAME": env.get("MN_NODE_NAME", ""),
+        "MN_NODE_ROLE": env.get("MN_NODE_ROLE", "runtime"),
+        "MN_DOCKER_NETWORK_MODE": env.get("MN_DOCKER_NETWORK_MODE", "disabled"),
+        "MN_DOCKER_NETWORK_NAME": env.get("MN_DOCKER_NETWORK_NAME", ""),
+    }
+    _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
+
+
+def _start_worker_compose_foundation_services(env: dict[str, str]) -> None:
+    if not runtime_compose_available():
+        return
+    services = ["mn-litellm-proxy"]
+    try:
+        compose_text = RUNTIME_COMPOSE_FILE.read_text(encoding="utf-8")
+    except OSError:
+        compose_text = ""
+    if "mn-native-sdk-grpc:" in compose_text:
+        services.insert(0, "mn-native-sdk-grpc")
+    available_services = [service for service in services if f"{service}:" in compose_text]
+    if not available_services:
+        return
+    _persist_worker_compose_foundation_env(env)
+    try:
+        subprocess.run(
+            runtime_compose_cmd("up", "-d", *available_services),
+            check=True,
+            stdout=subprocess.DEVNULL,
+            env={**os.environ.copy(), **env},
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        console.print(
+            "[yellow]=> Warning: worker Compose gateway services did not start; "
+            "remote LLM routing may be unavailable on this node.[/yellow]"
+        )
 
 
 def _network_shared_storage_roots(env: dict[str, str]) -> tuple[str, str, str]:
@@ -2700,6 +2758,8 @@ def _start_network_seed(
         )
     env = _ensure_syncthing_for_runtime(env, advertised_host=host)
     _start_native_sdk_grpc_if_installed(env)
+    if worker_node:
+        _start_worker_compose_foundation_services(env)
 
     console.print("=> Starting MirrorNeuron core-only exposed node...")
     _start_network_core(
@@ -5246,6 +5306,14 @@ def _build_core_docker_run_command(
         cmd.extend(["-e", f"MN_MODEL_SERVICE_NODE_NAME={env['MN_MODEL_SERVICE_NODE_NAME']}"])
     if env.get("MN_NATIVE_SDK_GRPC_TARGET"):
         cmd.extend(["-e", f"MN_NATIVE_SDK_GRPC_TARGET={env['MN_NATIVE_SDK_GRPC_TARGET']}"])
+    if env.get("MN_NATIVE_SDK_GRPC_HOST"):
+        cmd.extend(["-e", f"MN_NATIVE_SDK_GRPC_HOST={env['MN_NATIVE_SDK_GRPC_HOST']}"])
+    if env.get("MN_NATIVE_SDK_GRPC_PORT"):
+        cmd.extend(["-e", f"MN_NATIVE_SDK_GRPC_PORT={env['MN_NATIVE_SDK_GRPC_PORT']}"])
+    if env.get("MN_NATIVE_SDK_GRPC_ADVERTISE_HOST"):
+        cmd.extend(["-e", f"MN_NATIVE_SDK_GRPC_ADVERTISE_HOST={env['MN_NATIVE_SDK_GRPC_ADVERTISE_HOST']}"])
+    if env.get("MN_NATIVE_SDK_GRPC_ADVERTISE_PORT"):
+        cmd.extend(["-e", f"MN_NATIVE_SDK_GRPC_ADVERTISE_PORT={env['MN_NATIVE_SDK_GRPC_ADVERTISE_PORT']}"])
     cmd.extend(["-e", f"MN_NETWORK_REDIS_HOST={env['MN_NETWORK_REDIS_HOST']}"])
     cmd.extend(["-e", f"MN_NETWORK_REDIS_PORT={env['MN_NETWORK_REDIS_PORT']}"])
     cmd.extend(["-e", f"MN_ARTIFACT_ENABLED={env['MN_ARTIFACT_ENABLED']}"])

@@ -105,7 +105,47 @@ def test_network_core_env_includes_native_sdk_target_for_worker_core(monkeypatch
 
     assert env["MN_NATIVE_SDK_GRPC_HOST"] == "0.0.0.0"
     assert env["MN_NATIVE_SDK_GRPC_PORT"] == "55052"
+    assert env["MN_NATIVE_SDK_GRPC_ADVERTISE_HOST"] == "192.168.4.173"
+    assert env["MN_NATIVE_SDK_GRPC_ADVERTISE_PORT"] == "55052"
     assert env["MN_NATIVE_SDK_GRPC_TARGET"] == "host.docker.internal:55052"
+
+
+def test_network_core_env_advertises_worker_native_sdk_grpc_in_hardware(monkeypatch):
+    monkeypatch.setattr(server.os, "uname", lambda: type("Uname", (), {"sysname": "Linux"})())
+    monkeypatch.setattr(server, "_ensure_redis_ha_settings", lambda env, **_kwargs: env)
+
+    def fake_node_resource_environment(*, env, **_kwargs):
+        native = {
+            "enabled": True,
+            "host": env["MN_NATIVE_SDK_GRPC_ADVERTISE_HOST"],
+            "port": int(env["MN_NATIVE_SDK_GRPC_ADVERTISE_PORT"]),
+            "target": f"{env['MN_NATIVE_SDK_GRPC_ADVERTISE_HOST']}:{env['MN_NATIVE_SDK_GRPC_ADVERTISE_PORT']}",
+            "bind_host": env["MN_NATIVE_SDK_GRPC_HOST"],
+        }
+        return {"MN_NODE_HARDWARE_JSON": json.dumps({"native_sdk_grpc": native})}
+
+    monkeypatch.setattr(server, "node_resource_environment", fake_node_resource_environment)
+    monkeypatch.setattr(server, "_detect_host_gpu_count", lambda: 0)
+
+    env = server._network_core_env(
+        token="join-token",
+        host="192.168.4.173",
+        docker_network_mode="disabled",
+        docker_network_name="mirror-neuron-runtime",
+        node_alias="spark",
+        node_name="mirror_neuron@192.168.4.173",
+        cluster_nodes="mirror_neuron@192.168.4.173",
+        grpc_port=55051,
+        epmd_port=54369,
+        dist_port=54370,
+        redis_url="redis://127.0.0.1:6379/0",
+        redis_public_host="192.168.4.173",
+        redis_public_port=56379,
+    )
+
+    hardware = json.loads(env["MN_NODE_HARDWARE_JSON"])
+    assert hardware["native_sdk_grpc"]["target"] == "192.168.4.173:55052"
+    assert hardware["native_sdk_grpc"]["bind_host"] == "0.0.0.0"
 
 
 def test_network_core_env_uses_host_docker_internal_for_networked_container(monkeypatch):
@@ -140,3 +180,54 @@ def test_native_sdk_grpc_command_falls_back_to_importable_source_module(monkeypa
 
     assert command is not None
     assert command[-2:] == ["-m", "mn_sdk.native_runtime_service"]
+
+
+def test_worker_compose_foundation_services_start_gateway_only(monkeypatch, tmp_path):
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_env = tmp_path / "docker-compose.env"
+    compose_file.write_text(
+        "name: mirror-neuron\nservices:\n  mn-native-sdk-grpc:\n    image: mirror-neuron-core:latest\n  mn-litellm-proxy:\n    image: mirror-neuron-core:latest\n",
+        encoding="utf-8",
+    )
+    compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n", encoding="utf-8")
+    monkeypatch.setattr(server, "RUNTIME_COMPOSE_FILE", compose_file)
+    monkeypatch.setattr(server, "RUNTIME_COMPOSE_ENV", compose_env)
+    monkeypatch.setattr(
+        server,
+        "runtime_compose_cmd",
+        lambda *args: ["docker", "compose", *args],
+    )
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append((command, kwargs))
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr(server.subprocess, "run", fake_run)
+
+    server._start_worker_compose_foundation_services(
+        {
+            "MN_NETWORK_ADVERTISE_HOST": "192.168.4.173",
+            "MN_NATIVE_SDK_GRPC_HOST": "0.0.0.0",
+            "MN_NATIVE_SDK_GRPC_PORT": "55052",
+            "MN_NATIVE_SDK_GRPC_ADVERTISE_HOST": "192.168.4.173",
+            "MN_NATIVE_SDK_GRPC_ADVERTISE_PORT": "55052",
+            "MN_NATIVE_SDK_GRPC_TARGET": "host.docker.internal:55052",
+            "MN_NODE_NAME": "mirror_neuron@192.168.4.173",
+            "MN_NODE_ROLE": "runtime",
+            "MN_DOCKER_NETWORK_MODE": "disabled",
+            "MN_DOCKER_NETWORK_NAME": "mirror-neuron-runtime",
+        }
+    )
+
+    assert commands[0][0] == [
+        "docker",
+        "compose",
+        "up",
+        "-d",
+        "mn-native-sdk-grpc",
+        "mn-litellm-proxy",
+    ]
+    written = server._read_env_file(compose_env)
+    assert written["MN_NATIVE_SDK_GRPC_ADVERTISE_HOST"] == "192.168.4.173"
+    assert written["MN_NATIVE_SDK_GRPC_TARGET"] == "host.docker.internal:55052"
