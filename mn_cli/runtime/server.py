@@ -101,6 +101,8 @@ LOG_DIR = DIR / "logs"
 BEAM_PID_FILE = PID_DIR / "beam.pid"
 API_PID_FILE = PID_DIR / "api.pid"
 API_WATCHDOG_PID_FILE = PID_DIR / "api-watchdog.pid"
+NATIVE_SDK_GRPC_PID_FILE = PID_DIR / "native-sdk-grpc.pid"
+NATIVE_SDK_GRPC_WATCHDOG_PID_FILE = PID_DIR / "native-sdk-grpc-watchdog.pid"
 WEB_UI_PID_FILE = PID_DIR / "web-ui.pid"
 WEB_UI_WATCHDOG_PID_FILE = PID_DIR / "web-ui-watchdog.pid"
 API_TOKEN_FILE = DIR / "api.token"
@@ -108,6 +110,8 @@ REDIS_PASSWORD_FILE = DIR / "redis.password"
 BEAM_LOG = LOG_DIR / "beam.log"
 API_LOG = LOG_DIR / "api.log"
 API_WATCHDOG_LOG = LOG_DIR / "api-watchdog.log"
+NATIVE_SDK_GRPC_LOG = LOG_DIR / "native-sdk-grpc.log"
+NATIVE_SDK_GRPC_WATCHDOG_LOG = LOG_DIR / "native-sdk-grpc-watchdog.log"
 WEB_UI_LOG = LOG_DIR / "web-ui.log"
 WEB_UI_WATCHDOG_LOG = LOG_DIR / "web-ui-watchdog.log"
 VENV_DIR = Path.home() / ".local" / "share" / "mn_venv"
@@ -151,6 +155,12 @@ def _source_checkout_api_dir() -> Optional[Path]:
     return api_dir if (api_dir / "mn_api").is_dir() else None
 
 
+def _source_checkout_sdk_dir() -> Optional[Path]:
+    checkout_dir = Path(__file__).resolve().parents[2]
+    sdk_dir = checkout_dir / "mn-python-sdk"
+    return sdk_dir if (sdk_dir / "mn_sdk").is_dir() else None
+
+
 def _prepend_pythonpath(env: dict[str, str], path: Path) -> None:
     current = env.get("PYTHONPATH")
     value = str(path)
@@ -178,6 +188,10 @@ WEB_UI_DIRS = _web_ui_dirs()
 DEFAULT_HOST = "localhost"
 DEFAULT_GRPC_PORT = "55051"
 DEFAULT_API_PORT = "54001"
+DEFAULT_NATIVE_SDK_GRPC_PORT = "55052"
+DEFAULT_NATIVE_SDK_GRPC_HOST = "127.0.0.1"
+DEFAULT_NATIVE_SDK_GRPC_TARGET_HOST = "host.docker.internal"
+DEFAULT_NATIVE_SDK_GRPC_COMPOSE_SERVICE = "mn-native-sdk-grpc"
 DEFAULT_EPMD_PORT = "54369"
 DEFAULT_DIST_PORT = "54370"
 DEFAULT_WEB_UI_PORT = "55173"
@@ -1582,7 +1596,13 @@ def _handshake_node_info(
     except OSError:
         pass
     shared_env = _shared_storage_env_from_runtime_env(_runtime_base_env(runtime_compose_available()))
-    grpc_port_value = _parse_port(grpc_port or os.getenv("MN_GRPC_PORT") or DEFAULT_GRPC_PORT, int(DEFAULT_GRPC_PORT))
+    grpc_port_value = _parse_port(
+        grpc_port
+        or os.getenv("MN_GRPC_ADVERTISE_PORT")
+        or os.getenv("MN_GRPC_PORT")
+        or DEFAULT_GRPC_PORT,
+        int(DEFAULT_GRPC_PORT),
+    )
 
     return {
         "node_name": node_name or _network_node_name(local_host),
@@ -1609,7 +1629,11 @@ def _handshake_with_main_node(
     target = f"{seed_host}:{grpc_port}"
     advertised_node_name = local_node_name or (_network_node_name(local_host) if local_host else "")
     local_node_info = (
-        _handshake_node_info(local_host, node_name=advertised_node_name, grpc_port=os.getenv("MN_GRPC_PORT"))
+        _handshake_node_info(
+            local_host,
+            node_name=advertised_node_name,
+            grpc_port=os.getenv("MN_GRPC_ADVERTISE_PORT") or os.getenv("MN_GRPC_PORT"),
+        )
         if local_host
         else None
     )
@@ -2381,6 +2405,7 @@ def _stop_local_runtime_for_worker() -> None:
     for pid_file, _name in [
         *web_ui_pid_files(),
         *api_pid_files(),
+        *native_sdk_grpc_pid_files(),
         (BEAM_PID_FILE, "Legacy Core Service"),
     ]:
         if not pid_file.exists():
@@ -3746,7 +3771,10 @@ def _runtime_endpoint_snapshot(env: dict[str, str], web_ui_available: bool = Fal
         env,
         str(env.get("MN_GRPC_BIND_HOST") or env.get("MN_CORE_HOST") or DEFAULT_HOST)
     )
-    grpc_port = _valid_port_text(str(env.get("MN_GRPC_PORT") or DEFAULT_GRPC_PORT), DEFAULT_GRPC_PORT)
+    grpc_port = _valid_port_text(
+        str(env.get("MN_GRPC_ADVERTISE_PORT") or env.get("MN_GRPC_PORT") or DEFAULT_GRPC_PORT),
+        DEFAULT_GRPC_PORT,
+    )
     grpc_target = str(env.get("MN_GRPC_TARGET") or "").strip()
     if not grpc_target:
         grpc_target = f"{grpc_host}:{grpc_port}"
@@ -3772,6 +3800,16 @@ def _runtime_endpoint_snapshot(env: dict[str, str], web_ui_available: bool = Fal
             "host": web_ui_host,
             "port": web_ui_port,
         }
+    native_sdk_host = _native_endpoint_host(str(env.get("MN_NATIVE_SDK_GRPC_HOST") or DEFAULT_NATIVE_SDK_GRPC_HOST))
+    native_sdk_port = _valid_port_text(
+        str(env.get("MN_NATIVE_SDK_GRPC_PORT") or DEFAULT_NATIVE_SDK_GRPC_PORT),
+        DEFAULT_NATIVE_SDK_GRPC_PORT,
+    )
+    snapshot["native_sdk_grpc"] = {
+        "target": str(env.get("MN_NATIVE_SDK_GRPC_TARGET") or f"{DEFAULT_NATIVE_SDK_GRPC_TARGET_HOST}:{native_sdk_port}"),
+        "host": native_sdk_host,
+        "port": native_sdk_port,
+    }
     return snapshot
 
 def _read_runtime_api_health(api_host: str, api_port: str, *, timeout_seconds: float = 2.0) -> Optional[dict[str, Any]]:
@@ -3869,6 +3907,10 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
         _env_or_default(adjusted, "MN_GRPC_PORT", DEFAULT_GRPC_PORT, LEGACY_GRPC_PORT),
         DEFAULT_GRPC_PORT,
     )
+    grpc_advertise_port = _valid_port_text(
+        str(adjusted.get("MN_GRPC_ADVERTISE_PORT") or grpc_port),
+        grpc_port,
+    )
     api_port = _valid_port_text(
         _env_or_default(adjusted, "MN_API_PORT", DEFAULT_API_PORT, LEGACY_API_PORT),
         DEFAULT_API_PORT,
@@ -3908,13 +3950,42 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
     grpc_target = adjusted.get("MN_GRPC_TARGET") or f"localhost:{grpc_port}"
     if not os.getenv("MN_GRPC_TARGET", "").strip() and grpc_target == f"localhost:{LEGACY_GRPC_PORT}":
         grpc_target = f"localhost:{grpc_port}"
+    native_sdk_port = _valid_port_text(
+        _env_or_default(adjusted, "MN_NATIVE_SDK_GRPC_PORT", DEFAULT_NATIVE_SDK_GRPC_PORT),
+        DEFAULT_NATIVE_SDK_GRPC_PORT,
+    )
+    native_sdk_host = adjusted.get("MN_NATIVE_SDK_GRPC_HOST") or DEFAULT_NATIVE_SDK_GRPC_HOST
+    native_sdk_proxy_port = _valid_port_text(
+        str(adjusted.get("MN_NATIVE_SDK_GRPC_PROXY_PORT") or native_sdk_port),
+        native_sdk_port,
+    )
+    native_sdk_proxy_target_host = (
+        adjusted.get("MN_NATIVE_SDK_GRPC_PROXY_TARGET_HOST") or DEFAULT_NATIVE_SDK_GRPC_TARGET_HOST
+    )
+    native_sdk_proxy_target_port = _valid_port_text(
+        str(adjusted.get("MN_NATIVE_SDK_GRPC_PROXY_TARGET_PORT") or native_sdk_port),
+        native_sdk_port,
+    )
+    existing_native_sdk_target = str(adjusted.get("MN_NATIVE_SDK_GRPC_TARGET") or "").strip()
+    legacy_native_sdk_target = f"{DEFAULT_NATIVE_SDK_GRPC_TARGET_HOST}:{native_sdk_port}"
+    if existing_native_sdk_target and existing_native_sdk_target != legacy_native_sdk_target:
+        native_sdk_target = existing_native_sdk_target
+    else:
+        native_sdk_target = f"{DEFAULT_NATIVE_SDK_GRPC_COMPOSE_SERVICE}:{native_sdk_proxy_port}"
 
     updates = {
         "MN_GRPC_BIND_HOST": adjusted.get("MN_GRPC_BIND_HOST") or "127.0.0.1",
         "MN_GRPC_PORT": grpc_port,
+        "MN_GRPC_ADVERTISE_PORT": grpc_advertise_port,
         "MN_GRPC_TARGET": grpc_target,
         "MN_API_HOST": adjusted.get("MN_API_HOST") or DEFAULT_HOST,
         "MN_API_PORT": api_port,
+        "MN_NATIVE_SDK_GRPC_HOST": native_sdk_host,
+        "MN_NATIVE_SDK_GRPC_PORT": native_sdk_port,
+        "MN_NATIVE_SDK_GRPC_TARGET": native_sdk_target,
+        "MN_NATIVE_SDK_GRPC_PROXY_PORT": native_sdk_proxy_port,
+        "MN_NATIVE_SDK_GRPC_PROXY_TARGET_HOST": native_sdk_proxy_target_host,
+        "MN_NATIVE_SDK_GRPC_PROXY_TARGET_PORT": native_sdk_proxy_target_port,
         "MN_DIST_PORT": dist_port,
         "MN_WEB_UI_HOST": adjusted.get("MN_WEB_UI_HOST") or DEFAULT_HOST,
         "MN_WEB_UI_PORT": web_ui_port,
@@ -4297,6 +4368,26 @@ def api_pid_files() -> tuple[tuple[Path, str], ...]:
         unique.append((pid_file, name))
     return tuple(unique)
 
+def native_sdk_grpc_pid_files() -> tuple[tuple[Path, str], ...]:
+    legacy_pid_dir = _legacy_checkout_pid_dir()
+    paths = [
+        (NATIVE_SDK_GRPC_WATCHDOG_PID_FILE, "Native SDK gRPC watchdog"),
+        (NATIVE_SDK_GRPC_PID_FILE, "Native SDK gRPC"),
+        (DIR / "pids" / "native-sdk-grpc-watchdog.pid", "Native SDK gRPC watchdog"),
+        (DIR / "pids" / "native-sdk-grpc.pid", "Native SDK gRPC"),
+        (legacy_pid_dir / "native-sdk-grpc-watchdog.pid", "Native SDK gRPC watchdog"),
+        (legacy_pid_dir / "native-sdk-grpc.pid", "Native SDK gRPC"),
+    ]
+    unique: list[tuple[Path, str]] = []
+    seen: set[str] = set()
+    for pid_file, name in paths:
+        key = str(pid_file)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append((pid_file, name))
+    return tuple(unique)
+
 def kill_tree(parent_pid: int):
     try:
         os.kill(parent_pid, 0)
@@ -4451,6 +4542,127 @@ def _api_command() -> Optional[list[str]]:
     if api_bin.exists():
         return [str(api_bin)]
     return None
+
+def _native_sdk_grpc_command() -> Optional[list[str]]:
+    native_bin = VENV_DIR / "bin" / "mn-native-sdk-grpc"
+    if native_bin.exists():
+        return [str(native_bin)]
+    if os.getenv("MN_NATIVE_SDK_GRPC_SOURCE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return [sys.executable, "-m", "mn_sdk.native_runtime_service"]
+    return None
+
+def _start_native_sdk_grpc_watchdog(env: dict[str, str]) -> subprocess.Popen:
+    command = _native_sdk_grpc_command()
+    if command is None:
+        raise FileNotFoundError("mn-native-sdk-grpc")
+    NATIVE_SDK_GRPC_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    NATIVE_SDK_GRPC_LOG.parent.mkdir(parents=True, exist_ok=True)
+    NATIVE_SDK_GRPC_WATCHDOG_LOG.parent.mkdir(parents=True, exist_ok=True)
+    config = {
+        "command": command,
+        "cwd": str(Path.cwd()),
+        "pid_file": str(NATIVE_SDK_GRPC_PID_FILE),
+        "log_file": str(NATIVE_SDK_GRPC_LOG),
+        "restart_delay": env.get("MN_NATIVE_SDK_GRPC_RESTART_DELAY_SECONDS", DEFAULT_WEB_UI_RESTART_DELAY_SECONDS),
+    }
+    with open(NATIVE_SDK_GRPC_WATCHDOG_LOG, "w") as out:
+        return subprocess.Popen(
+            [sys.executable, "-c", _web_ui_watchdog_script(), json.dumps(config)],
+            stdout=out,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            env=env,
+            start_new_session=True,
+        )
+
+def _wait_for_tcp(host: str, port: str, *, timeout_seconds: float = 5.0) -> bool:
+    deadline = time.monotonic() + max(timeout_seconds, 0.0)
+    target_host = _native_endpoint_host(host)
+    target_port = _parse_configured_port(port)
+    if target_port is None:
+        return False
+    while True:
+        try:
+            with socket.create_connection((target_host, target_port), timeout=1.0):
+                return True
+        except OSError:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.2)
+
+def _start_native_sdk_grpc_if_installed(
+    runtime_env: Optional[dict[str, str]] = None,
+    *,
+    restart_running: bool = False,
+    restart_reason: str = "",
+) -> bool:
+    if _native_sdk_grpc_command() is None:
+        console.print("[yellow]=> Warning: mn-native-sdk-grpc not found; native model preparation forwarding is unavailable.[/yellow]")
+        return False
+
+    env = os.environ.copy()
+    if runtime_env:
+        env.update(runtime_env)
+    source_sdk_dir = _source_checkout_sdk_dir()
+    if source_sdk_dir is not None:
+        _prepend_pythonpath(env, source_sdk_dir)
+    native_host = env.get("MN_NATIVE_SDK_GRPC_HOST") or DEFAULT_NATIVE_SDK_GRPC_HOST
+    native_port = _valid_port_text(str(env.get("MN_NATIVE_SDK_GRPC_PORT") or DEFAULT_NATIVE_SDK_GRPC_PORT), DEFAULT_NATIVE_SDK_GRPC_PORT)
+    env["MN_NATIVE_SDK_GRPC_HOST"] = native_host
+    env["MN_NATIVE_SDK_GRPC_PORT"] = native_port
+
+    watchdog_status = check_status(NATIVE_SDK_GRPC_WATCHDOG_PID_FILE)
+    child_status = check_status(NATIVE_SDK_GRPC_PID_FILE)
+    if watchdog_status == 0:
+        if _wait_for_tcp(native_host, native_port, timeout_seconds=2.0) and not restart_running:
+            console.print("[yellow]=> Native SDK gRPC watchdog is already running, skipping.[/yellow]")
+            return True
+        if restart_running:
+            detail = f" ({restart_reason})" if restart_reason else ""
+            console.print(f"[yellow]=> Native SDK gRPC watchdog is already running; restarting it{detail}.[/yellow]")
+        else:
+            console.print("[yellow]=> Native SDK gRPC watchdog is running, but the service is not responding; restarting it.[/yellow]")
+        try:
+            watchdog_pid = int(NATIVE_SDK_GRPC_WATCHDOG_PID_FILE.read_text().strip())
+            kill_tree(watchdog_pid)
+            time.sleep(1)
+        except (ValueError, OSError):
+            pass
+        NATIVE_SDK_GRPC_WATCHDOG_PID_FILE.unlink(missing_ok=True)
+        NATIVE_SDK_GRPC_PID_FILE.unlink(missing_ok=True)
+    elif watchdog_status == 1:
+        NATIVE_SDK_GRPC_WATCHDOG_PID_FILE.unlink(missing_ok=True)
+
+    if child_status == 0:
+        try:
+            pid = int(NATIVE_SDK_GRPC_PID_FILE.read_text().strip())
+            console.print(f"=> Restarting existing Native SDK gRPC service (PID: {pid}) under watchdog...")
+            kill_tree(pid)
+            time.sleep(1)
+        except (ValueError, OSError):
+            pass
+        NATIVE_SDK_GRPC_PID_FILE.unlink(missing_ok=True)
+    elif child_status == 1:
+        NATIVE_SDK_GRPC_PID_FILE.unlink(missing_ok=True)
+
+    stop_matching_sidecar_processes("mn-native-sdk-grpc", "Native SDK gRPC")
+
+    console.print(f"=> Starting Native SDK gRPC watchdog (model prep on {native_host}:{native_port})...")
+    try:
+        p_watchdog = _start_native_sdk_grpc_watchdog(env)
+    except FileNotFoundError:
+        console.print("[yellow]=> Warning: mn-native-sdk-grpc not found; native model preparation forwarding is unavailable.[/yellow]")
+        return False
+    NATIVE_SDK_GRPC_WATCHDOG_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    NATIVE_SDK_GRPC_WATCHDOG_PID_FILE.write_text(str(p_watchdog.pid))
+    if _wait_for_tcp(native_host, native_port, timeout_seconds=10.0):
+        console.print(f"   [green][Started][/green] Native SDK gRPC watchdog (PID: {p_watchdog.pid})")
+    else:
+        console.print(
+            f"   [yellow][Started][/yellow] Native SDK gRPC watchdog (PID: {p_watchdog.pid}); "
+            f"waiting for {native_host}:{native_port} to respond."
+        )
+    return True
 
 def _api_http_url(api_host: str, api_port: str, path: str = "/api/v1/health") -> str:
     display_host = _native_endpoint_host(api_host)
@@ -4865,6 +5077,8 @@ def _build_core_docker_run_command(
     cmd.extend(["-e", f"MN_NETWORK_ADVERTISE_HOST={env['MN_NETWORK_ADVERTISE_HOST']}"])
     if env.get("MN_MODEL_SERVICE_NODE_NAME"):
         cmd.extend(["-e", f"MN_MODEL_SERVICE_NODE_NAME={env['MN_MODEL_SERVICE_NODE_NAME']}"])
+    if env.get("MN_NATIVE_SDK_GRPC_TARGET"):
+        cmd.extend(["-e", f"MN_NATIVE_SDK_GRPC_TARGET={env['MN_NATIVE_SDK_GRPC_TARGET']}"])
     cmd.extend(["-e", f"MN_NETWORK_REDIS_HOST={env['MN_NETWORK_REDIS_HOST']}"])
     cmd.extend(["-e", f"MN_NETWORK_REDIS_PORT={env['MN_NETWORK_REDIS_PORT']}"])
     cmd.extend(["-e", f"MN_ARTIFACT_ENABLED={env['MN_ARTIFACT_ENABLED']}"])
@@ -4883,6 +5097,7 @@ def _build_core_docker_run_command(
         if env.get(node_env_key):
             cmd.extend(["-e", f"{node_env_key}={env[node_env_key]}"])
     cmd.extend(["-e", f"MN_GRPC_PORT={env['MN_GRPC_PORT']}"])
+    cmd.extend(["-e", f"MN_GRPC_ADVERTISE_PORT={env.get('MN_GRPC_ADVERTISE_PORT', env['MN_GRPC_PORT'])}"])
     cmd.extend(["-e", f"MN_DIST_PORT={env['MN_DIST_PORT']}"])
     cmd.extend(["-e", f"MN_RUNS_ROOT={env.get('MN_CONTAINER_RUNS_ROOT', DEFAULT_CONTAINER_RUNS_ROOT)}"])
     cmd.extend(["-e", f"MN_SHARED_STORAGE_ROOT={env.get('MN_RUNTIME_SHARED_STORAGE_ROOT', DEFAULT_RUNTIME_SHARED_STORAGE_ROOT)}"])
@@ -5037,6 +5252,7 @@ def _start_server(
             restart_running=bool(api_mismatches),
             restart_reason="runtime config changed",
         )
+        _start_native_sdk_grpc_if_installed(env)
         web_ui_available = _start_web_ui_if_installed(env)
         endpoint_snapshot = _write_runtime_endpoints_file(env, web_ui_available=web_ui_available)
         console.print(f"   Runtime endpoints: {RUNTIME_ENDPOINTS_FILE}")
@@ -5193,6 +5409,10 @@ def _start_server(
     env.setdefault("MN_BLUEPRINT_WEB_UI_PORT_END", DEFAULT_BLUEPRINT_WEB_UI_PORT_END)
     env.setdefault("MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE", DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE)
     env.setdefault("MN_GRPC_TARGET", f"localhost:{env.get('MN_GRPC_PORT', DEFAULT_GRPC_PORT)}")
+    env.setdefault("MN_GRPC_ADVERTISE_PORT", env.get("MN_GRPC_PORT", DEFAULT_GRPC_PORT))
+    env.setdefault("MN_NATIVE_SDK_GRPC_HOST", DEFAULT_NATIVE_SDK_GRPC_HOST)
+    env.setdefault("MN_NATIVE_SDK_GRPC_PORT", DEFAULT_NATIVE_SDK_GRPC_PORT)
+    env.setdefault("MN_NATIVE_SDK_GRPC_TARGET", f"{DEFAULT_NATIVE_SDK_GRPC_TARGET_HOST}:{env['MN_NATIVE_SDK_GRPC_PORT']}")
     env["MN_NETWORK_JOIN_TOKEN"] = network_token
     env["MN_NETWORK_ADVERTISE_HOST"] = advertised_host
     env["MN_NETWORK_REDIS_HOST"] = seed_redis_host
@@ -5260,6 +5480,12 @@ def _start_server(
                     "MN_CLUSTER_NODES": cluster_nodes,
                     "MN_REDIS_URL": redis_url,
                     "MN_CONTEXT_REDIS_URL": env["MN_CONTEXT_REDIS_URL"],
+                    "MN_NATIVE_SDK_GRPC_HOST": env.get("MN_NATIVE_SDK_GRPC_HOST", DEFAULT_NATIVE_SDK_GRPC_HOST),
+                    "MN_NATIVE_SDK_GRPC_PORT": env.get("MN_NATIVE_SDK_GRPC_PORT", DEFAULT_NATIVE_SDK_GRPC_PORT),
+                    "MN_NATIVE_SDK_GRPC_TARGET": env.get("MN_NATIVE_SDK_GRPC_TARGET", ""),
+                    "MN_NATIVE_SDK_GRPC_PROXY_PORT": env.get("MN_NATIVE_SDK_GRPC_PROXY_PORT", ""),
+                    "MN_NATIVE_SDK_GRPC_PROXY_TARGET_HOST": env.get("MN_NATIVE_SDK_GRPC_PROXY_TARGET_HOST", ""),
+                    "MN_NATIVE_SDK_GRPC_PROXY_TARGET_PORT": env.get("MN_NATIVE_SDK_GRPC_PROXY_TARGET_PORT", ""),
                     "MN_NETWORK_REDIS_HOST": seed_redis_host,
                     "MN_NETWORK_REDIS_PORT": str(seed_redis_port),
                     "MN_ARTIFACT_ENABLED": env["MN_ARTIFACT_ENABLED"],
@@ -5296,6 +5522,12 @@ def _start_server(
             RUNTIME_COMPOSE_ENV,
             {
                 "MN_NETWORK_ADVERTISE_HOST": env["MN_NETWORK_ADVERTISE_HOST"],
+                "MN_NATIVE_SDK_GRPC_HOST": env.get("MN_NATIVE_SDK_GRPC_HOST", DEFAULT_NATIVE_SDK_GRPC_HOST),
+                "MN_NATIVE_SDK_GRPC_PORT": env.get("MN_NATIVE_SDK_GRPC_PORT", DEFAULT_NATIVE_SDK_GRPC_PORT),
+                "MN_NATIVE_SDK_GRPC_TARGET": env.get("MN_NATIVE_SDK_GRPC_TARGET", ""),
+                "MN_NATIVE_SDK_GRPC_PROXY_PORT": env.get("MN_NATIVE_SDK_GRPC_PROXY_PORT", ""),
+                "MN_NATIVE_SDK_GRPC_PROXY_TARGET_HOST": env.get("MN_NATIVE_SDK_GRPC_PROXY_TARGET_HOST", ""),
+                "MN_NATIVE_SDK_GRPC_PROXY_TARGET_PORT": env.get("MN_NATIVE_SDK_GRPC_PROXY_TARGET_PORT", ""),
                 "MN_MODEL_SERVICE_NODE_NAME": env.get("MN_MODEL_SERVICE_NODE_NAME", ""),
                 "MN_NODE_NAME": env["MN_NODE_NAME"],
                 "MN_NODE_ROLE": env["MN_NODE_ROLE"],
@@ -5362,6 +5594,7 @@ def _start_server(
     console.print("=> Waiting for Elixir to boot...")
     time.sleep(3)
 
+    _start_native_sdk_grpc_if_installed(env)
     api_started = _start_api_if_installed(env)
 
     web_ui_available = _start_web_ui_if_installed(env)

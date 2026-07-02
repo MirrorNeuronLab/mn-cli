@@ -331,23 +331,19 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
     )
     mocker.patch("mn_cli.libs.run_cmds.client.get_resource", return_value=json.dumps(resource_report))
     mocker.patch("mn_cli.libs.run_cmds.model_installed", return_value=False)
-    prepare_model = mocker.patch(
-        "mn_cli.libs.run_cmds.client.prepare_runtime_model",
-        return_value=json.dumps(
-            {
-                "status": "installed",
+    cluster_install = mocker.patch(
+        "mn_cli.libs.run_cmds._install_runtime_cluster_model",
+        return_value={
+            "endpoint": {
+                "provider": "docker_model_runner",
+                "model": "ai/nemotron3:latest",
+                "runtime_model": "ai/nemotron3:latest",
+                "api_model": "ai/nemotron3:latest",
+                "api_base": "http://spark:12434/engines/v1",
                 "node": "spark",
-                "endpoint": {
-                    "provider": "docker_model_runner",
-                    "model": "ai/nemotron3:latest",
-                    "runtime_model": "ai/nemotron3:latest",
-                    "api_model": "ai/nemotron3:latest",
-                    "api_base": "http://spark:12434/engines/v1",
-                    "node": "spark",
-                    "source": "cluster_node_install",
-                },
-            }
-        ),
+                "source": "cluster_node_install",
+            },
+        },
     )
     install_model = mocker.patch(
         "mn_cli.libs.run_cmds.install_model_entry",
@@ -358,11 +354,11 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
     summary = run_cmds._prepare_runtime_models_for_run_or_exit(bundle_dir, manifest, env_overrides=env_overrides)
 
     assert summary["ok"] is True
-    assert summary["models"][0]["status"] == "installed"
-    assert "MN_MODEL_ENDPOINTS_JSON" not in env_overrides
+    assert summary["models"][0]["status"] == "runtime_node_installed"
+    assert "MN_MODEL_ENDPOINTS_JSON" in env_overrides
     assert "ai/nemotron3:latest" in json.loads(env_overrides["MN_PREPARED_RUNTIME_MODELS_JSON"])
-    install_model.assert_called_once()
-    prepare_model.assert_not_called()
+    install_model.assert_not_called()
+    cluster_install.assert_called_once()
     assert "Installing runtime model nemotron3:latest on spark" not in capsys.readouterr().out
     resolver = run_cmds._prepared_model_installed_resolver(summary)
     assert resolver("ai/nemotron3:latest", {"model": "nemotron3:latest"}) is True
@@ -373,6 +369,64 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
     )
     assert validation_manifest["runtime"]["models"]["primary"]["install_mode"] == "cluster_provided"
     assert validation_config["llm"]["configs"]["primary"]["install_mode"] == "cluster_provided"
+
+
+def test_runtime_cluster_model_install_uses_grpc_not_ssh(mocker):
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.get_system_summary",
+        return_value=json.dumps(
+            {
+                "nodes": [
+                    {
+                        "name": "mirror_neuron@192.168.4.173",
+                        "grpc_host": "192.168.4.173",
+                        "grpc_port": 55051,
+                    }
+                ]
+            }
+        ),
+    )
+    remote_client_class = mocker.patch("mn_cli.libs.run_cmds.Client")
+    remote_client = remote_client_class.return_value
+    remote_client.prepare_runtime_model.return_value = json.dumps(
+        {
+            "status": "installed",
+            "endpoint": {
+                "provider": "docker_model_runner",
+                "model": "nemotron3",
+                "runtime_model": "nemotron3",
+                "api_model": "nemotron3",
+                "api_base": "http://host.docker.internal:12434/engines/v1",
+                "node": "mirror_neuron@192.168.4.173",
+                "source": "sdk_native_runtime_service",
+            },
+        }
+    )
+    shell = mocker.patch("mn_cli.libs.run_cmds.subprocess.run")
+
+    result = run_cmds._install_runtime_cluster_model(
+        requirement={"context_size": 8192},
+        entry={"id": "nemotron3", "model": "nemotron3", "provider": "docker_model_runner"},
+        model={"id": "nemotron3", "model": "nemotron3"},
+        cluster={"node": "mirror_neuron@192.168.4.173"},
+        backend="llama.cpp",
+        context_size=8192,
+        force=False,
+    )
+
+    shell.assert_not_called()
+    remote_client_class.assert_called_once_with(
+        target="192.168.4.173:55051",
+        timeout=run_cmds.config.grpc_timeout_seconds,
+        auth_token=run_cmds.config.grpc_auth_token,
+        admin_token=run_cmds.config.grpc_admin_token,
+    )
+    remote_client.prepare_runtime_model.assert_called_once()
+    payload = remote_client.prepare_runtime_model.call_args.args[0]
+    assert payload["node"] == "mirror_neuron@192.168.4.173"
+    assert payload["model"] == "nemotron3"
+    assert payload["backend"] == "llama.cpp"
+    assert result["endpoint"]["node"] == "mirror_neuron@192.168.4.173"
 
 
 def test_prepare_runtime_models_uses_default_model_fallback_without_capable_cluster_node(

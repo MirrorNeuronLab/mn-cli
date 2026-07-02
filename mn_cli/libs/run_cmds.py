@@ -71,6 +71,7 @@ from mn_cli.shared import console, client, config, logger
 from mn_cli.terminal import use_progress
 from mn_cli.error_handler import handle_cli_error
 from mn_sdk import (
+    Client,
     ModelEndpointMap,
     cluster_provided_model,
     docker_api_model_name,
@@ -83,6 +84,7 @@ from mn_sdk import (
     prepare_job_submission,
     record_model_owner,
     required_blueprint_models,
+    resolve_cluster_model_placement,
     resolve_model_endpoint,
     resolve_model_entry,
     run_hardware_requirements_validation,
@@ -284,6 +286,8 @@ def _prepare_runtime_models_for_run_or_exit(
             resolve_model_endpoint=_resolve_runtime_model_endpoint,
             notify_model_install_start=_print_runtime_model_install_start,
             install_model_with_progress=_install_runtime_model_with_progress,
+            resolve_cluster_model=_resolve_runtime_cluster_model,
+            install_cluster_model=_install_runtime_cluster_model,
         ),
     )
     endpoints = summary.get("endpoints") if isinstance(summary.get("endpoints"), dict) else {}
@@ -425,6 +429,97 @@ def _install_runtime_model_with_progress(
             context_size=context_size,
             force=force,
         )
+
+
+def _resolve_runtime_cluster_model(*, requirement: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        return resolve_cluster_model_placement(entry, resource_report=_runtime_resource_report)
+    except Exception:
+        logger.exception("Failed to resolve cluster model placement for %s", entry.get("id") or entry.get("model"))
+        return None
+
+
+def _runtime_resource_report() -> dict[str, Any]:
+    return json.loads(client.get_resource())
+
+
+def _cluster_node_grpc_target(node_name: str) -> str:
+    node_name = str(node_name or "").strip()
+    if not node_name:
+        raise RuntimeError("cluster model placement did not return a target node")
+    try:
+        summary = json.loads(client.get_system_summary())
+    except Exception as exc:
+        raise RuntimeError(f"could not inspect cluster nodes for {node_name}: {exc}") from exc
+    nodes = summary.get("nodes") if isinstance(summary, dict) else None
+    for node in nodes or []:
+        if not isinstance(node, dict):
+            continue
+        if str(node.get("name") or node.get("node") or "").strip() != node_name:
+            continue
+        host = str(node.get("grpc_host") or node.get("address") or "").strip()
+        port = str(node.get("grpc_port") or "").strip()
+        if not host or not port:
+            raise RuntimeError(f"cluster node {node_name} does not advertise grpc_host/grpc_port")
+        return f"{host}:{port}"
+    raise RuntimeError(f"cluster node {node_name} was not found in runtime summary")
+
+
+def _install_runtime_cluster_model(
+    *,
+    requirement: dict[str, Any],
+    entry: dict[str, Any],
+    model: dict[str, Any],
+    cluster: dict[str, Any],
+    backend: str,
+    context_size: Any,
+    force: bool,
+) -> dict[str, Any]:
+    node = str(cluster.get("node") or "").strip()
+    model_ref = str(model.get("model") or docker_model_name(entry))
+    console.print(f"[cyan]Installing runtime model {model.get('id') or model_ref} on {node or 'selected runtime node'}...[/cyan]")
+    target = _cluster_node_grpc_target(node)
+    runtime_client = Client(
+        target=target,
+        timeout=config.grpc_timeout_seconds,
+        auth_token=config.grpc_auth_token,
+        admin_token=config.grpc_admin_token,
+    )
+    response = runtime_client.prepare_runtime_model(
+        {
+            "node": node,
+            "model": model_ref,
+            "id": model.get("id") or entry.get("id"),
+            "provider": str(entry.get("provider") or "docker_model_runner"),
+            "backend": str(backend or "auto"),
+            "context_size": context_size,
+            "force": force,
+            "source": "mn-python-sdk",
+        }
+    )
+    try:
+        payload = json.loads(response)
+    except Exception as exc:
+        raise RuntimeError(f"runtime model prepare returned invalid JSON: {response}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("runtime model prepare returned a non-object response")
+    if str(payload.get("status") or "").lower() in {"failed", "error"}:
+        raise RuntimeError(str(payload.get("error") or payload.get("message") or "runtime model prepare failed"))
+    docker_model = docker_model_name(entry)
+    api_model = str(entry.get("api_model") or docker_model)
+    endpoint = payload.get("endpoint") if isinstance(payload.get("endpoint"), dict) else {}
+    return {
+        "install": payload,
+        "endpoint": {
+            "provider": str(endpoint.get("provider") or entry.get("provider") or "docker_model_runner"),
+            "model": str(endpoint.get("model") or api_model),
+            "runtime_model": str(endpoint.get("runtime_model") or docker_model),
+            "api_model": str(endpoint.get("api_model") or api_model),
+            "api_base": str(endpoint.get("api_base") or "http://host.docker.internal:12434/engines/v1"),
+            "node": str(endpoint.get("node") or node),
+            "source": str(endpoint.get("source") or "cluster_node_install"),
+        },
+    }
 
 
 def _print_runtime_model_install_summary(summary: dict[str, Any]) -> None:
