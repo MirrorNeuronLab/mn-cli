@@ -276,6 +276,16 @@ def status(
     runtime_status(json_output=json_output, timeout=timeout)
 
 
+def doctor(
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
+    timeout: float = typer.Option(3.0, "--timeout", min=0.1, help="Per-component timeout in seconds."),
+):
+    """Check runtime foundation services before running blueprints"""
+    from mn_cli.libs.runtime_health import doctor as runtime_doctor
+
+    runtime_doctor(json_output=json_output, timeout=timeout)
+
+
 def restart_sidecars(
     api: bool = typer.Option(False, "--api", help="Restart the REST API sidecar."),
     web_ui: bool = typer.Option(False, "--web-ui", help="Restart the Web UI sidecar."),

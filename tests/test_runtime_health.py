@@ -232,6 +232,70 @@ def test_runtime_status_command_exits_nonzero_for_critical(mocker):
     assert json.loads(result.stdout)["overall"] == "critical"
 
 
+def test_runtime_doctor_detects_stale_litellm_gateway_config(mocker):
+    mocker.patch(
+        "mn_cli.libs.runtime_health.collect_runtime_status",
+        return_value=_status_report(overall="passing"),
+    )
+    mocker.patch("mn_cli.libs.runtime_health.docker_status", return_value={"running": True})
+    mocker.patch("mn_cli.libs.runtime_health.dmr_api_list_models", return_value={"gemma4:e2b"})
+    mocker.patch(
+        "mn_cli.libs.runtime_health.validate_litellm_gateway_config_file",
+        return_value={
+            "ok": True,
+            "path": "/tmp/.mn/models/litellm-gateway/config.yaml",
+            "model_count": 2,
+            "models": ["gemma4:e2b", "nemotron3"],
+        },
+    )
+    mocker.patch(
+        "mn_cli.libs.runtime_health.litellm_gateway_health",
+        return_value={"ok": True, "url": "http://127.0.0.1:4000/v1/models", "models": []},
+    )
+
+    report = runtime_health.collect_runtime_doctor(timeout=1)
+
+    gateway = report["foundation"]["litellm_gateway"]
+    assert report["overall"] == "critical"
+    assert gateway["status"] == "critical"
+    assert gateway["missing_models"] == ["gemma4:e2b", "nemotron3"]
+    assert "stale config" in gateway["detail"]
+
+
+def test_runtime_doctor_command_json_exits_nonzero_for_stale_gateway(mocker):
+    mocker.patch(
+        "mn_cli.libs.runtime_health.collect_runtime_doctor",
+        return_value={
+            "overall": "critical",
+            "checked_at": "2026-06-03T00:00:00Z",
+            "runtime": {},
+            "endpoints": {},
+            "components": [
+                {
+                    "name": "litellm_gateway",
+                    "status": "critical",
+                    "target": "http://127.0.0.1:4000/v1",
+                    "configured_models": ["nemotron3"],
+                    "live_models": [],
+                    "missing_models": ["nemotron3"],
+                    "detail": "LiteLLM gateway is serving stale config",
+                }
+            ],
+            "foundation": {},
+            "nodes": {},
+            "jobs": {},
+            "shared_storage": {},
+        },
+    )
+
+    result = runner.invoke(app, ["runtime", "doctor", "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["overall"] == "critical"
+    assert payload["components"][0]["missing_models"] == ["nemotron3"]
+
+
 def test_runtime_health_repair_rechecks_after_restart(mocker):
     reports = [
         {

@@ -9,7 +9,9 @@ from rich.console import Group
 from rich.padding import Padding
 from rich.table import Table
 from rich.text import Text
-from mn_sdk import RuntimeConfig, collect_runtime_status as sdk_collect_runtime_status, health_report_from_status
+from mn_sdk import RuntimeConfig, collect_runtime_status as sdk_collect_runtime_status, docker_status, health_report_from_status
+from mn_sdk.litellm_gateway import litellm_gateway_health, validate_litellm_gateway_config_file
+from mn_sdk.model_runtime import DOCKER_MODEL_RUNNER_HOST_API_BASE, dmr_api_list_models
 
 from mn_cli.runtime_state import read_json_file
 from mn_cli.shared import client, console
@@ -63,6 +65,20 @@ def status(
         raise typer.Exit(1)
 
 
+def doctor(
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
+    timeout: float = typer.Option(3.0, "--timeout", min=0.1, help="Per-component timeout in seconds."),
+) -> None:
+    """Check runtime foundation services before running blueprints."""
+    report = collect_runtime_doctor(timeout)
+    if json_output:
+        console.print_json(data=report)
+    else:
+        print_doctor_report(report)
+    if report["overall"] == "critical":
+        raise typer.Exit(1)
+
+
 def collect_runtime_health(timeout: float = 3.0, *, core_client: Any | None = None) -> dict[str, Any]:
     return health_report_from_status(
         collect_runtime_status(timeout, core_client=core_client)
@@ -79,6 +95,29 @@ def collect_runtime_status(timeout: float = 3.0, *, core_client: Any | None = No
         http_opener=urllib.request.urlopen,
         web_ui_installed=installed_web_ui,
     )
+
+
+def collect_runtime_doctor(timeout: float = 3.0, *, core_client: Any | None = None) -> dict[str, Any]:
+    status_report = collect_runtime_status(timeout, core_client=core_client)
+    foundation = [
+        _docker_model_runner_component(timeout),
+        _litellm_gateway_component(timeout),
+    ]
+    components = list(status_report.get("components") or []) + foundation
+    return {
+        "overall": overall_status(components),
+        "checked_at": status_report.get("checked_at"),
+        "runtime": status_report.get("runtime") or {},
+        "endpoints": status_report.get("endpoints") or {},
+        "components": components,
+        "foundation": {
+            component["name"]: component
+            for component in foundation
+        },
+        "nodes": status_report.get("nodes") or {},
+        "jobs": status_report.get("jobs") or {},
+        "shared_storage": status_report.get("shared_storage") or {},
+    }
 
 
 def _runtime_config(*, web_ui_installed: bool) -> RuntimeConfig:
@@ -184,6 +223,39 @@ def print_status_report(report: dict[str, Any]) -> None:
     console.print(Group(*sections))
 
 
+def print_doctor_report(report: dict[str, Any]) -> None:
+    components = {
+        str(component.get("name")): component
+        for component in report.get("components", [])
+        if isinstance(component, dict)
+    }
+    sections = [
+        Text.assemble("Runtime doctor: ", (str(report.get("overall") or "unknown"), _status_style(report.get("overall"))), overflow="fold")
+    ]
+    for name, label in (
+        ("core_grpc", "Core gRPC"),
+        ("api", "REST API"),
+        ("web_ui", "Web UI"),
+        ("docker_model_runner", "Docker Model Runner"),
+        ("litellm_gateway", "LiteLLM gateway"),
+    ):
+        component = components.get(name, {})
+        sections.append(
+            _status_section(
+                label,
+                str(component.get("status") or "unknown"),
+                [
+                    ("endpoint", component.get("target")),
+                    ("detail", component.get("error") or component.get("detail")),
+                    ("configured_models", _format_model_list(component.get("configured_models"))),
+                    ("live_models", _format_model_list(component.get("live_models"))),
+                    ("missing_models", _format_model_list(component.get("missing_models"))),
+                ],
+            )
+        )
+    console.print(Group(*sections))
+
+
 def overall_status(components: list[dict[str, Any]]) -> str:
     statuses = {component["status"] for component in components}
     if "critical" in statuses:
@@ -191,6 +263,81 @@ def overall_status(components: list[dict[str, Any]]) -> str:
     if "warning" in statuses:
         return "warning"
     return "passing"
+
+
+def _docker_model_runner_component(timeout: float) -> dict[str, Any]:
+    target = DOCKER_MODEL_RUNNER_HOST_API_BASE.rstrip("/")
+    try:
+        status = docker_status()
+    except Exception as exc:
+        status = {"error": str(exc)}
+    try:
+        models = sorted(dmr_api_list_models(timeout=timeout))
+        endpoint_ok = True
+    except Exception as exc:
+        models = []
+        endpoint_ok = False
+        endpoint_error = str(exc)
+    else:
+        endpoint_error = ""
+
+    status_text = json.dumps(status, sort_keys=True).lower() if isinstance(status, dict) else str(status).lower()
+    running = bool(isinstance(status, dict) and status.get("running")) or "running" in status_text
+    component_status = "passing" if running and endpoint_ok else "warning"
+    detail = "running"
+    if not running and isinstance(status, dict) and status.get("error"):
+        detail = str(status.get("error"))
+    elif not endpoint_ok:
+        detail = f"Docker Model Runner endpoint did not respond: {endpoint_error}"
+    return {
+        "name": "docker_model_runner",
+        "status": component_status,
+        "target": target,
+        "running": running,
+        "endpoint_ok": endpoint_ok,
+        "models": models,
+        "detail": detail,
+    }
+
+
+def _litellm_gateway_component(timeout: float) -> dict[str, Any]:
+    config = validate_litellm_gateway_config_file()
+    health = litellm_gateway_health(timeout=timeout)
+    configured = sorted(str(name) for name in config.get("models") or [])
+    live = sorted(str(name) for name in health.get("models") or [])
+    missing = sorted(set(configured) - set(live))
+    status = "passing"
+    detail = "configured aliases match live gateway"
+    if not config.get("ok"):
+        status = "critical"
+        detail = f"LiteLLM gateway config is invalid: {config.get('error')}"
+    elif not health.get("ok") and configured:
+        status = "critical"
+        detail = f"LiteLLM gateway is not reachable while {len(configured)} model aliases are configured: {health.get('error')}"
+    elif not health.get("ok"):
+        status = "warning"
+        detail = f"LiteLLM gateway is not reachable: {health.get('error')}"
+    elif missing:
+        status = "critical"
+        detail = (
+            "LiteLLM gateway is serving stale config: "
+            f"{len(missing)} configured model alias(es) are missing from /v1/models; "
+            "restart mn-litellm-proxy"
+        )
+    return {
+        "name": "litellm_gateway",
+        "status": status,
+        "target": str(health.get("url") or "").removesuffix("/models"),
+        "endpoint_ok": bool(health.get("ok")),
+        "config_ok": bool(config.get("ok")),
+        "config_path": config.get("path"),
+        "config_model_count": int(config.get("model_count") or len(configured)),
+        "configured_models": configured,
+        "live_models": live,
+        "missing_models": missing,
+        "detail": detail,
+        **({"error": health.get("error")} if health.get("error") and status == "critical" else {}),
+    }
 
 
 def _repair_runtime_sidecars(report: dict[str, Any]) -> bool:
@@ -273,6 +420,15 @@ def _format_counts(value: Any) -> str:
     if not isinstance(value, dict) or not value:
         return ""
     return ", ".join(f"{key}: {count}" for key, count in sorted(value.items()))
+
+
+def _format_model_list(value: Any) -> str:
+    if not isinstance(value, list) or not value:
+        return ""
+    text = ", ".join(str(item) for item in value[:8])
+    if len(value) > 8:
+        text += f", +{len(value) - 8} more"
+    return text
 
 
 def _availability_status(value: dict[str, Any]) -> str:
