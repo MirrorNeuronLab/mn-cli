@@ -1288,10 +1288,14 @@ def test_start_worker_node_prefers_env_join_token_over_stale_file(mocker, tmp_pa
     start_seed = mocker.patch("mn_cli.server_cmds._start_network_seed", return_value="primary-token")
     stop_runtime = mocker.patch("mn_cli.server_cmds._stop_local_runtime_for_worker")
     clear_redis = mocker.patch("mn_cli.server_cmds._clear_worker_redis_state")
+    leave = mocker.patch("mn_cli.server_cmds.leave_joined_cluster_before_stop", return_value=False)
+    clear_owner = mocker.patch("mn_cli.server_cmds._clear_join_owner_metadata")
 
     assert _start_worker_node(host="192.168.4.173") == "primary-token"
 
+    leave.assert_called_once_with()
     stop_runtime.assert_called_once()
+    clear_owner.assert_called_once_with()
     clear_redis.assert_called_once()
     assert token_file.read_text(encoding="utf-8").strip() == "primary-token"
     start_seed.assert_called_once()
@@ -1381,8 +1385,31 @@ def test_start_worker_node_clears_state_and_starts_worker(mocker, tmp_path):
     (network_redis_dir / "appendonly.aof").write_text("old-state")
     server_cmds.NETWORK_REDIS_ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
     server_cmds.NETWORK_REDIS_ENV_FILE.write_text("MN_REDIS_PORT=56379\n")
+    compose_env = tmp_path / "docker-compose.env"
+    claim_file = tmp_path / "cluster-join-claim.json"
+    compose_env.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "MN_JOIN_OWNER_NODE=mirror_neuron@192.168.4.35\n"
+        "MN_JOIN_OWNER_HOST=192.168.4.35\n"
+        "MN_JOIN_OWNER_GRPC_PORT=55051\n"
+        "MN_JOIN_WORKER_NODE=mirror_neuron@192.168.4.20\n"
+        "MN_CLUSTER_NODES=mirror_neuron@192.168.4.35,mirror_neuron@192.168.4.20\n"
+    )
+    claim_file.write_text(
+        json.dumps(
+            {
+                "state": "confirmed",
+                "owner_node": "mirror_neuron@192.168.4.35",
+                "owner_grpc_host": "192.168.4.35",
+                "owner_grpc_port": 55051,
+            }
+        )
+    )
 
     stop_runtime = mocker.patch('mn_cli.server_cmds._stop_local_runtime_for_worker')
+    leave = mocker.patch("mn_cli.server_cmds.leave_joined_cluster_before_stop", return_value=False)
+    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.server_cmds.JOIN_CLAIM_FILE", claim_file)
     refresh_token = mocker.patch('mn_cli.server_cmds._refresh_network_token', return_value="rotated-token")
     start_seed = mocker.patch('mn_cli.server_cmds._start_network_seed', return_value="worker-token")
     start_api = mocker.patch('mn_cli.server_cmds._start_api_if_installed')
@@ -1391,10 +1418,18 @@ def test_start_worker_node_clears_state_and_starts_worker(mocker, tmp_path):
 
     assert _start_worker_node(host="192.168.4.20", grpc_port=50055) == "worker-token"
 
+    leave.assert_called_once_with()
     stop_runtime.assert_called_once_with()
     refresh_token.assert_not_called()
     assert not network_redis_dir.exists()
     assert not server_cmds.NETWORK_REDIS_ENV_FILE.exists()
+    assert not claim_file.exists()
+    compose_env_text = compose_env.read_text()
+    assert "MN_JOIN_OWNER_NODE=" not in compose_env_text
+    assert "MN_JOIN_OWNER_HOST=" not in compose_env_text
+    assert "MN_JOIN_OWNER_GRPC_PORT=" not in compose_env_text
+    assert "MN_JOIN_WORKER_NODE=" not in compose_env_text
+    assert "MN_CLUSTER_NODES=mirror_neuron@192.168.4.35,mirror_neuron@192.168.4.20" in compose_env_text
     start_seed.assert_called_once_with(
         host="192.168.4.20",
         grpc_port=50055,

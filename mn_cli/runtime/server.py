@@ -2471,7 +2471,9 @@ def _start_worker_node(
     docker_network_name: Optional[str] = None,
 ) -> str:
     console.print("=> Preparing this box as a clean MirrorNeuron worker node...")
+    leave_joined_cluster_before_stop()
     _stop_local_runtime_for_worker()
+    _clear_join_owner_metadata()
     _clear_worker_redis_state()
     env_token = os.getenv("MN_NETWORK_JOIN_TOKEN", "").strip()
     if env_token:
