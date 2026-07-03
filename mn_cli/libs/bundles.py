@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Union
 
+from mn_sdk import expand_manifest_json_if_source
+
 BundlePath = Union[str, Path]
 
 
@@ -11,6 +13,7 @@ def read_bundle(path: BundlePath) -> tuple[str, dict[str, bytes]]:
     manifest_path = root / "manifest.json" if root.is_dir() else root
     manifest_json = manifest_path.read_text(encoding="utf-8")
     bundle_root = root if root.is_dir() else manifest_path.parent
+    manifest_json = expand_manifest_json_if_source(manifest_json, root_dir=bundle_root)
     return manifest_json, load_bundle_payloads(bundle_root)
 
 

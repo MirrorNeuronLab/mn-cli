@@ -3,6 +3,7 @@ import copy
 import json
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Annotated, Any, Optional
@@ -67,6 +68,8 @@ from mn_sdk.blueprint_support.python_workflow_bundle import (
 from mn_sdk import (
     cluster_provided_model as _cluster_provided_model,
     docker_model_name as _docker_model_name,
+    expand_manifest_source as _expand_manifest_source,
+    is_manifest_source as _is_manifest_source,
     load_model_catalog as _load_model_catalog,
     load_model_ownership as _load_model_ownership,
     record_model_owner as _record_model_owner,
@@ -109,11 +112,14 @@ def _load_blueprint_manifest(blueprint_dir: Path, target_name: str) -> dict[str,
         console.print(f"[red]Error: Blueprint '{target_name}' is missing manifest.json. Validation failed.[/red]")
         raise typer.Exit(1)
     try:
-        return json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except Exception as exc:
         logger.exception("Error parsing blueprint manifest")
         console.print(f"[red]Error parsing manifest.json for blueprint '{target_name}': {exc}[/red]")
         raise typer.Exit(1)
+    if isinstance(manifest, dict) and _is_manifest_source(manifest):
+        return _expand_manifest_source(manifest, root_dir=blueprint_dir)
+    return manifest
 
 
 def _prepare_blueprint_bundle_for_run(
@@ -1013,7 +1019,11 @@ def _load_manifest_for_local_route(bundle_dir: Path) -> dict[str, Any] | None:
         manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
     except Exception:
         return None
-    return manifest if isinstance(manifest, dict) else None
+    if not isinstance(manifest, dict):
+        return None
+    if _is_manifest_source(manifest):
+        return _expand_manifest_source(manifest, root_dir=bundle_dir)
+    return manifest
 
 
 @blueprint_app.command("doctor")
@@ -1614,6 +1624,8 @@ def _read_json_object(path: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         console.print(f"[red]{path} must contain a JSON object.[/red]")
         raise typer.Exit(1)
+    if path.name == "manifest.json" and _is_manifest_source(data):
+        return _expand_manifest_source(data, root_dir=path.parent)
     return data
 
 

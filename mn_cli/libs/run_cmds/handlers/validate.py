@@ -40,6 +40,9 @@ def validate(
                 console.print(f"[red]Error: manifest.json is not valid JSON. {e}[/red]")
                 raise typer.Exit(1)
 
+        if is_manifest_source(manifest):
+            manifest = expand_manifest_source(manifest, root_dir=bundle_dir)
+
         workflow_manifest = _is_workflow_manifest(manifest)
         if workflow_manifest:
             schema_issues = _validate_workflow_schema_issues(manifest)

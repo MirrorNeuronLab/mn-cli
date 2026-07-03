@@ -8,7 +8,9 @@ from typing import Any, Optional
 
 from mn_sdk import (
     DOCKER_MODEL_RUNNER_CONTAINER_API_BASE,
+    expand_manifest_source,
     expand_manifest_model_service_requirements,
+    is_manifest_source,
     resolve_llm_environment,
 )
 from mn_sdk.runtime_modules import (
@@ -303,6 +305,8 @@ def prepare_manifest_for_submission(
     enable_runtime_web_ui: bool = True,
 ) -> dict[str, Any]:
     prepared = json.loads(json.dumps(manifest_dict))
+    if is_manifest_source(prepared):
+        prepared = expand_manifest_source(prepared, root_dir=bundle_dir)
     ensure_runtime_modules_for_manifest(prepared, workspace_root=workspace_root())
     render_agent_templates_for_submission(prepared)
     metadata = dict(submission_metadata or {})
