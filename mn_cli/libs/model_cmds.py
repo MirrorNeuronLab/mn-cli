@@ -5,7 +5,10 @@ import os
 import hashlib
 import re
 import subprocess
+import socket
+import urllib.parse
 from pathlib import Path
+from functools import lru_cache
 from typing import Annotated, Any, Optional
 
 import typer
@@ -621,13 +624,7 @@ def _install_model_on_cluster_node(
     force: bool,
 ) -> dict[str, Any]:
     node_endpoint = _cluster_node_endpoint(node)
-    native_endpoint = _cluster_node_native_sdk_endpoint(node, node_endpoint["node"])
-    runtime_client = Client(
-        target=native_endpoint["target"],
-        timeout=_runtime_model_prepare_timeout_seconds(),
-        auth_token=cli_config.grpc_auth_token,
-        admin_token=cli_config.grpc_admin_token,
-    )
+    runtime_client = _native_runtime_client_for_node(node_endpoint)
     docker_model = docker_model_name(entry)
     response = runtime_client.prepare_runtime_model(
         {
@@ -799,7 +796,88 @@ def _local_runtime_node_name() -> str:
     return str((endpoint or {}).get("node_name") or "")
 
 
+def _cluster_node_is_local(node_endpoint: dict[str, Any]) -> bool:
+    node = node_endpoint.get("node")
+    if isinstance(node, dict) and (node.get("self?") is True or node.get("self") is True):
+        return True
+
+    host = str(node_endpoint.get("host") or "").strip().lower()
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    if host in _local_host_addresses():
+        return True
+
+    node_name = str(node.get("name") or node.get("node") or "").strip() if isinstance(node, dict) else ""
+    return bool(node_name and node_name == _local_runtime_node_name())
+
+
+@lru_cache(maxsize=1)
+def _local_host_addresses() -> set[str]:
+    hostnames = {"localhost", "127.0.0.1", "::1", "::", "0.0.0.0"}
+    candidates: set[str] = {address.lower() for address in hostnames}
+    try:
+        candidates.update(_resolved_local_hostnames())
+    except Exception:
+        pass
+    try:
+        parsed = urllib.parse.urlparse(f"//{cli_config.grpc_target}")
+        if parsed.hostname:
+            candidates.add(parsed.hostname.lower())
+    except Exception:
+        pass
+    for env_key in ("MN_API_HOST", "MN_GRPC_TARGET", "MN_API_BASE_URL"):
+        env_value = os.getenv(env_key, "")
+        if env_value:
+            candidates.update(_extract_host_candidates_from_text(env_value))
+    return candidates
+
+
+def _extract_host_candidates_from_text(value: str) -> set[str]:
+    candidates: set[str] = set()
+    text = str(value or "").strip()
+    if not text:
+        return candidates
+    for part in (text, f"//{text}"):
+        parsed = urllib.parse.urlparse(part)
+        if parsed.hostname:
+            candidates.add(parsed.hostname.lower())
+    return candidates
+
+
+def _resolved_local_hostnames() -> set[str]:
+    addresses: set[str] = set()
+    try:
+        addresses.add(socket.gethostbyname(socket.gethostname()).lower())
+    except Exception:
+        pass
+    try:
+        addresses.update(addr.lower() for addr in socket.gethostbyname_ex(socket.gethostname())[2])
+    except Exception:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM):
+            if len(info) >= 5:
+                entry = info[4][0]
+                if isinstance(entry, str):
+                    addresses.add(entry.lower().split("%", 1)[0])
+    except Exception:
+        pass
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect(("10.255.255.255", 1))
+            addresses.add(probe.getsockname()[0].lower())
+        finally:
+            probe.close()
+    except Exception:
+        pass
+    return addresses
+
+
 def _native_runtime_client_for_node(node_endpoint: dict[str, Any]) -> Client:
+    if _cluster_node_is_local(node_endpoint):
+        return client
+
     node_name = str(node_endpoint.get("node_name") or "")
     native_endpoint = _cluster_node_native_sdk_endpoint(node_name, node_endpoint["node"])
     return Client(

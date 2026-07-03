@@ -7,6 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 from mn_cli.main import app
+from mn_cli.libs import model_cmds
 from mn_sdk import HostHardwareProfile, load_model_ownership, load_model_proxies, load_model_remotes, upsert_model_remote
 
 
@@ -140,6 +141,68 @@ def test_model_remote_add_list_remove_json():
     assert removed.exit_code == 0
     assert json.loads(removed.stdout)["removed"]["name"] == "spark"
     assert load_model_remotes()["remotes"] == {}
+
+
+def test_cluster_node_is_local_uses_local_host_alias(monkeypatch):
+    node_endpoint = {
+        "node": {"name": "mirror_neuron@192.168.6.28"},
+        "host": "192.168.6.28",
+        "port": "55052",
+        "self": False,
+    }
+    monkeypatch.setattr("mn_cli.libs.model_cmds._local_host_addresses", lambda: {"192.168.6.28"})
+
+    assert model_cmds._cluster_node_is_local(node_endpoint) is True
+
+
+def test_cluster_node_is_not_local_for_remote_host(monkeypatch):
+    node_endpoint = {
+        "node": {"name": "mirror_neuron@192.168.4.173"},
+        "host": "192.168.4.173",
+        "port": "55052",
+        "self": False,
+    }
+    monkeypatch.setattr("mn_cli.libs.model_cmds._local_host_addresses", lambda: {"192.168.6.28"})
+
+    assert model_cmds._cluster_node_is_local(node_endpoint) is False
+
+
+def test_install_model_on_cluster_node_uses_local_runtime_client_for_local_host(mocker):
+    model = {"id": "gemma4:e2b", "model": "ai/gemma4:E2B", "provider": "docker_model_runner"}
+    node = "mirror_neuron@192.168.6.28"
+
+    def fake_cluster_node_endpoint(_node_name: str):
+        return {
+            "grpc_target": "192.168.6.28:55051",
+            "host": "192.168.6.28",
+            "port": "55051",
+            "node": {"name": node, "grpc_host": "192.168.6.28", "grpc_port": 55051},
+            "node_name": node,
+        }
+
+    mocker.patch("mn_cli.libs.model_cmds._cluster_node_endpoint", side_effect=fake_cluster_node_endpoint)
+    mocker.patch("mn_cli.libs.model_cmds._local_host_addresses", return_value={"192.168.6.28"})
+    mocker.patch(
+        "mn_cli.libs.model_cmds.Client",
+        side_effect=AssertionError("should use local runtime client for local host"),
+    )
+    fake_runtime_client = mocker.Mock()
+    fake_runtime_client.prepare_runtime_model.return_value = json.dumps(
+        {
+            "status": "installed",
+            "install": {"compatibility": {"backend": "llama.cpp"}},
+            "endpoint": {"api_base": "http://mn-litellm-proxy:4000/v1"},
+        }
+    )
+    mocker.patch("mn_cli.libs.model_cmds.client", fake_runtime_client)
+    mocker.patch("mn_cli.libs.model_cmds._sync_gateway_best_effort")
+    mocker.patch("mn_cli.libs.model_cmds._cluster_gateway_endpoint", return_value={"api_base": "http://mn-litellm-proxy:4000/v1"})
+
+    result = model_cmds._install_model_on_cluster_node(model, node=node, backend="llama.cpp", context_size=None, force=False)
+
+    assert result["entry"] == model
+    assert result["transport"] == "runtime_node_grpc"
+    fake_runtime_client.prepare_runtime_model.assert_called_once()
 
 
 def test_model_proxy_registers_provider_config_without_start(tmp_path, mocker):

@@ -571,6 +571,28 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
     ) in progress_descriptions[0]
 
 
+def test_cluster_node_endpoint_is_local_uses_local_host_alias(monkeypatch):
+    node_endpoint = {
+        "node": {"name": "mirror_neuron@192.168.6.28"},
+        "host": "192.168.6.28",
+        "port": "55051",
+    }
+    monkeypatch.setattr(run_cmds, "_local_host_addresses", lambda: {"192.168.6.28"})
+
+    assert run_cmds._cluster_node_endpoint_is_local(node_endpoint) is True
+
+
+def test_cluster_node_endpoint_is_not_local_for_remote_host(monkeypatch):
+    node_endpoint = {
+        "node": {"name": "mirror_neuron@192.168.4.173"},
+        "host": "192.168.4.173",
+        "port": "55051",
+    }
+    monkeypatch.setattr(run_cmds, "_local_host_addresses", lambda: {"192.168.6.28"})
+
+    assert run_cmds._cluster_node_endpoint_is_local(node_endpoint) is False
+
+
 def test_runtime_cluster_model_install_requires_native_sdk_grpc_metadata(mocker):
     mocker.patch(
         "mn_cli.libs.run_cmds.client.get_system_summary",
