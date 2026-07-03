@@ -2429,6 +2429,93 @@ def test_start_server_existing_api_starts_missing_compose_core(mocker, tmp_path)
     assert compose_up[1]["env"]["MN_NETWORK_ADVERTISE_HOST"] == "192.168.4.20"
     assert "MN_NETWORK_ADVERTISE_HOST=192.168.4.20" in compose_env.read_text(encoding="utf-8")
 
+def test_start_server_existing_api_recreates_compose_core_with_stale_grpc_tokens(mocker, tmp_path):
+    mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
+    (tmp_path / "api.pid").write_text("1234")
+    mocker.patch('mn_cli.server_cmds.os.kill') # check_status returns 0
+
+    compose_file = server_cmds.RUNTIME_COMPOSE_FILE
+    compose_env = server_cmds.RUNTIME_COMPOSE_ENV
+    compose_file.parent.mkdir(parents=True, exist_ok=True)
+    compose_file.write_text("services: {}\n", encoding="utf-8")
+    compose_env.write_text("MN_GRPC_PORT=55051\n", encoding="utf-8")
+    mocker.patch('mn_cli.server_cmds._docker_container_running', return_value=True)
+    mocker.patch(
+        'mn_cli.server_cmds._docker_container_env_value',
+        side_effect=lambda _name, key: {
+            "MN_GRPC_AUTH_TOKEN": "stale-auth-token",
+            "MN_GRPC_ADMIN_TOKEN": "stale-admin-token",
+        }.get(key),
+    )
+    mocker.patch('mn_cli.server_cmds._start_api_if_installed')
+    mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed', return_value=False)
+    mocker.patch('mn_cli.server_cmds._write_runtime_endpoints_file', return_value={"api": {}})
+    mocker.patch('mn_cli.server_cmds._print_service_endpoints')
+
+    calls = []
+
+    def mock_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        result = mocker.Mock()
+        result.stdout = ""
+        return result
+
+    mocker.patch('mn_cli.server_cmds.subprocess.run', side_effect=mock_run)
+
+    _start_server()
+
+    compose_up = next(
+        item
+        for item in calls
+        if item[0] == runtime_compose_cmd("up", "-d", "--force-recreate", "redis", "mirror-neuron-core")
+    )
+    assert compose_up[1]["env"]["MN_GRPC_AUTH_TOKEN"] == server_cmds.FIXED_GRPC_AUTH_TOKEN
+    assert compose_up[1]["env"]["MN_GRPC_ADMIN_TOKEN"] == server_cmds.FIXED_GRPC_ADMIN_TOKEN
+    compose_text = compose_env.read_text(encoding="utf-8")
+    assert "MN_GRPC_AUTH_TOKEN=mirror_neuron_password" in compose_text
+    assert "MN_GRPC_ADMIN_TOKEN=mirror_neuron_password_admin" in compose_text
+
+def test_start_server_existing_api_keeps_compose_core_when_grpc_tokens_current(mocker, tmp_path):
+    mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
+    (tmp_path / "api.pid").write_text("1234")
+    mocker.patch('mn_cli.server_cmds.os.kill') # check_status returns 0
+
+    compose_file = server_cmds.RUNTIME_COMPOSE_FILE
+    compose_env = server_cmds.RUNTIME_COMPOSE_ENV
+    compose_file.parent.mkdir(parents=True, exist_ok=True)
+    compose_file.write_text("services: {}\n", encoding="utf-8")
+    compose_env.write_text("MN_GRPC_PORT=55051\n", encoding="utf-8")
+    mocker.patch('mn_cli.server_cmds._docker_container_running', return_value=True)
+    mocker.patch(
+        'mn_cli.server_cmds._docker_container_env_value',
+        side_effect=lambda _name, key: {
+            "MN_GRPC_AUTH_TOKEN": server_cmds.FIXED_GRPC_AUTH_TOKEN,
+            "MN_GRPC_ADMIN_TOKEN": server_cmds.FIXED_GRPC_ADMIN_TOKEN,
+        }.get(key),
+    )
+    mocker.patch('mn_cli.server_cmds._start_api_if_installed')
+    mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed', return_value=False)
+    mocker.patch('mn_cli.server_cmds._write_runtime_endpoints_file', return_value={"api": {}})
+    mocker.patch('mn_cli.server_cmds._print_service_endpoints')
+
+    calls = []
+
+    def mock_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        result = mocker.Mock()
+        result.stdout = ""
+        return result
+
+    mocker.patch('mn_cli.server_cmds.subprocess.run', side_effect=mock_run)
+
+    _start_server()
+
+    assert any(item[0] == runtime_compose_cmd("up", "-d") for item in calls)
+    assert not any(
+        item[0] == runtime_compose_cmd("up", "-d", "--force-recreate", "redis", "mirror-neuron-core")
+        for item in calls
+    )
+
 def test_join_still_errors_when_local_api_already_running(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
     (tmp_path / "api.pid").write_text("1234")

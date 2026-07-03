@@ -56,6 +56,8 @@ def test_clear_reports_admin_token_mismatch(monkeypatch):
     rendered = output.getvalue()
     assert "ClearJobs admin authorization failed" in rendered
     assert "fixed gRPC admin token" in rendered
+    assert "mn runtime start to reconcile and recreate stale-token runtime containers" in rendered
+    assert "Retry after: mn runtime start; mn job clear" in rendered
 
 
 def test_node_list_strips_restart_history_and_reasons(monkeypatch):

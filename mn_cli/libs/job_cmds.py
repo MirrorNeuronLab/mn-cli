@@ -117,9 +117,9 @@ def clear():
             console.print("[red]Error: ClearJobs admin authorization failed.[/red]")
             console.print(
                 "The running core rejected the fixed gRPC admin token. "
-                "Recreate the runtime with the current fixed-token build."
+                "Run mn runtime start to reconcile and recreate stale-token runtime containers."
             )
-            console.print("Retry after: mn runtime stop; mn runtime start")
+            console.print("Retry after: mn runtime start; mn job clear")
             return
         handle_cli_error(e, console, 'clear')
     except Exception as e:

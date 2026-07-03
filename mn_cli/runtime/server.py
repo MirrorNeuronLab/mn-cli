@@ -1842,6 +1842,13 @@ def _docker_container_env_value(name: str, key: str) -> Optional[str]:
             return line[len(prefix) :].strip() or None
     return None
 
+def _running_core_has_stale_grpc_tokens(container_name: str = "mirror-neuron-core") -> bool:
+    expected = {
+        "MN_GRPC_AUTH_TOKEN": FIXED_GRPC_AUTH_TOKEN,
+        GRPC_ADMIN_TOKEN_ENV: FIXED_GRPC_ADMIN_TOKEN,
+    }
+    return any(_docker_container_env_value(container_name, key) != value for key, value in expected.items())
+
 def _docker_container_user(name: str) -> Optional[str]:
     try:
         result = subprocess.run(
@@ -5477,6 +5484,9 @@ def _start_server(
             core_running = _docker_container_running("mirror-neuron-core")
             if not core_running:
                 console.print("=> MirrorNeuron Core is not running; starting Docker runtime (Compose)...")
+            elif _running_core_has_stale_grpc_tokens():
+                console.print("=> MirrorNeuron Core has stale gRPC tokens; recreating Docker runtime (Compose)...")
+                force_runtime_recreate = True
             try:
                 compose_args = ["up", "-d"]
                 if force_runtime_recreate:
