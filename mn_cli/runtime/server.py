@@ -122,6 +122,8 @@ RUNTIME_MODELS_OVERRIDE_FILE = "docker-compose.models.yml"
 RUNTIME_WORKERS_OVERRIDE_FILE = "docker-compose.workers.yml"
 RUNTIME_MODEL_RUNNER_PROXY_OVERRIDE_FILE = "docker-compose.model-runner-proxy.yml"
 RUNTIME_SYNCTHING_OVERRIDE_FILE = "docker-compose.syncthing.yml"
+LITELLM_GATEWAY_CONFIG_DIR = DIR / "models" / "litellm-gateway"
+LITELLM_GATEWAY_CONFIG_FILE = LITELLM_GATEWAY_CONFIG_DIR / "config.yaml"
 DEFAULT_LLM_MODEL_RUNNER_MODEL = "gemma4:e2b"
 DEFAULT_CONTEXT_MODEL_RUNNER_MODEL = "hf.co/homerquan/mn-context-engine-model-v-Q4_K_M"
 DEFAULT_MODEL_RUNNER_PROXY_PORT = "12435"
@@ -195,6 +197,19 @@ DEFAULT_NATIVE_SDK_GRPC_PORT = "55052"
 DEFAULT_NATIVE_SDK_GRPC_HOST = "127.0.0.1"
 DEFAULT_NATIVE_SDK_GRPC_TARGET_HOST = "host.docker.internal"
 DEFAULT_NATIVE_SDK_GRPC_COMPOSE_SERVICE = "mn-native-sdk-grpc"
+
+
+def _ensure_litellm_gateway_host_config() -> None:
+    try:
+        LITELLM_GATEWAY_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        if not LITELLM_GATEWAY_CONFIG_FILE.exists():
+            LITELLM_GATEWAY_CONFIG_FILE.write_text('{"model_list":[]}\n', encoding="utf-8")
+    except OSError as exc:
+        logger.warning("Could not prepare LiteLLM gateway config path: %s", exc)
+        console.print(
+            "[yellow]=> Warning: LiteLLM gateway config is not host-writable; "
+            "model route sync may fail until file ownership is fixed.[/yellow]"
+        )
 DEFAULT_EPMD_PORT = "54369"
 DEFAULT_DIST_PORT = "54370"
 DEFAULT_WEB_UI_PORT = "55173"
@@ -2017,6 +2032,11 @@ def _network_core_env(
                 ),
                 DEFAULT_NATIVE_SDK_GRPC_PORT,
             ),
+            "MN_LITELLM_GATEWAY_BIND_HOST": env.get("MN_LITELLM_GATEWAY_BIND_HOST") or "0.0.0.0",
+            "MN_LITELLM_GATEWAY_PORT": _valid_port_text(
+                str(env.get("MN_LITELLM_GATEWAY_PORT") or "4000"),
+                "4000",
+            ),
             "ERL_EPMD_ADDRESS": "0.0.0.0",
             "ERL_EPMD_PORT": str(epmd_port),
             "ERL_AFLAGS": _erl_aflags(dist_port),
@@ -2052,6 +2072,8 @@ def _persist_worker_compose_foundation_env(env: dict[str, str]) -> None:
             env.get("MN_NATIVE_SDK_GRPC_PORT", DEFAULT_NATIVE_SDK_GRPC_PORT),
         ),
         "MN_NATIVE_SDK_GRPC_TARGET": env.get("MN_NATIVE_SDK_GRPC_TARGET", ""),
+        "MN_LITELLM_GATEWAY_BIND_HOST": env.get("MN_LITELLM_GATEWAY_BIND_HOST", ""),
+        "MN_LITELLM_GATEWAY_PORT": env.get("MN_LITELLM_GATEWAY_PORT", "4000"),
         "MN_NODE_NAME": env.get("MN_NODE_NAME", ""),
         "MN_NODE_ROLE": env.get("MN_NODE_ROLE", "runtime"),
         "MN_DOCKER_NETWORK_MODE": env.get("MN_DOCKER_NETWORK_MODE", "disabled"),
@@ -2074,6 +2096,8 @@ def _start_worker_compose_foundation_services(env: dict[str, str]) -> None:
     if not available_services:
         return
     _persist_worker_compose_foundation_env(env)
+    if "mn-litellm-proxy" in available_services:
+        _ensure_litellm_gateway_host_config()
     try:
         subprocess.run(
             runtime_compose_cmd("up", "-d", *available_services),
@@ -5457,6 +5481,7 @@ def _start_server(
                 compose_args = ["up", "-d"]
                 if force_runtime_recreate:
                     compose_args.extend(["--force-recreate", "redis", "mirror-neuron-core"])
+                _ensure_litellm_gateway_host_config()
                 subprocess.run(runtime_compose_cmd(*compose_args), check=True, stdout=subprocess.DEVNULL, env=env)
                 if not core_running:
                     console.print("   [green][Started][/green] Docker runtime (Compose project: mirror-neuron)")
@@ -5794,6 +5819,7 @@ def _start_server(
         console.print("=> Starting MirrorNeuron Docker runtime (Compose)...")
         logger.info("Starting MirrorNeuron Docker Compose runtime")
         try:
+            _ensure_litellm_gateway_host_config()
             subprocess.run(runtime_compose_cmd("up", "-d"), check=True, stdout=subprocess.DEVNULL, env=env)
             if not ip and not reconnecting_joined_node:
                 _force_compose_redis_primary()

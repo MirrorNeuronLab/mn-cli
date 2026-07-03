@@ -169,7 +169,8 @@ def install_model(
             result = install_model_entry_with_progress(entry, backend=backend, context_size=context_size, force=force)
         compatibility = result["compatibility"]
         target = result["docker_model"]
-        record_manual_model_install(entry, backend=compatibility["backend"])
+        if not selected_node:
+            record_manual_model_install(entry, backend=compatibility["backend"])
         _sync_installed_model_gateway_route(entry, result=result, node=selected_node)
         _record_runtime_model_install(entry)
         print_success_confirmation(
@@ -218,6 +219,16 @@ def update_model(
             _ensure_runner(compatibility.backend, compatibility.accelerator)
             _docker(["model", "pull", target], timeout=900, stream=True)
             _docker(["model", "run", "--detach", target], timeout=300)
+            record_manual_model_install(entry, backend=compatibility.backend)
+            _sync_installed_model_gateway_route(
+                entry,
+                result={
+                    "entry": entry,
+                    "docker_model": target,
+                    "compatibility": compatibility.to_dict(),
+                },
+                node=None,
+            )
             _record_runtime_model_install(entry)
             print_success_confirmation(
                 console,

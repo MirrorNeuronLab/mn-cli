@@ -427,7 +427,23 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
     assert validation_config["llm"]["configs"]["primary"]["install_mode"] == "cluster_provided"
 
 
-def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_or_core(mocker):
+def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_or_core(mocker, capsys):
+    progress_descriptions: list[str] = []
+
+    class FakeProgress:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def add_task(self, description, total=None):
+            progress_descriptions.append(description)
+            return 1
+
     mocker.patch(
         "mn_cli.libs.run_cmds.client.get_system_summary",
         return_value=json.dumps(
@@ -448,6 +464,8 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
             }
         ),
     )
+    mocker.patch("mn_cli.libs.run_cmds.use_progress", return_value=True)
+    mocker.patch("mn_cli.libs.run_cmds.Progress", FakeProgress)
     remote_client_class = mocker.patch("mn_cli.libs.run_cmds.Client")
     remote_client = remote_client_class.return_value
     remote_client.prepare_runtime_model.return_value = json.dumps(
@@ -490,6 +508,16 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
     assert payload["backend"] == "llama.cpp"
     assert result["endpoint"]["node"] == "mirror_neuron@192.168.4.173"
     assert result["endpoint"]["api_base"] == "http://mn-litellm-proxy:4000/v1"
+    output = " ".join(capsys.readouterr().out.split())
+    assert (
+        "Installing runtime model nemotron3 on mirror_neuron@192.168.4.173 "
+        "with native SDK gRPC"
+    ) in output
+    assert len(progress_descriptions) == 1
+    assert (
+        "Pulling and starting nemotron3 on mirror_neuron@192.168.4.173; "
+        "waiting for remote Docker Model Runner..."
+    ) in progress_descriptions[0]
 
 
 def test_runtime_cluster_model_install_requires_native_sdk_grpc_metadata(mocker):

@@ -301,6 +301,7 @@ def test_model_install_syncs_local_dmr_gateway_route(mocker):
     assert synced
     endpoints = synced[0]["runtime_endpoints"]
     assert endpoints["gemma4:e2b"]["api_base"] == "http://host.docker.internal:12434/engines/v1"
+    assert "ai/gemma4:E2B" in load_model_ownership()["models"]
 
 
 def test_model_install_local_dmr_fans_out_gateway_route_to_other_nodes(mocker):
@@ -402,6 +403,36 @@ def test_model_install_node_uses_prepare_runtime_model_not_ssh(mocker):
     assert prepare_payload["model"] == "ai/gemma4:E2B"
     assert prepare_payload["source"] == "mn-cli"
     assert synced[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://192.168.4.173:4000/v1"
+    assert load_model_ownership()["models"] == {}
+    remotes = load_model_remotes()["remotes"]
+    assert remotes["spark-gemma4-e2b"]["base_url"] == "http://192.168.4.173:4000/v1"
+    assert remotes["spark-gemma4-e2b"]["node"] == "spark"
+
+
+def test_model_update_refreshes_local_dmr_gateway_route(mocker):
+    calls = []
+    synced = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:4] == ["docker", "model", "status", "--json"]:
+            return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
+        return _completed(command)
+
+    mocker.patch("subprocess.run", side_effect=fake_run)
+    mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", side_effect=lambda **kwargs: synced.append(kwargs) or {})
+    mocker.patch(
+        "mn_sdk.model_runtime.detect_host_hardware",
+        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+    )
+
+    result = runner.invoke(app, ["model", "update", "gemma4:e2b"])
+
+    assert result.exit_code == 0
+    assert ["docker", "model", "pull", "ai/gemma4:E2B"] in calls
+    assert ["docker", "model", "run", "--detach", "ai/gemma4:E2B"] in calls
+    assert synced[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://host.docker.internal:12434/engines/v1"
+    assert "ai/gemma4:E2B" in load_model_ownership()["models"]
 
 
 def test_model_install_node_fans_out_gateway_route_to_other_nodes(mocker):

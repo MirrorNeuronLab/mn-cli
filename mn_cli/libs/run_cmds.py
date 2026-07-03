@@ -659,7 +659,11 @@ def _install_runtime_cluster_model(
 ) -> dict[str, Any]:
     node = str(cluster.get("node") or "").strip()
     model_ref = str(model.get("model") or docker_model_name(entry))
-    console.print(f"[cyan]Installing runtime model {model.get('id') or model_ref} on {node or 'selected runtime node'}...[/cyan]")
+    model_label = str(model.get("id") or model_ref)
+    node_label = node or "selected runtime node"
+    console.print(
+        f"[cyan]Installing runtime model {model_label} on {node_label} with native SDK gRPC...[/cyan]"
+    )
     node_endpoint = _cluster_node_endpoint(node)
     native_endpoint = _cluster_node_native_sdk_endpoint(node, node_endpoint["node"])
     target = native_endpoint["target"]
@@ -669,18 +673,31 @@ def _install_runtime_cluster_model(
         auth_token=config.grpc_auth_token,
         admin_token=config.grpc_admin_token,
     )
-    response = runtime_client.prepare_runtime_model(
-        {
-            "node": node,
-            "model": model_ref,
-            "id": model.get("id") or entry.get("id"),
-            "provider": str(entry.get("provider") or "docker_model_runner"),
-            "backend": str(backend or "auto"),
-            "context_size": context_size,
-            "force": force,
-            "source": "mn-python-sdk",
-        }
-    )
+    prepare_payload = {
+        "node": node,
+        "model": model_ref,
+        "id": model.get("id") or entry.get("id"),
+        "provider": str(entry.get("provider") or "docker_model_runner"),
+        "backend": str(backend or "auto"),
+        "context_size": context_size,
+        "force": force,
+        "source": "mn-python-sdk",
+    }
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+        disable=not use_progress(),
+    ) as progress:
+        progress.add_task(
+            (
+                f"[cyan]Pulling and starting {model_label} on {node_label}; "
+                "waiting for remote Docker Model Runner..."
+            ),
+            total=None,
+        )
+        response = runtime_client.prepare_runtime_model(prepare_payload)
     try:
         payload = json.loads(response)
     except Exception as exc:
