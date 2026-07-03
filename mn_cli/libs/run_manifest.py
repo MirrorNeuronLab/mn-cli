@@ -1178,8 +1178,6 @@ def _docker_worker_runtime_service_environment() -> dict[str, str]:
     env: dict[str, str] = {}
     if redis_url:
         env.setdefault("MN_REDIS_URL", redis_url)
-        env.setdefault("MN_RAG_REDIS_URL", redis_url)
-        env.setdefault("MN_BLUEPRINT_RAG_REDIS_URL", redis_url)
     if network:
         env.setdefault("MN_DOCKER_WORKER_NETWORK", network)
     env.setdefault("MN_CONTEXT_ADDR", os.getenv("MN_CONTEXT_ADDR") or "mirror-neuron-context-engine:50052")

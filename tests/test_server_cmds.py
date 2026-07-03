@@ -2620,6 +2620,22 @@ def test_compose_internal_redis_settings_defaults_to_service_name(mocker, tmp_pa
     assert env["MN_NETWORK_REDIS_HOST"] == "redis"
     assert env["MN_NETWORK_REDIS_PORT"] == "6379"
 
+def test_compose_internal_redis_settings_prefers_explicit_alias_over_process_env(mocker, tmp_path, monkeypatch):
+    compose_env = tmp_path / "docker-compose.env"
+    compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
+    mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', compose_env)
+    monkeypatch.setenv("MN_NETWORK_REDIS_HOST", "192.168.4.99")
+
+    env = server_cmds._ensure_compose_internal_redis_settings(
+        {},
+        token="join-token",
+        network_redis_host="mn-node-redis",
+        network_redis_port=6379,
+    )
+
+    assert env["MN_NETWORK_REDIS_HOST"] == "mn-node-redis"
+    assert env["MN_NETWORK_REDIS_PORT"] == "6379"
+
 def test_compose_cluster_port_settings_treats_persisted_redis_port_as_preference(mocker, tmp_path):
     compose_env = tmp_path / "docker-compose.env"
     compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\nMN_REDIS_PORT=56379\n")

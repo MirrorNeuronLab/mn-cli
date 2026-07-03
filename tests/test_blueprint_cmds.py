@@ -878,6 +878,139 @@ def test_blueprint_run_passes_follow_seconds_to_bundle(mocker, tmp_path):
     assert mock_run_bundle.call_args.kwargs["follow_seconds"] == 2.5
 
 
+def test_blueprint_doctor_local_folder_passes_flags(mocker, tmp_path):
+    bp_dir = tmp_path / "bundle"
+    bp_dir.mkdir()
+    (bp_dir / "manifest.json").write_text(json.dumps({"metadata": {"blueprint_id": "local-bp"}}))
+    mocker.patch("mn_cli.libs.blueprint_cmds._make_blueprint_run_id", return_value="doctor-run")
+    mock_doctor = mocker.patch(
+        "mn_cli.libs.blueprint_cmds._doctor_bundle",
+        return_value={"summary": {"status": "passing"}},
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "blueprint",
+            "doctor",
+            "--folder",
+            str(bp_dir),
+            "--json",
+            "--timeout",
+            "4.5",
+            "--check-only",
+            "--no-llm-call",
+            "--cleanup",
+            "--force",
+            "--debug",
+        ],
+    )
+
+    assert result.exit_code == 0
+    mock_doctor.assert_called_once()
+    assert mock_doctor.call_args.args[0] == str(bp_dir)
+    kwargs = mock_doctor.call_args.kwargs
+    assert kwargs["json_output"] is True
+    assert kwargs["timeout"] == 4.5
+    assert kwargs["check_only"] is True
+    assert kwargs["no_llm_call"] is True
+    assert kwargs["cleanup"] is True
+    assert kwargs["force"] is True
+    assert kwargs["debug"] is True
+    assert kwargs["env_overrides"]["MN_RUN_ID"] == "doctor-run"
+    assert kwargs["env_overrides"]["MN_BLUEPRINT_ID"] == "local-bp"
+    assert kwargs["submission_metadata"]["doctor"] is True
+
+
+def test_blueprint_doctor_catalog_uses_run_resolution(mocker, tmp_path):
+    storage_dir = _default_blueprint_storage(tmp_path)
+    storage_dir.mkdir()
+    mocker.patch("mn_cli.libs.blueprint_cmds.os.path.expanduser", return_value=str(storage_dir))
+    (storage_dir / "index.json").write_text(json.dumps([{"id": "bp-1", "path": "bp-1-dir"}]))
+    bp_dir = storage_dir / "bp-1-dir"
+    bp_dir.mkdir()
+    (bp_dir / "manifest.json").write_text(json.dumps({"metadata": {"blueprint_id": "catalog-bp"}}))
+    mocker.patch("mn_cli.libs.blueprint_cmds._git_revision", return_value="abc123")
+    mocker.patch("mn_cli.libs.blueprint_cmds._make_blueprint_run_id", return_value="doctor-run")
+    mock_doctor = mocker.patch(
+        "mn_cli.libs.blueprint_cmds._doctor_bundle",
+        return_value={"summary": {"status": "passing"}},
+    )
+
+    result = runner.invoke(app, ["blueprint", "doctor", "bp-1", "--offline", "--no-llm-call"])
+
+    assert result.exit_code == 0
+    mock_doctor.assert_called_once()
+    assert mock_doctor.call_args.args[0] == str(bp_dir)
+    kwargs = mock_doctor.call_args.kwargs
+    assert kwargs["env_overrides"]["MN_BLUEPRINT_ID"] == "catalog-bp"
+    assert kwargs["env_overrides"]["MN_BLUEPRINT_REVISION"] == "abc123"
+    assert kwargs["submission_metadata"]["blueprint_source"] == str(storage_dir)
+    assert kwargs["no_llm_call"] is True
+
+
+def test_blueprint_doctor_blueprint_repo_flag_uses_custom_cache(mocker, tmp_path):
+    repo_url = "https://example.test/blueprints.git"
+    custom_cache_root = _custom_blueprint_cache_root(tmp_path)
+    default_storage = _default_blueprint_storage(tmp_path)
+
+    def fake_expanduser(path):
+        if path == "~/.mn/blueprint_repos":
+            return str(custom_cache_root)
+        return str(default_storage)
+
+    mocker.patch("mn_cli.libs.blueprint_cmds.os.path.expanduser", side_effect=fake_expanduser)
+    completed = mocker.Mock(returncode=0, stderr="", stdout="")
+
+    def fake_run(args, **kwargs):
+        if args[:2] == ["git", "clone"]:
+            storage_dir = Path(args[-1])
+            storage_dir.mkdir(parents=True, exist_ok=True)
+            (storage_dir / "index.json").write_text(json.dumps([{"id": "bp-1", "path": "bp-1-dir"}]))
+            bp_dir = storage_dir / "bp-1-dir"
+            bp_dir.mkdir()
+            (bp_dir / "manifest.json").write_text("{}")
+        return completed
+
+    mock_run = mocker.patch("mn_cli.libs.blueprint_cmds.subprocess.run", side_effect=fake_run)
+    mocker.patch("mn_cli.libs.blueprint_cmds._git_revision", return_value="abc123")
+    mock_doctor = mocker.patch("mn_cli.libs.blueprint_cmds._doctor_bundle")
+
+    result = runner.invoke(app, ["blueprint", "doctor", "--blueprint-repo", repo_url, "bp-1"])
+
+    assert result.exit_code == 0
+    clone_args = mock_run.call_args_list[0].args[0]
+    assert clone_args[:3] == ["git", "clone", repo_url]
+    storage_dir = Path(clone_args[-1])
+    assert storage_dir.parent == custom_cache_root
+    mock_doctor.assert_called_once()
+    assert mock_doctor.call_args.args[0] == str(storage_dir / "bp-1-dir")
+
+
+def test_blueprint_doctor_rejects_invalid_target_combinations(mocker, tmp_path):
+    bp_dir = tmp_path / "bundle"
+    bp_dir.mkdir()
+    mock_doctor = mocker.patch("mn_cli.libs.blueprint_cmds._doctor_bundle")
+
+    result = runner.invoke(app, ["blueprint", "doctor", "bp-1", "--folder", str(bp_dir)])
+
+    assert result.exit_code == 1
+    assert "pass either a blueprint ID or --folder" in result.stdout
+    mock_doctor.assert_not_called()
+
+
+def test_blueprint_doctor_rejects_local_path_without_folder(mocker, tmp_path):
+    bp_dir = tmp_path / "bundle"
+    bp_dir.mkdir()
+    mock_doctor = mocker.patch("mn_cli.libs.blueprint_cmds._doctor_bundle")
+
+    result = runner.invoke(app, ["blueprint", "doctor", str(bp_dir)])
+
+    assert result.exit_code == 1
+    assert "local folders must be passed with --folder" in result.stdout
+    mock_doctor.assert_not_called()
+
+
 def test_blueprint_run_help_lists_testing_flags():
     result = runner.invoke(app, ["blueprint", "run", "--help"])
 

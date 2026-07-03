@@ -4322,7 +4322,7 @@ def _ensure_compose_internal_redis_settings(
 ) -> dict[str, str]:
     adjusted = dict(env)
     redis_password = _resolve_redis_password(adjusted)
-    redis_host = os.getenv("MN_NETWORK_REDIS_HOST", "").strip() or network_redis_host or "redis"
+    redis_host = network_redis_host or os.getenv("MN_NETWORK_REDIS_HOST", "").strip() or "redis"
     redis_port = network_redis_port or REDIS_CONTAINER_PORT
 
     adjusted["MN_REDIS_PASSWORD"] = redis_password

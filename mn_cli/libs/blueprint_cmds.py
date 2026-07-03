@@ -52,6 +52,7 @@ from mn_cli.libs.ui import print_confirmed, print_success_confirmation
 from mn_cli.shared import console, logger
 from mn_cli.terminal import use_progress
 from mn_cli.libs.blueprint_models import BlueprintModelOps, blueprint_model_dependency_summary
+from mn_cli.libs.run_cmds import doctor_bundle as _doctor_bundle
 from mn_cli.libs.run_cmds import run_bundle as _run_bundle
 from mn_cli.libs.run_manifest import load_blueprint_config as _load_blueprint_config
 from mn_cli.libs.model_cmds import (
@@ -346,12 +347,12 @@ def _print_blueprint_run_phase(step: int, total: int, label: str) -> None:
     console.print(f"[bold]Step {step}/{total}[/bold] {label}")
 
 
-def _reject_local_blueprint_path(target: str) -> None:
+def _reject_local_blueprint_path(target: str, *, command: str = "run") -> None:
     blueprint_dir = Path(target).expanduser()
     if not blueprint_dir.exists():
         return
     console.print("[red]Error: local folders must be passed with --folder.[/red]")
-    console.print(f"Use [bold]mn blueprint run --folder {blueprint_dir}[/bold] to run a local blueprint folder.")
+    console.print(f"Use [bold]mn blueprint {command} --folder {blueprint_dir}[/bold] for a local blueprint folder.")
     raise typer.Exit(1)
 
 
@@ -778,6 +779,232 @@ def _run_local_folder(
     )
 
 
+def doctor_catalog_blueprint(
+    blueprint_name: str,
+    *,
+    blueprint_repo: Optional[str] = None,
+    source: Optional[str] = None,
+    update: bool = False,
+    offline: bool = False,
+    revision: Optional[str] = None,
+    json_output: bool = False,
+    timeout: float = 3.0,
+    check_only: bool = False,
+    no_llm_call: bool = False,
+    cleanup: bool = False,
+    force: bool = False,
+    debug: bool = False,
+) -> dict[str, Any] | None:
+    """Prepare and smoke-check a catalog blueprint without submitting a job."""
+    _reject_local_blueprint_path(blueprint_name, command="doctor")
+    try:
+        storage_dir = _ensure_blueprint_source(
+            source=source,
+            blueprint_repo=blueprint_repo,
+            update=update,
+            offline=offline,
+            revision=revision,
+        )
+    except ValueError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
+
+    index_path = Path(storage_dir) / "index.json"
+    try:
+        blueprints = _load_blueprint_index(index_path, require_paths=True)
+    except BlueprintIndexError as e:
+        logger.exception("Error parsing blueprint index")
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+    target_bp = None
+    for bp in blueprints:
+        if bp.get("id") == blueprint_name or bp.get("path") == blueprint_name:
+            target_bp = bp
+            break
+
+    if not target_bp:
+        console.print(f"[red]Error: Blueprint '{blueprint_name}' not found in index.[/red]")
+        raise typer.Exit(1)
+
+    bp_path = Path(storage_dir) / str(target_bp.get("path"))
+    manifest = _load_blueprint_manifest(bp_path, blueprint_name)
+    blueprint_id = _blueprint_id_from_manifest(
+        manifest,
+        fallback=blueprint_name,
+        catalog_id=str(target_bp.get("id") or ""),
+    )
+    resolved_revision = _git_revision(Path(storage_dir)) or revision
+    return _doctor_resolved_blueprint(
+        blueprint_dir=bp_path,
+        manifest=manifest,
+        blueprint_id=blueprint_id,
+        revision=resolved_revision,
+        source_label=str(storage_dir),
+        json_output=json_output,
+        timeout=timeout,
+        check_only=check_only,
+        no_llm_call=no_llm_call,
+        cleanup=cleanup,
+        force=force,
+        debug=debug,
+    )
+
+
+def doctor_local_blueprint_folder(
+    folder: str,
+    *,
+    json_output: bool = False,
+    timeout: float = 3.0,
+    check_only: bool = False,
+    no_llm_call: bool = False,
+    cleanup: bool = False,
+    force: bool = False,
+    debug: bool = False,
+) -> dict[str, Any] | None:
+    """Prepare and smoke-check a local Python source blueprint folder."""
+    blueprint_dir = Path(folder).expanduser()
+    manifest = _load_blueprint_manifest(blueprint_dir, str(blueprint_dir))
+    blueprint_id = _blueprint_id_from_manifest(manifest, fallback=blueprint_dir.name)
+    return _doctor_resolved_blueprint(
+        blueprint_dir=blueprint_dir,
+        manifest=manifest,
+        blueprint_id=blueprint_id,
+        revision=None,
+        source_label=str(blueprint_dir),
+        json_output=json_output,
+        timeout=timeout,
+        check_only=check_only,
+        no_llm_call=no_llm_call,
+        cleanup=cleanup,
+        force=force,
+        debug=debug,
+    )
+
+
+def _doctor_resolved_blueprint(
+    *,
+    blueprint_dir: Path,
+    manifest: dict[str, Any],
+    blueprint_id: str,
+    revision: Optional[str],
+    source_label: str,
+    json_output: bool,
+    timeout: float,
+    check_only: bool,
+    no_llm_call: bool,
+    cleanup: bool,
+    force: bool,
+    debug: bool,
+) -> dict[str, Any] | None:
+    shared_run_id = _make_blueprint_run_id(blueprint_id)
+    bundle_path = _prepare_blueprint_bundle_for_run(blueprint_dir, manifest, shared_run_id)
+    config_overrides = _collect_init_config_review_overrides(bundle_path, manifest)
+    return _doctor_bundle(
+        str(bundle_path),
+        env_overrides={
+            "MN_RUN_ID": shared_run_id,
+            "MN_BLUEPRINT_ID": blueprint_id,
+            "MN_BLUEPRINT_REVISION": revision or "",
+            **_blueprint_debug_env_overrides(debug),
+        },
+        submission_metadata={
+            "blueprint_id": blueprint_id,
+            "blueprint_run_id": shared_run_id,
+            "blueprint_revision": revision,
+            "blueprint_source": source_label,
+            "doctor": True,
+            "debug": debug,
+        },
+        config_overrides=config_overrides,
+        force=force,
+        json_output=json_output,
+        timeout=timeout,
+        check_only=check_only,
+        no_llm_call=no_llm_call,
+        cleanup=cleanup,
+        debug=debug,
+    )
+
+
+def _doctor_local_folder(
+    folder: str,
+    *,
+    json_output: bool,
+    timeout: float,
+    check_only: bool,
+    no_llm_call: bool,
+    cleanup: bool,
+    force: bool,
+    debug: bool,
+) -> dict[str, Any] | None:
+    bundle_dir = Path(folder).expanduser()
+    manifest = _load_manifest_for_local_route(bundle_dir)
+    if manifest is not None and _is_python_source_blueprint(manifest):
+        return doctor_local_blueprint_folder(
+            str(bundle_dir),
+            json_output=json_output,
+            timeout=timeout,
+            check_only=check_only,
+            no_llm_call=no_llm_call,
+            cleanup=cleanup,
+            force=force,
+            debug=debug,
+        )
+
+    blueprint_id = _blueprint_id_from_manifest(manifest or {}, fallback=bundle_dir.name)
+    shared_run_id = _make_blueprint_run_id(blueprint_id)
+    config_overrides = (
+        _collect_init_config_review_overrides(bundle_dir, manifest)
+        if manifest is not None
+        else None
+    )
+    return _doctor_bundle(
+        str(bundle_dir),
+        env_overrides={
+            "MN_RUN_ID": shared_run_id,
+            "MN_BLUEPRINT_ID": blueprint_id,
+            **_blueprint_debug_env_overrides(debug),
+        },
+        submission_metadata={
+            "blueprint_id": blueprint_id,
+            "blueprint_run_id": shared_run_id,
+            "blueprint_source": str(bundle_dir),
+            "doctor": True,
+            "debug": debug,
+        },
+        config_overrides=config_overrides,
+        force=force,
+        json_output=json_output,
+        timeout=timeout,
+        check_only=check_only,
+        no_llm_call=no_llm_call,
+        cleanup=cleanup,
+        debug=debug,
+    )
+
+
+def _blueprint_id_from_manifest(
+    manifest: dict[str, Any],
+    *,
+    fallback: str,
+    catalog_id: str = "",
+) -> str:
+    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
+    workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v1" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
+    return str(
+        metadata.get("blueprint_id")
+        or catalog_id
+        or manifest.get("id")
+        or manifest.get("blueprint_id")
+        or manifest.get("workflow_id")
+        or workflow.get("workflow_id")
+        or (None if workflow_manifest else manifest.get("graph_id"))
+        or fallback
+    )
+
+
 def _load_manifest_for_local_route(bundle_dir: Path) -> dict[str, Any] | None:
     manifest_file = bundle_dir / "manifest.json"
     if not manifest_file.exists():
@@ -787,6 +1014,122 @@ def _load_manifest_for_local_route(bundle_dir: Path) -> dict[str, Any] | None:
     except Exception:
         return None
     return manifest if isinstance(manifest, dict) else None
+
+
+@blueprint_app.command("doctor")
+def blueprint_doctor(
+    ctx: typer.Context,
+    target: Annotated[
+        Optional[str],
+        typer.Argument(
+            help="Catalog blueprint ID to diagnose. Use --folder for local blueprint or bundle folders.",
+        ),
+    ] = None,
+    folder: Annotated[
+        Optional[str],
+        typer.Option(
+            "--folder",
+            help="Diagnose a local blueprint or bundle folder. Local folders must use this option.",
+        ),
+    ] = None,
+    blueprint_repo: Annotated[
+        Optional[str],
+        typer.Option(
+            "--blueprint-repo",
+            help="Use this blueprint repository URL/path instead of the default catalog.",
+        ),
+    ] = None,
+    update: Annotated[
+        bool,
+        typer.Option(
+            "--update",
+            help="Update the cached blueprint repository before diagnosing a catalog blueprint.",
+        ),
+    ] = False,
+    offline: Annotated[
+        bool,
+        typer.Option(
+            "--offline",
+            help="Use only local blueprint files; never clone, fetch, or pull.",
+        ),
+    ] = False,
+    revision: Annotated[
+        Optional[str],
+        typer.Option("--revision", help="Checkout a specific git revision before diagnosing."),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the doctor report as JSON."),
+    ] = False,
+    timeout: Annotated[
+        float,
+        typer.Option("--timeout", min=0.1, help="Per-probe timeout in seconds."),
+    ] = 3.0,
+    check_only: Annotated[
+        bool,
+        typer.Option("--check-only", help="Validate declared dependencies without preparing Docker, OpenShell, or native environments."),
+    ] = False,
+    no_llm_call: Annotated[
+        bool,
+        typer.Option("--no-llm-call", help="Skip tiny LLM and embedding smoke requests."),
+    ] = False,
+    cleanup: Annotated[
+        bool,
+        typer.Option("--cleanup", help="Clean up doctor-created DockerWorker resources after probing."),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Continue preparation even if runtime requirement checks fail."),
+    ] = False,
+    debug: Annotated[
+        bool,
+        typer.Option("--debug", help="Enable verbose blueprint runtime debug environment variables."),
+    ] = False,
+) -> None:
+    """Diagnose a catalog blueprint or local folder without submitting a job."""
+    if folder and target:
+        console.print("[red]Error: pass either a blueprint ID or --folder, not both.[/red]")
+        raise typer.Exit(1)
+
+    if folder:
+        _doctor_local_folder(
+            folder,
+            json_output=json_output,
+            timeout=timeout,
+            check_only=check_only,
+            no_llm_call=no_llm_call,
+            cleanup=cleanup,
+            force=force,
+            debug=debug,
+        )
+        return
+
+    if not target:
+        console.print("[red]Error: mn blueprint doctor expects a blueprint ID or --folder <path>.[/red]")
+        console.print("Use [bold]mn blueprint doctor <blueprint-id>[/bold] for catalog blueprints.")
+        console.print("Use [bold]mn blueprint doctor --folder <path>[/bold] for local blueprint or bundle folders.")
+        raise typer.Exit(1)
+
+    target_path = Path(target).expanduser()
+    if target_path.exists():
+        console.print("[red]Error: local folders must be passed with --folder.[/red]")
+        console.print(f"Use [bold]mn blueprint doctor --folder {target_path}[/bold].")
+        raise typer.Exit(1)
+
+    doctor_catalog_blueprint(
+        target,
+        blueprint_repo=blueprint_repo or _context_blueprint_repo(ctx),
+        update=update,
+        offline=offline,
+        revision=revision,
+        json_output=json_output,
+        timeout=timeout,
+        check_only=check_only,
+        no_llm_call=no_llm_call,
+        cleanup=cleanup,
+        force=force,
+        debug=debug,
+    )
 
 
 @blueprint_app.command("run")

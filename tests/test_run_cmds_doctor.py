@@ -1,0 +1,234 @@
+import json
+import logging
+import os
+import re
+import subprocess
+import sys
+import uuid
+from pathlib import Path
+from types import SimpleNamespace
+import pytest
+from logging.handlers import RotatingFileHandler
+from typer.testing import CliRunner
+from rich.console import Console
+from mn_cli.main import app
+from mn_cli.libs import model_cmds, run_cmds
+from mn_cli.libs.ui import JobMonitorState, generate_live_layout
+from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress, _agent_progress_detail
+from mn_cli.libs.run_manifest import prepare_manifest_for_submission
+from mn_sdk import AgentProgress, load_model_ownership, load_model_remotes, upsert_model_remote
+
+runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def isolated_mn_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_HOME", str(tmp_path / "mn-home"))
+    monkeypatch.delenv("MN_SHARED_STORAGE_ROOT", raising=False)
+    monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
+    monkeypatch.delenv("MN_RUNTIME_SHARED_STORAGE_ROOT", raising=False)
+    monkeypatch.delenv("MN_CONTAINER_SHARED_STORAGE_ROOT", raising=False)
+    monkeypatch.setattr(
+        run_cmds,
+        "sync_litellm_gateway",
+        lambda **_kwargs: {"status": "running", "api_base": "http://mn-litellm-proxy:4000/v1"},
+    )
+
+def test_doctor_bundle_prepares_without_submitting_job(mocker, tmp_path):
+    bundle_dir = tmp_path / "doctor_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps({"nodes": []}))
+    mocker.patch(
+        "mn_cli.libs.run_cmds._doctor_runtime_foundation",
+        return_value={"status": "passing", "detail": "runtime ok"},
+    )
+    mocker.patch("mn_cli.libs.run_cmds._doctor_validate_hardware", return_value={"ok": True})
+    mocker.patch("mn_cli.libs.run_cmds._doctor_validate_services", return_value={"ok": True})
+    mocker.patch("mn_cli.libs.run_cmds._doctor_validate_inputs", return_value={"ok": True})
+    mocker.patch("mn_cli.libs.run_cmds._doctor_validate_models", return_value={"ok": True})
+    mocker.patch("mn_cli.libs.run_cmds._prepare_runtime_models_for_run_or_exit", return_value={"models": []})
+    mocker.patch(
+        "mn_cli.libs.run_cmds.prepare_manifest_for_submission",
+        side_effect=lambda _bundle_dir, manifest, **_kwargs: manifest,
+    )
+    mocker.patch("mn_cli.libs.run_cmds._prepare_openshell_custom_images")
+    mocker.patch("mn_cli.libs.run_cmds._prefer_default_single_node_agent_placement")
+    mocker.patch(
+        "mn_cli.libs.run_cmds._doctor_prepare_hostlocal_python_envs",
+        return_value={"status": "skipped", "detail": "none"},
+    )
+    mocker.patch("mn_cli.libs.run_cmds._stage_bundle_payloads", return_value={})
+    mocker.patch("mn_cli.libs.run_cmds.blueprint_requires_context_engine", return_value=False)
+    mock_prepare = mocker.patch(
+        "mn_cli.libs.run_cmds.prepare_job_submission",
+        return_value=SimpleNamespace(
+            manifest_json=json.dumps({"metadata": {}}),
+            payloads={},
+            metadata={"submission_id": "doctor-submission"},
+        ),
+    )
+    mock_submit = mocker.patch("mn_cli.libs.run_cmds.client.submit_job")
+    mocker.patch("mn_cli.libs.run_cmds._doctor_print_report")
+
+    report = run_cmds.doctor_bundle(str(bundle_dir), no_llm_call=True)
+
+    assert report["summary"]["status"] == "passing"
+    mock_prepare.assert_called_once()
+    mock_submit.assert_not_called()
+
+def test_doctor_bundle_check_only_skips_openshell_build(mocker, tmp_path):
+    bundle_dir = tmp_path / "doctor_openshell_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "nodes": [
+                    {
+                        "node_id": "shell",
+                        "config": {"runner_module": "MirrorNeuron.Sandbox.OpenShell"},
+                    }
+                ]
+            }
+        )
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds._doctor_runtime_foundation",
+        return_value={"status": "passing", "detail": "runtime ok"},
+    )
+    mocker.patch("mn_cli.libs.run_cmds._doctor_validate_hardware", return_value={"ok": True})
+    mocker.patch("mn_cli.libs.run_cmds._doctor_validate_services", return_value={"ok": True})
+    mocker.patch("mn_cli.libs.run_cmds._doctor_validate_inputs", return_value={"ok": True})
+    mocker.patch("mn_cli.libs.run_cmds._doctor_validate_models", return_value={"ok": True})
+    mocker.patch(
+        "mn_cli.libs.run_cmds.prepare_manifest_for_submission",
+        side_effect=lambda _bundle_dir, manifest, **_kwargs: manifest,
+    )
+    mock_build = mocker.patch("mn_cli.libs.run_cmds._prepare_openshell_custom_images")
+    mocker.patch("mn_cli.libs.run_cmds._prefer_default_single_node_agent_placement")
+    mocker.patch("mn_cli.libs.run_cmds._stage_bundle_payloads", return_value={})
+    mock_prepare_job = mocker.patch("mn_cli.libs.run_cmds.prepare_job_submission")
+    mocker.patch("mn_cli.libs.run_cmds._doctor_print_report")
+
+    report = run_cmds.doctor_bundle(str(bundle_dir), check_only=True, no_llm_call=True)
+
+    assert report["summary"]["status"] == "warning"
+    assert report["environments"]["openshell"]["status"] == "warning"
+    mock_build.assert_not_called()
+    mock_prepare_job.assert_not_called()
+
+def test_doctor_summary_redacts_and_marks_critical():
+    report = {
+        "runtime": {"status": "passing"},
+        "models": {"status": "critical"},
+        "config": {"api_key": "secret", "nested": {"token": "abc", "plain": "ok"}},
+    }
+
+    summary = run_cmds._doctor_summary(report)
+    redacted = run_cmds._doctor_redact(report)
+
+    assert summary["status"] == "critical"
+    assert redacted["config"]["api_key"] == "[redacted]"
+    assert redacted["config"]["nested"]["token"] == "[redacted]"
+    assert redacted["config"]["nested"]["plain"] == "ok"
+
+def test_doctor_environment_probe_reports(mocker, tmp_path):
+    env_dir = tmp_path / "venv"
+    mocker.patch("mn_cli.libs.run_cmds._doctor_prepare_python_env", return_value=env_dir)
+    host_manifest = {
+        "nodes": [
+            {
+                "node_id": "native",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.HostLocal",
+                    "python_environment": {"packages": ["requests"]},
+                },
+            }
+        ]
+    }
+
+    host_report = run_cmds._doctor_prepare_hostlocal_python_envs(
+        tmp_path,
+        host_manifest,
+        timeout=1,
+        check_only=False,
+    )
+    openshell_report = run_cmds._doctor_openshell_report(
+        {
+            "nodes": [
+                {
+                    "node_id": "shell",
+                    "config": {"runner_module": "MirrorNeuron.Sandbox.OpenShell"},
+                }
+            ]
+        }
+    )
+    docker_report = run_cmds._doctor_docker_worker_report(
+        {
+            "prepared": True,
+            "services": [{"service": "worker", "container_name": "mn-worker", "image": "worker:latest"}],
+        }
+    )
+
+    assert host_report["status"] == "passing"
+    assert host_report["prepared"][0]["path"] == str(env_dir)
+    assert openshell_report["status"] == "passing"
+    assert openshell_report["nodes"] == ["shell"]
+    assert docker_report["status"] == "passing"
+    assert docker_report["services"][0]["service"] == "worker"
+
+def test_doctor_skill_report_reads_declared_dependencies(tmp_path):
+    bundle_dir = tmp_path / "bundle"
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "default.json").write_text(
+        json.dumps(
+            {
+                "input_skills": {
+                    "search": {
+                        "skill": "web_search",
+                        "package": "search-pkg",
+                        "import": "json",
+                        "executable": sys.executable,
+                    }
+                },
+                "python_dependencies": {"packages": ["numpy"]},
+            }
+        )
+    )
+
+    report = run_cmds._doctor_skill_report(bundle_dir, {})
+
+    assert report["status"] == "passing"
+    assert {entry["name"] for entry in report["entries"]} == {"search", "numpy"}
+
+def test_doctor_llm_and_embedding_smoke_uses_host_reachable_urls(mocker):
+    calls = []
+
+    def fake_post(name, url, payload, *, timeout):
+        calls.append((name, url, payload, timeout))
+        return {"name": name, "status": "passing", "url": url}
+
+    mocker.patch("mn_cli.libs.run_cmds._doctor_post_openai_payload", side_effect=fake_post)
+
+    chat = run_cmds._doctor_chat_smoke(
+        "primary",
+        {
+            "provider": "docker_model_runner",
+            "model": "gemma4:e2b",
+            "api_base": "http://mn-litellm-proxy:4000/v1",
+        },
+        {},
+        timeout=2,
+    )
+    embedding = run_cmds._doctor_embedding_smoke(
+        {
+            "embedding_model": "embedding-model",
+            "embedding_api_base": "http://host.docker.internal:12434/engines/v1",
+        },
+        timeout=2,
+    )
+
+    assert chat["status"] == "passing"
+    assert embedding["status"] == "passing"
+    assert calls[0][1] == "http://127.0.0.1:4000/v1/chat/completions"
+    assert calls[1][1] == "http://127.0.0.1:12434/engines/v1/embeddings"

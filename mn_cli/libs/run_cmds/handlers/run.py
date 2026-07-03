@@ -1,0 +1,337 @@
+from ..common import *
+from ..context import *
+from ..events import *
+from ..models import *
+from ..openshell import *
+from ..outputs import *
+from ..run_state import *
+from ..web_ui import *
+from .validate import *
+
+def run_bundle(
+    bundle_path: str,
+    *,
+    follow_seconds: Optional[float] = None,
+    env_overrides: Optional[dict[str, str]] = None,
+    submission_metadata: Optional[dict[str, Any]] = None,
+    config_overrides: Optional[dict[str, Any]] = None,
+    force: bool = False,
+    detached: bool = False,
+    web_ui: bool = False,
+    auto_schedule: bool = False,
+    schedule: Optional[str] = None,
+):
+    """Run a bundle after applying optional runtime metadata and environment."""
+    pre_launch_process: subprocess.Popen[Any] | None = None
+    pre_launch_run_dir: Path | None = None
+    submitted_job_id: str | None = None
+    submitted_log_writer: JobLogWriter | None = None
+    submitted_bundle_dir: Path | None = None
+    submitted_manifest: dict[str, Any] | None = None
+    submitted_run_dir: Path | None = None
+    submitted_web_ui_url: str | None = None
+    submitted_config_overrides: dict[str, Any] | None = None
+    try:
+        env_overrides = dict(env_overrides or {})
+        config_overrides = dict(config_overrides or {})
+        submitted_config_overrides = config_overrides
+        submission_metadata = dict(submission_metadata or {})
+        bundle_dir, manifest_file, manifest_dict = _load_bundle_manifest(bundle_path)
+        submitted_bundle_dir = bundle_dir
+        manifest_dict = _configure_bundle_if_required(
+            bundle_dir,
+            manifest_file,
+            manifest_dict,
+        )
+
+        _ensure_local_run_store_identity(
+            bundle_dir,
+            manifest_dict,
+            env_overrides,
+            submission_metadata,
+            config_overrides=config_overrides,
+        )
+        _print_launch_progress(
+            "Check runtime resources",
+            "confirming the runtime can satisfy this blueprint before submission.",
+        )
+        _validate_manifest_hardware_or_exit(
+            manifest_dict,
+            force=force,
+            allow_local_fallback=False,
+        )
+        blueprint_run_id = submission_metadata.get(
+            "blueprint_run_id"
+        ) or env_overrides.get("MN_RUN_ID")
+        if blueprint_run_id:
+            pre_launch_run_dir = _blueprint_run_dir(
+                str(blueprint_run_id), env_overrides
+            )
+            _register_post_launch_hook(
+                bundle_dir, str(blueprint_run_id), env_overrides=env_overrides
+            )
+            pre_launch_process = _start_pre_launch_hook(
+                bundle_dir,
+                str(blueprint_run_id),
+                env_overrides=env_overrides,
+                config_overrides=config_overrides,
+            )
+        if not force:
+            _print_launch_progress(
+                "Validate inputs and dependencies",
+                "checking services, models, local inputs, and non-hard requirements.",
+            )
+            _validate_manifest_services_or_exit(
+                bundle_dir,
+                manifest_dict,
+                env_overrides=env_overrides,
+                config_overrides=config_overrides,
+            )
+            _print_launch_progress(
+                "Prepare runtime models",
+                "installing any missing Docker Model Runner models required by this blueprint.",
+            )
+            model_install_summary = _prepare_runtime_models_for_run_or_exit(
+                bundle_dir,
+                manifest_dict,
+                env_overrides=env_overrides,
+                config_overrides=config_overrides,
+                force=force,
+            )
+            _merge_runtime_model_config_overrides(config_overrides, model_install_summary)
+            _validate_manifest_models_or_exit(
+                bundle_dir,
+                manifest_dict,
+                env_overrides=env_overrides,
+                config_overrides=config_overrides,
+                model_install_summary=model_install_summary,
+            )
+            _validate_manifest_inputs_or_exit(
+                bundle_dir,
+                manifest_dict,
+                env_overrides=env_overrides,
+                config_overrides=config_overrides,
+            )
+        else:
+            console.print(
+                "[yellow]Validation skipped because --force was provided; service checks, model checks, input checks, and non-hard runtime requirements will be bypassed, but required runtime models will still be prepared.[/yellow]"
+            )
+            _print_launch_progress(
+                "Prepare runtime models",
+                "installing any missing Docker Model Runner models required by this blueprint.",
+            )
+            model_install_summary = _prepare_runtime_models_for_run_or_exit(
+                bundle_dir,
+                manifest_dict,
+                env_overrides=env_overrides,
+                config_overrides=config_overrides,
+                force=force,
+            )
+            _merge_runtime_model_config_overrides(config_overrides, model_install_summary)
+        _print_launch_progress(
+            "Package workflow",
+            "staging workflow files, local inputs, runtime helpers, and output wiring.",
+        )
+        manifest_dict = prepare_manifest_for_submission(
+            bundle_dir,
+            manifest_dict,
+            env_overrides=env_overrides,
+            submission_metadata=submission_metadata,
+            config_overrides=config_overrides,
+            enable_runtime_web_ui=web_ui,
+        )
+        if force:
+            _mark_manifest_force(manifest_dict)
+        _prepare_openshell_custom_images(bundle_dir, manifest_dict)
+        _prefer_default_single_node_agent_placement(manifest_dict)
+
+        payloads = _stage_bundle_payloads(bundle_dir, manifest_dict, web_ui=web_ui)
+
+        schedule_attrs = _run_schedule_attrs(auto_schedule=auto_schedule, schedule=schedule)
+        if schedule_attrs is not None:
+            submitted_manifest = manifest_dict
+            _create_schedule_for_bundle(
+                bundle_dir,
+                manifest_dict,
+                payloads,
+                schedule_attrs,
+            )
+            return
+
+        _ensure_context_engine_for_run_if_needed(
+            bundle_dir,
+            manifest_dict,
+            env_overrides=env_overrides,
+            config_overrides=config_overrides,
+            force=force,
+        )
+
+        prepared_submission = prepare_job_submission(
+            manifest_dict,
+            payloads,
+            bundle_dir=bundle_dir,
+            run_id=blueprint_run_id,
+        )
+        manifest = prepared_submission.manifest_json
+        payloads = prepared_submission.payloads
+        submitted_manifest = json.loads(manifest)
+
+        blueprint_run_dir = (
+            _blueprint_run_dir(blueprint_run_id, env_overrides)
+            if blueprint_run_id
+            else None
+        )
+        submitted_run_dir = blueprint_run_dir
+        _print_launch_progress(
+            "Submit runtime job",
+            "handing the prepared bundle to MirrorNeuron core.",
+        )
+        job_id = client.submit_job(manifest, payloads, force=force)
+        submitted_job_id = job_id
+        log_writer = JobLogWriter(job_id, run_dir=blueprint_run_dir)
+        submitted_log_writer = log_writer
+        if blueprint_run_id:
+            _write_blueprint_job_mapping(
+                blueprint_run_id, job_id, submission_metadata, env_overrides
+            )
+            if web_ui:
+                _write_local_web_ui_handle(
+                    bundle_dir,
+                    blueprint_run_id,
+                    env_overrides=env_overrides,
+                    config_overrides=config_overrides,
+                )
+        web_ui_url = _console_web_ui_url(manifest_dict, blueprint_run_dir) if web_ui else None
+        submitted_web_ui_url = web_ui_url
+        resolved_follow_seconds = (
+            float(os.getenv("MN_RUN_DETACH_LOG_SECONDS", "30"))
+            if follow_seconds is None
+            else follow_seconds
+        )
+
+        console.print(
+            generate_run_submitted_panel(
+                bundle_name=bundle_dir.name,
+                job_id=job_id,
+                payload_count=len(payloads),
+                log_dir=log_writer.log_dir,
+                follow_seconds=resolved_follow_seconds,
+                run_mode=_run_mode_label(manifest_dict),
+                blueprint_run_id=blueprint_run_id,
+                blueprint_revision=submission_metadata.get("blueprint_revision"),
+                web_ui_url=web_ui_url,
+                detached=detached,
+            )
+        )
+        if detached:
+            if blueprint_run_dir is not None:
+                _start_background_event_relay_if_needed(
+                    bundle_dir,
+                    submitted_manifest or manifest_dict,
+                    job_id,
+                    blueprint_run_dir,
+                    "submitted",
+                    config_overrides=config_overrides,
+                )
+            console.print(
+                generate_detached_panel(
+                    job_id,
+                    log_writer.log_dir,
+                    "submitted",
+                    log_writer.event_count,
+                    web_ui_url=log_writer.web_ui_url or web_ui_url,
+                )
+            )
+            return
+
+        final_status = _stream_and_format_events(
+            job_id,
+            log_writer,
+            resolved_follow_seconds,
+            web_ui_url=web_ui_url,
+            manifest=manifest_dict,
+        )
+        if final_status in FINAL_STATUSES:
+            materialized_shared = _materialize_shared_storage_outputs(prepared_submission.metadata)
+            if not materialized_shared:
+                _materialize_completed_blueprint_outputs(log_writer.log_dir, manifest_dict)
+        if blueprint_run_dir is not None:
+            _start_background_event_relay_if_needed(
+                bundle_dir,
+                submitted_manifest or manifest_dict,
+                job_id,
+                blueprint_run_dir,
+                final_status,
+                config_overrides=config_overrides,
+            )
+            if final_status in FINAL_STATUSES:
+                cleanup_blueprint_host_hooks(
+                    blueprint_run_dir,
+                    dry_run=False,
+                    summary={
+                        "process_removed": [],
+                        "process_skipped": [],
+                        "errors": [],
+                    },
+                    reason=f"job_{final_status}",
+                )
+    except typer.Exit:
+        _cleanup_pre_launch_artifacts(
+            pre_launch_process,
+            pre_launch_run_dir,
+            reason="launch_failed",
+        )
+        raise
+    except (KeyboardInterrupt, EOFError):
+        if submitted_job_id:
+            log_writer = submitted_log_writer or JobLogWriter(
+                submitted_job_id, run_dir=submitted_run_dir
+            )
+            status = "running"
+            try:
+                status, _data = _follow_job_events(submitted_job_id, log_writer, 0)
+                if status == "unknown":
+                    status = "running"
+            except Exception:
+                log_writer.run_logger.exception("Failed to poll detached job status")
+            console.print(f"[yellow]{DETACHED_AFTER_INTERRUPT_MESSAGE}[/yellow]")
+            if (
+                submitted_run_dir is not None
+                and submitted_bundle_dir is not None
+                and submitted_manifest is not None
+            ):
+                _start_background_event_relay_if_needed(
+                    submitted_bundle_dir,
+                    submitted_manifest,
+                    submitted_job_id,
+                    submitted_run_dir,
+                    status,
+                    config_overrides=submitted_config_overrides,
+                )
+            console.print(
+                generate_detached_panel(
+                    submitted_job_id,
+                    log_writer.log_dir,
+                    status,
+                    log_writer.event_count,
+                    web_ui_url=log_writer.web_ui_url or submitted_web_ui_url,
+                )
+            )
+            return
+        _cleanup_pre_launch_artifacts(
+            pre_launch_process,
+            pre_launch_run_dir,
+            reason="launch_interrupted",
+        )
+        raise typer.Exit(130)
+    except Exception as e:
+        _cleanup_pre_launch_artifacts(
+            pre_launch_process,
+            pre_launch_run_dir,
+            reason="launch_failed",
+        )
+        handle_cli_error(e, console, "run bundle")
+        raise typer.Exit(1)
+
+
+__all__ = [name for name in globals() if not name.startswith("__")]
