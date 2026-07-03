@@ -292,19 +292,29 @@ def remove_model(
                 )
                 return
         target = docker_model_name(entry) if entry else _resolve_or_raw_model(model)
-        remove_model_ref(target, force=force)
+        removed_remotes = _remove_remote_model_records(model)
+        local_installed = model_installed(target)
+        if local_installed:
+            remove_model_ref(target, force=force)
         remove_model_record(target)
         remove_litellm_gateway_route(target)
         if entry:
             remove_litellm_gateway_route(str(entry.get("id") or ""))
+        for removed_remote in removed_remotes:
+            remove_litellm_gateway_route(str(removed_remote.get("name") or ""))
+            remove_litellm_gateway_route(str(removed_remote.get("model") or ""))
+            remove_litellm_gateway_route(str(removed_remote.get("api_model") or ""))
+        _sync_gateway_best_effort(restart=True)
         _remove_gateway_route_across_cluster(target, restart=True)
         if entry:
             _remove_gateway_route_across_cluster(str(entry.get("id") or ""), restart=True)
+        if removed_remotes and not local_installed:
+            _remove_gateway_route_across_cluster(model, restart=True)
         print_success_confirmation(
             console,
             "Model remove",
             status="removed",
-            details={"Model": target},
+            details={"Model": target, "Routes cleared": str(len(removed_remotes))},
             next_steps="mn model list --installed",
         )
     except Exception as exc:
@@ -688,7 +698,7 @@ def _cluster_gateway_endpoint(
     endpoint = payload.get("endpoint") if isinstance(payload.get("endpoint"), dict) else {}
     docker_model = docker_model_name(entry)
     api_model = str(endpoint.get("api_model") or endpoint.get("model") or entry.get("api_model") or docker_model)
-    return {
+    result = {
         "provider": str(endpoint.get("provider") or entry.get("provider") or "docker_model_runner"),
         "model": api_model,
         "runtime_model": str(endpoint.get("runtime_model") or docker_model),
@@ -698,6 +708,10 @@ def _cluster_gateway_endpoint(
         "node": str(endpoint.get("node") or node_endpoint.get("node_name") or ""),
         "source": "remote-dmr",
     }
+    aliases = entry.get("route_aliases")
+    if isinstance(aliases, list) and aliases:
+        result["route_aliases"] = [str(alias) for alias in aliases if str(alias or "").strip()]
+    return result
 
 
 def _node_litellm_gateway_api_base(node_endpoint: dict[str, Any], payload: dict[str, Any]) -> str:
@@ -978,6 +992,10 @@ def _remove_gateway_route_on_cluster_node(model: str, *, node: str, restart: boo
 
 
 def _remove_remote_model_records_for_node(model: str, *, node: str) -> list[dict[str, Any]]:
+    return _remove_remote_model_records(model, node=node)
+
+
+def _remove_remote_model_records(model: str, *, node: str | None = None) -> list[dict[str, Any]]:
     wanted = docker_model_match_keys(model)
     ledger = load_model_remotes()
     remotes = ledger.setdefault("remotes", {})
@@ -985,7 +1003,7 @@ def _remove_remote_model_records_for_node(model: str, *, node: str) -> list[dict
     for key, remote in list(remotes.items()):
         if not isinstance(remote, dict):
             continue
-        if str(remote.get("node") or "").strip() != str(node or "").strip():
+        if node is not None and str(remote.get("node") or "").strip() != str(node or "").strip():
             continue
         candidates = {
             str(key or "").strip(),

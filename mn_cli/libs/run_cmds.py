@@ -74,6 +74,7 @@ from mn_sdk import (
     Client,
     ModelEndpointMap,
     cluster_provided_model,
+    docker_model_match_keys,
     docker_api_model_name,
     docker_model_runner_endpoint,
     docker_model_name,
@@ -93,6 +94,7 @@ from mn_sdk import (
     run_input_validation,
     run_model_validation,
     run_service_validation,
+    save_model_remotes,
     validate_input_validation_spec_issues,
     validate_requirements_spec_issues,
     validate_resource_spec_issues,
@@ -368,7 +370,7 @@ def _resolve_runtime_model_endpoint(*, requirement: dict[str, Any], entry: dict[
     config = requirement.get("config") if isinstance(requirement.get("config"), dict) else {}
     services = _resolve_model_services_for_requirement(entry)
     try:
-        return resolve_model_endpoint(
+        endpoint = resolve_model_endpoint(
             model,
             config=config,
             entry=entry,
@@ -377,6 +379,68 @@ def _resolve_runtime_model_endpoint(*, requirement: dict[str, Any], entry: dict[
         )
     except Exception:
         return None
+    if _node_owned_dmr_endpoint_requires_prepare(endpoint):
+        if str(endpoint.get("source") or "") == "model_remote":
+            _prune_runtime_model_remote(model=model, entry=entry, endpoint=endpoint)
+        return None
+    return endpoint
+
+
+def _node_owned_dmr_endpoint_requires_prepare(endpoint: dict[str, Any] | None) -> bool:
+    if not isinstance(endpoint, dict):
+        return False
+    if str(endpoint.get("source") or "") not in {"model_remote", "service_registry"}:
+        return False
+    if not str(endpoint.get("node") or "").strip():
+        return False
+    provider = str(endpoint.get("provider") or "docker_model_runner").strip().lower()
+    return provider in {"docker_model_runner", "docker-model-runner", "dmr"}
+
+
+def _prune_runtime_model_remote(*, model: str, entry: dict[str, Any], endpoint: dict[str, Any]) -> list[dict[str, Any]]:
+    wanted: set[str] = set()
+    for value in (
+        model,
+        entry.get("id"),
+        entry.get("model"),
+        entry.get("api_model"),
+        endpoint.get("model"),
+        endpoint.get("runtime_model"),
+        endpoint.get("api_model"),
+    ):
+        wanted.update(docker_model_match_keys(str(value or "")))
+    wanted.update(
+        key
+        for alias in entry.get("aliases") or []
+        for key in docker_model_match_keys(str(alias or ""))
+    )
+    if not wanted:
+        return []
+    node = str(endpoint.get("node") or "").strip()
+    remote_name = str(endpoint.get("remote") or "").strip()
+    ledger = load_model_remotes()
+    remotes = ledger.setdefault("remotes", {})
+    removed: list[dict[str, Any]] = []
+    for key, remote in list(remotes.items()):
+        if not isinstance(remote, dict):
+            continue
+        if node and str(remote.get("node") or "").strip() != node:
+            continue
+        candidates = {
+            str(key or "").strip(),
+            str(remote.get("name") or "").strip(),
+            str(remote.get("model") or "").strip(),
+            str(remote.get("api_model") or "").strip(),
+            str(remote.get("runtime_model") or "").strip(),
+        }
+        if remote_name and remote_name in candidates:
+            removed.append(remotes.pop(key))
+            continue
+        if any(docker_model_match_keys(candidate) & wanted for candidate in candidates if candidate):
+            removed.append(remotes.pop(key))
+    if removed:
+        save_model_remotes(ledger)
+    return removed
 
 
 def _resolve_model_services_for_requirement(entry: dict[str, Any]) -> list[dict[str, Any]]:
@@ -706,25 +770,84 @@ def _install_runtime_cluster_model(
         raise RuntimeError("runtime model prepare returned a non-object response")
     if str(payload.get("status") or "").lower() in {"failed", "error"}:
         raise RuntimeError(str(payload.get("error") or payload.get("message") or "runtime model prepare failed"))
-    docker_model = docker_model_name(entry)
-    api_model = str(entry.get("api_model") or docker_model)
     endpoint = payload.get("endpoint") if isinstance(payload.get("endpoint"), dict) else {}
-    api_base = _container_local_api_base_to_node_host(
-        str(endpoint.get("api_base") or "http://host.docker.internal:12434/engines/v1"),
-        node_endpoint.get("host", ""),
+    upstream_endpoint = _cluster_runtime_model_upstream_endpoint(
+        entry=entry,
+        node=node,
+        node_endpoint=node_endpoint,
+        payload=payload,
+        endpoint=endpoint,
     )
     return {
         "install": payload,
-        "endpoint": {
-            "provider": str(endpoint.get("provider") or entry.get("provider") or "docker_model_runner"),
-            "model": str(endpoint.get("model") or api_model),
-            "runtime_model": str(endpoint.get("runtime_model") or docker_model),
-            "api_model": str(endpoint.get("api_model") or api_model),
-            "api_base": api_base,
-            "node": str(endpoint.get("node") or node),
-            "source": str(endpoint.get("source") or "cluster_node_install"),
-        },
+        "endpoint": upstream_endpoint,
     }
+
+
+def _cluster_runtime_model_upstream_endpoint(
+    *,
+    entry: dict[str, Any],
+    node: str,
+    node_endpoint: dict[str, Any],
+    payload: dict[str, Any],
+    endpoint: dict[str, Any],
+) -> dict[str, Any]:
+    if _cluster_node_endpoint_is_local(node_endpoint):
+        local_endpoint = docker_model_runner_endpoint(entry, node=node, source="local-dmr")
+        local_endpoint["node"] = node
+        return local_endpoint
+
+    docker_model = docker_model_name(entry)
+    api_model = str(endpoint.get("api_model") or endpoint.get("model") or entry.get("api_model") or docker_model)
+    return {
+        "provider": str(endpoint.get("provider") or entry.get("provider") or "docker_model_runner"),
+        "model": api_model,
+        "runtime_model": str(endpoint.get("runtime_model") or docker_model),
+        "api_model": api_model,
+        "api_base": _node_litellm_gateway_api_base(node_endpoint, payload, endpoint),
+        "api_key": str(endpoint.get("api_key") or "not-needed"),
+        "node": str(endpoint.get("node") or node),
+        "source": "remote-dmr",
+        **_route_aliases_payload(entry),
+    }
+
+
+def _route_aliases_payload(entry: dict[str, Any]) -> dict[str, Any]:
+    aliases = entry.get("route_aliases")
+    if not isinstance(aliases, list) or not aliases:
+        return {}
+    return {"route_aliases": [str(alias) for alias in aliases if str(alias or "").strip()]}
+
+
+def _cluster_node_endpoint_is_local(node_endpoint: dict[str, Any]) -> bool:
+    node = node_endpoint.get("node") if isinstance(node_endpoint.get("node"), dict) else {}
+    if node.get("self?") is True or node.get("self") is True:
+        return True
+    host = str(node_endpoint.get("host") or "").strip().lower()
+    return host in {"localhost", "127.0.0.1", "::1"}
+
+
+def _node_litellm_gateway_api_base(
+    node_endpoint: dict[str, Any],
+    payload: dict[str, Any],
+    endpoint: dict[str, Any],
+) -> str:
+    gateway = payload.get("gateway") if isinstance(payload.get("gateway"), dict) else {}
+    host_base = str(gateway.get("host_api_base") or "").strip()
+    host = str(node_endpoint.get("host") or "").strip()
+    if host_base and host:
+        parsed = urllib.parse.urlparse(host_base)
+        scheme = parsed.scheme or "http"
+        try:
+            port = parsed.port or int(os.environ.get("MN_LITELLM_GATEWAY_PORT", "4000"))
+        except ValueError:
+            port = 4000
+        path = parsed.path or "/v1"
+        return urllib.parse.urlunparse((scheme, f"{host}:{port}", path, "", "", "")).rstrip("/")
+    if host:
+        port = os.environ.get("MN_LITELLM_GATEWAY_PORT", "4000")
+        return f"http://{host}:{port}/v1".rstrip("/")
+    return str(endpoint.get("api_base") or "http://mn-litellm-proxy:4000/v1").rstrip("/")
 
 
 def _runtime_model_prepare_timeout_seconds() -> float:
@@ -779,7 +902,24 @@ def _runtime_model_ready_label(item: dict[str, Any]) -> str:
     if str(item.get("status") or "") == "fallback_model" and fallback:
         fallback_label = str(fallback.get("id") or fallback.get("model") or "fallback model")
         return f"{label} -> {fallback_label}"
+    if str(item.get("status") or "") == "runtime_node_installed":
+        node = _runtime_model_ready_node(item)
+        if node:
+            return f"{label} installed on {node}"
     return label
+
+
+def _runtime_model_ready_node(item: dict[str, Any]) -> str:
+    for value in (
+        item.get("node"),
+        (item.get("endpoint") or {}).get("node") if isinstance(item.get("endpoint"), dict) else None,
+        (item.get("cluster") or {}).get("node") if isinstance(item.get("cluster"), dict) else None,
+        (item.get("install") or {}).get("node") if isinstance(item.get("install"), dict) else None,
+    ):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
 
 
 def _ensure_context_engine_for_run_if_needed(

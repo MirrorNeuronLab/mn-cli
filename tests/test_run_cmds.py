@@ -11,11 +11,11 @@ from logging.handlers import RotatingFileHandler
 from typer.testing import CliRunner
 from rich.console import Console
 from mn_cli.main import app
-from mn_cli.libs import run_cmds
+from mn_cli.libs import model_cmds, run_cmds
 from mn_cli.libs.ui import JobMonitorState, generate_live_layout
 from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress, _agent_progress_detail
 from mn_cli.libs.run_manifest import prepare_manifest_for_submission
-from mn_sdk import AgentProgress, load_model_ownership, upsert_model_remote
+from mn_sdk import AgentProgress, load_model_ownership, load_model_remotes, upsert_model_remote
 
 runner = CliRunner()
 
@@ -216,7 +216,6 @@ def test_prepare_runtime_models_uses_cluster_model_endpoint(
     service = {
         "id": "spark:docker-model-runner:qwen3",
         "name": "docker-model-runner",
-        "node": "spark@192.168.4.173",
         "status": "passing",
         "address": "http://192.168.4.173:12434/v1",
         "tags": ["model:ai/qwen3-coder", "model-id:qwen3-coder"],
@@ -245,7 +244,7 @@ def test_prepare_runtime_models_uses_cluster_model_endpoint(
     assert "MN_LLM_MODEL" not in env_overrides
 
 
-def test_prepare_runtime_models_uses_registered_nemotron_remote(
+def test_prepare_runtime_models_prunes_node_owned_remote_and_prepares_on_target_node(
     mocker,
     tmp_path,
     monkeypatch,
@@ -274,6 +273,7 @@ def test_prepare_runtime_models_uses_registered_nemotron_remote(
             "aliases": ["nemotron3", "ai/nemotron3:latest"],
             "provider": "docker_model_runner",
             "backend": "llama.cpp",
+            "requirements": {"min_vram_gb": 48},
         }
     }
     upsert_model_remote(
@@ -288,6 +288,24 @@ def test_prepare_runtime_models_uses_registered_nemotron_remote(
         "mn_cli.libs.run_cmds.client.resolve_service",
         return_value=json.dumps({"services": []}),
     )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.resolve_cluster_model_placement",
+        return_value={"source": "cluster_node", "status": "cluster_node", "node": "spark"},
+    )
+    cluster_install = mocker.patch(
+        "mn_cli.libs.run_cmds._install_runtime_cluster_model",
+        return_value={
+            "endpoint": {
+                "provider": "docker_model_runner",
+                "model": "ai/nemotron3:latest",
+                "runtime_model": "ai/nemotron3:latest",
+                "api_model": "ai/nemotron3:latest",
+                "api_base": "http://spark:12434/engines/v1",
+                "node": "spark",
+                "source": "cluster_node_install",
+            },
+        },
+    )
     install_model = mocker.patch("mn_cli.libs.run_cmds.install_model_entry")
     env_overrides = {}
 
@@ -298,11 +316,42 @@ def test_prepare_runtime_models_uses_registered_nemotron_remote(
     )
 
     assert summary["ok"] is True
-    assert summary["models"][0]["status"] == "model_remote"
+    assert summary["models"][0]["status"] == "runtime_node_installed"
     install_model.assert_not_called()
+    cluster_install.assert_called_once()
+    assert load_model_remotes()["remotes"] == {}
     endpoints = json.loads(env_overrides["MN_MODEL_ENDPOINTS_JSON"])
     assert endpoints["nemotron3:latest"]["api_base"] == "http://mn-litellm-proxy:4000/v1"
     assert endpoints["nemotron3:latest"]["node"] == "spark"
+
+
+def test_runtime_model_ready_label_includes_remote_install_node():
+    label = run_cmds._runtime_model_ready_label(
+        {
+            "id": "nemotron3",
+            "status": "runtime_node_installed",
+            "endpoint": {"node": "mirror_neuron@192.168.4.173"},
+        }
+    )
+
+    assert label == "nemotron3 installed on mirror_neuron@192.168.4.173"
+
+
+def test_model_remove_remote_records_matches_aliases(tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_MODEL_REMOTES_PATH", str(tmp_path / "remotes.json"))
+    upsert_model_remote(
+        "spark-nemotron3",
+        "ai/nemotron3:latest",
+        "http://192.168.4.173:4000/v1",
+        api_model="ai/nemotron3:latest",
+        node="mirror_neuron@192.168.4.173",
+    )
+
+    removed = model_cmds._remove_remote_model_records("nemotron3")
+
+    assert len(removed) == 1
+    assert removed[0]["node"] == "mirror_neuron@192.168.4.173"
+    assert load_model_remotes()["remotes"] == {}
 
 
 def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_node(
@@ -475,12 +524,13 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
                 "provider": "docker_model_runner",
                 "model": "nemotron3",
                 "runtime_model": "nemotron3",
-                "api_model": "nemotron3",
-                "api_base": "http://mn-litellm-proxy:4000/v1",
-                "node": "mirror_neuron@192.168.4.173",
-                "source": "litellm_gateway",
-            },
-        }
+            "api_model": "nemotron3",
+            "api_base": "http://mn-litellm-proxy:4000/v1",
+            "node": "mirror_neuron@192.168.4.173",
+            "source": "litellm_gateway",
+        },
+        "gateway": {"host_api_base": "http://127.0.0.1:4000/v1"},
+    }
     )
     shell = mocker.patch("mn_cli.libs.run_cmds.subprocess.run")
 
@@ -507,7 +557,8 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
     assert payload["model"] == "nemotron3"
     assert payload["backend"] == "llama.cpp"
     assert result["endpoint"]["node"] == "mirror_neuron@192.168.4.173"
-    assert result["endpoint"]["api_base"] == "http://mn-litellm-proxy:4000/v1"
+    assert result["endpoint"]["api_base"] == "http://192.168.4.173:4000/v1"
+    assert result["endpoint"]["source"] == "remote-dmr"
     output = " ".join(capsys.readouterr().out.split())
     assert (
         "Installing runtime model nemotron3 on mirror_neuron@192.168.4.173 "
