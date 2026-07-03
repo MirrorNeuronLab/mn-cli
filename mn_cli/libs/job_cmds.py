@@ -368,9 +368,38 @@ def nodes():
     try:
         summary_json = client.get_system_summary()
         summary = json.loads(summary_json)
+        summary = _strip_node_list_restart_history(summary)
         console.print_json(data=summary)
     except Exception as e:
         handle_cli_error(e, console, 'nodes')
+
+
+def _strip_node_list_restart_history(value):
+    if isinstance(value, list):
+        return [_strip_node_list_restart_history(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    cleaned = {}
+    for key, item in value.items():
+        if _node_list_restart_history_key(key):
+            continue
+        cleaned[key] = _strip_node_list_restart_history(item)
+    return cleaned
+
+
+def _node_list_restart_history_key(key: object) -> bool:
+    normalized = "".join(char for char in str(key).lower() if char.isalnum())
+    if not normalized:
+        return False
+    if normalized in {
+        "restarthistory",
+        "restartreason",
+        "restartexhaustedreason",
+        "exhaustedreason",
+    }:
+        return True
+    return "restart" in normalized and ("history" in normalized or "reason" in normalized)
 
 
 def reconcile_node(

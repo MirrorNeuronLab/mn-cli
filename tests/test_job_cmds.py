@@ -1,4 +1,5 @@
 from io import StringIO
+import json
 from types import SimpleNamespace
 
 import grpc
@@ -55,3 +56,49 @@ def test_clear_reports_admin_token_mismatch(monkeypatch):
     rendered = output.getvalue()
     assert "ClearJobs admin authorization failed" in rendered
     assert "fixed gRPC admin token" in rendered
+
+
+def test_node_list_strips_restart_history_and_reasons(monkeypatch):
+    output = _capture_console(monkeypatch)
+    summary = {
+        "nodes": [
+            {
+                "name": "mirror_neuron@local",
+                "status": "healthy",
+                "restart_history": [
+                    {"at": "2026-07-03T00:00:00Z", "reason": "model emitted invalid JSON"}
+                ],
+                "restartReason": "runtime config changed",
+                "restart_exhausted_reason": "attempts exhausted",
+                "drain": {"reason": "operator maintenance"},
+            }
+        ],
+        "jobs": [
+            {
+                "job_id": "job-1",
+                "agents": [
+                    {
+                        "agent_id": "research_planner",
+                        "restartHistory": [{"reason": "actor failed"}],
+                    }
+                ],
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        job_cmds,
+        "client",
+        SimpleNamespace(get_system_summary=lambda: json.dumps(summary)),
+    )
+
+    job_cmds.nodes()
+
+    rendered = output.getvalue()
+    assert "restart_history" not in rendered
+    assert "restartHistory" not in rendered
+    assert "restartReason" not in rendered
+    assert "restart_exhausted_reason" not in rendered
+    assert "model emitted invalid JSON" not in rendered
+    assert "actor failed" not in rendered
+    assert "attempts exhausted" not in rendered
+    assert "operator maintenance" in rendered
