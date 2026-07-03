@@ -306,6 +306,8 @@ def _prepare_runtime_models_for_run_or_exit(
         env_overrides["MN_PREPARED_RUNTIME_MODELS_JSON"] = prepared_json
     materialized_config = _config_with_runtime_model_endpoints(config, summary)
     materialized_config = _config_with_runtime_model_fallbacks(materialized_config, summary)
+    materialized_config = _config_with_runtime_model_profile(materialized_config)
+    materialized_config = _config_with_runtime_model_endpoints(materialized_config, summary)
     if materialized_config is not config and env_overrides is not None:
         summary["config_overrides"] = materialized_config
         env_overrides["MN_BLUEPRINT_CONFIG_JSON"] = json.dumps(materialized_config, sort_keys=True)
@@ -2203,6 +2205,98 @@ def _config_with_runtime_model_fallbacks(config: dict[str, Any], model_install_s
         if path.startswith("llm"):
             _apply_llm_model_fallback(config_copy, path, fallback)
     return config_copy
+
+
+def _config_with_runtime_model_profile(config: dict[str, Any]) -> dict[str, Any]:
+    llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
+    if not llm:
+        return config
+    profile_name, profile = _matching_llm_model_profile(llm, _active_llm_model_ref(llm))
+    if not profile:
+        return config
+    config_copy = json.loads(json.dumps(config))
+    copy_llm = config_copy.setdefault("llm", {})
+    if not isinstance(copy_llm, dict):
+        return config
+    _apply_llm_model_profile(copy_llm, profile_name, profile)
+    return config_copy
+
+
+def _active_llm_model_ref(llm: dict[str, Any]) -> str:
+    config_name = str(llm.get("default_config") or "primary")
+    configs = llm.get("configs") if isinstance(llm.get("configs"), dict) else {}
+    primary = configs.get(config_name) if isinstance(configs.get(config_name), dict) else {}
+    return str(
+        primary.get("runtime_model")
+        or primary.get("model")
+        or llm.get("runtime_model")
+        or llm.get("model")
+        or ""
+    ).strip()
+
+
+def _matching_llm_model_profile(llm: dict[str, Any], model_ref: str) -> tuple[str, dict[str, Any] | None]:
+    wanted = _runtime_model_match_keys(model_ref)
+    if not wanted:
+        return "", None
+    for profile_name in ("large_model_profile", "small_model_profile", "live_model_profile"):
+        profile = llm.get(profile_name)
+        if not isinstance(profile, dict):
+            continue
+        profile_keys = _runtime_model_match_keys(str(profile.get("runtime_model") or profile.get("model") or ""))
+        profile_keys.update(_runtime_model_match_keys(str(profile.get("api_model") or "")))
+        if wanted & profile_keys:
+            return profile_name, profile
+    return "", None
+
+
+def _apply_llm_model_profile(llm: dict[str, Any], profile_name: str, profile: dict[str, Any]) -> None:
+    top_level_keys = {
+        "provider",
+        "model",
+        "runtime_model",
+        "fallback_model",
+        "backend",
+        "api_base",
+        "timeout_seconds",
+        "max_tokens",
+        "num_retries",
+        "retry_backoff_seconds",
+        "context_size",
+        "quantization",
+        "parameter_count_b",
+        "strict_json",
+        "prefer_shared_skill",
+        "require_live",
+        "mode",
+        "mock_mode",
+    }
+    profile_fields = {
+        key: value
+        for key, value in profile.items()
+        if key in top_level_keys and value not in (None, "")
+    }
+    for stale_key in ("context_size", "quantization", "parameter_count_b"):
+        if stale_key not in profile_fields:
+            llm.pop(stale_key, None)
+    llm.update(profile_fields)
+    llm["active_model_profile"] = profile_name
+
+    configs = llm.get("configs") if isinstance(llm.get("configs"), dict) else {}
+    config_name = str(llm.get("default_config") or "primary")
+    primary = configs.get(config_name)
+    if not isinstance(primary, dict):
+        return
+    primary_keys = top_level_keys - {"strict_json", "prefer_shared_skill", "require_live"}
+    primary_fields = {
+        key: value
+        for key, value in profile.items()
+        if key in primary_keys and value not in (None, "")
+    }
+    for stale_key in ("context_size", "quantization", "parameter_count_b"):
+        if stale_key not in primary_fields:
+            primary.pop(stale_key, None)
+    primary.update(primary_fields)
 
 
 def _config_with_runtime_model_endpoints(config: dict[str, Any], model_install_summary: dict[str, Any]) -> dict[str, Any]:

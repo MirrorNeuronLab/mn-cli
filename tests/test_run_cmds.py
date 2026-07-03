@@ -372,6 +372,8 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
                     "enabled": True,
                     "model": "nemotron3:latest",
                     "runtime_model": "nemotron3:latest",
+                    "strict_json": True,
+                    "require_live": True,
                     "default_config": "primary",
                     "configs": {
                         "primary": {
@@ -653,6 +655,27 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
                             "context_size": 8192,
                         }
                     },
+                    "small_model_profile": {
+                        "provider": "docker_model_runner",
+                        "model": "gemma4:e2b",
+                        "runtime_model": "gemma4:e2b",
+                        "backend": "llama.cpp",
+                        "max_tokens": 1800,
+                        "num_retries": 2,
+                        "strict_json": False,
+                        "require_live": False,
+                    },
+                    "large_model_profile": {
+                        "provider": "docker_model_runner",
+                        "model": "nemotron3:latest",
+                        "runtime_model": "nemotron3:latest",
+                        "backend": "llama.cpp",
+                        "context_size": 8192,
+                        "max_tokens": 1800,
+                        "num_retries": 1,
+                        "strict_json": True,
+                        "require_live": True,
+                    },
                 }
             }
         ),
@@ -721,8 +744,66 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
     assert env_overrides["MN_LLM_RUNTIME_MODEL"] == "ai/gemma4:E2B"
     effective_config = json.loads(env_overrides["MN_BLUEPRINT_CONFIG_JSON"])
     assert effective_config["llm"]["model"] == "gemma4:e2b"
+    assert effective_config["llm"]["active_model_profile"] == "small_model_profile"
+    assert effective_config["llm"]["strict_json"] is False
+    assert effective_config["llm"]["require_live"] is False
+    assert effective_config["llm"]["max_tokens"] == 1800
+    assert effective_config["llm"]["num_retries"] == 2
     assert effective_config["llm"]["configs"]["primary"]["runtime_model"] == "gemma4:e2b"
+    assert effective_config["llm"]["configs"]["primary"]["max_tokens"] == 1800
+    assert effective_config["llm"]["configs"]["primary"]["num_retries"] == 2
     install_model.assert_not_called()
+
+
+def test_runtime_model_profile_applies_large_model_strict_contract():
+    config = {
+        "llm": {
+            "enabled": True,
+            "model": "nemotron3",
+            "runtime_model": "nemotron3",
+            "strict_json": False,
+            "require_live": False,
+            "default_config": "primary",
+            "configs": {
+                "primary": {
+                    "provider": "docker_model_runner",
+                    "model": "nemotron3",
+                    "runtime_model": "nemotron3",
+                    "backend": "llama.cpp",
+                    "max_tokens": 900,
+                    "num_retries": 2,
+                }
+            },
+            "small_model_profile": {
+                "provider": "docker_model_runner",
+                "model": "gemma4:e2b",
+                "runtime_model": "gemma4:e2b",
+                "strict_json": False,
+                "require_live": False,
+            },
+            "large_model_profile": {
+                "provider": "docker_model_runner",
+                "model": "nemotron3",
+                "runtime_model": "nemotron3",
+                "backend": "llama.cpp",
+                "context_size": 8192,
+                "max_tokens": 1800,
+                "num_retries": 1,
+                "strict_json": True,
+                "require_live": True,
+            },
+        }
+    }
+
+    materialized = run_cmds._config_with_runtime_model_profile(config)
+
+    assert materialized["llm"]["active_model_profile"] == "large_model_profile"
+    assert materialized["llm"]["strict_json"] is True
+    assert materialized["llm"]["require_live"] is True
+    assert materialized["llm"]["context_size"] == 8192
+    assert materialized["llm"]["configs"]["primary"]["context_size"] == 8192
+    assert materialized["llm"]["configs"]["primary"]["max_tokens"] == 1800
+    assert materialized["llm"]["configs"]["primary"]["num_retries"] == 1
 
 
 def _workflow_manifest_fixture():
