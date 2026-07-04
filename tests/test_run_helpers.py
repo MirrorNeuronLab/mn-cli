@@ -1484,20 +1484,20 @@ def test_prepare_manifest_for_submission_renders_agent_templates(tmp_path, monke
     (bundle_dir / "config" / "default.json").write_text(json.dumps({"identity": {"blueprint_id": "bp"}}))
 
     agent_root = tmp_path / "mn-agents"
-    agent_dir = agent_root / "control_router"
+    agent_dir = agent_root / "control_message_router"
     agent_dir.mkdir(parents=True)
     (agent_root / "index.json").write_text(json.dumps({
         "agents": [
             {
-                "template_id": "mn-agents.control_router",
+                "template_id": "mn-agents.control.message_router",
                 "version": 1,
-                "path": "control_router",
+                "path": "control_message_router",
                 "template_category": "control",
             }
         ]
     }))
     (agent_dir / "agent.json").write_text(json.dumps({
-        "template_id": "mn-agents.control_router",
+        "template_id": "mn-agents.control.message_router",
         "version": 1,
         "defaults": {
             "agent_type": "router",
@@ -1515,7 +1515,7 @@ def test_prepare_manifest_for_submission_renders_agent_templates(tmp_path, monke
             "nodes": [
                 {
                     "node_id": "ingress",
-                    "uses": "mn-agents.control_router@1",
+                    "uses": "mn-agents.control.message_router@1",
                     "with": {"emit_type": "video_monitor_start"},
                 }
             ]
