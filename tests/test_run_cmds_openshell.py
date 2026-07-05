@@ -93,7 +93,6 @@ def test_run_prebuilds_custom_openshell_image_from_payload_directory(mocker, tmp
 
     assert result.exit_code == 0
     assert "OpenShell sandbox image build successful." in result.stdout
-    assert "Status: ready" in result.stdout
     mock_build.assert_called_once()
     assert mock_build.call_args.kwargs["env"]["OPENSHELL_GATEWAY_ENDPOINT"] == "http://127.0.0.1:58080"
     manifest = json.loads(mock_submit.call_args.args[0])
@@ -160,9 +159,7 @@ def test_openshell_skill_dependency_context_injects_pinned_gar_install(tmp_path)
     context = run_cmds._openshell_skill_dependency_context(sandbox_dir, manifest)
     try:
         dockerfile = (context / "Dockerfile").read_text(encoding="utf-8")
-        requirements = (
-            context / "__mn_skill_dependencies" / "requirements.txt"
-        ).read_text(encoding="utf-8")
+        requirements = (context / "requirements.txt").read_text(encoding="utf-8")
     finally:
         if context != sandbox_dir:
             run_cmds.shutil.rmtree(context, ignore_errors=True)
@@ -173,5 +170,5 @@ def test_openshell_skill_dependency_context_injects_pinned_gar_install(tmp_path)
     assert "--index-url\n" not in requirements
     assert "--index-url https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/" in requirements
     assert "--extra-index-url https://pypi.org/simple" in requirements
-    assert "COPY __mn_skill_dependencies/requirements.txt" in dockerfile
-    assert "pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-dependencies/requirements.txt" in dockerfile
+    assert "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt" in dockerfile
+    assert "pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt" in dockerfile

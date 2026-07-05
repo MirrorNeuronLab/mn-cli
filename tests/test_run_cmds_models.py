@@ -7,6 +7,7 @@ import sys
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
+import grpc
 import pytest
 from logging.handlers import RotatingFileHandler
 from typer.testing import CliRunner
@@ -538,6 +539,88 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
         "Pulling and starting nemotron3 on mirror_neuron@192.168.4.173; "
         "waiting for remote Docker Model Runner..."
     ) in progress_descriptions[0]
+
+def test_runtime_cluster_model_install_uses_long_timeout_for_local_runtime_coordinator(mocker):
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.get_system_summary",
+        return_value=json.dumps(
+            {
+                "nodes": [
+                    {
+                        "name": "mirror_neuron@192.168.5.10",
+                        "grpc_host": "192.168.5.10",
+                        "grpc_port": 55051,
+                        "self?": True,
+                    }
+                ]
+            }
+        ),
+    )
+    local_client_class = mocker.patch("mn_cli.libs.run_cmds.Client")
+    local_client = local_client_class.return_value
+    local_client.prepare_runtime_model.return_value = json.dumps(
+        {
+            "status": "installed",
+            "endpoint": {
+                "provider": "docker_model_runner",
+                "model": "ai/gemma4:E2B",
+                "runtime_model": "ai/gemma4:E2B",
+                "api_model": "ai/gemma4:E2B",
+            },
+        }
+    )
+
+    result = run_cmds._install_runtime_cluster_model(
+        requirement={"context_size": 4096},
+        entry={"id": "gemma4:e2b", "model": "ai/gemma4:E2B", "provider": "docker_model_runner"},
+        model={"id": "gemma4:e2b", "model": "ai/gemma4:E2B"},
+        cluster={"node": "mirror_neuron@192.168.5.10"},
+        backend="llama.cpp",
+        context_size=4096,
+        force=False,
+    )
+
+    local_client_class.assert_called_once_with(
+        target=run_cmds.config.grpc_target,
+        timeout=run_cmds.DEFAULT_RUNTIME_MODEL_PREPARE_TIMEOUT_SECONDS,
+        auth_token=run_cmds.config.grpc_auth_token,
+        admin_token=run_cmds.config.grpc_admin_token,
+    )
+    local_client.prepare_runtime_model.assert_called_once()
+    assert result["endpoint"]["source"] == "local-dmr"
+    assert result["endpoint"]["node"] == "mirror_neuron@192.168.5.10"
+
+class FakePrepareRpcError(grpc.RpcError):
+    def __init__(self, code):
+        self._code = code
+
+    def code(self):
+        return self._code
+
+    def details(self):
+        return str(self._code)
+
+def test_prepare_runtime_model_retries_once_on_deadline(mocker, capsys):
+    runtime_client = mocker.Mock()
+    runtime_client.prepare_runtime_model.side_effect = [
+        FakePrepareRpcError(grpc.StatusCode.DEADLINE_EXCEEDED),
+        json.dumps({"status": "installed"}),
+    ]
+
+    response = run_cmds._prepare_runtime_model_with_retry(runtime_client, {"model": "ai/gemma4:E2B"})
+
+    assert json.loads(response)["status"] == "installed"
+    assert runtime_client.prepare_runtime_model.call_count == 2
+    assert "retrying once" in capsys.readouterr().out
+
+def test_prepare_runtime_model_does_not_retry_non_transient_errors(mocker):
+    runtime_client = mocker.Mock()
+    runtime_client.prepare_runtime_model.side_effect = FakePrepareRpcError(grpc.StatusCode.INVALID_ARGUMENT)
+
+    with pytest.raises(FakePrepareRpcError):
+        run_cmds._prepare_runtime_model_with_retry(runtime_client, {"model": "ai/gemma4:E2B"})
+
+    runtime_client.prepare_runtime_model.assert_called_once()
 
 def test_cluster_node_endpoint_is_local_uses_local_host_alias(monkeypatch):
     node_endpoint = {

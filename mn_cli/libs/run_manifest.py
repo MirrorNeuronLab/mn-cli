@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tomllib
 from pathlib import Path
 from typing import Any, Optional
@@ -30,10 +31,13 @@ from mn_cli.libs.skill_runtime import (
     stage_skill_runtime_payloads_for_manifest,
 )
 from mn_cli.libs.skill_dependencies import (
+    DEFAULT_SKILL_PACKAGE_VERSION,
+    GAR_PIP_INDEX_URL,
+    PYPI_PIP_INDEX_URL,
     gar_requirement_lines,
-    gar_requirements_text,
     normalize_package_name,
     pinned_skill_dependency_requirements,
+    requirement_package_name,
     skill_dependency_records,
     skill_dependency_package_names,
     without_requirements_for_packages,
@@ -60,6 +64,8 @@ WORKSPACE_BASES = {"workspace_root", "workspace", "repo_root"}
 HOST_LOCAL_RUNNER = "MirrorNeuron.Runner.HostLocal"
 DOCKER_WORKER_RUNNER = "MirrorNeuron.Runner.DockerWorker"
 SKILL_DEPENDENCY_CONTEXT_ROOT = "__mn_skill_dependencies"
+SKILL_DEPENDENCY_MARKER = "# mirrorneuron: skill-dependencies"
+SKILL_DEPENDENCY_END_MARKER = "# mirrorneuron: skill-dependencies-end"
 LOCAL_SKILL_CONTEXT_ROOT = ".mn-local-skills"
 LOCAL_SKILL_ENABLE_VALUES = {"1", "true", "True", "TRUE", "yes", "Yes", "YES"}
 LOCAL_SKILL_DISABLE_VALUES = {"0", "false", "False", "FALSE", "no", "No", "NO"}
@@ -674,13 +680,9 @@ def stage_skill_dependency_payloads_for_manifest(
     *,
     bundle_dir: Path,
 ) -> dict[str, Any]:
-    local_staged_sources = _stage_local_skill_dependency_payloads(manifest, payloads)
-    requirements_text = gar_requirements_text(manifest)
-    pinned_requirements = pinned_skill_dependency_requirements(manifest)
-    if not requirements_text or not pinned_requirements:
-        return {"staged": bool(local_staged_sources), "sources": local_staged_sources}
-
-    staged_sources: list[str] = list(local_staged_sources)
+    staged_sources: list[str] = list(_stage_local_skill_dependency_payloads(manifest, payloads))
+    config = _manifest_blueprint_config(manifest)
+    local_sources = _local_skill_dependency_source_records(manifest)
     for context_path in _docker_worker_context_paths(manifest):
         dockerfile_key = _payload_join(context_path, "Dockerfile")
         if dockerfile_key not in payloads:
@@ -691,30 +693,334 @@ def stage_skill_dependency_payloads_for_manifest(
         if dockerfile_bytes is None:
             continue
 
-        dockerfile_text = dockerfile_bytes.decode("utf-8", errors="ignore")
-        if _docker_context_already_installs_skill_dependencies(
-            payloads,
-            dockerfile_text,
+        local_context_sources = _stage_local_skill_dependency_context_sources(
             context_path,
-            pinned_requirements,
-        ):
-            continue
-        if SKILL_DEPENDENCY_CONTEXT_ROOT in dockerfile_text:
+            local_sources,
+            payloads,
+        )
+        requirements_text = _docker_worker_requirements_text(
+            manifest,
+            payloads,
+            bundle_dir=bundle_dir,
+            context_path=context_path,
+            config=config,
+            local_context_sources=local_context_sources,
+        )
+        if not requirements_text:
+            staged_sources.extend(local_context_sources)
             continue
 
-        requirements_key = _payload_join(context_path, SKILL_DEPENDENCY_CONTEXT_ROOT, "requirements.txt")
+        requirements_key = _payload_join(context_path, "requirements.txt")
         payloads[requirements_key] = requirements_text.encode("utf-8")
-        payloads[dockerfile_key] = (
-            dockerfile_text.rstrip()
-            + "\n\n"
-            + "COPY __mn_skill_dependencies/requirements.txt /tmp/mn-skill-dependencies/requirements.txt\n"
-            + "RUN if [ -s /tmp/mn-skill-dependencies/requirements.txt ]; then \\\n"
-            + "      python3 -m pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-dependencies/requirements.txt; \\\n"
-            + "    fi\n"
-        ).encode("utf-8")
-        staged_sources.extend([requirements_key, dockerfile_key])
 
-    return {"staged": bool(staged_sources), "sources": staged_sources}
+        dockerfile_text = dockerfile_bytes.decode("utf-8", errors="ignore")
+        next_dockerfile = _ensure_docker_worker_requirements_install(
+            dockerfile_text,
+            local_context_sources=local_context_sources,
+        )
+        if next_dockerfile != dockerfile_text:
+            payloads[dockerfile_key] = next_dockerfile.encode("utf-8")
+            staged_sources.append(dockerfile_key)
+        staged_sources.extend([requirements_key, *local_context_sources])
+
+    return {"staged": bool(staged_sources), "sources": _dedupe_strings(staged_sources)}
+
+
+def _manifest_blueprint_config(manifest: dict[str, Any]) -> dict[str, Any]:
+    for node in manifest_nodes(manifest):
+        config = node.get("config") if isinstance(node.get("config"), dict) else {}
+        environment = config.get("environment") if isinstance(config.get("environment"), dict) else {}
+        raw = environment.get("MN_BLUEPRINT_CONFIG_JSON")
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(decoded, dict):
+            return decoded
+    return {}
+
+
+def _docker_worker_requirements_text(
+    manifest: dict[str, Any],
+    payloads: dict[str, bytes],
+    *,
+    bundle_dir: Path,
+    context_path: str,
+    config: dict[str, Any],
+    local_context_sources: list[str],
+) -> str:
+    local_package_names = {
+        normalize_package_name(str(record.get("package") or ""))
+        for record in _local_skill_dependency_source_records(manifest)
+        if str(record.get("package") or "").strip()
+    }
+    manifest_skill_packages = skill_dependency_package_names(manifest)
+    configured_skill_packages = _configured_skill_package_names(config)
+    skill_layer_packages = manifest_skill_packages | local_package_names | configured_skill_packages
+
+    lines: list[str] = []
+    foundation = _foundation_requirement_lines(config, payloads, bundle_dir, context_path)
+    lines.extend(without_requirements_for_packages(foundation, skill_layer_packages))
+    lines.extend(_configured_non_skill_package_lines(config, skill_layer_packages))
+
+    skill_lines = pinned_skill_dependency_requirements(manifest)
+    skill_lines.extend(
+        _configured_skill_requirement_lines(
+            config,
+            manifest_skill_packages | local_package_names,
+        )
+    )
+    local_install_lines = _local_skill_install_requirement_lines(local_context_sources)
+    if skill_lines or local_install_lines:
+        lines = _ensure_pip_index_lines(lines, config)
+    lines.extend(skill_lines)
+    lines.extend(local_install_lines)
+    return _requirements_text(lines)
+
+
+def _foundation_requirement_lines(
+    config: dict[str, Any],
+    payloads: dict[str, bytes],
+    bundle_dir: Path,
+    context_path: str,
+) -> list[str]:
+    paths: list[str] = []
+    python_dependencies = config.get("python_dependencies") if isinstance(config.get("python_dependencies"), dict) else {}
+    configured = python_dependencies.get("requirements")
+    if isinstance(configured, str) and configured.strip():
+        paths.append(configured.strip().strip("/"))
+    context_requirements = _payload_join(context_path, "requirements.txt")
+    if context_requirements not in paths:
+        paths.append(context_requirements)
+
+    lines: list[str] = []
+    for path in paths:
+        text = _payload_or_file_text(payloads, bundle_dir, path)
+        if text:
+            lines.extend(text.splitlines())
+    return lines
+
+
+def _payload_or_file_text(payloads: dict[str, bytes], bundle_dir: Path, path: str) -> str:
+    payload = payloads.get(path)
+    if payload is not None:
+        try:
+            return payload.decode("utf-8")
+        except UnicodeDecodeError:
+            return ""
+    candidate = bundle_dir / "payloads" / path
+    try:
+        return candidate.read_text(encoding="utf-8") if candidate.is_file() else ""
+    except OSError:
+        return ""
+
+
+def _configured_non_skill_package_lines(config: dict[str, Any], excluded_packages: set[str]) -> list[str]:
+    python_dependencies = config.get("python_dependencies") if isinstance(config.get("python_dependencies"), dict) else {}
+    lines: list[str] = []
+    for package in python_dependencies.get("packages", []):
+        if not isinstance(package, str) or not package.strip():
+            continue
+        name = requirement_package_name(package)
+        if not name or name in excluded_packages or _is_skill_requirement(package):
+            continue
+        lines.append(package.strip())
+    return lines
+
+
+def _configured_skill_package_names(config: dict[str, Any]) -> set[str]:
+    python_dependencies = config.get("python_dependencies") if isinstance(config.get("python_dependencies"), dict) else {}
+    return {
+        package_name
+        for package in python_dependencies.get("packages", [])
+        if isinstance(package, str)
+        and _is_skill_requirement(package)
+        and (package_name := requirement_package_name(package))
+    }
+
+
+def _configured_skill_requirement_lines(config: dict[str, Any], known_packages: set[str]) -> list[str]:
+    python_dependencies = config.get("python_dependencies") if isinstance(config.get("python_dependencies"), dict) else {}
+    lines: list[str] = []
+    for package in python_dependencies.get("packages", []):
+        if not isinstance(package, str) or not _is_skill_requirement(package):
+            continue
+        package_name = requirement_package_name(package)
+        if not package_name or package_name in known_packages:
+            continue
+        text = package.strip()
+        if re.search(r"(==|~=|!=|<=|>=|<|>)", text):
+            lines.append(text)
+            continue
+        lines.append(f"{_requirement_display_name(text)}=={DEFAULT_SKILL_PACKAGE_VERSION}")
+    return lines
+
+
+def _is_skill_requirement(requirement: str) -> bool:
+    package = requirement_package_name(requirement)
+    return bool(package and package.startswith("mirrorneuron-") and package.endswith("-skill"))
+
+
+def _requirement_display_name(requirement: str) -> str:
+    match = re.match(r"([A-Za-z0-9_.-]+(?:\[[^\]]+\])?)", requirement.strip())
+    return match.group(1) if match else requirement.strip()
+
+
+def _ensure_pip_index_lines(lines: list[str], config: dict[str, Any]) -> list[str]:
+    if any(line.strip().startswith("--index-url") for line in lines):
+        return lines
+    python_dependencies = config.get("python_dependencies") if isinstance(config.get("python_dependencies"), dict) else {}
+    index_url = str(python_dependencies.get("index_url") or GAR_PIP_INDEX_URL).strip()
+    extra_index_url = str(python_dependencies.get("extra_index_url") or PYPI_PIP_INDEX_URL).strip()
+    index_lines = [f"--index-url {index_url}"] if index_url else []
+    if extra_index_url:
+        index_lines.append(f"--extra-index-url {extra_index_url}")
+    return [*index_lines, *lines]
+
+
+def _requirements_text(lines: list[str]) -> str:
+    output: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        text = str(line).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        output.append(text)
+    return "\n".join(output) + ("\n" if output else "")
+
+
+def _local_skill_dependency_source_records(manifest: dict[str, Any]) -> list[dict[str, str]]:
+    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    local = metadata.get("mn_local_skill_dependencies") if isinstance(metadata, dict) else {}
+    sources = local.get("sources") if isinstance(local, dict) else None
+    if not isinstance(sources, list):
+        return []
+
+    records: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for entry in sources:
+        if not isinstance(entry, dict):
+            continue
+        source = str(entry.get("source") or "").strip()
+        package = str(entry.get("package") or "").strip()
+        if not source or not package:
+            continue
+        key = (normalize_package_name(package), str(Path(source).expanduser()))
+        if key in seen:
+            continue
+        seen.add(key)
+        records.append({"package": package, "source": source})
+    return records
+
+
+def _stage_local_skill_dependency_context_sources(
+    context_path: str,
+    local_sources: list[dict[str, str]],
+    payloads: dict[str, bytes],
+) -> list[str]:
+    staged: list[str] = []
+    for record in local_sources:
+        source = Path(str(record.get("source") or "")).expanduser()
+        if not source.exists():
+            continue
+        target = _payload_join(
+            context_path,
+            SKILL_DEPENDENCY_CONTEXT_ROOT,
+            "local",
+            _safe_dependency_source_name(source),
+        )
+        if _add_upload_source_to_payloads(source, target, payloads):
+            staged.append(target)
+    return _dedupe_strings(staged)
+
+
+def _safe_dependency_source_name(source: Path) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", source.name).strip(".-")
+    return safe or "skill"
+
+
+def _local_skill_install_requirement_lines(local_context_sources: list[str]) -> list[str]:
+    return [
+        f"/tmp/mn-skill-runtime/local/{Path(source).name}"
+        for source in local_context_sources
+        if Path(source).name
+    ]
+
+
+def _ensure_docker_worker_requirements_install(
+    dockerfile_text: str,
+    *,
+    local_context_sources: list[str],
+) -> str:
+    copy_block = _local_skill_copy_block(local_context_sources)
+    next_text = _replace_skill_dependency_marker_block(dockerfile_text, copy_block)
+    if next_text == dockerfile_text and local_context_sources:
+        next_text = _insert_after_runtime_requirements_copy(next_text, copy_block)
+    if _dockerfile_installs_runtime_requirements(next_text):
+        return next_text
+
+    lines: list[str] = []
+    if "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt" not in next_text:
+        lines.append("COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt")
+    if local_context_sources and copy_block not in next_text:
+        lines.append(copy_block)
+    lines.extend(_runtime_requirements_install_lines())
+    return next_text.rstrip() + "\n\n" + "\n".join(lines).rstrip() + "\n"
+
+
+def _local_skill_copy_block(local_context_sources: list[str]) -> str:
+    lines = [SKILL_DEPENDENCY_MARKER]
+    if local_context_sources:
+        for source in local_context_sources:
+            name = Path(source).name
+            lines.append(
+                f"COPY {SKILL_DEPENDENCY_CONTEXT_ROOT}/local/{name} "
+                f"/tmp/mn-skill-runtime/local/{name}"
+            )
+    else:
+        lines.append("# No local skill sources staged for this image.")
+    lines.append(SKILL_DEPENDENCY_END_MARKER)
+    return "\n".join(lines)
+
+
+def _replace_skill_dependency_marker_block(dockerfile_text: str, block: str) -> str:
+    start = dockerfile_text.find(SKILL_DEPENDENCY_MARKER)
+    if start < 0:
+        return dockerfile_text
+    end = dockerfile_text.find(SKILL_DEPENDENCY_END_MARKER, start)
+    if end < 0:
+        return dockerfile_text
+    end += len(SKILL_DEPENDENCY_END_MARKER)
+    return dockerfile_text[:start].rstrip() + "\n" + block + "\n" + dockerfile_text[end:].lstrip("\n")
+
+
+def _insert_after_runtime_requirements_copy(dockerfile_text: str, block: str) -> str:
+    copy_line = "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt"
+    lines = dockerfile_text.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() != copy_line:
+            continue
+        return "\n".join([*lines[: index + 1], "", block, *lines[index + 1 :]]) + "\n"
+    return dockerfile_text
+
+
+def _dockerfile_installs_runtime_requirements(dockerfile_text: str) -> bool:
+    return (
+        "/tmp/mn-skill-runtime/requirements.txt" in dockerfile_text
+        and "pip install" in dockerfile_text
+        and "-r /tmp/mn-skill-runtime/requirements.txt" in dockerfile_text
+    )
+
+
+def _runtime_requirements_install_lines() -> list[str]:
+    return [
+        "RUN if [ -s /tmp/mn-skill-runtime/requirements.txt ]; then \\",
+        "      python3 -m pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt; \\",
+        "    fi",
+    ]
 
 
 def _stage_local_skill_dependency_payloads(
@@ -1074,25 +1380,6 @@ def _safe_context_path(value: str) -> str:
     if candidate.name == "Dockerfile":
         return candidate.parent.as_posix()
     return cleaned
-
-
-def _docker_context_already_installs_skill_dependencies(
-    payloads: dict[str, bytes],
-    dockerfile_text: str,
-    context_path: str,
-    pinned_requirements: list[str],
-) -> bool:
-    requirements_key = _payload_join(context_path, "requirements.txt")
-    requirements = payloads.get(requirements_key)
-    if requirements is None:
-        return False
-    try:
-        requirements_text = requirements.decode("utf-8")
-    except UnicodeDecodeError:
-        return False
-    if not all(requirement in requirements_text for requirement in pinned_requirements):
-        return False
-    return "requirements.txt" in dockerfile_text and "pip install" in dockerfile_text
 
 
 def _path_is_under_any(value: str, roots: list[Path]) -> bool:

@@ -1,3 +1,5 @@
+import grpc
+
 from .common import *
 
 def _resolve_runtime_cluster_model(*, requirement: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any] | None:
@@ -72,16 +74,43 @@ def _cluster_node_native_sdk_endpoint(node_name: str, node: dict[str, Any]) -> d
     return {"target": target, "host": host, "port": port}
 
 def _runtime_model_prepare_client(node: str, node_endpoint: dict[str, Any]) -> Client:
+    timeout = _runtime_model_prepare_timeout_seconds()
     if _cluster_node_endpoint_is_local(node_endpoint):
-        return client
+        return Client(
+            target=config.grpc_target,
+            timeout=timeout,
+            auth_token=config.grpc_auth_token,
+            admin_token=config.grpc_admin_token,
+        )
 
     native_endpoint = _cluster_node_native_sdk_endpoint(node, node_endpoint["node"])
     return Client(
         target=native_endpoint["target"],
-        timeout=_runtime_model_prepare_timeout_seconds(),
+        timeout=timeout,
         auth_token=config.grpc_auth_token,
         admin_token=config.grpc_admin_token,
     )
+
+def _prepare_runtime_model_with_retry(runtime_client: Client, prepare_payload: dict[str, Any]) -> str:
+    for attempt in range(2):
+        try:
+            return runtime_client.prepare_runtime_model(prepare_payload)
+        except grpc.RpcError as exc:
+            if attempt == 0 and _retryable_runtime_model_prepare_error(exc):
+                console.print(
+                    "[yellow]Runtime model prepare timed out or became unavailable; "
+                    "retrying once with the same request...[/yellow]"
+                )
+                continue
+            raise
+    raise RuntimeError("runtime model prepare retry loop exited unexpectedly")
+
+def _retryable_runtime_model_prepare_error(exc: grpc.RpcError) -> bool:
+    try:
+        code = exc.code()
+    except Exception:
+        return False
+    return code in {grpc.StatusCode.DEADLINE_EXCEEDED, grpc.StatusCode.UNAVAILABLE}
 
 def _container_local_api_base_to_node_host(api_base: str, node_host: str) -> str:
     base = str(api_base or "").strip()
@@ -204,7 +233,7 @@ def _install_runtime_cluster_model(
             ),
             total=None,
         )
-        response = runtime_client.prepare_runtime_model(prepare_payload)
+        response = _prepare_runtime_model_with_retry(runtime_client, prepare_payload)
     try:
         payload = json.loads(response)
     except Exception as exc:

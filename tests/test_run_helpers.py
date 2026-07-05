@@ -24,10 +24,13 @@ def _write_skill_pyproject(
     folder: str,
     package: str,
     *,
+    dependencies: list[str] | None = None,
     runtime: bool = False,
 ) -> None:
     skill_dir = skills_root / folder
     skill_dir.mkdir(parents=True)
+    dependency_lines = ",\n".join(f'    "{dependency}"' for dependency in (dependencies or []))
+    dependencies_text = f"[\n{dependency_lines}\n]" if dependency_lines else "[]"
     runtime_block = ""
     if runtime:
         runtime_block = """
@@ -50,7 +53,7 @@ packages = ["ca-certificates", "python3", "python3-pip", "python3-venv", "w3m"]
 [project]
 name = "{package}"
 version = "0.0.0"
-dependencies = []
+dependencies = {dependencies_text}
 {runtime_block}
 [build-system]
 requires = ["setuptools"]
@@ -303,6 +306,7 @@ def test_prepare_manifest_stages_local_skill_dependencies_in_dev(tmp_path, monke
     monkeypatch.setenv("MN_ENV", "dev")
     monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setenv("MN_SKILLS_ROOT", str(skills_root))
+    monkeypatch.setattr("mn_cli.libs.run_manifest.mn_home", lambda: tmp_path / ".mn")
 
     manifest = {
         "skill_dependencies": [
@@ -350,9 +354,18 @@ def test_prepare_manifest_stages_local_skill_dependencies_in_dev(tmp_path, monke
         ".mn-local-skills/evidence_engine_skill/src/mn_evidence_engine_skill/__init__.py"
         in payloads
     )
-    requirements = payloads["worker/docker_worker/__mn_skill_dependencies/requirements.txt"].decode()
+    assert (
+        "worker/docker_worker/__mn_skill_dependencies/local/evidence_engine_skill/src/mn_evidence_engine_skill/__init__.py"
+        in payloads
+    )
+    requirements = payloads["worker/docker_worker/requirements.txt"].decode()
+    dockerfile = payloads["worker/docker_worker/Dockerfile"].decode()
     assert "mirrorneuron-rag-skill==1.2.14" in requirements
     assert "mirrorneuron-evidence-engine-skill" not in requirements
+    assert "/tmp/mn-skill-runtime/local/evidence_engine_skill" in requirements
+    assert "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt" in dockerfile
+    assert "COPY __mn_skill_dependencies/local/evidence_engine_skill" in dockerfile
+    assert "pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
 
 
 def test_prepare_manifest_stages_local_skill_dependencies_from_runtime_env(tmp_path, monkeypatch):
@@ -411,6 +424,74 @@ def test_prepare_manifest_stages_local_skill_dependencies_from_runtime_env(tmp_p
         ".mn-local-skills/evidence_engine_skill/src/mn_evidence_engine_skill/__init__.py"
         in payloads
     )
+    requirements = payloads["worker/docker_worker/requirements.txt"].decode()
+    assert "/tmp/mn-skill-runtime/local/evidence_engine_skill" in requirements
+
+
+def test_prepare_manifest_stages_local_rag_skill_source_for_dockerworker_dev(
+    tmp_path, monkeypatch
+):
+    bundle_dir = tmp_path / "bundle"
+    skills_root = tmp_path / "mn-skills"
+    bundle_dir.mkdir()
+    (bundle_dir / "config").mkdir()
+    (bundle_dir / "config" / "default.json").write_text(
+        json.dumps({"identity": {"blueprint_id": "local_rag_dev"}}),
+        encoding="utf-8",
+    )
+    _write_skill_pyproject(
+        skills_root,
+        "rag_skill",
+        "mirrorneuron-rag-skill",
+        dependencies=["pymilvus[milvus-lite]>=2.4"],
+    )
+    skill_module = skills_root / "rag_skill" / "src" / "mn_rag_skill"
+    skill_module.mkdir(parents=True)
+    (skill_module / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+    monkeypatch.setenv("MN_ENV", "dev")
+    monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("MN_SKILLS_ROOT", str(skills_root))
+
+    manifest = {
+        "skill_dependencies": [
+            {
+                "type": "pip",
+                "source": "gar",
+                "name": "mirrorneuron-rag-skill",
+                "version": "1.2.14",
+            }
+        ],
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.DockerWorker",
+                    "docker_worker_image": "worker/docker_worker",
+                    "environment": {},
+                },
+            }
+        ],
+    }
+    payloads = {"worker/docker_worker/Dockerfile": b"FROM python:3.11-slim\n"}
+
+    prepared = prepare_manifest_for_submission(bundle_dir, manifest)
+    assert prepared["skill_dependencies"] == []
+
+    stage_skill_dependency_payloads_for_manifest(
+        prepared,
+        payloads,
+        bundle_dir=bundle_dir,
+    )
+
+    requirements = payloads["worker/docker_worker/requirements.txt"].decode()
+    dockerfile = payloads["worker/docker_worker/Dockerfile"].decode()
+    pyproject = payloads[
+        "worker/docker_worker/__mn_skill_dependencies/local/rag_skill/pyproject.toml"
+    ].decode()
+    assert "mirrorneuron-rag-skill" not in requirements
+    assert "/tmp/mn-skill-runtime/local/rag_skill" in requirements
+    assert "pymilvus[milvus-lite]>=2.4" in pyproject
+    assert "COPY __mn_skill_dependencies/local/rag_skill" in dockerfile
 
 
 def test_prepare_manifest_stages_local_skill_dependencies_only_in_docker_workdir_upload(
@@ -625,15 +706,57 @@ def test_stage_skill_dependency_payloads_injects_pinned_gar_requirements_for_doc
     )
 
     assert staged["staged"] is True
-    requirements = payloads["worker/docker_worker/__mn_skill_dependencies/requirements.txt"].decode()
+    requirements = payloads["worker/docker_worker/requirements.txt"].decode()
     dockerfile = payloads["worker/docker_worker/Dockerfile"].decode()
     assert "mirrorneuron-rag-skill==1.2.7" in requirements
     assert "https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/" in requirements
     assert "--index-url\n" not in requirements
     assert "--index-url https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/" in requirements
     assert "--extra-index-url https://pypi.org/simple" in requirements
-    assert "COPY __mn_skill_dependencies/requirements.txt" in dockerfile
-    assert "pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-dependencies/requirements.txt" in dockerfile
+    assert "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt" in dockerfile
+    assert "pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
+
+
+def test_stage_skill_dependency_payloads_ignores_comment_only_dependency_text(tmp_path):
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    manifest = {
+        "skill_dependencies": [
+            {
+                "type": "pip",
+                "source": "gar",
+                "name": "mirrorneuron-rag-skill",
+                "version": "1.2.7",
+            }
+        ],
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.DockerWorker",
+                    "docker_worker_image": "worker/docker_worker",
+                },
+            }
+        ],
+    }
+    payloads = {
+        "worker/docker_worker/Dockerfile": (
+            b"FROM python:3.11-slim\n"
+            b"# __mn_skill_dependencies are documented here only.\n"
+        )
+    }
+
+    stage_skill_dependency_payloads_for_manifest(
+        manifest,
+        payloads,
+        bundle_dir=bundle_dir,
+    )
+
+    requirements = payloads["worker/docker_worker/requirements.txt"].decode()
+    dockerfile = payloads["worker/docker_worker/Dockerfile"].decode()
+    assert "mirrorneuron-rag-skill==1.2.7" in requirements
+    assert "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt" in dockerfile
+    assert "pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
 
 
 def test_prepare_manifest_adds_sdk_upload_for_manual_blueprint_support_worker(tmp_path, monkeypatch):
@@ -1661,6 +1784,7 @@ def test_prepare_manifest_stages_local_skill_dependencies_from_workspace_fallbac
     monkeypatch.setenv("MN_USE_LOCAL_SKILLS", "1")
     monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setenv("MN_SKILLS_ROOT", str(stale_root))
+    monkeypatch.setattr("mn_cli.libs.run_manifest.mn_home", lambda: tmp_path / ".mn")
 
     manifest = {
         "skill_dependencies": [

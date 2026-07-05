@@ -1,4 +1,8 @@
 from .common import *
+from mn_cli.libs.run_manifest import (
+    _ensure_docker_worker_requirements_install,
+    _requirements_text,
+)
 
 def _prepare_openshell_custom_images(
     bundle_dir: Path, manifest_dict: dict[str, Any]
@@ -136,16 +140,17 @@ def _openshell_skill_dependency_context(source_path: Path, manifest: dict[str, A
     temp_context = Path(tempfile.mkdtemp(prefix=f"mn-openshell-skill-deps-{source_root.name}."))
     shutil.copytree(source_root, temp_context, dirs_exist_ok=True)
     dockerfile = temp_context / "Dockerfile"
-    requirements = temp_context / "__mn_skill_dependencies" / "requirements.txt"
-    requirements.parent.mkdir(parents=True, exist_ok=True)
-    requirements.write_text(requirements_text, encoding="utf-8")
+    requirements = temp_context / "requirements.txt"
+    existing_requirements = requirements.read_text(encoding="utf-8") if requirements.is_file() else ""
+    requirements.write_text(
+        _requirements_text([*existing_requirements.splitlines(), *requirements_text.splitlines()]),
+        encoding="utf-8",
+    )
     dockerfile.write_text(
-        dockerfile.read_text(encoding="utf-8").rstrip()
-        + "\n\n"
-        + "COPY __mn_skill_dependencies/requirements.txt /tmp/mn-skill-dependencies/requirements.txt\n"
-        + "RUN if [ -s /tmp/mn-skill-dependencies/requirements.txt ]; then \\\n"
-        + "      python3 -m pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-dependencies/requirements.txt; \\\n"
-        + "    fi\n",
+        _ensure_docker_worker_requirements_install(
+            dockerfile.read_text(encoding="utf-8"),
+            local_context_sources=[],
+        ),
         encoding="utf-8",
     )
     return temp_context
