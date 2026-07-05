@@ -172,3 +172,19 @@ def test_openshell_skill_dependency_context_injects_pinned_gar_install(tmp_path)
     assert "--extra-index-url https://pypi.org/simple" in requirements
     assert "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt" in dockerfile
     assert "pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
+
+
+def test_local_docker_openshell_build_uses_plain_progress(mocker, tmp_path):
+    sandbox_dir = tmp_path / "openshell_sandbox"
+    sandbox_dir.mkdir()
+    (sandbox_dir / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+    mock_build = mocker.patch(
+        "mn_cli.libs.run_cmds._run_streaming_local_docker_build",
+        return_value=subprocess.CompletedProcess(["docker"], 0, "ok", ""),
+    )
+
+    image = run_cmds._build_local_docker_sandbox_image(sandbox_dir)
+
+    assert image.startswith("openshell/sandbox-from:")
+    command = mock_build.call_args.args[0]
+    assert command[:3] == ["docker", "build", "--progress=plain"]

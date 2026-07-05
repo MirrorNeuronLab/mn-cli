@@ -36,6 +36,7 @@ def _prepared_runtime_model_keys(model_install_summary: Optional[dict[str, Any]]
         "installed",
         "already_installed",
         "runtime_node_install",
+        "runtime_node_already_installed",
         "runtime_node_installed",
         "fallback_model",
         "cluster_provided",

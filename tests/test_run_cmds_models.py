@@ -267,6 +267,7 @@ def test_prepare_runtime_models_prunes_node_owned_remote_and_prepares_on_target_
     cluster_install = mocker.patch(
         "mn_cli.libs.run_cmds._install_runtime_cluster_model",
         return_value={
+            "install": {"status": "already_installed"},
             "endpoint": {
                 "provider": "docker_model_runner",
                 "model": "ai/nemotron3:latest",
@@ -288,13 +289,21 @@ def test_prepare_runtime_models_prunes_node_owned_remote_and_prepares_on_target_
     )
 
     assert summary["ok"] is True
-    assert summary["models"][0]["status"] == "runtime_node_installed"
+    assert summary["models"][0]["status"] == "runtime_node_already_installed"
     install_model.assert_not_called()
     cluster_install.assert_called_once()
     assert load_model_remotes()["remotes"] == {}
     endpoints = json.loads(env_overrides["MN_MODEL_ENDPOINTS_JSON"])
     assert endpoints["nemotron3:latest"]["api_base"] == "http://mn-litellm-proxy:4000/v1"
     assert endpoints["nemotron3:latest"]["node"] == "spark"
+    resolver = run_cmds._prepared_model_installed_resolver(summary)
+    assert resolver("ai/nemotron3:latest", {"model": "nemotron3:latest"}) is True
+    validation_manifest, _validation_config = run_cmds._model_validation_inputs_with_prepared_models(
+        manifest,
+        {},
+        summary,
+    )
+    assert validation_manifest["runtime"]["models"]["primary"]["install_mode"] == "cluster_provided"
 
 def test_runtime_model_ready_label_includes_remote_install_node():
     label = run_cmds._runtime_model_ready_label(
@@ -306,6 +315,19 @@ def test_runtime_model_ready_label_includes_remote_install_node():
     )
 
     assert label == "nemotron3 installed on mirror_neuron@192.168.4.173"
+
+
+def test_runtime_model_ready_label_includes_remote_already_installed_node():
+    label = run_cmds._runtime_model_ready_label(
+        {
+            "id": "gemma4:e2b",
+            "status": "runtime_node_already_installed",
+            "endpoint": {"node": "mirror_neuron@192.168.5.10"},
+        }
+    )
+
+    assert label == "gemma4:e2b already installed on mirror_neuron@192.168.5.10"
+
 
 def test_model_remove_remote_records_matches_aliases(tmp_path, monkeypatch):
     monkeypatch.setenv("MN_MODEL_REMOTES_PATH", str(tmp_path / "remotes.json"))
@@ -531,12 +553,12 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
     assert result["endpoint"]["source"] == "remote-dmr"
     output = " ".join(capsys.readouterr().out.split())
     assert (
-        "Installing runtime model nemotron3 on mirror_neuron@192.168.4.173 "
+        "Preparing runtime model nemotron3 on mirror_neuron@192.168.4.173 "
         "with native SDK gRPC"
     ) in output
     assert len(progress_descriptions) == 1
     assert (
-        "Pulling and starting nemotron3 on mirror_neuron@192.168.4.173; "
+        "Checking and preparing nemotron3 on mirror_neuron@192.168.4.173; "
         "waiting for remote Docker Model Runner..."
     ) in progress_descriptions[0]
 

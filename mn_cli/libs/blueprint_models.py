@@ -125,10 +125,18 @@ def blueprint_model_dependency_summary(
                     for key in keys:
                         if key:
                             endpoints[key] = endpoint
+                install_status = ""
+                if isinstance(install_result, dict) and isinstance(install_result.get("install"), dict):
+                    install_status = str(install_result["install"].get("status") or "").strip().lower()
+                result_status = (
+                    "runtime_node_already_installed"
+                    if install_status == "already_installed"
+                    else "runtime_node_installed"
+                )
                 results.append(
                     {
                         **base_result,
-                        "status": "runtime_node_installed",
+                        "status": result_status,
                         "cluster": cluster_model,
                         **(install_result if isinstance(install_result, dict) else {}),
                     }

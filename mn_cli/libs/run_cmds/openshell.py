@@ -231,10 +231,8 @@ def _build_local_docker_sandbox_image(source_path: Path) -> str:
     source_path = source_path.resolve()
     digest = hashlib.sha256(str(source_path).encode("utf-8")).hexdigest()[:12]
     image_ref = f"openshell/sandbox-from:{digest}"
-    result = subprocess.run(
-        ["docker", "build", "-t", image_ref, str(source_path)],
-        capture_output=True,
-        text=True,
+    result = _run_streaming_local_docker_build(
+        ["docker", "build", "--progress=plain", "-t", image_ref, str(source_path)]
     )
     if result.returncode != 0:
         output = f"{result.stdout}\n{result.stderr}".strip()
@@ -242,6 +240,23 @@ def _build_local_docker_sandbox_image(source_path: Path) -> str:
             console.print(output)
         raise typer.Exit(1)
     return image_ref
+
+
+def _run_streaming_local_docker_build(command: list[str]) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    recent_output: list[str] = []
+    if process.stdout is not None:
+        for line in process.stdout:
+            recent_output.append(line)
+            del recent_output[:-400]
+            console.print(line.rstrip("\n"), highlight=False)
+    return subprocess.CompletedProcess(command, process.wait(), "".join(recent_output), "")
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

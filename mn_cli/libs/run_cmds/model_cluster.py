@@ -206,7 +206,7 @@ def _install_runtime_cluster_model(
     local_target = _cluster_node_endpoint_is_local(node_endpoint)
     transport = "local runtime coordinator" if local_target else "native SDK gRPC"
     console.print(
-        f"[cyan]Installing runtime model {model_label} on {node_label} with {transport}...[/cyan]"
+        f"[cyan]Preparing runtime model {model_label} on {node_label} with {transport}...[/cyan]"
     )
     runtime_client = _runtime_model_prepare_client(node, node_endpoint)
     prepare_payload = {
@@ -228,7 +228,7 @@ def _install_runtime_cluster_model(
     ) as progress:
         progress.add_task(
             (
-                f"[cyan]Pulling and starting {model_label} on {node_label}; "
+                f"[cyan]Checking and preparing {model_label} on {node_label}; "
                 f"waiting for {'local' if local_target else 'remote'} Docker Model Runner..."
             ),
             total=None,
@@ -409,6 +409,7 @@ def _print_runtime_model_install_summary(summary: dict[str, Any]) -> None:
             "service_required",
             "cluster_provided",
             "runtime_node_install",
+            "runtime_node_already_installed",
             "runtime_node_installed",
             "fallback_model",
             "service_registry",
@@ -433,9 +434,12 @@ def _runtime_model_ready_label(item: dict[str, Any]) -> str:
     if str(item.get("status") or "") == "fallback_model" and fallback:
         fallback_label = str(fallback.get("id") or fallback.get("model") or "fallback model")
         return f"{label} -> {fallback_label}"
-    if str(item.get("status") or "") == "runtime_node_installed":
+    status = str(item.get("status") or "")
+    if status in {"runtime_node_installed", "runtime_node_already_installed"}:
         node = _runtime_model_ready_node(item)
         if node:
+            if status == "runtime_node_already_installed":
+                return f"{label} already installed on {node}"
             return f"{label} installed on {node}"
     return label
 
