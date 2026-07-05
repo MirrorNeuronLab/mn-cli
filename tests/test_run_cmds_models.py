@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import grpc
 import pytest
+import typer
 from logging.handlers import RotatingFileHandler
 from typer.testing import CliRunner
 from rich.console import Console
@@ -467,6 +468,257 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
     )
     assert validation_manifest["runtime"]["models"]["primary"]["install_mode"] == "cluster_provided"
     assert validation_config["llm"]["configs"]["primary"]["install_mode"] == "cluster_provided"
+
+def _preferred_large_model_config(default_model: str = "gemma4:e2b") -> dict:
+    return {
+        "llm": {
+            "enabled": True,
+            "model": default_model,
+            "runtime_model": default_model,
+            "fallback_model": "gemma4:e2b",
+            "preferred_model": "nemotron3",
+            "default_config": "primary",
+            "configs": {
+                "primary": {
+                    "provider": "docker_model_runner",
+                    "model": default_model,
+                    "runtime_model": default_model,
+                    "fallback_model": "gemma4:e2b",
+                    "backend": "llama.cpp",
+                    "max_tokens": 1800,
+                    "num_retries": 2,
+                    "strict_json": False,
+                    "require_live": False,
+                }
+            },
+            "small_model_profile": {
+                "provider": "docker_model_runner",
+                "model": "gemma4:e2b",
+                "runtime_model": "gemma4:e2b",
+                "fallback_model": "gemma4:e2b",
+                "backend": "llama.cpp",
+                "max_tokens": 1800,
+                "num_retries": 2,
+                "strict_json": False,
+                "require_live": False,
+            },
+            "live_model_profile": {
+                "provider": "docker_model_runner",
+                "model": "gemma4:e2b",
+                "runtime_model": "gemma4:e2b",
+                "fallback_model": "gemma4:e2b",
+                "backend": "llama.cpp",
+                "max_tokens": 1800,
+                "num_retries": 2,
+                "strict_json": False,
+                "require_live": False,
+            },
+            "large_model_profile": {
+                "provider": "docker_model_runner",
+                "model": "nemotron3",
+                "runtime_model": "nemotron3",
+                "fallback_model": "gemma4:e2b",
+                "backend": "llama.cpp",
+                "context_size": 8192,
+                "max_tokens": 1800,
+                "num_retries": 1,
+                "strict_json": True,
+                "require_live": True,
+                "hardware": {"gpu": {"min_count": 1, "min_memory_mb": 49152, "memory_operator": ">="}},
+            },
+        }
+    }
+
+def _preferred_large_model_catalog() -> dict:
+    return {
+        "nemotron3": {
+            "id": "nemotron3",
+            "model": "ai/nemotron3:latest",
+            "api_model": "nemotron3",
+            "provider": "docker_model_runner",
+            "backend": "llama.cpp",
+            "context_size": 8192,
+            "fallback_model": "gemma4:e2b",
+            "requirements": {"min_vram_gb": 48, "min_unified_memory_gb": 48},
+        },
+        "gemma4:e2b": {
+            "id": "gemma4:e2b",
+            "model": "ai/gemma4:E2B",
+            "api_model": "ai/gemma4:E2B",
+            "provider": "docker_model_runner",
+            "backend": "llama.cpp",
+            "context_size": 4096,
+        },
+    }
+
+def _spark_gb10_resource_report() -> dict:
+    return {
+        "nodes": [
+            {
+                "name": "mirror_neuron@192.168.5.12",
+                "status": "healthy",
+                "scheduling_eligible": True,
+                "devices": [
+                    {
+                        "kind": "gpu",
+                        "type": "nvidia/gpu",
+                        "vendor": "nvidia",
+                        "model": "NVIDIA GB10",
+                        "memory_total_mb": 131072,
+                        "memory_free_mb": 126000,
+                        "capabilities": ["gpu", "nvidia", "cuda", "nvidia-gb10", "nvidia-dgx-spark"],
+                    }
+                ],
+            }
+        ]
+    }
+
+def test_prepare_runtime_models_promotes_preferred_large_profile_on_capable_cluster_node(
+    mocker,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
+    bundle_dir = tmp_path / "assistant"
+    bundle_dir.mkdir()
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(json.dumps(_preferred_large_model_config()), encoding="utf-8")
+    manifest = {"metadata": {"blueprint_id": "assistant"}}
+    catalog = _preferred_large_model_catalog()
+    mocker.patch("mn_cli.libs.run_cmds.load_model_catalog", return_value=catalog)
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.resolve_service",
+        return_value=json.dumps({"services": []}),
+    )
+    mocker.patch("mn_cli.libs.run_cmds.client.get_resource", return_value=json.dumps(_spark_gb10_resource_report()))
+    mocker.patch("mn_cli.libs.run_cmds.model_installed", return_value=False)
+    cluster_install = mocker.patch(
+        "mn_cli.libs.run_cmds._install_runtime_cluster_model",
+        return_value={
+            "install": {"status": "already_installed", "node": "mirror_neuron@192.168.5.12"},
+            "endpoint": {
+                "provider": "docker_model_runner",
+                "model": "nemotron3",
+                "runtime_model": "ai/nemotron3:latest",
+                "api_model": "nemotron3",
+                "api_base": "http://192.168.5.12:4000/v1",
+                "node": "mirror_neuron@192.168.5.12",
+                "source": "remote-dmr",
+            },
+        },
+    )
+    install_model = mocker.patch("mn_cli.libs.run_cmds.install_model_entry")
+
+    env_overrides = {}
+    summary = run_cmds._prepare_runtime_models_for_run_or_exit(bundle_dir, manifest, env_overrides=env_overrides)
+
+    assert summary["ok"] is True
+    assert summary["models"][0]["id"] == "nemotron3"
+    assert summary["models"][0]["status"] == "runtime_node_already_installed"
+    assert summary["models"][0]["cluster"]["node"] == "mirror_neuron@192.168.5.12"
+    cluster_install.assert_called_once()
+    install_model.assert_not_called()
+    prepared = json.loads(env_overrides["MN_PREPARED_RUNTIME_MODELS_JSON"])
+    assert "nemotron3" in prepared
+    assert "ai/nemotron3:latest" in prepared
+    effective_config = json.loads(env_overrides["MN_BLUEPRINT_CONFIG_JSON"])
+    assert effective_config["llm"]["active_model_profile"] == "large_model_profile"
+    assert effective_config["llm"]["model"] == "nemotron3"
+    assert effective_config["llm"]["runtime_model"] == "ai/nemotron3:latest"
+    assert effective_config["llm"]["strict_json"] is True
+    assert effective_config["llm"]["configs"]["primary"]["model"] == "nemotron3"
+    assert effective_config["llm"]["configs"]["primary"]["runtime_model"] == "ai/nemotron3:latest"
+    resolver = run_cmds._prepared_model_installed_resolver(summary)
+    assert resolver("ai/nemotron3:latest", {"model": "nemotron3"}) is True
+    validation_manifest, validation_config = run_cmds._model_validation_inputs_with_prepared_models(
+        {"runtime": {"models": {"primary": {"provider": "docker_model_runner", "model": "nemotron3"}}}},
+        {"llm": {"configs": {"primary": {"provider": "docker_model_runner", "model": "nemotron3"}}}},
+        summary,
+    )
+    assert validation_manifest["runtime"]["models"]["primary"]["install_mode"] == "cluster_provided"
+    assert validation_config["llm"]["configs"]["primary"]["install_mode"] == "cluster_provided"
+
+def test_prepare_runtime_models_keeps_default_model_without_capable_cluster_node(
+    mocker,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
+    bundle_dir = tmp_path / "assistant"
+    bundle_dir.mkdir()
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(json.dumps(_preferred_large_model_config()), encoding="utf-8")
+    manifest = {"metadata": {"blueprint_id": "assistant"}}
+    catalog = _preferred_large_model_catalog()
+    resource_report = {
+        "nodes": [
+            {
+                "name": "small-node",
+                "status": "healthy",
+                "scheduling_eligible": True,
+                "devices": [{"kind": "gpu", "type": "integrated_gpu", "memory_total_mb": 32768}],
+            }
+        ]
+    }
+    mocker.patch("mn_cli.libs.run_cmds.load_model_catalog", return_value=catalog)
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.resolve_service",
+        return_value=json.dumps({"services": []}),
+    )
+    mocker.patch("mn_cli.libs.run_cmds.client.get_resource", return_value=json.dumps(resource_report))
+    mocker.patch("mn_cli.libs.run_cmds.model_installed", side_effect=lambda model: model == "ai/gemma4:E2B")
+    cluster_install = mocker.patch("mn_cli.libs.run_cmds._install_runtime_cluster_model")
+    install_model = mocker.patch("mn_cli.libs.run_cmds.install_model_entry")
+
+    env_overrides = {}
+    summary = run_cmds._prepare_runtime_models_for_run_or_exit(bundle_dir, manifest, env_overrides=env_overrides)
+
+    assert summary["ok"] is True
+    assert summary["models"][0]["id"] == "gemma4:e2b"
+    assert summary["models"][0]["status"] == "already_installed"
+    cluster_install.assert_not_called()
+    install_model.assert_not_called()
+    effective_config = json.loads(env_overrides["MN_BLUEPRINT_CONFIG_JSON"])
+    assert effective_config["llm"]["active_model_profile"] == "small_model_profile"
+    assert effective_config["llm"]["model"] == "ai/gemma4:E2B"
+    assert effective_config["llm"]["runtime_model"] == "ai/gemma4:E2B"
+
+def test_prepare_runtime_models_surfaces_large_profile_prepare_failure_without_fallback(
+    mocker,
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
+    bundle_dir = tmp_path / "assistant"
+    bundle_dir.mkdir()
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(json.dumps(_preferred_large_model_config()), encoding="utf-8")
+    manifest = {"metadata": {"blueprint_id": "assistant"}}
+    catalog = _preferred_large_model_catalog()
+    mocker.patch("mn_cli.libs.run_cmds.load_model_catalog", return_value=catalog)
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.resolve_service",
+        return_value=json.dumps({"services": []}),
+    )
+    mocker.patch("mn_cli.libs.run_cmds.client.get_resource", return_value=json.dumps(_spark_gb10_resource_report()))
+    mocker.patch("mn_cli.libs.run_cmds.model_installed", return_value=False)
+    cluster_install = mocker.patch(
+        "mn_cli.libs.run_cmds._install_runtime_cluster_model",
+        side_effect=RuntimeError("remote prepare failed"),
+    )
+    install_model = mocker.patch("mn_cli.libs.run_cmds.install_model_entry")
+
+    with pytest.raises(typer.Exit) as exc:
+        run_cmds._prepare_runtime_models_for_run_or_exit(bundle_dir, manifest, env_overrides={})
+
+    assert exc.value.exit_code == 1
+    cluster_install.assert_called_once()
+    install_model.assert_not_called()
+    assert "remote prepare failed" in capsys.readouterr().out
 
 def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_or_core(mocker, capsys):
     progress_descriptions: list[str] = []

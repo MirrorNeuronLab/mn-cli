@@ -1,3 +1,6 @@
+import copy
+from typing import Callable
+
 from .common import *
 
 def _prepared_model_installed_resolver(model_install_summary: Optional[dict[str, Any]]):
@@ -95,6 +98,90 @@ def _config_with_runtime_model_profile(config: dict[str, Any]) -> dict[str, Any]
         return config
     _apply_llm_model_profile(copy_llm, profile_name, profile)
     return config_copy
+
+def _config_with_auto_runtime_model_profile(
+    config: dict[str, Any],
+    *,
+    catalog: dict[str, dict[str, Any]],
+    resolve_cluster_model: Callable[..., dict[str, Any] | None],
+) -> dict[str, Any]:
+    llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
+    if not llm or llm.get("enabled") is False:
+        return config
+    profile_name, profile = _automatic_large_llm_model_profile(llm)
+    if not profile:
+        return config
+    model_ref = _llm_profile_model_ref(profile)
+    if not model_ref:
+        return config
+    try:
+        entry = resolve_model_entry(model_ref, catalog=catalog)
+    except Exception:
+        return config
+    cluster_model = resolve_cluster_model(
+        requirement={
+            "name": str(llm.get("default_config") or "primary"),
+            "path": f"llm.{profile_name}",
+            "model": model_ref,
+            "backend": str(profile.get("backend") or entry.get("backend") or "auto"),
+            "context_size": profile.get("context_size") or entry.get("context_size"),
+            "required": True,
+            "config": copy.deepcopy(profile),
+        },
+        entry=entry,
+    )
+    if not cluster_model:
+        return config
+    config_copy = json.loads(json.dumps(config))
+    copy_llm = config_copy.setdefault("llm", {})
+    if not isinstance(copy_llm, dict):
+        return config
+    _apply_llm_model_profile(copy_llm, profile_name, profile)
+    return config_copy
+
+def _automatic_large_llm_model_profile(llm: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
+    preferred_model = str(llm.get("preferred_model") or "").strip()
+    large_profile = llm.get("large_model_profile")
+    if isinstance(large_profile, dict) and _llm_profile_matches_preferred_model(large_profile, preferred_model):
+        return "large_model_profile", large_profile
+    live_profile = llm.get("live_model_profile")
+    if (
+        isinstance(live_profile, dict)
+        and _llm_profile_is_hardware_gated(live_profile)
+        and _llm_profile_matches_preferred_model(live_profile, preferred_model)
+    ):
+        return "live_model_profile", live_profile
+    return "", None
+
+def _llm_profile_model_ref(profile: dict[str, Any]) -> str:
+    return str(
+        profile.get("runtime_model")
+        or profile.get("model")
+        or profile.get("api_model")
+        or ""
+    ).strip()
+
+def _llm_profile_matches_preferred_model(profile: dict[str, Any], preferred_model: str) -> bool:
+    profile_ref = _llm_profile_model_ref(profile)
+    if not profile_ref:
+        return False
+    preferred = str(preferred_model or "").strip()
+    if not preferred:
+        return False
+    return bool(_runtime_model_match_keys(profile_ref) & _runtime_model_match_keys(preferred))
+
+def _llm_profile_is_hardware_gated(profile: dict[str, Any]) -> bool:
+    hardware = profile.get("hardware") if isinstance(profile.get("hardware"), dict) else {}
+    gpu = hardware.get("gpu") if isinstance(hardware.get("gpu"), dict) else {}
+    if not gpu:
+        return False
+    for key in ("min_memory_mb", "min_vram_mb", "min_unified_memory_mb"):
+        try:
+            if float(gpu.get(key) or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return bool(gpu.get("required_capabilities"))
 
 def _active_llm_model_ref(llm: dict[str, Any]) -> str:
     config_name = str(llm.get("default_config") or "primary")

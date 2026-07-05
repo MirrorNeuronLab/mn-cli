@@ -11,7 +11,13 @@ def _prepare_runtime_models_for_run_or_exit(
     force: bool = False,
     quiet: bool = False,
 ) -> dict[str, Any]:
-    config = load_blueprint_config(bundle_dir, config_overrides=config_overrides) or {}
+    base_config = load_blueprint_config(bundle_dir, config_overrides=config_overrides) or {}
+    catalog = load_model_catalog()
+    config = _config_with_auto_runtime_model_profile(
+        base_config,
+        catalog=catalog,
+        resolve_cluster_model=_resolve_runtime_cluster_model,
+    )
     validation_manifest = _manifest_for_model_validation(manifest, config)
     summary = blueprint_model_dependency_summary(
         blueprint_id=_runtime_model_blueprint_id(bundle_dir, manifest, config),
@@ -22,7 +28,7 @@ def _prepare_runtime_models_for_run_or_exit(
         install_source=str(bundle_dir),
         force=force,
         ops=BlueprintModelOps(
-            load_model_catalog=load_model_catalog,
+            load_model_catalog=lambda: catalog,
             required_blueprint_models=required_blueprint_models,
             load_model_ownership=load_model_ownership,
             resolve_model_entry=resolve_model_entry,
@@ -48,7 +54,7 @@ def _prepare_runtime_models_for_run_or_exit(
     materialized_config = _config_with_runtime_model_fallbacks(materialized_config, summary)
     materialized_config = _config_with_runtime_model_profile(materialized_config)
     materialized_config = _config_with_runtime_model_endpoints(materialized_config, summary)
-    if materialized_config is not config and env_overrides is not None:
+    if (config is not base_config or materialized_config is not config) and env_overrides is not None:
         summary["config_overrides"] = materialized_config
         env_overrides["MN_BLUEPRINT_CONFIG_JSON"] = json.dumps(materialized_config, sort_keys=True)
         env_overrides.update(_runtime_model_fallback_llm_env(materialized_config))
