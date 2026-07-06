@@ -36,7 +36,8 @@ def test_clear_runs_without_local_admin_token_preflight(monkeypatch):
 
     rendered = output.getvalue()
     assert "Job clear successful" in rendered
-    assert "Jobs cleared: 1 non-running" in rendered
+    assert "Jobs cleared:" in rendered
+    assert "1 non-running" in rendered
 
 
 def test_clear_reports_admin_token_mismatch(monkeypatch):
@@ -57,6 +58,27 @@ def test_clear_reports_admin_token_mismatch(monkeypatch):
     assert "ClearJobs admin authorization failed" in rendered
     assert "fixed gRPC admin token" in rendered
     assert "mn runtime start to reconcile and recreate stale-token runtime containers" in rendered
+    assert "Retry after: mn runtime start; mn job clear" in rendered
+
+
+def test_clear_reports_missing_local_admin_token(monkeypatch):
+    output = _capture_console(monkeypatch)
+
+    def clear_jobs():
+        raise StubRpcError(
+            grpc.StatusCode.PERMISSION_DENIED,
+            "ClearJobs requires MN_GRPC_ADMIN_TOKEN",
+        )
+
+    monkeypatch.setattr(job_cmds, "client", SimpleNamespace(admin_token="", clear_jobs=clear_jobs))
+    monkeypatch.setattr(job_cmds, "config", SimpleNamespace(grpc_admin_token=""))
+
+    job_cmds.clear()
+
+    rendered = output.getvalue()
+    assert "ClearJobs admin authorization failed" in rendered
+    assert "did not load a gRPC admin token from runtime state" in rendered
+    assert "fixed gRPC admin token" not in rendered
     assert "Retry after: mn runtime start; mn job clear" in rendered
 
 

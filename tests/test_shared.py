@@ -91,7 +91,7 @@ def test_shared_client_passes_admin_token_for_current_sdk(monkeypatch, tmp_path)
             "target": "localhost:55051",
             "timeout": 10.0,
             "auth_token": DEFAULT_GRPC_AUTH_TOKEN,
-            "admin_token": DEFAULT_GRPC_ADMIN_TOKEN,
+            "admin_token": "admin-secret",
         }
     ]
 
@@ -131,8 +131,8 @@ def test_shared_client_reads_runtime_env_target_and_tokens(monkeypatch, tmp_path
         {
             "target": "127.0.0.1:55111",
             "timeout": 10.0,
-            "auth_token": DEFAULT_GRPC_AUTH_TOKEN,
-            "admin_token": DEFAULT_GRPC_ADMIN_TOKEN,
+            "auth_token": "auth-from-state",
+            "admin_token": "admin-from-state",
         }
     ]
 
@@ -169,7 +169,7 @@ def test_shared_client_prefers_runtime_endpoint_over_stale_core_target(monkeypat
         {
             "target": "192.168.4.20:55051",
             "timeout": 10.0,
-            "auth_token": DEFAULT_GRPC_AUTH_TOKEN,
+            "auth_token": "auth-from-state",
             "admin_token": DEFAULT_GRPC_ADMIN_TOKEN,
         }
     ]
@@ -200,8 +200,8 @@ def test_shared_client_reads_refreshed_token_files(monkeypatch, tmp_path):
         {
             "target": "localhost:55051",
             "timeout": 10.0,
-            "auth_token": DEFAULT_GRPC_AUTH_TOKEN,
-            "admin_token": DEFAULT_GRPC_ADMIN_TOKEN,
+            "auth_token": "auth-from-file",
+            "admin_token": "admin-from-file",
         }
     ]
 
@@ -236,7 +236,7 @@ def test_shared_client_reads_token_files_before_stale_runtime_env(monkeypatch, t
         {
             "target": "localhost:55051",
             "timeout": 10.0,
-            "auth_token": DEFAULT_GRPC_AUTH_TOKEN,
-            "admin_token": DEFAULT_GRPC_ADMIN_TOKEN,
+            "auth_token": "auth-from-file",
+            "admin_token": "admin-from-file",
         }
     ]

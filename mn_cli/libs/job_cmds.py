@@ -115,10 +115,21 @@ def clear():
     except grpc.RpcError as e:
         if e.code() == grpc.StatusCode.PERMISSION_DENIED and "MN_GRPC_ADMIN_TOKEN" in str(e.details()):
             console.print("[red]Error: ClearJobs admin authorization failed.[/red]")
-            console.print(
-                "The running core rejected the fixed gRPC admin token. "
-                "Run mn runtime start to reconcile and recreate stale-token runtime containers."
-            )
+            local_admin_token = str(
+                getattr(client, "admin_token", None)
+                or getattr(config, "grpc_admin_token", "")
+                or ""
+            ).strip()
+            if local_admin_token:
+                console.print(
+                    "The running core rejected the fixed gRPC admin token. "
+                    "Run mn runtime start to reconcile and recreate stale-token runtime containers."
+                )
+            else:
+                console.print(
+                    "The CLI did not load a gRPC admin token from runtime state. "
+                    "Run mn runtime start to refresh ~/.mn/docker-compose.env and token files."
+                )
             console.print("Retry after: mn runtime start; mn job clear")
             return
         handle_cli_error(e, console, 'clear')

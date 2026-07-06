@@ -128,6 +128,63 @@ def test_cli_config_uses_same_loader_for_dotenv_defaults(tmp_path):
     assert config.grpc_timeout_seconds == 3.0
 
 
+def test_cli_config_reads_mn_home_token_files_without_dotenv(monkeypatch, tmp_path):
+    state_dir = tmp_path / ".mn"
+    state_dir.mkdir()
+    (state_dir / "grpc_auth.token").write_text("auth-from-file\n", encoding="utf-8")
+    (state_dir / "grpc_admin.token").write_text("admin-from-file\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("MN_HOME", raising=False)
+    monkeypatch.delenv("MN_GRPC_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("MN_GRPC_AUTH_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN_FILE", raising=False)
+
+    config = CliConfig.from_env(root=tmp_path)
+
+    assert config.grpc_auth_token == "auth-from-file"
+    assert config.grpc_admin_token == "admin-from-file"
+
+
+def test_cli_config_reads_runtime_env_tokens_without_dotenv(monkeypatch, tmp_path):
+    state_dir = tmp_path / ".mn"
+    state_dir.mkdir()
+    (state_dir / "docker-compose.env").write_text(
+        "MN_GRPC_AUTH_TOKEN=auth-from-state\n"
+        "MN_GRPC_ADMIN_TOKEN=admin-from-state\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("MN_HOME", raising=False)
+    monkeypatch.delenv("MN_GRPC_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("MN_GRPC_AUTH_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN_FILE", raising=False)
+
+    config = CliConfig.from_env(root=tmp_path)
+
+    assert config.grpc_auth_token == "auth-from-state"
+    assert config.grpc_admin_token == "admin-from-state"
+
+
+def test_cli_config_prefers_direct_env_admin_token(monkeypatch, tmp_path):
+    state_dir = tmp_path / ".mn"
+    state_dir.mkdir()
+    (state_dir / "grpc_admin.token").write_text("admin-from-file\n", encoding="utf-8")
+    (state_dir / "docker-compose.env").write_text(
+        "MN_GRPC_ADMIN_TOKEN=admin-from-state\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("MN_HOME", raising=False)
+    monkeypatch.setenv("MN_GRPC_ADMIN_TOKEN", "admin-from-env")
+    monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN_FILE", raising=False)
+
+    config = CliConfig.from_env(root=tmp_path)
+
+    assert config.grpc_admin_token == "admin-from-env"
+
+
 def test_config_loader_is_reusable_for_api_code(tmp_path):
     config = load_config(env={"MN_ENV": "production", "MN_API_PORT": "8080"}, root=tmp_path, app_name="mn-api")
 

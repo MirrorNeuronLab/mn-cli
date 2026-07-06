@@ -180,7 +180,7 @@ class CliConfig:
         app_config = load_config(env=env, root=root, app_name="mn-cli")
         runtime_config = _build_runtime_config(
             app_config.effective_env,
-            resolve_tokens=env is not None or bool(app_config.loaded_files),
+            resolve_tokens=True,
         )
         log_path = app_config.path("MN_CLI_LOG_PATH")
         return cls(
