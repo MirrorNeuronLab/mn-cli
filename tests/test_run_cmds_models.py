@@ -489,7 +489,20 @@ def _preferred_large_model_config(default_model: str = "gemma4:e2b") -> dict:
                     "num_retries": 2,
                     "strict_json": False,
                     "require_live": False,
-                }
+                },
+                "large": {
+                    "provider": "docker_model_runner",
+                    "model": "nemotron3",
+                    "runtime_model": "nemotron3",
+                    "backend": "llama.cpp",
+                    "context_size": 8192,
+                    "max_tokens": 1800,
+                    "num_retries": 1,
+                    "strict_json": True,
+                    "require_live": True,
+                    "required": False,
+                    "hardware": {"gpu": {"min_count": 1, "min_memory_mb": 49152, "memory_operator": ">="}},
+                },
             },
             "small_model_profile": {
                 "provider": "docker_model_runner",
@@ -614,6 +627,7 @@ def test_prepare_runtime_models_promotes_preferred_large_profile_on_capable_clus
     summary = run_cmds._prepare_runtime_models_for_run_or_exit(bundle_dir, manifest, env_overrides=env_overrides)
 
     assert summary["ok"] is True
+    assert len(summary["models"]) == 1
     assert summary["models"][0]["id"] == "nemotron3"
     assert summary["models"][0]["status"] == "runtime_node_already_installed"
     assert summary["models"][0]["cluster"]["node"] == "mirror_neuron@192.168.5.12"
@@ -676,6 +690,7 @@ def test_prepare_runtime_models_keeps_default_model_without_capable_cluster_node
     summary = run_cmds._prepare_runtime_models_for_run_or_exit(bundle_dir, manifest, env_overrides=env_overrides)
 
     assert summary["ok"] is True
+    assert len(summary["models"]) == 1
     assert summary["models"][0]["id"] == "gemma4:e2b"
     assert summary["models"][0]["status"] == "already_installed"
     cluster_install.assert_not_called()
