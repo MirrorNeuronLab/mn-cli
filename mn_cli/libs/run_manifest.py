@@ -8,11 +8,27 @@ from pathlib import Path
 from typing import Any, Optional
 
 from mn_sdk import (
-    DOCKER_MODEL_RUNNER_CONTAINER_API_BASE,
     expand_manifest_source,
     expand_manifest_model_service_requirements,
     is_manifest_source,
-    resolve_llm_environment,
+)
+from mn_sdk.blueprint_runtime import (
+    add_mn_llm_aliases as sdk_add_mn_llm_aliases,
+    adjust_llm_environment_for_node as sdk_adjust_llm_environment_for_node,
+    apply_manifest_config_bindings as sdk_apply_manifest_config_bindings,
+    blueprint_runtime_environment as sdk_blueprint_runtime_environment,
+    config_path_get as sdk_config_path_get,
+    config_to_environment as sdk_config_to_environment,
+    config_uses_docker_worker_skill_runtime as sdk_config_uses_docker_worker_skill_runtime,
+    deep_merge as sdk_deep_merge,
+    docker_worker_runtime_service_environment as sdk_docker_worker_runtime_service_environment,
+    inject_node_environment as sdk_inject_node_environment,
+    load_blueprint_config as sdk_load_blueprint_config,
+    load_blueprint_config_overwrites as sdk_load_blueprint_config_overwrites,
+    merge_path_values as sdk_merge_path_values,
+    set_manifest_path as sdk_set_manifest_path,
+    shared_runs_root as sdk_shared_runs_root,
+    with_shared_run_store_config as sdk_with_shared_run_store_config,
 )
 from mn_sdk.runtime_modules import (
     ensure_runtime_modules_for_manifest,
@@ -27,7 +43,6 @@ from mn_sdk.blueprint_support import (
     runtime_web_ui_support_payloads,
     stage_local_input_payloads_for_manifest as stage_sdk_local_input_payloads,
 )
-from mn_sdk.runtime_config import default_runs_root
 from mn_cli.libs.skill_runtime import (
     prepare_skill_runtime_for_manifest,
     stage_skill_runtime_payloads_for_manifest,
@@ -44,6 +59,7 @@ from mn_cli.libs.skill_dependencies import (
     skill_dependency_package_names,
     without_requirements_for_packages,
 )
+from mn_cli.runtime_state import mn_home
 USER_HOME_ENV_KEYS = ("MN_OUTPUT_HOME", "MN_USER_HOME", "OTTERDESK_USER_HOME")
 UPLOAD_SOURCE_EXCLUDED_DIRS = {
     ".git",
@@ -83,19 +99,25 @@ def workspace_root() -> Path:
 
 
 def runtime_path_environment() -> dict[str, str]:
-    env = sdk_runtime_path_environment(workspace_root=workspace_root())
+    env = sdk_runtime_path_environment(env=_sdk_runtime_env(), workspace_root=workspace_root())
     env.update(user_home_environment())
     return env
 
 
 def local_skill_sources_enabled() -> bool:
-    return sdk_local_skill_sources_enabled(default_for_dev_env=True)
+    return sdk_local_skill_sources_enabled(env=_sdk_runtime_env(), default_for_dev_env=True)
 
 
 def _local_skill_source_roots() -> list[Path]:
     """Return candidate local skill roots, ordered by explicit env then fallbacks."""
 
-    return sdk_local_skill_source_roots(workspace_root=workspace_root())
+    return sdk_local_skill_source_roots(env=_sdk_runtime_env(), workspace_root=workspace_root())
+
+
+def _sdk_runtime_env() -> dict[str, str]:
+    values = dict(os.environ)
+    values["MN_HOME"] = str(mn_home())
+    return values
 
 
 def localize_skill_dependencies_for_dev(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -1340,8 +1362,7 @@ def _path_is_under_any(value: str, roots: list[Path]) -> bool:
 
 
 def _shared_runs_root(env_overrides: Optional[dict[str, str]] = None) -> str:
-    configured = (env_overrides or {}).get("MN_RUNS_ROOT")
-    return str(Path(configured).expanduser() if configured else default_runs_root())
+    return sdk_shared_runs_root(env_overrides)
 
 
 def with_shared_run_store_config(
@@ -1349,15 +1370,7 @@ def with_shared_run_store_config(
     run_id: str,
     runs_root: str,
 ) -> dict[str, Any]:
-    resolved = json.loads(json.dumps(config or {}))
-    identity = resolved.setdefault("identity", {})
-    if isinstance(identity, dict):
-        identity["run_id"] = run_id
-    outputs = resolved.setdefault("outputs", {})
-    if isinstance(outputs, dict):
-        outputs["run_root"] = runs_root
-        outputs.setdefault("write_run_store", True)
-    return resolved
+    return sdk_with_shared_run_store_config(config, run_id, runs_root)
 
 
 def blueprint_runtime_environment(
@@ -1366,91 +1379,28 @@ def blueprint_runtime_environment(
     config: Optional[dict[str, Any]] = None,
     config_overrides: Optional[dict[str, Any]] = None,
 ) -> dict[str, str]:
-    env: dict[str, str] = runtime_path_environment()
-    if config is None:
-        config = load_blueprint_config(bundle_dir, config_overrides=config_overrides)
-    if config is not None:
-        env["MN_BLUEPRINT_CONFIG_JSON"] = json.dumps(config, sort_keys=True)
-        projected_config = load_blueprint_config_overwrites(
-            bundle_dir, config_overrides=config_overrides
-        )
-        if projected_config is not None:
-            env.update(config_to_environment(projected_config))
-        docker_model_env = resolve_llm_environment(config)
-        if docker_model_env:
-            env.update(docker_model_env)
-        if _config_uses_docker_worker_skill_runtime(config):
-            env.update(_docker_worker_runtime_service_environment())
-
-    scenario_path = bundle_dir / "scenario.json"
-    if scenario_path.exists():
-        env["MN_BLUEPRINT_SCENARIO_JSON"] = scenario_path.read_text(encoding="utf-8")
-    return env
+    return sdk_blueprint_runtime_environment(
+        bundle_dir,
+        config=config,
+        config_overrides=config_overrides,
+        runtime_env=runtime_path_environment(),
+        include_docker_worker_runtime_env=True,
+        read_json_object_fn=read_json_object,
+    )
 
 
 def _config_uses_docker_worker_skill_runtime(config: dict[str, Any]) -> bool:
-    runtime = config.get("skill_runtime") if isinstance(config.get("skill_runtime"), dict) else {}
-    if runtime.get("driver") == "docker_worker":
-        return True
-    for section_name in ("input_skills", "output_skills"):
-        section = config.get(section_name) if isinstance(config.get(section_name), dict) else {}
-        for entry in section.values():
-            if not isinstance(entry, dict):
-                continue
-            runtime = entry.get("runtime") if isinstance(entry.get("runtime"), dict) else {}
-            if runtime.get("driver") == "docker_worker":
-                return True
-    return False
+    return sdk_config_uses_docker_worker_skill_runtime(config)
 
 
 def _docker_worker_runtime_service_environment() -> dict[str, str]:
-    values = _runtime_compose_env_values()
-    redis_url = os.getenv("MN_REDIS_URL") or values.get("MN_REDIS_URL")
-    network = os.getenv("MN_DOCKER_WORKER_NETWORK") or values.get("MN_DOCKER_NETWORK_NAME")
-    env: dict[str, str] = {}
-    if redis_url:
-        env.setdefault("MN_REDIS_URL", redis_url)
-    if network:
-        env.setdefault("MN_DOCKER_WORKER_NETWORK", network)
-    env.setdefault("MN_CONTEXT_ADDR", os.getenv("MN_CONTEXT_ADDR") or "mirror-neuron-context-engine:50052")
-    return env
-
-
-def _runtime_compose_env_values() -> dict[str, str]:
-    path = Path(os.getenv("MN_HOME") or Path.home() / ".mn") / "docker-compose.env"
-    values: dict[str, str] = {}
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return values
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, value = stripped.split("=", 1)
-        values[key.strip()] = value.strip().strip('"').strip("'")
-    return values
+    return sdk_docker_worker_runtime_service_environment()
 
 
 def apply_manifest_config_bindings(
     manifest: dict[str, Any], config: dict[str, Any]
 ) -> None:
-    bindings = config.get("manifest_config_bindings") or []
-    if not isinstance(bindings, list):
-        return
-    for binding in bindings:
-        if not isinstance(binding, dict):
-            continue
-        config_path = binding.get("config_path") or binding.get("from")
-        manifest_path = binding.get("manifest_path") or binding.get("to")
-        if not isinstance(config_path, str) or not isinstance(manifest_path, str):
-            continue
-        value = config_path_get(config, config_path)
-        if value is None and not binding.get("allow_null", False):
-            continue
-        if binding.get("stringify") is True:
-            value = str(value).lower() if isinstance(value, bool) else str(value)
-        set_manifest_path(manifest, manifest_path, value)
+    sdk_apply_manifest_config_bindings(manifest, config)
 
 
 def refresh_embedded_blueprint_config(manifest: dict[str, Any], config: dict[str, Any]) -> None:
@@ -1467,116 +1417,15 @@ def refresh_embedded_blueprint_config(manifest: dict[str, Any], config: dict[str
 
 
 def config_to_environment(config: dict[str, Any]) -> dict[str, str]:
-    env: dict[str, str] = {}
-    docker_model_env = resolve_llm_environment(config)
-    for path, names in (
-        ("video_source.uri", ("VIDEO_SOURCE_URI",)),
-        ("video_source.transport", ("VIDEO_SOURCE_TRANSPORT",)),
-        ("video_source.codec", ("VIDEO_SOURCE_CODEC",)),
-        ("video_source.camera_id", ("VIDEO_SOURCE_CAMERA_ID",)),
-        ("video_source.frame_sample_seconds", ("FRAME_SAMPLE_SECONDS",)),
-        ("video_source.frame_jpeg_max_width", ("FRAME_JPEG_MAX_WIDTH",)),
-        ("vl_model.base_url", ("VL_MODEL_BASE_URL", "OLLAMA_BASE_URL")),
-        ("vl_model.model", ("VL_MODEL_NAME", "OLLAMA_MODEL")),
-        (
-            "vl_model.timeout_seconds",
-            ("VL_MODEL_TIMEOUT_SECONDS", "OLLAMA_TIMEOUT_SECONDS"),
-        ),
-        ("vl_model.temperature", ("VL_MODEL_TEMPERATURE", "OLLAMA_TEMPERATURE")),
-    ):
-        value = config_path_get(config, path)
-        if value is None:
-            continue
-        for name in names:
-            env[name] = str(value)
-
-    if docker_model_env:
-        env.update(docker_model_env)
-        return env
-
-    for path, names in (
-        ("llm.api_base", ("MN_LLM_API_BASE", "LITELLM_API_BASE")),
-        ("llm.model", ("MN_LLM_MODEL", "LITELLM_MODEL")),
-        ("llm.timeout_seconds", ("MN_LLM_TIMEOUT_SECONDS", "LITELLM_TIMEOUT_SECONDS")),
-        ("llm.max_tokens", ("MN_LLM_MAX_TOKENS", "LITELLM_MAX_TOKENS")),
-        ("llm.num_retries", ("MN_LLM_NUM_RETRIES", "LITELLM_NUM_RETRIES")),
-    ):
-        value = config_path_get(config, path)
-        if value is None:
-            continue
-        for name in names:
-            env[name] = str(value)
-    return env
+    return sdk_config_to_environment(config)
 
 
 def set_manifest_path(target: Any, dotted_path: str, value: Any) -> None:
-    parts = [part for part in dotted_path.split(".") if part]
-    _set_path(target, parts, value)
-
-
-def _set_path(cursor: Any, parts: list[str], value: Any) -> None:
-    if not parts:
-        return
-    part = parts[0]
-    rest = parts[1:]
-
-    if isinstance(cursor, list):
-        for item in _list_targets(cursor, part):
-            _set_path(item, rest, value)
-        return
-
-    if not isinstance(cursor, dict):
-        return
-
-    if len(parts) == 1:
-        cursor[part] = value
-        return
-
-    next_value = cursor.get(part)
-    if isinstance(next_value, list):
-        _set_path(next_value, rest, value)
-        return
-    if not isinstance(next_value, dict):
-        next_value = {}
-        cursor[part] = next_value
-    _set_path(next_value, rest, value)
-
-
-def _list_targets(items: list[Any], selector: str) -> list[Any]:
-    if selector == "*":
-        return [item for item in items if isinstance(item, dict)]
-    if selector.isdigit():
-        index = int(selector)
-        if 0 <= index < len(items):
-            return [items[index]]
-        return []
-    if selector.endswith("*"):
-        prefix = selector[:-1]
-        return [
-            item
-            for item in items
-            if isinstance(item, dict)
-            and str(item.get("node_id") or item.get("id") or "").startswith(prefix)
-        ]
-    return [
-        item
-        for item in items
-        if isinstance(item, dict)
-        and (
-            item.get("node_id") == selector
-            or item.get("id") == selector
-            or item.get("edge_id") == selector
-        )
-    ]
+    sdk_set_manifest_path(target, dotted_path, value)
 
 
 def config_path_get(config: dict[str, Any], dotted_path: str) -> Any:
-    cursor: Any = config
-    for part in dotted_path.split("."):
-        if not isinstance(cursor, dict) or part not in cursor:
-            return None
-        cursor = cursor[part]
-    return cursor
+    return sdk_config_path_get(config, dotted_path)
 
 
 def load_blueprint_config(
@@ -1584,19 +1433,11 @@ def load_blueprint_config(
     *,
     config_overrides: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any] | None:
-    config: dict[str, Any] = {}
-    loaded = False
-    for path in (
-        bundle_dir / "config" / "default.json",
-        bundle_dir / "config" / "overwrite.json",
-    ):
-        if path.exists():
-            config = deep_merge(config, read_json_object(path))
-            loaded = True
-    if config_overrides:
-        config = deep_merge(config, config_overrides)
-        loaded = True
-    return config if loaded else None
+    return sdk_load_blueprint_config(
+        bundle_dir,
+        config_overrides=config_overrides,
+        read_json_object_fn=read_json_object,
+    )
 
 
 def load_blueprint_config_overwrites(
@@ -1604,73 +1445,34 @@ def load_blueprint_config_overwrites(
     *,
     config_overrides: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any] | None:
-    config: dict[str, Any] = {}
-    loaded = False
-    overwrite_path = bundle_dir / "config" / "overwrite.json"
-    if overwrite_path.exists():
-        config = deep_merge(config, read_json_object(overwrite_path))
-        loaded = True
-    if config_overrides:
-        config = deep_merge(config, config_overrides)
-        loaded = True
-    return config if loaded else None
+    return sdk_load_blueprint_config_overwrites(
+        bundle_dir,
+        config_overrides=config_overrides,
+        read_json_object_fn=read_json_object,
+    )
 
 
 def inject_node_environment(manifest: dict[str, Any], env: dict[str, str]) -> None:
-    for node in manifest_nodes(manifest):
-        config = node.setdefault("config", {})
-        if not isinstance(config, dict):
-            continue
-        environment = config.setdefault("environment", {})
-        if not isinstance(environment, dict):
-            continue
-        existing_env = dict(environment)
-        node_env = dict(env)
-        if existing_env.get("PYTHONPATH") and node_env.get("PYTHONPATH"):
-            existing_env["PYTHONPATH"] = merge_path_values(
-                str(existing_env["PYTHONPATH"]),
-                str(node_env["PYTHONPATH"]),
-            )
-        adjust_llm_environment_for_node(node_env, node)
-        environment.clear()
-        environment.update(node_env)
-        environment.update(existing_env)
-        for key in ("MN_BLUEPRINT_CONFIG_JSON",):
-            if key in node_env:
-                environment[key] = node_env[key]
-        add_mn_llm_aliases(environment)
+    sdk_inject_node_environment(
+        manifest,
+        env,
+        nodes=manifest_nodes(manifest),
+        preserve_existing=True,
+        force_env_keys=("MN_BLUEPRINT_CONFIG_JSON",),
+        skip_host_local_dmr_rewrite=False,
+    )
 
 
 def merge_path_values(*values: str) -> str:
-    merged: list[str] = []
-    for value in values:
-        for item in value.split(os.pathsep):
-            item = item.strip()
-            if item and item not in merged:
-                merged.append(item)
-    return os.pathsep.join(merged)
+    return sdk_merge_path_values(*values)
 
 
 def add_mn_llm_aliases(environment: dict[str, Any]) -> None:
-    for legacy, primary in (
-        ("LITELLM_MODEL", "MN_LLM_MODEL"),
-        ("LITELLM_API_BASE", "MN_LLM_API_BASE"),
-        ("LITELLM_API_KEY", "MN_LLM_API_KEY"),
-        ("LITELLM_TIMEOUT_SECONDS", "MN_LLM_TIMEOUT_SECONDS"),
-        ("LITELLM_MAX_TOKENS", "MN_LLM_MAX_TOKENS"),
-        ("LITELLM_NUM_RETRIES", "MN_LLM_NUM_RETRIES"),
-        ("LITELLM_RETRY_BACKOFF_SECONDS", "MN_LLM_RETRY_BACKOFF_SECONDS"),
-    ):
-        if primary not in environment and legacy in environment:
-            environment[primary] = environment[legacy]
+    sdk_add_mn_llm_aliases(environment)
 
 
 def adjust_llm_environment_for_node(environment: dict[str, Any], node: dict[str, Any]) -> None:
-    if environment.get("MN_LLM_PROVIDER") != "docker_model_runner":
-        return
-    api_base = str(environment.get("MN_LLM_API_BASE") or "")
-    if "localhost:12434" in api_base or "127.0.0.1:12434" in api_base:
-        environment["MN_LLM_API_BASE"] = DOCKER_MODEL_RUNNER_CONTAINER_API_BASE
+    sdk_adjust_llm_environment_for_node(environment, node, skip_host_local=False)
 
 
 def strip_docker_model_runner_placement_requirements(manifest: dict[str, Any], *, force: bool = False) -> None:
@@ -1851,10 +1653,4 @@ def read_json_object(path: Path) -> dict[str, Any]:
 
 
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    result = dict(base)
-    for key, value in override.items():
-        if isinstance(value, dict) and isinstance(result.get(key), dict):
-            result[key] = deep_merge(result[key], value)
-        else:
-            result[key] = value
-    return result
+    return sdk_deep_merge(base, override)

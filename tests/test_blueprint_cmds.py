@@ -320,6 +320,30 @@ def test_blueprint_list_success(monkeypatch, tmp_path):
     assert "bp-1" in result.stdout
     assert "Blueprint 1" in result.stdout
 
+
+def test_blueprint_list_uses_persisted_local_source(monkeypatch, tmp_path):
+    catalog = tmp_path / "catalog"
+    catalog.mkdir()
+    (catalog / "index.json").write_text(json.dumps([{"id": "persisted-bp", "name": "Persisted BP"}]))
+    mn_home = tmp_path / ".mn"
+    (mn_home / "docker-compose.env").write_text(
+        "MN_ENV=dev\n"
+        "MN_BLUEPRINT_SOURCE=local\n"
+        "MN_BLUEPRINT_REPO=https://github.com/MirrorNeuronLab/mn-blueprints.git\n"
+        f"MN_BLUEPRINT_LOCAL={catalog}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("MN_BLUEPRINT_SOURCE", raising=False)
+    monkeypatch.delenv("MN_BLUEPRINT_REPO", raising=False)
+    monkeypatch.delenv("MN_BLUEPRINT_LOCAL", raising=False)
+
+    result = runner.invoke(app, ["blueprint", "list"])
+
+    assert result.exit_code == 0
+    assert "persisted-bp" in result.stdout
+    assert "Persisted BP" in result.stdout
+
+
 def test_blueprint_list_error(monkeypatch, tmp_path):
     index_file = tmp_path / "index.json"
     index_file.write_text("invalid json")

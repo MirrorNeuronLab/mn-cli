@@ -7,13 +7,12 @@ from typing import Any, Optional
 import typer
 
 from mn_sdk.blueprint_source import (
-    DEFAULT_BLUEPRINT_REPO,
     BlueprintCatalogError,
     blueprint_storage_dir_for_source as sdk_blueprint_storage_dir_for_source,
     custom_blueprint_storage_dir as sdk_custom_blueprint_storage_dir,
     default_blueprint_storage_dir as sdk_default_blueprint_storage_dir,
     load_blueprint_index as sdk_load_blueprint_index,
-    resolve_blueprint_source_config,
+    resolve_blueprint_source_location as sdk_resolve_blueprint_source_location,
 )
 
 from mn_cli.shared import console, logger
@@ -54,12 +53,7 @@ def resolved_blueprint_source(
     source: Optional[str],
     blueprint_repo: Optional[str],
 ) -> tuple[str, bool]:
-    if source:
-        return source, False
-    if blueprint_repo:
-        return blueprint_repo, blueprint_repo == DEFAULT_BLUEPRINT_REPO
-    config = resolve_blueprint_source_config()
-    return config.active_location, config.source == "github" and config.repo == DEFAULT_BLUEPRINT_REPO
+    return sdk_resolve_blueprint_source_location(source=source, blueprint_repo=blueprint_repo)
 
 
 def load_blueprint_index(index_path: Path, *, require_paths: bool = False) -> list[dict[str, Any]]:
