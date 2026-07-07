@@ -45,6 +45,7 @@ from mn_cli.server_cmds import (
     stop_matching_sidecar_processes as _stop_matching_sidecar_processes,
     api_pid_files,
     web_ui_pid_files,
+    native_sdk_grpc_pid_files,
 )
 
 CONTEXT_ENGINE_EXPECTATION = (
@@ -230,6 +231,7 @@ def stop():
     for pid_file, name in [
         *web_ui_pid_files(),
         *api_pid_files(),
+        *native_sdk_grpc_pid_files(),
         (BEAM_PID_FILE, "Legacy Core Service"),
     ]:
         if pid_file.exists():
@@ -246,6 +248,7 @@ def stop():
                 pass
             pid_file.unlink()
     _stop_matching_sidecar_processes("mn-api", "REST API")
+    _stop_matching_sidecar_processes("mn-native-sdk-grpc", "Native SDK gRPC")
     _stop_matching_sidecar_processes("mn-web-ui-server", "Web UI")
     print_success_confirmation(
         console,

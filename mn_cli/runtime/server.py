@@ -166,6 +166,13 @@ def _source_checkout_sdk_dir() -> Optional[Path]:
     return sdk_dir if (sdk_dir / "mn_sdk").is_dir() else None
 
 
+def _sidecar_workdir() -> Path:
+    try:
+        return Path.cwd()
+    except OSError:
+        return DIR
+
+
 def _prepend_pythonpath(env: dict[str, str], path: Path) -> None:
     current = env.get("PYTHONPATH")
     value = str(path)
@@ -4807,7 +4814,7 @@ def _start_native_sdk_grpc_watchdog(env: dict[str, str]) -> subprocess.Popen:
     NATIVE_SDK_GRPC_WATCHDOG_LOG.parent.mkdir(parents=True, exist_ok=True)
     config = {
         "command": command,
-        "cwd": str(Path.cwd()),
+        "cwd": str(_sidecar_workdir()),
         "pid_file": str(NATIVE_SDK_GRPC_PID_FILE),
         "log_file": str(NATIVE_SDK_GRPC_LOG),
         "restart_delay": env.get("MN_NATIVE_SDK_GRPC_RESTART_DELAY_SECONDS", DEFAULT_WEB_UI_RESTART_DELAY_SECONDS),
@@ -4954,7 +4961,7 @@ def _start_api_watchdog(env: dict[str, str]) -> subprocess.Popen:
     API_WATCHDOG_LOG.parent.mkdir(parents=True, exist_ok=True)
     config = {
         "command": command,
-        "cwd": str(Path.cwd()),
+        "cwd": str(_sidecar_workdir()),
         "pid_file": str(API_PID_FILE),
         "log_file": str(API_LOG),
         "restart_delay": env.get("MN_API_RESTART_DELAY_SECONDS", DEFAULT_WEB_UI_RESTART_DELAY_SECONDS),
@@ -5517,7 +5524,11 @@ def _start_server(
             restart_running=bool(api_mismatches),
             restart_reason="runtime config changed",
         )
-        _start_native_sdk_grpc_if_installed(env)
+        _start_native_sdk_grpc_if_installed(
+            env,
+            restart_running=True,
+            restart_reason="runtime already running",
+        )
         web_ui_available = _start_web_ui_if_installed(env)
         endpoint_snapshot = _write_runtime_endpoints_file(env, web_ui_available=web_ui_available)
         console.print(f"   Runtime endpoints: {RUNTIME_ENDPOINTS_FILE}")

@@ -2220,6 +2220,7 @@ def test_start_server_already_running(mocker, tmp_path):
         },
     )
     mock_start_web = mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed', return_value=True)
+    mock_start_native_sdk = mocker.patch('mn_cli.server_cmds._start_native_sdk_grpc_if_installed', return_value=True)
     mock_write_endpoints = mocker.patch('mn_cli.server_cmds._write_runtime_endpoints_file', return_value={"api": {}})
     mock_print_endpoints = mocker.patch('mn_cli.server_cmds._print_service_endpoints')
 
@@ -2229,6 +2230,9 @@ def test_start_server_already_running(mocker, tmp_path):
     assert not (server_cmds.DIR / "grpc_auth.token").exists()
     assert not (server_cmds.DIR / "grpc_admin.token").exists()
     mock_start_web.assert_called_once()
+    mock_start_native_sdk.assert_called_once()
+    assert mock_start_native_sdk.call_args.kwargs["restart_running"] is True
+    assert mock_start_native_sdk.call_args.kwargs["restart_reason"] == "runtime already running"
     mock_write_endpoints.assert_called_once()
     mock_print_endpoints.assert_called_once_with(None, True)
 
@@ -2271,6 +2275,7 @@ def test_start_server_restarts_existing_api_when_runtime_blueprint_env_changes(m
     )
     mock_run = mocker.patch('mn_cli.server_cmds.subprocess.run')
     start_api = mocker.patch('mn_cli.server_cmds._start_api_if_installed')
+    start_native_sdk = mocker.patch('mn_cli.server_cmds._start_native_sdk_grpc_if_installed', return_value=True)
     mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed', return_value=False)
     mocker.patch('mn_cli.server_cmds._write_runtime_endpoints_file', return_value={"api": {}})
     mocker.patch('mn_cli.server_cmds._print_service_endpoints')
@@ -2286,6 +2291,9 @@ def test_start_server_restarts_existing_api_when_runtime_blueprint_env_changes(m
     assert api_env["MN_ENV"] == "prod"
     assert api_env["MN_BLUEPRINT_REPO"] == "https://github.com/MirrorNeuronLab/otterdesk-blueprints"
     assert api_env["MN_RUNS_ROOT"] == "/tmp/otterdesk-runs"
+    start_native_sdk.assert_called_once()
+    assert start_native_sdk.call_args.kwargs["restart_running"] is True
+    assert start_native_sdk.call_args.kwargs["restart_reason"] == "runtime already running"
     mock_run.assert_any_call(runtime_compose_cmd("up", "-d"), check=True, stdout=subprocess.DEVNULL, env=api_env)
     compose_text = compose_env.read_text()
     assert "MN_ENV=prod" in compose_text
@@ -3782,6 +3790,39 @@ def test_start_api_restarts_running_watchdog_when_requested(mocker, tmp_path):
         call("localhost", "54001", timeout_seconds=1.0),
         call("localhost", "54001", timeout_seconds=10.0),
     ]
+
+
+def test_start_native_sdk_watchdog_uses_stable_workdir_when_cwd_is_missing(mocker, tmp_path):
+    native_sdk = tmp_path / "mn_venv" / "bin" / "mn-native-sdk-grpc"
+    native_sdk.parent.mkdir(parents=True)
+    native_sdk.write_text("#!/bin/sh\n")
+
+    mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path / "mn_venv")
+    mocker.patch('mn_cli.server_cmds.NATIVE_SDK_GRPC_PID_FILE', tmp_path / "native-sdk-grpc.pid")
+    mocker.patch('mn_cli.server_cmds.NATIVE_SDK_GRPC_WATCHDOG_PID_FILE', tmp_path / "native-sdk-grpc-watchdog.pid")
+    mocker.patch('mn_cli.server_cmds.NATIVE_SDK_GRPC_LOG', tmp_path / "native-sdk-grpc.log")
+    mocker.patch('mn_cli.server_cmds.NATIVE_SDK_GRPC_WATCHDOG_LOG', tmp_path / "native-sdk-grpc-watchdog.log")
+    mocker.patch("mn_cli.server_cmds.os.getcwd", side_effect=FileNotFoundError(2, "No such file or directory"))
+    mock_wait = mocker.patch('mn_cli.server_cmds._wait_for_tcp', side_effect=[False, True])
+    mocker.patch('mn_cli.server_cmds.stop_matching_sidecar_processes', return_value=False)
+    mock_popen = mocker.patch('mn_cli.server_cmds.subprocess.Popen')
+    mock_popen.return_value.pid = 55052
+
+    assert _start_native_sdk_grpc_if_installed(
+        {
+            "MN_NATIVE_SDK_GRPC_HOST": "127.0.0.1",
+            "MN_NATIVE_SDK_GRPC_PORT": "55052",
+        }
+    ) is True
+
+    command = mock_popen.call_args.args[0]
+    watchdog_config = json.loads(command[3])
+    assert watchdog_config["cwd"] == str(server_cmds.DIR)
+    assert mock_wait.call_args_list == [
+        call("127.0.0.1", "55052", timeout_seconds=2.0),
+        call("127.0.0.1", "55052", timeout_seconds=10.0),
+    ]
+
 
 def test_start_web_ui_if_installed(mocker, tmp_path):
     web_ui_dir = tmp_path / "web-ui"

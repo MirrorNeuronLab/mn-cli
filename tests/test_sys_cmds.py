@@ -114,6 +114,7 @@ def test_stop_sweeps_orphan_native_sidecars(mocker, tmp_path):
     mocker.patch.object(sys_cmds.subprocess, "run")
     mocker.patch.object(sys_cmds, "web_ui_pid_files", return_value=())
     mocker.patch.object(sys_cmds, "api_pid_files", return_value=())
+    mocker.patch.object(sys_cmds, "native_sdk_grpc_pid_files", return_value=())
     mocker.patch.object(sys_cmds, "BEAM_PID_FILE", tmp_path / "beam.pid")
     stop_matching = mocker.patch.object(sys_cmds, "_stop_matching_sidecar_processes", return_value=True)
 
@@ -121,6 +122,7 @@ def test_stop_sweeps_orphan_native_sidecars(mocker, tmp_path):
 
     assert stop_matching.call_args_list == [
         call("mn-api", "REST API"),
+        call("mn-native-sdk-grpc", "Native SDK gRPC"),
         call("mn-web-ui-server", "Web UI"),
     ]
 
