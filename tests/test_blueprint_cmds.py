@@ -1075,7 +1075,7 @@ def test_blueprint_run_blueprint_repo_malformed_index_errors(mocker, tmp_path):
         if args[:2] == ["git", "clone"]:
             storage_dir = Path(args[-1])
             storage_dir.mkdir(parents=True, exist_ok=True)
-            (storage_dir / "index.json").write_text(json.dumps({"blueprints": []}))
+            (storage_dir / "index.json").write_text(json.dumps({"blueprints": {}}))
         return completed
 
     mocker.patch('mn_cli.libs.blueprint_cmds.subprocess.run', side_effect=fake_run)

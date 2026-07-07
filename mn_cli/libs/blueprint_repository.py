@@ -1,23 +1,24 @@
 from __future__ import annotations
 
-import hashlib
-import json
-import os
 from pathlib import Path
-import re
 import subprocess
 from typing import Any, Optional
 
 import typer
 
-from mn_sdk.blueprint_source import DEFAULT_BLUEPRINT_REPO, resolve_blueprint_source_config
-from mn_sdk.runtime_config import resolve_mn_home
+from mn_sdk.blueprint_source import (
+    DEFAULT_BLUEPRINT_REPO,
+    BlueprintCatalogError,
+    blueprint_storage_dir_for_source as sdk_blueprint_storage_dir_for_source,
+    custom_blueprint_storage_dir as sdk_custom_blueprint_storage_dir,
+    default_blueprint_storage_dir as sdk_default_blueprint_storage_dir,
+    load_blueprint_index as sdk_load_blueprint_index,
+    resolve_blueprint_source_config,
+)
 
 from mn_cli.shared import console, logger
 
 
-DEFAULT_BLUEPRINT_STORAGE_NAME = "blueprints"
-CUSTOM_BLUEPRINT_STORAGE_ROOT_NAME = "blueprint_repos"
 BLUEPRINT_REPO_CONTEXT_KEY = "blueprint_repo"
 
 
@@ -33,24 +34,15 @@ def context_blueprint_repo(ctx: typer.Context) -> Optional[str]:
 
 
 def default_blueprint_storage_dir() -> Path:
-    return resolve_mn_home() / DEFAULT_BLUEPRINT_STORAGE_NAME
+    return sdk_default_blueprint_storage_dir()
 
 
 def custom_blueprint_storage_dir(repo: str) -> Path:
-    normalized = repo.strip().rstrip("/")
-    name = normalized.removesuffix(".git").split("/")[-1] or "blueprints"
-    name = re.sub(r"[^A-Za-z0-9_.-]+", "-", name).strip("-._") or "blueprints"
-    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
-    return resolve_mn_home() / CUSTOM_BLUEPRINT_STORAGE_ROOT_NAME / f"{name}-{digest}"
+    return sdk_custom_blueprint_storage_dir(repo)
 
 
 def blueprint_storage_dir_for_source(source: str, *, use_default_cache: bool = False) -> Path:
-    source_path = Path(source).expanduser()
-    if source_path.exists():
-        return source_path
-    if use_default_cache:
-        return default_blueprint_storage_dir()
-    return custom_blueprint_storage_dir(source)
+    return sdk_blueprint_storage_dir_for_source(source, use_default_cache=use_default_cache)
 
 
 def blueprint_cache_dir_for_repo(repo: str) -> Path:
@@ -71,28 +63,10 @@ def resolved_blueprint_source(
 
 
 def load_blueprint_index(index_path: Path, *, require_paths: bool = False) -> list[dict[str, Any]]:
-    if not index_path.exists():
-        raise BlueprintIndexError(f"index.json not found in blueprint storage at {index_path.parent}")
     try:
-        data = json.loads(index_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise BlueprintIndexError(f"Error parsing index.json: {exc}") from exc
-
-    if not isinstance(data, list):
-        raise BlueprintIndexError("index.json is not well formatted: expected a JSON list of blueprint entries")
-
-    blueprints: list[dict[str, Any]] = []
-    for position, entry in enumerate(data):
-        if not isinstance(entry, dict):
-            raise BlueprintIndexError(
-                f"index.json is not well formatted: entry {position} must be a JSON object"
-            )
-        if require_paths and not isinstance(entry.get("path"), str):
-            raise BlueprintIndexError(
-                f"index.json is not well formatted: entry {position} must include a string path"
-            )
-        blueprints.append(entry)
-    return blueprints
+        return sdk_load_blueprint_index(index_path, require_paths=require_paths)
+    except BlueprintCatalogError as exc:
+        raise BlueprintIndexError(exc.detail) from exc
 
 
 def ensure_blueprint_source(

@@ -15,8 +15,10 @@ from mn_sdk import (
     resolve_llm_environment,
 )
 from mn_sdk.runtime_modules import (
-    default_registered_modules_root,
     ensure_runtime_modules_for_manifest,
+    local_skill_source_roots as sdk_local_skill_source_roots,
+    local_skill_sources_enabled as sdk_local_skill_sources_enabled,
+    runtime_path_environment as sdk_runtime_path_environment,
 )
 from mn_sdk.blueprint_support import (
     inject_runtime_web_ui_service,
@@ -42,7 +44,6 @@ from mn_cli.libs.skill_dependencies import (
     skill_dependency_package_names,
     without_requirements_for_packages,
 )
-from mn_cli.runtime_state import mn_home, read_env_file
 USER_HOME_ENV_KEYS = ("MN_OUTPUT_HOME", "MN_USER_HOME", "OTTERDESK_USER_HOME")
 UPLOAD_SOURCE_EXCLUDED_DIRS = {
     ".git",
@@ -67,10 +68,6 @@ SKILL_DEPENDENCY_CONTEXT_ROOT = "__mn_skill_dependencies"
 SKILL_DEPENDENCY_MARKER = "# mirrorneuron: skill-dependencies"
 SKILL_DEPENDENCY_END_MARKER = "# mirrorneuron: skill-dependencies-end"
 LOCAL_SKILL_CONTEXT_ROOT = ".mn-local-skills"
-LOCAL_SKILL_ENABLE_VALUES = {"1", "true", "True", "TRUE", "yes", "Yes", "YES"}
-LOCAL_SKILL_DISABLE_VALUES = {"0", "false", "False", "FALSE", "no", "No", "NO"}
-LOCAL_SKILL_ENV_VALUES = {"dev", "development", "local"}
-
 
 def workspace_root() -> Path:
     for name in (
@@ -86,75 +83,19 @@ def workspace_root() -> Path:
 
 
 def runtime_path_environment() -> dict[str, str]:
-    root = workspace_root()
-    runtime_modules_root = default_registered_modules_root(workspace_root=root)
-    membrane_project_path = Path(
-        os.getenv("MN_MEMBRANE_PROJECT_PATH") or root / "Membrane"
-    ).expanduser()
-    membrane_sdk_path = Path(
-        os.getenv("MN_MEMBRANE_SDK_PATH")
-        or membrane_project_path / "mn-context-engine-python-sdk" / "src"
-    ).expanduser()
-    skills_root = Path(os.getenv("MN_SKILLS_ROOT") or runtime_modules_root).expanduser()
-    env = {
-        "MN_WORKSPACE_ROOT": str(root),
-        "MN_MEMBRANE_PROJECT_PATH": str(membrane_project_path),
-        "MN_MEMBRANE_SDK_PATH": str(membrane_sdk_path),
-        "MN_SKILLS_ROOT": str(skills_root),
-    }
-    python_paths = [
-        skills_root / "llm_ocr_skill" / "src",
-        skills_root / "pdf_extract_skill" / "src",
-    ]
-    existing_pythonpath = os.getenv("PYTHONPATH")
-    resolved_python_paths = [str(path) for path in python_paths if path.exists()]
-    if existing_pythonpath:
-        resolved_python_paths.append(existing_pythonpath)
-    if resolved_python_paths:
-        env["PYTHONPATH"] = os.pathsep.join(resolved_python_paths)
+    env = sdk_runtime_path_environment(workspace_root=workspace_root())
     env.update(user_home_environment())
     return env
 
 
 def local_skill_sources_enabled() -> bool:
-    flag = os.getenv("MN_USE_LOCAL_SKILLS", "").strip()
-    if flag in LOCAL_SKILL_DISABLE_VALUES:
-        return False
-    if flag in LOCAL_SKILL_ENABLE_VALUES:
-        return True
-    env_name = os.getenv("MN_ENV", "").strip() or _runtime_env_value("MN_ENV")
-    return env_name.strip().lower() in LOCAL_SKILL_ENV_VALUES
-
-
-def _runtime_env_value(key: str) -> str:
-    return read_env_file(mn_home() / "docker-compose.env").get(key, "").strip()
+    return sdk_local_skill_sources_enabled(default_for_dev_env=True)
 
 
 def _local_skill_source_roots() -> list[Path]:
     """Return candidate local skill roots, ordered by explicit env then fallbacks."""
 
-    root = workspace_root()
-    roots: list[Path] = []
-    seen: set[str] = set()
-
-    def add(value: str | Path | None) -> None:
-        if value is None:
-            return
-        path = Path(value).expanduser()
-        if not str(path).strip():
-            return
-        key = str(path.resolve())
-        if key in seen:
-            return
-        seen.add(key)
-        roots.append(path)
-
-    add(os.getenv("MN_SKILLS_ROOT"))
-    add(_runtime_env_value("MN_SKILLS_ROOT"))
-    add(default_registered_modules_root(workspace_root=root))
-    add(root / "mn-skills")
-    add(mn_home() / "skills")
-    return roots
+    return sdk_local_skill_source_roots(workspace_root=workspace_root())
 
 
 def localize_skill_dependencies_for_dev(manifest: dict[str, Any]) -> dict[str, Any]:
