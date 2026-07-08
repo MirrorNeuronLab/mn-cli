@@ -52,7 +52,6 @@ from mn_cli.libs.blueprint_resources import (
 from mn_cli.libs.ui import print_confirmed, print_success_confirmation
 from mn_cli.shared import console, logger
 from mn_cli.terminal import use_progress
-from mn_cli.libs.blueprint_models import BlueprintModelOps, blueprint_model_dependency_summary
 from mn_cli.libs.run_cmds import doctor_bundle as _doctor_bundle
 from mn_cli.libs.run_cmds import run_bundle as _run_bundle
 from mn_cli.libs.run_manifest import load_blueprint_config as _load_blueprint_config
@@ -66,6 +65,8 @@ from mn_sdk.blueprint_support.python_workflow_bundle import (
     generate_python_workflow_bundle_from_blueprint_dir,
 )
 from mn_sdk import (
+    BlueprintModelOps,
+    blueprint_model_dependency_summary,
     cluster_provided_model as _cluster_provided_model,
     docker_model_name as _docker_model_name,
     expand_manifest_source as _expand_manifest_source,

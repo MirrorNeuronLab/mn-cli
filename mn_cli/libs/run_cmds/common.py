@@ -67,7 +67,6 @@ from mn_cli.libs.blueprint_observability import (
     load_observability_tools,
     make_blueprint_run_id as _make_blueprint_run_id,
 )
-from mn_cli.libs.blueprint_models import BlueprintModelOps, blueprint_model_dependency_summary
 from mn_cli.libs.model_cmds import install_model_entry, model_installed
 from mn_cli.libs.blueprint_resources import cleanup_blueprint_host_hooks
 from mn_cli.server_cmds import ensure_context_engine_runtime
@@ -76,6 +75,7 @@ from mn_cli.terminal import use_progress
 from mn_cli.error_handler import handle_cli_error
 from mn_sdk import (
     Client,
+    BlueprintModelOps,
     ModelEndpointMap,
     cluster_provided_model,
     cleanup_docker_worker_services,
@@ -108,6 +108,7 @@ from mn_sdk import (
     validate_service_spec_issues,
     sync_litellm_gateway,
     workflow_progress_snapshot,
+    blueprint_model_dependency_summary,
 )
 from mn_sdk.blueprint_support.shared_outputs import (
     materialize_shared_storage_outputs as _sdk_materialize_shared_storage_outputs,
