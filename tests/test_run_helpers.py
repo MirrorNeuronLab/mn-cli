@@ -359,13 +359,17 @@ def test_prepare_manifest_stages_local_skill_dependencies_in_dev(tmp_path, monke
         in payloads
     )
     requirements = payloads["worker/docker_worker/requirements.txt"].decode()
+    local_requirements = payloads["worker/docker_worker/local-requirements.txt"].decode()
     dockerfile = payloads["worker/docker_worker/Dockerfile"].decode()
     assert "mirrorneuron-rag-skill==1.2.14" in requirements
     assert "mirrorneuron-evidence-engine-skill" not in requirements
-    assert "/tmp/mn-skill-runtime/local/evidence_engine_skill" in requirements
+    assert "/tmp/mn-skill-runtime/local/evidence_engine_skill" not in requirements
+    assert "/tmp/mn-skill-runtime/local/evidence_engine_skill" in local_requirements
     assert "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt" in dockerfile
+    assert "COPY local-requirements.txt /tmp/mn-skill-runtime/local-requirements.txt" in dockerfile
     assert "COPY __mn_skill_dependencies/local/evidence_engine_skill" in dockerfile
     assert "pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
+    assert "pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/local-requirements.txt" in dockerfile
 
 
 def test_prepare_manifest_stages_local_skill_dependencies_from_runtime_env(tmp_path, monkeypatch):
@@ -425,7 +429,9 @@ def test_prepare_manifest_stages_local_skill_dependencies_from_runtime_env(tmp_p
         in payloads
     )
     requirements = payloads["worker/docker_worker/requirements.txt"].decode()
-    assert "/tmp/mn-skill-runtime/local/evidence_engine_skill" in requirements
+    local_requirements = payloads["worker/docker_worker/local-requirements.txt"].decode()
+    assert "/tmp/mn-skill-runtime/local/evidence_engine_skill" not in requirements
+    assert "/tmp/mn-skill-runtime/local/evidence_engine_skill" in local_requirements
 
 
 def test_prepare_manifest_stages_local_rag_skill_source_for_dockerworker_dev(
@@ -484,14 +490,19 @@ def test_prepare_manifest_stages_local_rag_skill_source_for_dockerworker_dev(
     )
 
     requirements = payloads["worker/docker_worker/requirements.txt"].decode()
+    local_requirements = payloads["worker/docker_worker/local-requirements.txt"].decode()
     dockerfile = payloads["worker/docker_worker/Dockerfile"].decode()
     pyproject = payloads[
         "worker/docker_worker/__mn_skill_dependencies/local/rag_skill/pyproject.toml"
     ].decode()
     assert "mirrorneuron-rag-skill" not in requirements
-    assert "/tmp/mn-skill-runtime/local/rag_skill" in requirements
+    assert "/tmp/mn-skill-runtime/local/rag_skill" not in requirements
+    assert "/tmp/mn-skill-runtime/local/rag_skill" in local_requirements
     assert "pymilvus[milvus-lite]>=2.4" in pyproject
+    assert "COPY local-requirements.txt /tmp/mn-skill-runtime/local-requirements.txt" in dockerfile
     assert "COPY __mn_skill_dependencies/local/rag_skill" in dockerfile
+    assert "-r /tmp/mn-skill-runtime/local-requirements.txt" in dockerfile
+    assert "--no-deps" not in dockerfile
 
 
 def test_prepare_manifest_stages_local_skill_dependencies_only_in_docker_workdir_upload(

@@ -84,6 +84,9 @@ SKILL_DEPENDENCY_CONTEXT_ROOT = "__mn_skill_dependencies"
 SKILL_DEPENDENCY_MARKER = "# mirrorneuron: skill-dependencies"
 SKILL_DEPENDENCY_END_MARKER = "# mirrorneuron: skill-dependencies-end"
 LOCAL_SKILL_CONTEXT_ROOT = ".mn-local-skills"
+RUNTIME_REQUIREMENTS_COPY_LINE = "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt"
+LOCAL_REQUIREMENTS_COPY_LINE = "COPY local-requirements.txt /tmp/mn-skill-runtime/local-requirements.txt"
+
 
 def workspace_root() -> Path:
     for name in (
@@ -667,14 +670,19 @@ def stage_skill_dependency_payloads_for_manifest(
             bundle_dir=bundle_dir,
             context_path=context_path,
             config=config,
-            local_context_sources=local_context_sources,
         )
-        if not requirements_text:
+        local_requirements_text = _local_skill_requirements_text(local_context_sources)
+        if not requirements_text and not local_requirements_text:
             staged_sources.extend(local_context_sources)
             continue
 
         requirements_key = _payload_join(context_path, "requirements.txt")
         payloads[requirements_key] = requirements_text.encode("utf-8")
+        staged_payload_keys = [requirements_key]
+        if local_requirements_text:
+            local_requirements_key = _payload_join(context_path, "local-requirements.txt")
+            payloads[local_requirements_key] = local_requirements_text.encode("utf-8")
+            staged_payload_keys.append(local_requirements_key)
 
         dockerfile_text = dockerfile_bytes.decode("utf-8", errors="ignore")
         next_dockerfile = _ensure_docker_worker_requirements_install(
@@ -684,7 +692,7 @@ def stage_skill_dependency_payloads_for_manifest(
         if next_dockerfile != dockerfile_text:
             payloads[dockerfile_key] = next_dockerfile.encode("utf-8")
             staged_sources.append(dockerfile_key)
-        staged_sources.extend([requirements_key, *local_context_sources])
+        staged_sources.extend([*staged_payload_keys, *local_context_sources])
 
     return {"staged": bool(staged_sources), "sources": _dedupe_strings(staged_sources)}
 
@@ -712,7 +720,6 @@ def _docker_worker_requirements_text(
     bundle_dir: Path,
     context_path: str,
     config: dict[str, Any],
-    local_context_sources: list[str],
 ) -> str:
     local_package_names = {
         normalize_package_name(str(record.get("package") or ""))
@@ -735,12 +742,14 @@ def _docker_worker_requirements_text(
             manifest_skill_packages | local_package_names,
         )
     )
-    local_install_lines = _local_skill_install_requirement_lines(local_context_sources)
-    if skill_lines or local_install_lines:
+    if skill_lines:
         lines = _ensure_pip_index_lines(lines, config)
     lines.extend(skill_lines)
-    lines.extend(local_install_lines)
     return _requirements_text(lines)
+
+
+def _local_skill_requirements_text(local_context_sources: list[str]) -> str:
+    return _requirements_text(_local_skill_install_requirement_lines(local_context_sources))
 
 
 def _foundation_requirement_lines(
@@ -920,17 +929,27 @@ def _ensure_docker_worker_requirements_install(
 ) -> str:
     copy_block = _local_skill_copy_block(local_context_sources)
     next_text = _replace_skill_dependency_marker_block(dockerfile_text, copy_block)
+    if local_context_sources and LOCAL_REQUIREMENTS_COPY_LINE not in next_text:
+        next_text = _insert_after_runtime_requirements_copy(next_text, LOCAL_REQUIREMENTS_COPY_LINE)
     if next_text == dockerfile_text and local_context_sources:
         next_text = _insert_after_runtime_requirements_copy(next_text, copy_block)
-    if _dockerfile_installs_runtime_requirements(next_text):
+    installs_runtime = _dockerfile_installs_runtime_requirements(next_text)
+    installs_local = _dockerfile_installs_local_requirements(next_text)
+    has_local_copy_block = not local_context_sources or copy_block in next_text
+    if installs_runtime and (not local_context_sources or (installs_local and has_local_copy_block)):
         return next_text
 
     lines: list[str] = []
-    if "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt" not in next_text:
-        lines.append("COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt")
+    if RUNTIME_REQUIREMENTS_COPY_LINE not in next_text:
+        lines.append(RUNTIME_REQUIREMENTS_COPY_LINE)
+    if local_context_sources and LOCAL_REQUIREMENTS_COPY_LINE not in next_text:
+        lines.append(LOCAL_REQUIREMENTS_COPY_LINE)
     if local_context_sources and copy_block not in next_text:
         lines.append(copy_block)
-    lines.extend(_runtime_requirements_install_lines())
+    if not installs_runtime:
+        lines.extend(_runtime_requirements_install_lines())
+    if local_context_sources and not installs_local:
+        lines.extend(_local_requirements_install_lines())
     return next_text.rstrip() + "\n\n" + "\n".join(lines).rstrip() + "\n"
 
 
@@ -961,10 +980,9 @@ def _replace_skill_dependency_marker_block(dockerfile_text: str, block: str) -> 
 
 
 def _insert_after_runtime_requirements_copy(dockerfile_text: str, block: str) -> str:
-    copy_line = "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt"
     lines = dockerfile_text.splitlines()
     for index, line in enumerate(lines):
-        if line.strip() != copy_line:
+        if line.strip() != RUNTIME_REQUIREMENTS_COPY_LINE:
             continue
         return "\n".join([*lines[: index + 1], "", block, *lines[index + 1 :]]) + "\n"
     return dockerfile_text
@@ -978,10 +996,26 @@ def _dockerfile_installs_runtime_requirements(dockerfile_text: str) -> bool:
     )
 
 
+def _dockerfile_installs_local_requirements(dockerfile_text: str) -> bool:
+    return (
+        "/tmp/mn-skill-runtime/local-requirements.txt" in dockerfile_text
+        and "pip install" in dockerfile_text
+        and "-r /tmp/mn-skill-runtime/local-requirements.txt" in dockerfile_text
+    )
+
+
 def _runtime_requirements_install_lines() -> list[str]:
     return [
         "RUN if [ -s /tmp/mn-skill-runtime/requirements.txt ]; then \\",
         "      python3 -m pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt; \\",
+        "    fi",
+    ]
+
+
+def _local_requirements_install_lines() -> list[str]:
+    return [
+        "RUN if [ -s /tmp/mn-skill-runtime/local-requirements.txt ]; then \\",
+        "      python3 -m pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/local-requirements.txt; \\",
         "    fi",
     ]
 
