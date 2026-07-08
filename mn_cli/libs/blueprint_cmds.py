@@ -248,6 +248,7 @@ def _fake_llm_env_overrides(enabled: bool) -> dict[str, str]:
     if not enabled:
         return {}
     return {
+        "MN_BLUEPRINT_FAKE_LLM": "1",
         "MN_BLUEPRINT_LLM_MODE": "fake",
         "MN_LLM_PROVIDER": "fake",
         "MN_LLM_MODEL": "fake-deterministic-blueprint-agent",
@@ -286,7 +287,6 @@ def _fake_skills_env_overrides(enabled: bool) -> dict[str, str]:
         return {}
     return {
         "MN_BLUEPRINT_FAKE_SKILLS": "1",
-        "MN_FAKE_SKILLS": "1",
     }
 
 

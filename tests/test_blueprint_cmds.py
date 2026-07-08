@@ -850,6 +850,7 @@ def test_blueprint_run_fake_llm_flag_overrides_local_bundle(mocker, tmp_path):
     assert result.exit_code == 0
     mock_run_bundle.assert_called_once()
     kwargs = mock_run_bundle.call_args.kwargs
+    assert kwargs["env_overrides"]["MN_BLUEPRINT_FAKE_LLM"] == "1"
     assert kwargs["env_overrides"]["MN_BLUEPRINT_LLM_MODE"] == "fake"
     assert kwargs["env_overrides"]["MN_LLM_PROVIDER"] == "fake"
     assert kwargs["env_overrides"]["MN_LLM_MODEL"] == "fake-deterministic-blueprint-agent"
@@ -878,7 +879,7 @@ def test_blueprint_run_testing_flags_override_local_bundle(mocker, tmp_path):
     mock_run_bundle.assert_called_once()
     kwargs = mock_run_bundle.call_args.kwargs
     assert kwargs["env_overrides"]["MN_BLUEPRINT_FAKE_SKILLS"] == "1"
-    assert kwargs["env_overrides"]["MN_FAKE_SKILLS"] == "1"
+    assert "MN_FAKE_SKILLS" not in kwargs["env_overrides"]
     assert kwargs["env_overrides"]["MN_BLUEPRINT_BENCHMARK"] == "1"
     assert kwargs["env_overrides"]["MN_BLUEPRINT_DEBUG"] == "1"
     assert kwargs["env_overrides"]["MN_DEBUG"] == "1"
