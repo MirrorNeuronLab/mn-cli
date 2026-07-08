@@ -365,7 +365,7 @@ def test_prepare_manifest_stages_local_skill_dependencies_in_dev(tmp_path, monke
     assert "/tmp/mn-skill-runtime/local/evidence_engine_skill" in requirements
     assert "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt" in dockerfile
     assert "COPY __mn_skill_dependencies/local/evidence_engine_skill" in dockerfile
-    assert "pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
+    assert "pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
 
 
 def test_prepare_manifest_stages_local_skill_dependencies_from_runtime_env(tmp_path, monkeypatch):
@@ -714,7 +714,7 @@ def test_stage_skill_dependency_payloads_injects_pinned_gar_requirements_for_doc
     assert "--index-url https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/" in requirements
     assert "--extra-index-url https://pypi.org/simple" in requirements
     assert "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt" in dockerfile
-    assert "pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
+    assert "pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
 
 
 def test_stage_skill_dependency_payloads_ignores_comment_only_dependency_text(tmp_path):
@@ -756,7 +756,7 @@ def test_stage_skill_dependency_payloads_ignores_comment_only_dependency_text(tm
     dockerfile = payloads["worker/docker_worker/Dockerfile"].decode()
     assert "mirrorneuron-rag-skill==1.2.7" in requirements
     assert "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt" in dockerfile
-    assert "pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
+    assert "pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
 
 
 def test_prepare_manifest_adds_sdk_upload_for_manual_blueprint_support_worker(tmp_path, monkeypatch):

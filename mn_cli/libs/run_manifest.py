@@ -981,7 +981,7 @@ def _dockerfile_installs_runtime_requirements(dockerfile_text: str) -> bool:
 def _runtime_requirements_install_lines() -> list[str]:
     return [
         "RUN if [ -s /tmp/mn-skill-runtime/requirements.txt ]; then \\",
-        "      python3 -m pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt; \\",
+        "      python3 -m pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt; \\",
         "    fi",
     ]
 

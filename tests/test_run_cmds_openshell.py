@@ -171,7 +171,7 @@ def test_openshell_skill_dependency_context_injects_pinned_gar_install(tmp_path)
     assert "--index-url https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/" in requirements
     assert "--extra-index-url https://pypi.org/simple" in requirements
     assert "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt" in dockerfile
-    assert "pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
+    assert "pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
 
 
 def test_local_docker_openshell_build_uses_plain_progress(mocker, tmp_path):

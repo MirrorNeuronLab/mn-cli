@@ -274,14 +274,14 @@ def _render_dockerfile(runtime: dict[str, Any]) -> str:
         install_targets = " ".join(f"/tmp/mn-local-packages/{package['source']}" for package in local_packages)
         lines.extend(
             [
-                f"RUN python3 -m pip install --break-system-packages --no-cache-dir {install_targets}",
+                f"RUN python3 -m pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir {install_targets}",
             ]
         )
 
     lines.extend(
         [
             "RUN if [ -s /tmp/mn-skill-runtime/requirements.txt ]; then \\",
-            "      python3 -m pip install --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt; \\",
+            "      python3 -m pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt; \\",
             "    fi",
         ]
     )
@@ -500,11 +500,7 @@ def _requirement_display_name(requirement: str) -> str:
 
 
 def _local_skill_sources_enabled() -> bool:
-    value = (
-        os.getenv("MN_RUNTIME_MODULE_ALLOW_LOCAL_SKILLS")
-        or os.getenv("MN_USE_LOCAL_SKILLS")
-        or ""
-    )
+    value = os.getenv("MN_USE_LOCAL_SKILLS") or ""
     return value in LOCAL_SKILL_ENABLE_VALUES
 
 
