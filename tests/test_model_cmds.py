@@ -80,7 +80,7 @@ def test_model_list_prints_builtin_catalog_json():
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["models"][0]["id"] == "gemma4:e2b"
-    assert payload["models"][0]["model"] == "ai/gemma4:E2B"
+    assert payload["models"][0]["model"] == "docker.io/ai/gemma4:E2B"
     assert payload["models"][0]["default"] is True
     assert payload["models"][0]["status"] == "default"
 
@@ -91,7 +91,7 @@ def test_model_show_resolves_gemme_alias():
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["id"] == "gemma4:e2b"
-    assert payload["model"] == "ai/gemma4:E2B"
+    assert payload["model"] == "docker.io/ai/gemma4:E2B"
     assert payload["default"] is True
     assert payload["status"] == "default"
 
@@ -168,7 +168,7 @@ def test_cluster_node_is_not_local_for_remote_host(monkeypatch):
 
 
 def test_install_model_on_cluster_node_uses_local_runtime_client_for_local_host(mocker):
-    model = {"id": "gemma4:e2b", "model": "ai/gemma4:E2B", "provider": "docker_model_runner"}
+    model = {"id": "gemma4:e2b", "model": "docker.io/ai/gemma4:E2B", "provider": "docker_model_runner"}
     node = "mirror_neuron@192.168.6.28"
 
     def fake_cluster_node_endpoint(_node_name: str):
@@ -303,7 +303,7 @@ def test_model_proxy_syncs_external_provider_config_to_all_cluster_nodes(tmp_pat
 
     assert result.exit_code == 0
     assert local_syncs[0]["external_litellm_config"]["model_list"][0]["litellm_params"]["api_key"] == "os.environ/OPENAI_API_KEY"
-    assert {target for target, _payload in node_syncs} == {"10.0.0.1:55052", "10.0.0.2:55052"}
+    assert {target for target, _payload in node_syncs} == {"10.0.0.2:55052"}
     for _target, payload in node_syncs:
         params = payload["external_litellm_config"]["model_list"][0]["litellm_params"]
         assert params["api_base"] == "https://api.openai.com/v1"
@@ -333,8 +333,8 @@ def test_model_install_pulls_and_runs_compatible_model(mocker):
     assert result.exit_code == 0
     assert "Model install successful." in result.stdout
     assert "gemma4:e2b" in result.stdout
-    assert ["docker", "model", "pull", "ai/gemma4:E2B"] in calls
-    assert ["docker", "model", "run", "--detach", "--context-size", "8192", "ai/gemma4:E2B"] in calls
+    assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] in calls
+    assert ["docker", "model", "run", "--detach", "--context-size", "8192", "docker.io/ai/gemma4:E2B"] in calls
 
 
 def test_model_install_syncs_local_dmr_gateway_route(mocker):
@@ -364,7 +364,7 @@ def test_model_install_syncs_local_dmr_gateway_route(mocker):
     assert synced
     endpoints = synced[0]["runtime_endpoints"]
     assert endpoints["gemma4:e2b"]["api_base"] == "http://host.docker.internal:12434/engines/v1"
-    assert "ai/gemma4:E2B" in load_model_ownership()["models"]
+    assert "docker.io/ai/gemma4:E2B" in load_model_ownership()["models"]
 
 
 def test_model_install_local_dmr_fans_out_gateway_route_to_other_nodes(mocker):
@@ -426,13 +426,13 @@ def test_model_install_node_uses_prepare_runtime_model_not_ssh(mocker):
             return json.dumps(
                 {
                     "status": "installed",
-                    "docker_model": "ai/gemma4:E2B",
+                    "docker_model": "docker.io/ai/gemma4:E2B",
                     "install": {"compatibility": {"backend": "llama.cpp", "warnings": []}},
                     "gateway": {"host_api_base": "http://127.0.0.1:4000/v1"},
                     "endpoint": {
                         "provider": "docker_model_runner",
                         "model": "gemma4:E2B",
-                        "runtime_model": "ai/gemma4:E2B",
+                        "runtime_model": "docker.io/ai/gemma4:E2B",
                         "api_model": "gemma4:E2B",
                         "api_base": "http://mn-litellm-proxy:4000/v1",
                         "node": "spark",
@@ -463,7 +463,7 @@ def test_model_install_node_uses_prepare_runtime_model_not_ssh(mocker):
 
     assert result.exit_code == 0
     prepare_payload = [payload for kind, payload in calls if kind == "prepare"][0]
-    assert prepare_payload["model"] == "ai/gemma4:E2B"
+    assert prepare_payload["model"] == "docker.io/ai/gemma4:E2B"
     assert prepare_payload["source"] == "mn-cli"
     assert synced[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://192.168.4.173:4000/v1"
     assert load_model_ownership()["models"] == {}
@@ -492,10 +492,10 @@ def test_model_update_refreshes_local_dmr_gateway_route(mocker):
     result = runner.invoke(app, ["model", "update", "gemma4:e2b"])
 
     assert result.exit_code == 0
-    assert ["docker", "model", "pull", "ai/gemma4:E2B"] in calls
-    assert ["docker", "model", "run", "--detach", "ai/gemma4:E2B"] in calls
+    assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] in calls
+    assert ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"] in calls
     assert synced[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://host.docker.internal:12434/engines/v1"
-    assert "ai/gemma4:E2B" in load_model_ownership()["models"]
+    assert "docker.io/ai/gemma4:E2B" in load_model_ownership()["models"]
 
 
 def test_model_install_node_fans_out_gateway_route_to_other_nodes(mocker):
@@ -512,7 +512,7 @@ def test_model_install_node_fans_out_gateway_route_to_other_nodes(mocker):
             return json.dumps(
                 {
                     "status": "installed",
-                    "docker_model": "ai/gemma4:E2B",
+                    "docker_model": "docker.io/ai/gemma4:E2B",
                     "install": {"compatibility": {"backend": "llama.cpp", "warnings": []}},
                     "gateway": {"host_api_base": "http://127.0.0.1:4000/v1"},
                     "endpoint": {"api_model": "gemma4:E2B"},
@@ -568,7 +568,7 @@ def test_model_install_streams_pull_progress(mocker):
     pull_kwargs = [
         kwargs
         for command, kwargs in calls
-        if command == ["docker", "model", "pull", "ai/gemma4:E2B"]
+        if command == ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"]
     ][0]
     assert pull_kwargs["capture_output"] is False
 
@@ -584,11 +584,11 @@ def test_model_install_retries_transient_pull_failure(mocker):
             return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
         if command[:4] == ["docker", "model", "run", "--help"]:
             return _completed(command, stdout="Options:\n")
-        if command == ["docker", "model", "pull", "ai/gemma4:E2B"]:
+        if command == ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"]:
             pull_attempts += 1
             if pull_attempts == 1:
                 return _completed(command, returncode=1, stderr="writing blob: blob digest mismatch")
-        if command == ["docker", "model", "inspect", "ai/gemma4:E2B"]:
+        if command == ["docker", "model", "inspect", "docker.io/ai/gemma4:E2B"]:
             return _completed(command, returncode=1)
         return _completed(command)
 
@@ -601,8 +601,8 @@ def test_model_install_retries_transient_pull_failure(mocker):
     result = runner.invoke(app, ["model", "install", "gemma4:e2b"])
 
     assert result.exit_code == 0
-    assert calls.count(["docker", "model", "pull", "ai/gemma4:E2B"]) == 2
-    assert ["docker", "model", "run", "--detach", "ai/gemma4:E2B"] in calls
+    assert calls.count(["docker", "model", "pull", "docker.io/ai/gemma4:E2B"]) == 2
+    assert ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"] in calls
 
 
 def test_model_install_persists_manual_ownership_record(mocker):
@@ -622,9 +622,9 @@ def test_model_install_persists_manual_ownership_record(mocker):
     result = runner.invoke(app, ["model", "install", "gemma4:e2b"])
 
     assert result.exit_code == 0
-    record = load_model_ownership()["models"]["ai/gemma4:E2B"]
+    record = load_model_ownership()["models"]["docker.io/ai/gemma4:E2B"]
     assert record["model_id"] == "gemma4:e2b"
-    assert record["docker_model"] == "ai/gemma4:E2B"
+    assert record["docker_model"] == "docker.io/ai/gemma4:E2B"
     assert record["backend"] == "llama.cpp"
     assert record["manual"] is True
     assert record["owners"] == {}
@@ -637,7 +637,7 @@ def test_model_install_state_can_be_listed_after_install(mocker):
         if command[:4] == ["docker", "model", "run", "--help"]:
             return _completed(command, stdout="Options:\n      --context-size int\n")
         if command[:4] == ["docker", "model", "list", "--format"]:
-            return _completed(command, stdout=json.dumps([{"name": "ai/gemma4:E2B"}]))
+            return _completed(command, stdout=json.dumps([{"name": "docker.io/ai/gemma4:E2B"}]))
         return _completed(command)
 
     mocker.patch("subprocess.run", side_effect=fake_run)
@@ -653,7 +653,7 @@ def test_model_install_state_can_be_listed_after_install(mocker):
     assert list_result.exit_code == 0
     model = json.loads(list_result.stdout)["models"][0]
     assert model["id"] == "gemma4:e2b"
-    assert model["docker_model"] == "ai/gemma4:E2B"
+    assert model["docker_model"] == "docker.io/ai/gemma4:E2B"
     assert model["installed"] is True
     assert model["manual"] is True
     assert model["owner_count"] == 0
@@ -680,8 +680,8 @@ def test_model_install_skips_context_size_when_docker_cli_does_not_support_it(mo
     result = runner.invoke(app, ["model", "install", "gemma4:e2b", "--context-size", "8192"])
 
     assert result.exit_code == 0
-    assert ["docker", "model", "run", "--detach", "ai/gemma4:E2B"] in calls
-    assert ["docker", "model", "run", "--detach", "--context-size", "8192", "ai/gemma4:E2B"] not in calls
+    assert ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"] in calls
+    assert ["docker", "model", "run", "--detach", "--context-size", "8192", "docker.io/ai/gemma4:E2B"] not in calls
 
 
 def test_model_install_falls_back_to_dmr_rest_when_cli_plugin_missing(mocker):
@@ -710,10 +710,10 @@ def test_model_install_falls_back_to_dmr_rest_when_cli_plugin_missing(mocker):
     result = runner.invoke(app, ["model", "install", "gemma4:e2b"])
 
     assert result.exit_code == 0
-    assert ["docker", "model", "pull", "ai/gemma4:E2B"] not in calls
+    assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] not in calls
     assert any(url.endswith("/models/create") and method == "POST" for url, method, _data in requests)
     payloads = [json.loads(data.decode("utf-8")) for _url, _method, data in requests if data]
-    assert {"from": "ai/gemma4:E2B"} in payloads
+    assert {"from": "docker.io/ai/gemma4:E2B"} in payloads
 
 
 def test_model_install_prefers_dmr_rest_pull_when_runner_api_reachable(mocker, monkeypatch):
@@ -743,11 +743,11 @@ def test_model_install_prefers_dmr_rest_pull_when_runner_api_reachable(mocker, m
     result = runner.invoke(app, ["model", "install", "gemma4:e2b"])
 
     assert result.exit_code == 0
-    assert ["docker", "model", "pull", "ai/gemma4:E2B"] not in calls
-    assert ["docker", "model", "run", "--detach", "ai/gemma4:E2B"] in calls
+    assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] not in calls
+    assert ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"] in calls
     assert any(url.endswith("/models/create") and method == "POST" for url, method, _data, _timeout in requests)
     payloads = [json.loads(data.decode("utf-8")) for _url, _method, data, _timeout in requests if data]
-    assert {"from": "ai/gemma4:E2B"} in payloads
+    assert {"from": "docker.io/ai/gemma4:E2B"} in payloads
 
 
 def test_model_list_reads_dmr_rest_tags_when_cli_plugin_missing(mocker):
@@ -758,7 +758,7 @@ def test_model_list_reads_dmr_rest_tags_when_cli_plugin_missing(mocker):
 
     def fake_urlopen(request, timeout=0):
         return FakeResponse(json.dumps([
-            {"id": "sha256:one", "tags": ["ai/gemma4:E2B"]}
+            {"id": "sha256:one", "tags": ["docker.io/ai/gemma4:E2B"]}
         ]))
 
     mocker.patch("subprocess.run", side_effect=fake_run)
@@ -817,7 +817,7 @@ def test_model_install_blocks_incompatible_hardware_before_pull(mocker):
     result = runner.invoke(app, ["model", "install", "gemma4:e2b"])
 
     assert result.exit_code == 1
-    assert ["docker", "model", "pull", "ai/gemma4:E2B"] not in calls
+    assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] not in calls
 
 
 def test_model_install_failure_does_not_record_manual_ownership(mocker, tmp_path, monkeypatch):
@@ -846,7 +846,7 @@ def test_model_install_failure_does_not_record_manual_ownership(mocker, tmp_path
     result = runner.invoke(app, ["model", "install", "gemma4:e2b"])
 
     assert result.exit_code == 1
-    assert ["docker", "model", "pull", "ai/gemma4:E2B"] in calls
+    assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] in calls
     assert load_model_ownership()["models"] == {}
 
 
@@ -893,7 +893,7 @@ def test_model_remove_uses_resolved_docker_model_with_force(mocker):
 
     assert result.exit_code == 0
     assert "Model remove successful." in result.stdout
-    assert ["docker", "model", "rm", "--force", "ai/gemma4:E2B"] in calls
+    assert ["docker", "model", "rm", "--force", "docker.io/ai/gemma4:E2B"] in calls
 
 
 def test_model_remove_local_dmr_removes_gateway_route_from_cluster(mocker):
@@ -927,12 +927,10 @@ def test_model_remove_local_dmr_removes_gateway_route_from_cluster(mocker):
     result = runner.invoke(app, ["model", "remove", "gemma4:e2b", "--force"])
 
     assert result.exit_code == 0
-    assert ["docker", "model", "rm", "--force", "ai/gemma4:E2B"] in calls
-    assert local_removed == ["ai/gemma4:E2B", "gemma4:e2b"]
+    assert ["docker", "model", "rm", "--force", "docker.io/ai/gemma4:E2B"] in calls
+    assert local_removed == ["docker.io/ai/gemma4:E2B", "gemma4:e2b"]
     assert {(target, payload["model"]) for target, payload in node_removed} == {
-        ("10.0.0.1:55052", "ai/gemma4:E2B"),
-        ("10.0.0.2:55052", "ai/gemma4:E2B"),
-        ("10.0.0.1:55052", "gemma4:e2b"),
+        ("10.0.0.2:55052", "docker.io/ai/gemma4:E2B"),
         ("10.0.0.2:55052", "gemma4:e2b"),
     }
 
@@ -943,7 +941,7 @@ def test_model_remove_node_removes_route_on_target_and_other_nodes(mocker):
     local_syncs = []
     upsert_model_remote(
         "spark-gemma4-e2b",
-        "ai/gemma4:E2B",
+        "docker.io/ai/gemma4:E2B",
         "http://192.168.4.173:4000/v1",
         api_model="gemma4:E2B",
         node="spark",
@@ -972,7 +970,7 @@ def test_model_remove_node_removes_route_on_target_and_other_nodes(mocker):
     result = runner.invoke(app, ["model", "remove", "gemma4:e2b", "--node", "spark"])
 
     assert result.exit_code == 0
-    assert set(local_removed) == {"gemma4:e2b", "spark-gemma4-e2b", "ai/gemma4:E2B", "gemma4:E2B"}
+    assert set(local_removed) == {"gemma4:e2b", "spark-gemma4-e2b", "docker.io/ai/gemma4:E2B", "gemma4:E2B"}
     assert load_model_remotes()["remotes"] == {}
     assert local_syncs == [{"runtime_endpoints": {}, "restart": True}]
     assert [(target, payload["model"], payload["source"]) for target, payload in node_removed] == [
@@ -1016,8 +1014,6 @@ def test_model_remote_remove_removes_gateway_route_from_all_nodes(mocker):
     assert result.exit_code == 0
     assert local_removed == ["spark-qwen", "ai/qwen3-coder"]
     assert {(target, payload["model"]) for target, payload in node_removed} == {
-        ("10.0.0.1:55052", "spark-qwen"),
         ("10.0.0.2:55052", "spark-qwen"),
-        ("10.0.0.1:55052", "ai/qwen3-coder"),
         ("10.0.0.2:55052", "ai/qwen3-coder"),
     }

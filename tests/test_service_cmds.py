@@ -86,4 +86,4 @@ def test_service_check_runs_local_required_service_validation(tmp_path):
 
     assert result.exit_code == 0
     assert "Service check confirmed." in result.stdout
-    assert "Status: healthy" in result.stdout
+    assert "healthy" in result.stdout

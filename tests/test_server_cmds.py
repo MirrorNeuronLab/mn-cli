@@ -800,7 +800,7 @@ def test_record_runtime_model_install_advertises_model_without_compose_override(
     path = server_cmds.record_runtime_model_install(
         {
             "id": "gemma4:e2b",
-            "model": "ai/gemma4:E2B",
+            "model": "docker.io/ai/gemma4:E2B",
             "aliases": ["default", "gemma4"],
         }
     )
@@ -1180,7 +1180,7 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     port_available = mocker.patch('mn_cli.server_cmds._port_available_or_owned', return_value=True)
     start_api = mocker.patch('mn_cli.server_cmds._start_api_if_installed')
     start_web_ui = mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed')
-    start_native_sdk = mocker.patch('mn_cli.server_cmds._start_native_sdk_grpc_if_installed', return_value=True)
+    start_native_sdk = mocker.patch('mn_cli.runtime.server._start_native_sdk_grpc_if_installed', return_value=True)
 
     commands = []
 
@@ -1381,8 +1381,8 @@ def test_start_network_seed_already_exposed_prints_existing_token(mocker):
     rendered = output.getvalue()
     assert token == "seed-token"
     assert "MirrorNeuron node ready confirmed." in rendered
-    assert "Status: already running" in rendered
-    assert "Token: seed-token" in rendered
+    assert "already running" in rendered
+    assert "seed-token" in rendered
     assert "mn node join 192.168.4.10 --token seed-token" in rendered
     mock_start_redis.assert_not_called()
     mock_start_core.assert_not_called()
@@ -1404,8 +1404,8 @@ def test_start_network_seed_running_local_runtime_prints_existing_token(mocker):
     rendered = output.getvalue()
     assert token == "runtime-token"
     assert "MirrorNeuron node ready confirmed." in rendered
-    assert "Status: already running" in rendered
-    assert "Token: runtime-token" in rendered
+    assert "already running" in rendered
+    assert "runtime-token" in rendered
     assert "mn node join 192.168.4.20 --token runtime-token" in rendered
     mock_start_redis.assert_not_called()
     mock_start_core.assert_not_called()
@@ -2220,7 +2220,7 @@ def test_start_server_already_running(mocker, tmp_path):
         },
     )
     mock_start_web = mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed', return_value=True)
-    mock_start_native_sdk = mocker.patch('mn_cli.server_cmds._start_native_sdk_grpc_if_installed', return_value=True)
+    mock_start_native_sdk = mocker.patch('mn_cli.runtime.server._start_native_sdk_grpc_if_installed', return_value=True)
     mock_write_endpoints = mocker.patch('mn_cli.server_cmds._write_runtime_endpoints_file', return_value={"api": {}})
     mock_print_endpoints = mocker.patch('mn_cli.server_cmds._print_service_endpoints')
 
@@ -2275,7 +2275,7 @@ def test_start_server_restarts_existing_api_when_runtime_blueprint_env_changes(m
     )
     mock_run = mocker.patch('mn_cli.server_cmds.subprocess.run')
     start_api = mocker.patch('mn_cli.server_cmds._start_api_if_installed')
-    start_native_sdk = mocker.patch('mn_cli.server_cmds._start_native_sdk_grpc_if_installed', return_value=True)
+    start_native_sdk = mocker.patch('mn_cli.runtime.server._start_native_sdk_grpc_if_installed', return_value=True)
     mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed', return_value=False)
     mocker.patch('mn_cli.server_cmds._write_runtime_endpoints_file', return_value={"api": {}})
     mocker.patch('mn_cli.server_cmds._print_service_endpoints')

@@ -125,7 +125,7 @@ def test_prepare_runtime_models_installs_missing_model_for_run(
     catalog = {
         "gemma4:e2b": {
             "id": "gemma4:e2b",
-            "model": "ai/gemma4:E2B",
+            "model": "docker.io/ai/gemma4:E2B",
             "provider": "docker_model_runner",
             "backend": "llama.cpp",
         }
@@ -136,7 +136,7 @@ def test_prepare_runtime_models_installs_missing_model_for_run(
         "mn_cli.libs.run_cmds.install_model_entry",
         return_value={
             "entry": catalog["gemma4:e2b"],
-            "docker_model": "ai/gemma4:E2B",
+            "docker_model": "docker.io/ai/gemma4:E2B",
             "compatibility": {"backend": "llama.cpp"},
         },
     )
@@ -151,11 +151,11 @@ def test_prepare_runtime_models_installs_missing_model_for_run(
         context_size=None,
         force=False,
     )
-    record = load_model_ownership()["models"]["ai/gemma4:E2B"]
+    record = load_model_ownership()["models"]["docker.io/ai/gemma4:E2B"]
     assert record["owners"]["vc_assistant"]["blueprint_revision"] == "rev-1"
     output = capsys.readouterr().out
-    assert "Runtime model gemma4:e2b (ai/gemma4:E2B) is not installed." in output
-    assert "Installing runtime model gemma4:e2b (ai/gemma4:E2B)" in output
+    assert "Runtime model gemma4:e2b (docker.io/ai/gemma4:E2B) is not installed." in output
+    assert "Installing runtime model gemma4:e2b (docker.io/ai/gemma4:E2B)" in output
     assert "Docker Model Runner" in output
     assert "Runtime models ready: gemma4:e2b" in output
 
@@ -241,9 +241,9 @@ def test_prepare_runtime_models_prunes_node_owned_remote_and_prepares_on_target_
     catalog = {
         "nemotron3:latest": {
             "id": "nemotron3:latest",
-            "model": "ai/nemotron3:latest",
-            "api_model": "ai/nemotron3:latest",
-            "aliases": ["nemotron3", "ai/nemotron3:latest"],
+            "model": "docker.io/docker.io/ai/nemotron3:latest",
+            "api_model": "docker.io/docker.io/ai/nemotron3:latest",
+            "aliases": ["nemotron3", "docker.io/docker.io/ai/nemotron3:latest"],
             "provider": "docker_model_runner",
             "backend": "llama.cpp",
             "requirements": {"min_vram_gb": 48},
@@ -251,9 +251,9 @@ def test_prepare_runtime_models_prunes_node_owned_remote_and_prepares_on_target_
     }
     upsert_model_remote(
         "spark",
-        "ai/nemotron3:latest",
+        "docker.io/docker.io/ai/nemotron3:latest",
         "http://192.168.4.173:12434/v1",
-        api_model="ai/nemotron3:latest",
+        api_model="docker.io/docker.io/ai/nemotron3:latest",
         node="spark",
     )
     mocker.patch("mn_cli.libs.run_cmds.load_model_catalog", return_value=catalog)
@@ -271,9 +271,9 @@ def test_prepare_runtime_models_prunes_node_owned_remote_and_prepares_on_target_
             "install": {"status": "already_installed"},
             "endpoint": {
                 "provider": "docker_model_runner",
-                "model": "ai/nemotron3:latest",
-                "runtime_model": "ai/nemotron3:latest",
-                "api_model": "ai/nemotron3:latest",
+                "model": "docker.io/docker.io/ai/nemotron3:latest",
+                "runtime_model": "docker.io/docker.io/ai/nemotron3:latest",
+                "api_model": "docker.io/docker.io/ai/nemotron3:latest",
                 "api_base": "http://spark:12434/engines/v1",
                 "node": "spark",
                 "source": "cluster_node_install",
@@ -298,7 +298,7 @@ def test_prepare_runtime_models_prunes_node_owned_remote_and_prepares_on_target_
     assert endpoints["nemotron3:latest"]["api_base"] == "http://mn-litellm-proxy:4000/v1"
     assert endpoints["nemotron3:latest"]["node"] == "spark"
     resolver = run_cmds._prepared_model_installed_resolver(summary)
-    assert resolver("ai/nemotron3:latest", {"model": "nemotron3:latest"}) is True
+    assert resolver("docker.io/docker.io/ai/nemotron3:latest", {"model": "nemotron3:latest"}) is True
     validation_manifest, _validation_config = run_cmds._model_validation_inputs_with_prepared_models(
         manifest,
         {},
@@ -334,9 +334,9 @@ def test_model_remove_remote_records_matches_aliases(tmp_path, monkeypatch):
     monkeypatch.setenv("MN_MODEL_REMOTES_PATH", str(tmp_path / "remotes.json"))
     upsert_model_remote(
         "spark-nemotron3",
-        "ai/nemotron3:latest",
+        "docker.io/docker.io/ai/nemotron3:latest",
         "http://192.168.4.173:4000/v1",
-        api_model="ai/nemotron3:latest",
+        api_model="docker.io/docker.io/ai/nemotron3:latest",
         node="mirror_neuron@192.168.4.173",
     )
 
@@ -395,8 +395,8 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
     catalog = {
         "nemotron3:latest": {
             "id": "nemotron3:latest",
-            "model": "ai/nemotron3:latest",
-            "api_model": "ai/nemotron3:latest",
+            "model": "docker.io/docker.io/ai/nemotron3:latest",
+            "api_model": "docker.io/docker.io/ai/nemotron3:latest",
             "provider": "docker_model_runner",
             "backend": "llama.cpp",
             "requirements": {
@@ -435,9 +435,9 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
         return_value={
             "endpoint": {
                 "provider": "docker_model_runner",
-                "model": "ai/nemotron3:latest",
-                "runtime_model": "ai/nemotron3:latest",
-                "api_model": "ai/nemotron3:latest",
+                "model": "docker.io/docker.io/ai/nemotron3:latest",
+                "runtime_model": "docker.io/docker.io/ai/nemotron3:latest",
+                "api_model": "docker.io/docker.io/ai/nemotron3:latest",
                 "api_base": "http://spark:12434/engines/v1",
                 "node": "spark",
                 "source": "cluster_node_install",
@@ -455,12 +455,12 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
     assert summary["ok"] is True
     assert summary["models"][0]["status"] == "runtime_node_installed"
     assert "MN_MODEL_ENDPOINTS_JSON" in env_overrides
-    assert "ai/nemotron3:latest" in json.loads(env_overrides["MN_PREPARED_RUNTIME_MODELS_JSON"])
+    assert "docker.io/docker.io/ai/nemotron3:latest" in json.loads(env_overrides["MN_PREPARED_RUNTIME_MODELS_JSON"])
     install_model.assert_not_called()
     cluster_install.assert_called_once()
     assert "Installing runtime model nemotron3:latest on spark" not in capsys.readouterr().out
     resolver = run_cmds._prepared_model_installed_resolver(summary)
-    assert resolver("ai/nemotron3:latest", {"model": "nemotron3:latest"}) is True
+    assert resolver("docker.io/docker.io/ai/nemotron3:latest", {"model": "nemotron3:latest"}) is True
     validation_manifest, validation_config = run_cmds._model_validation_inputs_with_prepared_models(
         manifest,
         {"llm": {"configs": {"primary": {"provider": "docker_model_runner", "model": "nemotron3:latest"}}}},
@@ -546,7 +546,7 @@ def _preferred_large_model_catalog() -> dict:
     return {
         "nemotron3": {
             "id": "nemotron3",
-            "model": "ai/nemotron3:latest",
+            "model": "docker.io/docker.io/ai/nemotron3:latest",
             "api_model": "nemotron3",
             "provider": "docker_model_runner",
             "backend": "llama.cpp",
@@ -556,8 +556,8 @@ def _preferred_large_model_catalog() -> dict:
         },
         "gemma4:e2b": {
             "id": "gemma4:e2b",
-            "model": "ai/gemma4:E2B",
-            "api_model": "ai/gemma4:E2B",
+            "model": "docker.io/ai/gemma4:E2B",
+            "api_model": "docker.io/ai/gemma4:E2B",
             "provider": "docker_model_runner",
             "backend": "llama.cpp",
             "context_size": 4096,
@@ -613,7 +613,7 @@ def test_prepare_runtime_models_promotes_preferred_large_profile_on_capable_clus
             "endpoint": {
                 "provider": "docker_model_runner",
                 "model": "nemotron3",
-                "runtime_model": "ai/nemotron3:latest",
+                "runtime_model": "docker.io/docker.io/ai/nemotron3:latest",
                 "api_model": "nemotron3",
                 "api_base": "http://192.168.5.12:4000/v1",
                 "node": "mirror_neuron@192.168.5.12",
@@ -635,16 +635,16 @@ def test_prepare_runtime_models_promotes_preferred_large_profile_on_capable_clus
     install_model.assert_not_called()
     prepared = json.loads(env_overrides["MN_PREPARED_RUNTIME_MODELS_JSON"])
     assert "nemotron3" in prepared
-    assert "ai/nemotron3:latest" in prepared
+    assert "docker.io/docker.io/ai/nemotron3:latest" in prepared
     effective_config = json.loads(env_overrides["MN_BLUEPRINT_CONFIG_JSON"])
     assert effective_config["llm"]["active_model_profile"] == "large_model_profile"
     assert effective_config["llm"]["model"] == "nemotron3"
-    assert effective_config["llm"]["runtime_model"] == "ai/nemotron3:latest"
+    assert effective_config["llm"]["runtime_model"] == "docker.io/docker.io/ai/nemotron3:latest"
     assert effective_config["llm"]["strict_json"] is True
     assert effective_config["llm"]["configs"]["primary"]["model"] == "nemotron3"
-    assert effective_config["llm"]["configs"]["primary"]["runtime_model"] == "ai/nemotron3:latest"
+    assert effective_config["llm"]["configs"]["primary"]["runtime_model"] == "docker.io/docker.io/ai/nemotron3:latest"
     resolver = run_cmds._prepared_model_installed_resolver(summary)
-    assert resolver("ai/nemotron3:latest", {"model": "nemotron3"}) is True
+    assert resolver("docker.io/docker.io/ai/nemotron3:latest", {"model": "nemotron3"}) is True
     validation_manifest, validation_config = run_cmds._model_validation_inputs_with_prepared_models(
         {"runtime": {"models": {"primary": {"provider": "docker_model_runner", "model": "nemotron3"}}}},
         {"llm": {"configs": {"primary": {"provider": "docker_model_runner", "model": "nemotron3"}}}},
@@ -682,7 +682,7 @@ def test_prepare_runtime_models_keeps_default_model_without_capable_cluster_node
         return_value=json.dumps({"services": []}),
     )
     mocker.patch("mn_cli.libs.run_cmds.client.get_resource", return_value=json.dumps(resource_report))
-    mocker.patch("mn_cli.libs.run_cmds.model_installed", side_effect=lambda model: model == "ai/gemma4:E2B")
+    mocker.patch("mn_cli.libs.run_cmds.model_installed", side_effect=lambda model: model == "docker.io/ai/gemma4:E2B")
     cluster_install = mocker.patch("mn_cli.libs.run_cmds._install_runtime_cluster_model")
     install_model = mocker.patch("mn_cli.libs.run_cmds.install_model_entry")
 
@@ -697,8 +697,8 @@ def test_prepare_runtime_models_keeps_default_model_without_capable_cluster_node
     install_model.assert_not_called()
     effective_config = json.loads(env_overrides["MN_BLUEPRINT_CONFIG_JSON"])
     assert effective_config["llm"]["active_model_profile"] == "small_model_profile"
-    assert effective_config["llm"]["model"] == "ai/gemma4:E2B"
-    assert effective_config["llm"]["runtime_model"] == "ai/gemma4:E2B"
+    assert effective_config["llm"]["model"] == "docker.io/ai/gemma4:E2B"
+    assert effective_config["llm"]["runtime_model"] == "docker.io/ai/gemma4:E2B"
 
 def test_prepare_runtime_models_surfaces_large_profile_prepare_failure_without_fallback(
     mocker,
@@ -852,17 +852,17 @@ def test_runtime_cluster_model_install_uses_long_timeout_for_local_runtime_coord
             "status": "installed",
             "endpoint": {
                 "provider": "docker_model_runner",
-                "model": "ai/gemma4:E2B",
-                "runtime_model": "ai/gemma4:E2B",
-                "api_model": "ai/gemma4:E2B",
+                "model": "docker.io/ai/gemma4:E2B",
+                "runtime_model": "docker.io/ai/gemma4:E2B",
+                "api_model": "docker.io/ai/gemma4:E2B",
             },
         }
     )
 
     result = run_cmds._install_runtime_cluster_model(
         requirement={"context_size": 4096},
-        entry={"id": "gemma4:e2b", "model": "ai/gemma4:E2B", "provider": "docker_model_runner"},
-        model={"id": "gemma4:e2b", "model": "ai/gemma4:E2B"},
+        entry={"id": "gemma4:e2b", "model": "docker.io/ai/gemma4:E2B", "provider": "docker_model_runner"},
+        model={"id": "gemma4:e2b", "model": "docker.io/ai/gemma4:E2B"},
         cluster={"node": "mirror_neuron@192.168.5.10"},
         backend="llama.cpp",
         context_size=4096,
@@ -896,7 +896,7 @@ def test_prepare_runtime_model_retries_once_on_deadline(mocker, capsys):
         json.dumps({"status": "installed"}),
     ]
 
-    response = run_cmds._prepare_runtime_model_with_retry(runtime_client, {"model": "ai/gemma4:E2B"})
+    response = run_cmds._prepare_runtime_model_with_retry(runtime_client, {"model": "docker.io/ai/gemma4:E2B"})
 
     assert json.loads(response)["status"] == "installed"
     assert runtime_client.prepare_runtime_model.call_count == 2
@@ -907,7 +907,7 @@ def test_prepare_runtime_model_does_not_retry_non_transient_errors(mocker):
     runtime_client.prepare_runtime_model.side_effect = FakePrepareRpcError(grpc.StatusCode.INVALID_ARGUMENT)
 
     with pytest.raises(FakePrepareRpcError):
-        run_cmds._prepare_runtime_model_with_retry(runtime_client, {"model": "ai/gemma4:E2B"})
+        run_cmds._prepare_runtime_model_with_retry(runtime_client, {"model": "docker.io/ai/gemma4:E2B"})
 
     runtime_client.prepare_runtime_model.assert_called_once()
 
@@ -1031,7 +1031,7 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
     catalog = {
         "nemotron3:latest": {
             "id": "nemotron3:latest",
-            "model": "ai/nemotron3:latest",
+            "model": "docker.io/docker.io/ai/nemotron3:latest",
             "provider": "docker_model_runner",
             "backend": "llama.cpp",
             "fallback_model": "gemma4:e2b",
@@ -1039,8 +1039,8 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
         },
         "gemma4:e2b": {
             "id": "gemma4:e2b",
-            "model": "ai/gemma4:E2B",
-            "api_model": "ai/gemma4:E2B",
+            "model": "docker.io/ai/gemma4:E2B",
+            "api_model": "docker.io/ai/gemma4:E2B",
             "provider": "docker_model_runner",
             "backend": "llama.cpp",
             "context_size": 4096,
@@ -1063,7 +1063,7 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
         return_value=json.dumps({"services": []}),
     )
     mocker.patch("mn_cli.libs.run_cmds.client.get_resource", return_value=json.dumps(resource_report))
-    mocker.patch("mn_cli.libs.run_cmds.model_installed", side_effect=lambda model: model == "ai/gemma4:E2B")
+    mocker.patch("mn_cli.libs.run_cmds.model_installed", side_effect=lambda model: model == "docker.io/ai/gemma4:E2B")
     install_model = mocker.patch(
         "mn_cli.libs.run_cmds.install_model_entry",
     )
@@ -1074,9 +1074,9 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
     assert summary["ok"] is True
     assert summary["models"][0]["status"] == "fallback_model"
     assert summary["models"][0]["fallback"]["id"] == "gemma4:e2b"
-    assert summary["models"][0]["fallback"]["model"] == "ai/gemma4:E2B"
-    assert env_overrides["MN_LLM_MODEL"] == "ai/gemma4:E2B"
-    assert env_overrides["MN_LLM_RUNTIME_MODEL"] == "ai/gemma4:E2B"
+    assert summary["models"][0]["fallback"]["model"] == "docker.io/ai/gemma4:E2B"
+    assert env_overrides["MN_LLM_MODEL"] == "docker.io/ai/gemma4:E2B"
+    assert env_overrides["MN_LLM_RUNTIME_MODEL"] == "docker.io/ai/gemma4:E2B"
     effective_config = json.loads(env_overrides["MN_BLUEPRINT_CONFIG_JSON"])
     assert effective_config["llm"]["model"] == "gemma4:e2b"
     assert effective_config["llm"]["active_model_profile"] == "small_model_profile"

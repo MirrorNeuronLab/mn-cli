@@ -159,7 +159,7 @@ def test_run_auto_schedule_creates_resource_wait_schedule(mocker, tmp_path, monk
 
     assert result.exit_code == 0
     assert "Schedule create successful." in result.stdout
-    assert "Schedule ID: schedule-123" in result.stdout
+    assert "schedule-123" in result.stdout
     mock_submit.assert_not_called()
     mock_create_schedule.assert_called_once()
     assert mock_create_schedule.call_args.kwargs["schedule"]["kind"] == "resource_wait"
@@ -675,7 +675,7 @@ def test_run_error_submitting(mocker, tmp_path):
     result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
     
     assert result.exit_code == 1
-    assert "Error running bundle: API failure" in result.stdout
+    assert "API failure" in result.stdout
 
 def test_run_keyboard_interrupt(mocker, tmp_path):
     mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")

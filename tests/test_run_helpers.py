@@ -1235,8 +1235,8 @@ def test_prepare_manifest_injects_docker_model_runner_llm_env_by_node_runtime(tm
     host_env = prepared["nodes"][0]["config"]["environment"]
     sandbox_env = prepared["nodes"][1]["config"]["environment"]
     assert host_env["MN_LLM_PROVIDER"] == "docker_model_runner"
-    assert host_env["MN_LLM_MODEL"] == "ai/gemma4:E2B"
-    assert host_env["MN_LLM_RUNTIME_MODEL"] == "ai/gemma4:E2B"
+    assert host_env["MN_LLM_MODEL"] == "docker.io/ai/gemma4:E2B"
+    assert host_env["MN_LLM_RUNTIME_MODEL"] == "docker.io/ai/gemma4:E2B"
     assert host_env["MN_LLM_API_BASE"] == "http://host.docker.internal:12434/engines/v1"
     assert sandbox_env["MN_LLM_API_BASE"] == "http://host.docker.internal:12434/engines/v1"
     assert host_env["MN_LLM_CONTEXT_SIZE"] == "4096"
@@ -1424,7 +1424,7 @@ def test_prepare_manifest_model_only_llm_config_does_not_request_scheduler_model
 
     env = prepared["nodes"][0]["config"]["environment"]
     assert env["MN_LLM_PROVIDER"] == "docker_model_runner"
-    assert env["MN_LLM_MODEL"] == "ai/gemma4:E2B"
+    assert env["MN_LLM_MODEL"] == "docker.io/ai/gemma4:E2B"
     assert "MN_LLM_RUNTIME_MODEL" not in env
 
 
@@ -1485,7 +1485,7 @@ def test_prepare_manifest_for_submission_injects_flow_nodes_and_scheduler_bindin
 
     assert video_env["MN_RUN_ID"] == "safety-run"
     assert video_env["MN_LLM_MODEL"].startswith("hf.co/nvidia/")
-    assert report_env["MN_LLM_MODEL"] == "ai/gemma4:E2B"
+    assert report_env["MN_LLM_MODEL"] == "docker.io/ai/gemma4:E2B"
     assert (
         nodes["report_generator"]["policies"]["scheduler"]["preferred_node"]
         == "mirror_neuron@192.168.4.173"

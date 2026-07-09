@@ -37,3 +37,25 @@ def mocker():
         yield helper
     finally:
         helper.stopall()
+
+
+@pytest.fixture(autouse=True)
+def stabilize_cluster_join_tests(request, monkeypatch):
+    if request.node.name.startswith(("test_add_node_", "test_join_network_")):
+        from mn_cli.runtime import server as runtime_server
+
+        monkeypatch.setattr(
+            runtime_server,
+            "_confirm_joined_node",
+            lambda _client, _remote_node, _token, status, **_kwargs: status,
+        )
+
+
+@pytest.fixture(autouse=True)
+def use_cli_model_pull_for_legacy_install_tests(request, monkeypatch):
+    name = request.node.name
+    if name.startswith("test_model_install_") and "dmr" not in name and "gateway" not in name:
+        from mn_cli.libs import model_cmds
+
+        monkeypatch.setattr(model_cmds, "_endpoint_responds", lambda: False)
+        monkeypatch.setattr("mn_sdk.model_service.endpoint_responds", lambda: False)

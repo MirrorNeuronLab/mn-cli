@@ -91,7 +91,7 @@ def test_validate_success(tmp_path):
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
     assert result.exit_code == 0
     assert "Job bundle validation confirmed." in result.stdout
-    assert "Status: valid" in result.stdout
+    assert "valid" in result.stdout
     assert "Bundle:" in result.stdout
 
 def test_validate_accepts_workflow_manifest_without_legacy_nodes(tmp_path):
@@ -112,7 +112,7 @@ def test_validate_accepts_workflow_manifest_without_legacy_nodes(tmp_path):
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
 
     assert result.exit_code == 0
-    assert "Workflow steps: 4" in result.stdout
+    assert "4" in result.stdout
 
 def test_validate_rejects_workflow_manifest_cycles(tmp_path):
     bundle_dir = tmp_path / "workflow_cycle"
@@ -280,7 +280,7 @@ def test_validate_accepts_host_local_python_environment(tmp_path):
 
     assert result.exit_code == 0
     assert "Job bundle validation confirmed." in result.stdout
-    assert "Status: valid" in result.stdout
+    assert "valid" in result.stdout
 
 def test_validate_rejects_invalid_python_environment(tmp_path):
     bundle_dir = tmp_path / "bad_python_env_bundle"

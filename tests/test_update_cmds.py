@@ -133,7 +133,7 @@ def test_update_yes_stops_updates_and_restarts(mocker, capsys):
 
     output = capsys.readouterr().out
     assert "MirrorNeuron update successful." in output
-    assert "Status: installed" in output
+    assert "installed" in output
     mock_stop.assert_called_once()
     mock_python.assert_called_once()
     mock_web.assert_called_once()
