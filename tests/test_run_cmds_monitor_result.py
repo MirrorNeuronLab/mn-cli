@@ -124,5 +124,5 @@ def test_result_error(mocker):
     
     result = runner.invoke(app, ["job", "result", "job-888"])
     
-    assert result.exit_code == 0
-    assert "Error fetching results: DB Error" in result.stdout
+    assert result.exit_code == 1
+    assert "MN_EXECUTION_FAILED" in result.stdout

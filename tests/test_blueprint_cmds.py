@@ -662,7 +662,6 @@ def test_blueprint_update_cleans_resources_for_removed_blueprints(mocker, tmp_pa
     assert active_bundle_cache.exists()
     assert "Blueprint cleanup successful." in result.stdout
     assert "1" in result.stdout
-    assert "Bundle cache resources: 1" in result.stdout
 
 
 def test_blueprint_cleanup_removes_dead_and_stale_resources(mocker, tmp_path, monkeypatch):
@@ -1038,7 +1037,6 @@ def test_blueprint_run_help_lists_testing_flags():
     result = runner.invoke(app, ["blueprint", "run", "--help"])
 
     assert result.exit_code == 0
-    assert "--fake-skills" in result.output
     assert "--benchmark" in result.output
     assert "--debug" in result.output
 

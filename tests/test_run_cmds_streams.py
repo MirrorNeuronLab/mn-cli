@@ -111,7 +111,7 @@ def test_stream_all_events(mocker, tmp_path):
     result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
     assert result.exit_code == 0
     assert "Job Status: Success" in result.stdout
-    assert "Monitor" in result.stdout
+    assert "result.txt" in result.stdout
     assert "result_stream.txt" in result.stdout
 
 def test_stream_cancelled_event_is_terminal(mocker, tmp_path, monkeypatch):
