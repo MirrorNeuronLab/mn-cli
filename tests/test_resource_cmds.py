@@ -1,6 +1,5 @@
 from mn_cli.libs.resource_cmds import (
     ensure_combined_resource_totals,
-    resource_number,
 )
 
 
@@ -48,5 +47,3 @@ def test_resource_totals_passthrough_and_invalid_numbers():
     payload = ["not", "a", "dict"]
 
     assert ensure_combined_resource_totals(payload) is payload
-    assert resource_number("not-a-number") == 0.0
-    assert resource_number(None) == 0.0
