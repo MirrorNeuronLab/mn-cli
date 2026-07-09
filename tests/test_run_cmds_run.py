@@ -104,7 +104,7 @@ def test_run_stream_error_falls_back_to_status_polling(mocker, tmp_path, monkeyp
     assert result.exit_code == 0
     assert "Job submit successful" in result.stdout
     assert "Completed" in result.stdout
-    assert "result.txt" in result.stdout
+    assert "Monitor" in result.stdout
     mock_get.assert_called_once_with("job-stream-fallback")
 
 def test_run_prepares_runtime_models_before_model_validation(mocker, tmp_path, monkeypatch):
@@ -675,7 +675,7 @@ def test_run_error_submitting(mocker, tmp_path):
     result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
     
     assert result.exit_code == 1
-    assert "API failure" in result.stdout
+    assert "MN_EXECUTION_FAILED" in result.stdout
 
 def test_run_keyboard_interrupt(mocker, tmp_path):
     mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")

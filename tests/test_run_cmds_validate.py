@@ -467,4 +467,4 @@ def test_validate_unexpected_error(mocker, tmp_path):
     
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
     assert result.exit_code == 1
-    assert "Validation failed: Read error" in result.stdout
+    assert "MN_EXECUTION_FAILED" in result.stdout

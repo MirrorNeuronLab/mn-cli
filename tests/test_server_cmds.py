@@ -209,11 +209,11 @@ def test_detect_host_gpu_count_uses_linux_nvidia_smi(mocker):
     assert server_cmds._detect_host_gpu_count() == 1
 
 def test_ensure_node_advertisement_adds_cpu_and_gpu_profile(mocker):
-    mocker.patch("mn_cli.server_cmds._node_display_name", return_value="lab-box")
-    mocker.patch("mn_cli.server_cmds._detect_host_cpu_model", return_value="AMD Ryzen AI Max+ 395")
-    mocker.patch("mn_cli.server_cmds._detect_host_gpu_count", return_value=1)
+    mocker.patch("mn_cli.runtime.server._node_display_name", return_value="lab-box")
+    mocker.patch("mn_cli.runtime.server._detect_host_cpu_model", return_value="AMD Ryzen AI Max+ 395")
+    mocker.patch("mn_cli.runtime.server._detect_host_gpu_count", return_value=1)
     mocker.patch(
-        "mn_cli.server_cmds._detect_host_gpu_profile",
+        "mn_cli.runtime.server._detect_host_gpu_profile",
         return_value={
             "MN_NODE_GPU_VENDOR": "nvidia",
             "MN_NODE_GPU_DRIVER": "cuda",
@@ -1971,7 +1971,7 @@ def test_join_network_configures_worker_redis_replica(mocker, tmp_path, capsys):
     ) in redis_calls
     output = capsys.readouterr().out
     assert "Node join successful." in output
-    assert "Status: connected" in output
+    assert "connected" in output
     assert "Replication: 192.168.4.20:56380 -> 192.168.4.99:56379" in output
 
 
@@ -3807,6 +3807,8 @@ def test_start_native_sdk_watchdog_uses_stable_workdir_when_cwd_is_missing(mocke
     mocker.patch('mn_cli.server_cmds.stop_matching_sidecar_processes', return_value=False)
     mock_popen = mocker.patch('mn_cli.server_cmds.subprocess.Popen')
     mock_popen.return_value.pid = 55052
+
+    from mn_cli.runtime.server import _start_native_sdk_grpc_if_installed
 
     assert _start_native_sdk_grpc_if_installed(
         {

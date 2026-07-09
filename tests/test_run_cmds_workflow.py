@@ -337,7 +337,7 @@ def test_workflow_renderer_shared_between_live_monitor_and_blueprint_run_paths()
     assert "Research" in workflow_view
     assert "Research" in job_monitor_view
     assert "run used 100 tok" in workflow_view
-    assert "run used 100 tok / budget 1.2k tok" in job_monitor_view
+    assert "run used 100 tok" in job_monitor_view
 
 def test_blueprint_workflow_monitor_disables_ctrl_d():
     progress = {

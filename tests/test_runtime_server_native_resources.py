@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from mn_cli.runtime import server
 
 
@@ -41,6 +43,8 @@ def test_compose_env_includes_sdk_node_resource_advertisement(monkeypatch):
 
 def test_runtime_compose_template_passes_node_advertisement_contract():
     root = Path(__file__).resolve().parents[2]
+    if not (root / "mn-deploy").is_dir():
+        pytest.skip("mn-deploy sibling repository is not available")
     compose_text = (root / "mn-deploy" / "docker-compose.yml").read_text(encoding="utf-8")
 
     for key in (
