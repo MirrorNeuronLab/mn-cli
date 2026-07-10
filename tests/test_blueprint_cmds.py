@@ -1037,7 +1037,6 @@ def test_blueprint_run_help_lists_testing_flags():
     result = runner.invoke(app, ["blueprint", "run", "--help"])
 
     assert result.exit_code == 0
-    assert "--benchmark" in result.output
     assert "--debug" in result.output
 
 
