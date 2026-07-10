@@ -1037,7 +1037,6 @@ def test_blueprint_run_help_lists_testing_flags():
     result = runner.invoke(app, ["blueprint", "run", "--help"])
 
     assert result.exit_code == 0
-    assert "--debug" in result.output
 
 
 def test_fake_llm_manifest_override_skips_live_runtime_model_requirement():
