@@ -1,8 +1,28 @@
-import grpc
-
 from .common import *
 
 def _resolve_runtime_cluster_model(*, requirement: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any] | None:
+    if is_custom_model_requirement(requirement):
+        resource_report = _runtime_resource_report()
+        try:
+            system_summary = json.loads(client.get_system_summary())
+        except Exception as exc:
+            raise ModelPrepareError(
+                "model.custom_cluster_inspection_failed",
+                f"could not inspect cluster nodes for custom model placement: {exc}",
+                stage="placement",
+                safe_message="Could not inspect runtime nodes for custom model placement.",
+            ) from exc
+        if not isinstance(system_summary, dict):
+            raise ModelPrepareError(
+                "model.custom_cluster_inspection_failed",
+                "runtime system summary is not a JSON object",
+                stage="placement",
+                safe_message="Runtime node metadata is invalid for custom model placement.",
+            )
+        return resolve_custom_model_placement(
+            resource_report=resource_report,
+            system_summary=system_summary,
+        )
     try:
         return resolve_cluster_model_placement(entry, resource_report=_runtime_resource_report)
     except Exception:
@@ -91,54 +111,18 @@ def _runtime_model_prepare_client(node: str, node_endpoint: dict[str, Any]) -> C
         admin_token=config.grpc_admin_token,
     )
 
-def _prepare_runtime_model_with_retry(runtime_client: Client, prepare_payload: dict[str, Any]) -> str:
-    for attempt in range(2):
-        try:
-            return runtime_client.prepare_runtime_model(prepare_payload)
-        except grpc.RpcError as exc:
-            if attempt == 0 and _retryable_runtime_model_prepare_error(exc):
-                console.print(
-                    "[yellow]Runtime model prepare timed out or became unavailable; "
-                    "retrying once with the same request...[/yellow]"
-                )
-                continue
-            raise
-    raise RuntimeError("runtime model prepare retry loop exited unexpectedly")
-
-def _retryable_runtime_model_prepare_error(exc: grpc.RpcError) -> bool:
-    try:
-        code = exc.code()
-    except Exception:
-        return False
-    return code in {grpc.StatusCode.DEADLINE_EXCEEDED, grpc.StatusCode.UNAVAILABLE}
-
-def _container_local_api_base_to_node_host(api_base: str, node_host: str) -> str:
-    base = str(api_base or "").strip()
-    host = str(node_host or "").strip()
-    if not base or not host:
-        return base
-    parsed = urllib.parse.urlparse(base)
-    hostname = (parsed.hostname or "").lower()
-    if hostname not in {"host.docker.internal", "localhost", "127.0.0.1", "0.0.0.0"}:
-        return base
-    netloc = host
-    port = parsed.port
-    if port == 12434:
-        try:
-            port = int(os.environ.get("MN_DOCKER_MODEL_RUNNER_PROXY_PORT", "12435"))
-        except ValueError:
-            port = 12435
-    if port:
-        netloc = f"{host}:{port}"
-    return urllib.parse.urlunparse(
-        (
-            parsed.scheme or "http",
-            netloc,
-            parsed.path or "",
-            parsed.params or "",
-            parsed.query or "",
-            parsed.fragment or "",
+def _prepare_runtime_model_with_retry(runtime_client: Client, prepare_payload: dict[str, Any]) -> dict[str, Any]:
+    def notify_retry(_attempt: int, _error: BaseException) -> None:
+        console.print(
+            "[yellow]Runtime model prepare timed out or became unavailable; "
+            "retrying once with the same request...[/yellow]"
         )
+
+    return call_prepare_runtime_model(
+        runtime_client,
+        prepare_payload,
+        on_retry=notify_retry,
+        logger=logger,
     )
 
 def _prefer_default_single_node_agent_placement(manifest: dict[str, Any]) -> None:
@@ -209,16 +193,20 @@ def _install_runtime_cluster_model(
         f"[cyan]Preparing runtime model {model_label} on {node_label} with {transport}...[/cyan]"
     )
     runtime_client = _runtime_model_prepare_client(node, node_endpoint)
-    prepare_payload = {
-        "node": node,
-        "model": model_ref,
-        "id": model.get("id") or entry.get("id"),
-        "provider": str(entry.get("provider") or "docker_model_runner"),
-        "backend": str(backend or "auto"),
-        "context_size": context_size,
-        "force": force,
-        "source": "mn-python-sdk",
-    }
+    prepare_payload = build_prepare_runtime_model_request(
+        requirement=requirement,
+        entry=entry,
+        model={**model, "model": model_ref},
+        node=node,
+        backend=backend,
+        context_size=context_size,
+        force=force,
+        source="mn-cli",
+    )
+    if entry.get("customize_mode") is True:
+        console.print(
+            f"[yellow]Warning: {CUSTOM_MODEL_WARNING}[/yellow]"
+        )
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -233,15 +221,7 @@ def _install_runtime_cluster_model(
             ),
             total=None,
         )
-        response = _prepare_runtime_model_with_retry(runtime_client, prepare_payload)
-    try:
-        payload = json.loads(response)
-    except Exception as exc:
-        raise RuntimeError(f"runtime model prepare returned invalid JSON: {response}") from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError("runtime model prepare returned a non-object response")
-    if str(payload.get("status") or "").lower() in {"failed", "error"}:
-        raise RuntimeError(str(payload.get("error") or payload.get("message") or "runtime model prepare failed"))
+        payload = _prepare_runtime_model_with_retry(runtime_client, prepare_payload)
     endpoint = payload.get("endpoint") if isinstance(payload.get("endpoint"), dict) else {}
     upstream_endpoint = _cluster_runtime_model_upstream_endpoint(
         entry=entry,
@@ -268,25 +248,12 @@ def _cluster_runtime_model_upstream_endpoint(
         local_endpoint["node"] = node
         return local_endpoint
 
-    docker_model = docker_model_name(entry)
-    api_model = str(endpoint.get("api_model") or endpoint.get("model") or entry.get("api_model") or docker_model)
-    return {
-        "provider": str(endpoint.get("provider") or entry.get("provider") or "docker_model_runner"),
-        "model": api_model,
-        "runtime_model": str(endpoint.get("runtime_model") or docker_model),
-        "api_model": api_model,
-        "api_base": _node_litellm_gateway_api_base(node_endpoint, payload, endpoint),
-        "api_key": str(endpoint.get("api_key") or "not-needed"),
-        "node": str(endpoint.get("node") or node),
-        "source": "remote-dmr",
-        **_route_aliases_payload(entry),
-    }
-
-def _route_aliases_payload(entry: dict[str, Any]) -> dict[str, Any]:
-    aliases = entry.get("route_aliases")
-    if not isinstance(aliases, list) or not aliases:
-        return {}
-    return {"route_aliases": [str(alias) for alias in aliases if str(alias or "").strip()]}
+    return remote_runtime_model_endpoint(
+        entry=entry,
+        node=node,
+        node_host=str(node_endpoint.get("host") or ""),
+        payload=payload,
+    )
 
 def _cluster_node_endpoint_is_local(node_endpoint: dict[str, Any]) -> bool:
     node = node_endpoint.get("node") if isinstance(node_endpoint.get("node"), dict) else {}
@@ -361,38 +328,8 @@ def _resolved_local_hostnames() -> set[str]:
         pass
     return addresses
 
-def _node_litellm_gateway_api_base(
-    node_endpoint: dict[str, Any],
-    payload: dict[str, Any],
-    endpoint: dict[str, Any],
-) -> str:
-    gateway = payload.get("gateway") if isinstance(payload.get("gateway"), dict) else {}
-    host_base = str(gateway.get("host_api_base") or "").strip()
-    host = str(node_endpoint.get("host") or "").strip()
-    if host_base and host:
-        parsed = urllib.parse.urlparse(host_base)
-        scheme = parsed.scheme or "http"
-        try:
-            port = parsed.port or int(os.environ.get("MN_LITELLM_GATEWAY_PORT", "4000"))
-        except ValueError:
-            port = 4000
-        path = parsed.path or "/v1"
-        return urllib.parse.urlunparse((scheme, f"{host}:{port}", path, "", "", "")).rstrip("/")
-    if host:
-        port = os.environ.get("MN_LITELLM_GATEWAY_PORT", "4000")
-        return f"http://{host}:{port}/v1".rstrip("/")
-    return str(endpoint.get("api_base") or "http://mn-litellm-proxy:4000/v1").rstrip("/")
-
 def _runtime_model_prepare_timeout_seconds() -> float:
-    raw = str(os.environ.get("MN_RUNTIME_MODEL_PREPARE_TIMEOUT_SECONDS") or "").strip()
-    if raw:
-        try:
-            value = float(raw)
-            if value > 0:
-                return value
-        except ValueError:
-            pass
-    return DEFAULT_RUNTIME_MODEL_PREPARE_TIMEOUT_SECONDS
+    return runtime_model_prepare_timeout_seconds()
 
 def _print_runtime_model_install_summary(summary: dict[str, Any]) -> None:
     models = summary.get("models") or []

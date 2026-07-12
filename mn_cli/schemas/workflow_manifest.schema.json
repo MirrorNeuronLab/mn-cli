@@ -317,6 +317,41 @@
       "properties": {
         "bindings": {
           "type": "object"
+        },
+        "models": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "runtime_model": {
+                "type": "string"
+              },
+              "backend": {
+                "enum": [
+                  "auto",
+                  "llama.cpp",
+                  "vllm"
+                ]
+              },
+              "context_size": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "customize_mode": {
+                "const": true
+              }
+            },
+            "additionalProperties": true
+          }
         }
       },
       "additionalProperties": true

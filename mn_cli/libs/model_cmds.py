@@ -9,18 +9,20 @@ import socket
 import urllib.parse
 from pathlib import Path
 from functools import lru_cache
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, Callable, Optional
 
 import typer
 from rich.table import Table
 
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.ui import print_confirmation, print_confirmed, print_success_confirmation
-from mn_cli.shared import client, config as cli_config, console
+from mn_cli.shared import client, config as cli_config, console, logger
 from mn_sdk import (
     Client,
     DEFAULT_MODEL_ID,
     DOCKER_MODEL_RUNNER_HOST_API_BASE,
+    build_prepare_runtime_model_request,
+    call_prepare_runtime_model,
     build_litellm_gateway_config,
     assess_model_compatibility,
     default_model_proxies_path,
@@ -52,6 +54,7 @@ from mn_sdk import (
     sync_litellm_gateway,
     validate_litellm_gateway_config_file,
     resolve_model_entry,
+    runtime_model_prepare_timeout_seconds,
     upsert_model_proxy,
     upsert_model_remote,
 )
@@ -626,26 +629,17 @@ def _install_model_on_cluster_node(
     node_endpoint = _cluster_node_endpoint(node)
     runtime_client = _native_runtime_client_for_node(node_endpoint)
     docker_model = docker_model_name(entry)
-    response = runtime_client.prepare_runtime_model(
-        {
-            "node": node,
-            "model": docker_model,
-            "id": entry.get("id"),
-            "provider": str(entry.get("provider") or "docker_model_runner"),
-            "backend": backend,
-            "context_size": context_size,
-            "force": force,
-            "source": "mn-cli",
-        }
+    request = build_prepare_runtime_model_request(
+        requirement={"model": docker_model},
+        entry=entry,
+        model={"id": entry.get("id"), "model": docker_model},
+        node=node,
+        backend=backend,
+        context_size=context_size,
+        force=force,
+        source="mn-cli",
     )
-    try:
-        payload = json.loads(response)
-    except Exception as exc:
-        raise RuntimeError(f"runtime model prepare returned invalid JSON: {response}") from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError("runtime model prepare returned a non-object response")
-    if str(payload.get("status") or "").lower() in {"failed", "error"}:
-        raise RuntimeError(str(payload.get("error") or payload.get("message") or "runtime model prepare failed"))
+    payload = call_prepare_runtime_model(runtime_client, request, logger=logger)
     install = payload.get("install") if isinstance(payload.get("install"), dict) else {}
     compatibility = install.get("compatibility") if isinstance(install.get("compatibility"), dict) else {}
     if not compatibility:
@@ -926,15 +920,7 @@ def _cluster_node_native_sdk_endpoint(node_name: str, node: dict[str, Any]) -> d
 
 
 def _runtime_model_prepare_timeout_seconds() -> float:
-    raw = str(os.environ.get("MN_RUNTIME_MODEL_PREPARE_TIMEOUT_SECONDS") or "").strip()
-    if raw:
-        try:
-            value = float(raw)
-            if value > 0:
-                return value
-        except ValueError:
-            pass
-    return 1200.0
+    return runtime_model_prepare_timeout_seconds()
 
 
 def _sync_installed_model_gateway_route(

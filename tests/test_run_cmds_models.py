@@ -18,7 +18,13 @@ from mn_cli.libs import model_cmds, run_cmds
 from mn_cli.libs.ui import JobMonitorState, generate_live_layout
 from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress, _agent_progress_detail
 from mn_cli.libs.run_manifest import prepare_manifest_for_submission
-from mn_sdk import AgentProgress, load_model_ownership, load_model_remotes, upsert_model_remote
+from mn_sdk import (
+    AgentProgress,
+    ModelPrepareTransportError,
+    load_model_ownership,
+    load_model_remotes,
+    upsert_model_remote,
+)
 
 runner = CliRunner()
 
@@ -156,7 +162,7 @@ def test_prepare_runtime_models_installs_missing_model_for_run(
     output = capsys.readouterr().out
     assert "Runtime model gemma4:e2b (docker.io/ai/gemma4:E2B) is not installed." in output
     assert "Installing runtime model gemma4:e2b (docker.io/ai/gemma4:E2B)" in output
-    assert "Docker Model Runner" in output
+    assert re.search(r"Docker\s+Model\s+Runner", output)
     assert "Runtime models ready: gemma4:e2b" in output
 
 def test_prepare_runtime_models_uses_cluster_model_endpoint(
@@ -733,7 +739,7 @@ def test_prepare_runtime_models_surfaces_large_profile_prepare_failure_without_f
     assert exc.value.exit_code == 1
     cluster_install.assert_called_once()
     install_model.assert_not_called()
-    assert "remote prepare failed" in capsys.readouterr().out
+    assert "Runtime model preparation failed unexpectedly" in capsys.readouterr().out
 
 def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_or_core(mocker, capsys):
     progress_descriptions: list[str] = []
@@ -898,7 +904,7 @@ def test_prepare_runtime_model_retries_once_on_deadline(mocker, capsys):
 
     response = run_cmds._prepare_runtime_model_with_retry(runtime_client, {"model": "docker.io/ai/gemma4:E2B"})
 
-    assert json.loads(response)["status"] == "installed"
+    assert response["status"] == "installed"
     assert runtime_client.prepare_runtime_model.call_count == 2
     assert "retrying once" in capsys.readouterr().out
 
@@ -906,9 +912,11 @@ def test_prepare_runtime_model_does_not_retry_non_transient_errors(mocker):
     runtime_client = mocker.Mock()
     runtime_client.prepare_runtime_model.side_effect = FakePrepareRpcError(grpc.StatusCode.INVALID_ARGUMENT)
 
-    with pytest.raises(FakePrepareRpcError):
+    with pytest.raises(ModelPrepareTransportError) as exc_info:
         run_cmds._prepare_runtime_model_with_retry(runtime_client, {"model": "docker.io/ai/gemma4:E2B"})
 
+    assert exc_info.value.code == "model.custom_prepare_transport_failed"
+    assert exc_info.value.retryable is False
     runtime_client.prepare_runtime_model.assert_called_once()
 
 def test_cluster_node_endpoint_is_local_uses_local_host_alias(monkeypatch):
@@ -1138,3 +1146,110 @@ def test_runtime_model_profile_applies_large_model_strict_contract():
     assert materialized["llm"]["configs"]["primary"]["context_size"] == 8192
     assert materialized["llm"]["configs"]["primary"]["max_tokens"] == 1800
     assert materialized["llm"]["configs"]["primary"]["num_retries"] == 1
+
+
+def test_custom_runtime_model_selects_most_powerful_capable_node(mocker):
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.get_resource",
+        return_value=json.dumps(
+            {
+                "nodes": [
+                    {
+                        "name": "gpu-64",
+                        "status": "healthy",
+                        "scheduling_eligible": True,
+                        "gpu_memory_total_mb": 65536,
+                        "gpu_memory_free_mb": 60000,
+                    },
+                    {
+                        "name": "gpu-128",
+                        "status": "healthy",
+                        "scheduling_eligible": True,
+                        "gpu_memory_total_mb": 131072,
+                        "gpu_memory_free_mb": 120000,
+                    },
+                ]
+            }
+        ),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.get_system_summary",
+        return_value=json.dumps(
+            {
+                "nodes": [
+                    {
+                        "name": name,
+                        "status": "healthy",
+                        "scheduling_eligible": True,
+                        "native_sdk_grpc": {
+                            "enabled": True,
+                            "host": f"{name}.local",
+                            "port": 55052,
+                            "target": f"{name}.local:55052",
+                            "capabilities": ["custom_hf_model_v1"],
+                        },
+                    }
+                    for name in ("gpu-64", "gpu-128")
+                ]
+            }
+        ),
+    )
+
+    placement = run_cmds._resolve_runtime_cluster_model(
+        requirement={"customize_mode": True},
+        entry={"id": "custom", "model": "huggingface.co/acme/custom:Q4_K_M"},
+    )
+
+    assert placement["node"] == "gpu-128"
+    assert placement["selection"]["gpu_memory_total_mb"] == 131072
+
+
+def test_custom_runtime_model_prepare_payload_carries_risk_contract(mocker):
+    mocker.patch(
+        "mn_cli.libs.run_cmds._cluster_node_endpoint",
+        return_value={
+            "grpc_target": "gpu-128.local:55051",
+            "host": "gpu-128.local",
+            "port": "55051",
+            "node": {"name": "gpu-128", "self?": True},
+        },
+    )
+    runtime_client = mocker.Mock()
+    runtime_client.prepare_runtime_model.return_value = json.dumps(
+        {
+            "status": "installed",
+            "docker_model": "huggingface.co/acme/custom:Q4_K_M",
+            "endpoint": {
+                "model": "huggingface.co/acme/custom:Q4_K_M",
+                "runtime_model": "huggingface.co/acme/custom:Q4_K_M",
+            },
+        }
+    )
+    mocker.patch("mn_cli.libs.run_cmds._runtime_model_prepare_client", return_value=runtime_client)
+
+    run_cmds._install_runtime_cluster_model(
+        requirement={"model": "hf.co/acme/custom:Q4_K_M", "context_size": 4096},
+        entry={
+            "id": "huggingface.co/acme/custom:Q4_K_M",
+            "model": "huggingface.co/acme/custom:Q4_K_M",
+            "api_model": "huggingface.co/acme/custom:Q4_K_M",
+            "provider": "docker_model_runner",
+            "backend": "llama.cpp",
+            "customize_mode": True,
+            "verification": "unverified",
+            "source_model": "hf.co/acme/custom:Q4_K_M",
+        },
+        model={
+            "id": "huggingface.co/acme/custom:Q4_K_M",
+            "model": "huggingface.co/acme/custom:Q4_K_M",
+        },
+        cluster={"node": "gpu-128"},
+        backend="llama.cpp",
+        context_size=4096,
+        force=False,
+    )
+
+    payload = runtime_client.prepare_runtime_model.call_args.args[0]
+    assert payload["customize_mode"] is True
+    assert payload["verification"] == "unverified"
+    assert payload["source_model"] == "hf.co/acme/custom:Q4_K_M"

@@ -46,6 +46,27 @@ def test_workflow_schema_reports_each_deprecated_root_field():
     assert {issue["code"] for issue in issues} == {"workflow_manifest.schema_failed"}
 
 
+def test_workflow_schema_requires_literal_true_for_customize_mode():
+    manifest = _workflow_manifest()
+    manifest["runtime"]["models"] = {
+        "primary": {
+            "provider": "docker_model_runner",
+            "runtime_model": "hf.co/acme/custom:Q4_K_M",
+            "backend": "llama.cpp",
+            "customize_mode": True,
+        }
+    }
+
+    assert "runtime.models.primary.customize_mode" not in _issue_paths(
+        workflow_validation._validate_workflow_schema_issues(manifest)
+    )
+
+    manifest["runtime"]["models"]["primary"]["customize_mode"] = "true"
+    issues = workflow_validation._validate_workflow_schema_issues(manifest)
+
+    assert "runtime.models.primary.customize_mode" in _issue_paths(issues)
+
+
 def test_workflow_manifest_reports_nested_step_and_runtime_binding_issues():
     manifest = _workflow_manifest()
     manifest["workflow"]["steps"][0] = {

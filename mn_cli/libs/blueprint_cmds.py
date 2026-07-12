@@ -1440,6 +1440,11 @@ def _install_blueprint_model_dependencies(
     install_source: str,
     force: bool,
 ) -> dict[str, Any]:
+    from mn_cli.libs.run_cmds.model_cluster import (
+        _install_runtime_cluster_model,
+        _resolve_runtime_cluster_model,
+    )
+
     summary = blueprint_model_dependency_summary(
         blueprint_id=blueprint_id,
         blueprint_revision=blueprint_revision,
@@ -1460,6 +1465,8 @@ def _install_blueprint_model_dependencies(
             install_model_entry=_install_model_entry,
             notify_model_install_start=_print_model_install_start,
             install_model_with_progress=_install_model_with_progress,
+            resolve_cluster_model=_resolve_runtime_cluster_model,
+            install_cluster_model=_install_runtime_cluster_model,
         ),
     )
     if summary["errors"]:

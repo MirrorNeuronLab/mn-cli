@@ -76,7 +76,10 @@ from mn_cli.error_handler import handle_cli_error
 from mn_sdk import (
     Client,
     BlueprintModelOps,
+    CUSTOM_MODEL_WARNING,
+    DEFAULT_RUNTIME_MODEL_PREPARE_TIMEOUT_SECONDS,
     ModelEndpointMap,
+    ModelPrepareError,
     cluster_provided_model,
     cleanup_docker_worker_services,
     docker_model_match_keys,
@@ -95,6 +98,8 @@ from mn_sdk import (
     record_model_owner,
     required_blueprint_models,
     resolve_cluster_model_placement,
+    resolve_custom_model_placement,
+    is_custom_model_requirement,
     resolve_model_endpoint,
     resolve_model_entry,
     run_hardware_requirements_validation,
@@ -109,6 +114,10 @@ from mn_sdk import (
     sync_litellm_gateway,
     workflow_progress_snapshot,
     blueprint_model_dependency_summary,
+    build_prepare_runtime_model_request,
+    call_prepare_runtime_model,
+    remote_runtime_model_endpoint,
+    runtime_model_prepare_timeout_seconds,
 )
 from mn_sdk.blueprint_support.shared_outputs import (
     materialize_shared_storage_outputs as _sdk_materialize_shared_storage_outputs,
@@ -127,7 +136,6 @@ CONTEXT_ENGINE_EXPECTATION = (
     "This blueprint uses context memory. First launch may download the context model "
     "and start the Membrane context engine; keep Docker running and be patient."
 )
-DEFAULT_RUNTIME_MODEL_PREPARE_TIMEOUT_SECONDS = 1200.0
 FALSE_VALUES = {"0", "false", "no", "off"}
 _HELPER_COMPAT = (
     _add_mn_llm_aliases,
