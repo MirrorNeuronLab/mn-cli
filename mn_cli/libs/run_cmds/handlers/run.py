@@ -8,6 +8,88 @@ from ..run_state import *
 from ..web_ui import *
 from .validate import *
 
+
+def _record_prevalidated_command_rules(
+    manifest: dict[str, Any],
+    validation_report: dict[str, Any],
+) -> None:
+    """Remove host-executed validators before handing the manifest to Core.
+
+    Command validators run at the trusted CLI/API boundary because Core does not
+    execute arbitrary validation commands. Pattern validators remain in the
+    manifest so Core can independently re-check them at admission time.
+    """
+
+    if validation_report.get("ok") is not True:
+        return
+
+    passed_commands: dict[int, dict[str, Any]] = {}
+    for result in validation_report.get("results") or []:
+        if not isinstance(result, dict) or result.get("type") != "command" or result.get("ok") is not True:
+            continue
+        rule_ref = result.get("rule") if isinstance(result.get("rule"), dict) else {}
+        index = rule_ref.get("index")
+        if isinstance(index, int):
+            passed_commands[index] = {
+                key: rule_ref[key]
+                for key in ("name", "id", "type", "index")
+                if key in rule_ref
+            }
+
+    if not passed_commands:
+        return
+
+    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    validation_candidates = (
+        (manifest, "input_validation"),
+        (manifest, "inputValidation"),
+        (metadata, "input_validation"),
+        (metadata, "inputValidation"),
+    )
+    for container, key in validation_candidates:
+        raw_validation = container.get(key)
+        if isinstance(raw_validation, list):
+            rules = raw_validation
+            container[key] = [
+                rule
+                for index, rule in enumerate(rules)
+                if not (
+                    index in passed_commands
+                    and isinstance(rule, dict)
+                    and rule.get("type") == "command"
+                )
+            ]
+            break
+        if isinstance(raw_validation, dict) and isinstance(raw_validation.get("rules"), list):
+            rules = raw_validation["rules"]
+            raw_validation["rules"] = [
+                rule
+                for index, rule in enumerate(rules)
+                if not (
+                    index in passed_commands
+                    and isinstance(rule, dict)
+                    and rule.get("type") == "command"
+                )
+            ]
+            break
+    else:
+        return
+
+    manifest_metadata = manifest.setdefault("metadata", {})
+    if not isinstance(manifest_metadata, dict):
+        manifest_metadata = {}
+        manifest["metadata"] = manifest_metadata
+    validation_metadata = manifest_metadata.setdefault("mn_validation", {})
+    if not isinstance(validation_metadata, dict):
+        validation_metadata = {}
+        manifest_metadata["mn_validation"] = validation_metadata
+    validation_metadata["input_validation"] = {
+        "status": "passed",
+        "validator": "mn-python-sdk",
+        "prevalidated_command_rules": [passed_commands[index] for index in sorted(passed_commands)],
+    }
+
+
 def run_bundle(
     bundle_path: str,
     *,
@@ -106,12 +188,13 @@ def run_bundle(
                 config_overrides=config_overrides,
                 model_install_summary=model_install_summary,
             )
-            _validate_manifest_inputs_or_exit(
+            input_validation_report = _validate_manifest_inputs_or_exit(
                 bundle_dir,
                 manifest_dict,
                 env_overrides=env_overrides,
                 config_overrides=config_overrides,
             )
+            _record_prevalidated_command_rules(manifest_dict, input_validation_report)
         else:
             console.print(
                 "[yellow]Validation skipped because --force was provided; service checks, model checks, input checks, and non-hard runtime requirements will be bypassed, but required runtime models will still be prepared.[/yellow]"

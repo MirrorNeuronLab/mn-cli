@@ -203,6 +203,66 @@ def test_run_force_skips_input_validation(mocker, tmp_path, monkeypatch):
     ]
     assert mock_submit.call_args.kwargs["force"] is True
 
+
+def test_run_prevalidates_command_rules_before_core_submission(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    mocker.patch("mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="prevalidated-run")
+    mock_submit = mocker.patch("mn_cli.libs.run_cmds.client.submit_job", return_value="job-123")
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.stream_events",
+        return_value=[json.dumps({"type": "job_completed"})],
+    )
+
+    bundle_dir = tmp_path / "prevalidated_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "job_name": "prevalidated-bundle",
+                "nodes": [],
+                "input_validation": {
+                    "rules": [
+                        {
+                            "name": "host_validator",
+                            "type": "command",
+                            "command": [sys.executable, "-c", "print('validated')"],
+                        },
+                        {
+                            "name": "job_name",
+                            "type": "pattern",
+                            "source": "manifest",
+                            "path": "job_name",
+                            "pattern": "^prevalidated-",
+                        },
+                    ]
+                },
+            }
+        )
+    )
+    (bundle_dir / "payloads").mkdir()
+
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+
+    assert result.exit_code == 0
+    submitted_manifest = json.loads(mock_submit.call_args.args[0])
+    assert submitted_manifest["input_validation"]["rules"] == [
+        {
+            "name": "job_name",
+            "type": "pattern",
+            "source": "manifest",
+            "path": "job_name",
+            "pattern": "^prevalidated-",
+        }
+    ]
+    validation = submitted_manifest["metadata"]["mn_validation"]["input_validation"]
+    assert validation == {
+        "status": "passed",
+        "validator": "mn-python-sdk",
+        "prevalidated_command_rules": [
+            {"name": "host_validator", "type": "command", "index": 0}
+        ],
+    }
+
 def test_run_submits_python_environment_requirements_payload(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="python-env-run")
