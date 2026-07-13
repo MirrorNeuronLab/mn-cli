@@ -189,6 +189,70 @@ def test_doctor_maps_prepared_python_environment_into_runtime_shared_storage(tmp
 
     assert mapped == runtime_root / "blueprint-python-envs" / "digest"
 
+
+def test_doctor_prepares_hostlocal_python_environment_inside_docker_core(tmp_path, monkeypatch, mocker):
+    bundle_dir = tmp_path / "bundle"
+    requirements = bundle_dir / "payloads" / "worker" / "requirements.txt"
+    requirements.parent.mkdir(parents=True)
+    requirements.write_text("gradio==5.0.0\n", encoding="utf-8")
+    host_root = tmp_path / "host-shared"
+    runtime_root = Path("/runtime/shared")
+    monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", str(host_root))
+    monkeypatch.setenv("MN_RUNTIME_SHARED_STORAGE_ROOT", str(runtime_root))
+    mocker.patch(
+        "mn_cli.libs.run_cmds._doctor_running_core_container",
+        return_value="mirror-neuron-core",
+    )
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        if args[-1] == "--version":
+            return subprocess.CompletedProcess(args, 0, stdout="Python 3.11.2\n", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    mocker.patch("mn_cli.libs.run_cmds.subprocess.run", side_effect=fake_run)
+
+    env_dir = run_cmds._doctor_prepare_python_env(
+        bundle_dir,
+        blueprint_id="docker-core-env",
+        node_id="worker",
+        packages=["requests==2.32.0"],
+        requirements_path="worker/requirements.txt",
+        timeout=1,
+    )
+
+    runtime_env_dir = runtime_root / "blueprint-python-envs" / env_dir.name
+    assert calls[0][0] == ["docker", "exec", "mirror-neuron-core", "python3", "--version"]
+    assert calls[1][0] == [
+        "docker",
+        "exec",
+        "mirror-neuron-core",
+        "python3",
+        "-m",
+        "venv",
+        str(runtime_env_dir),
+    ]
+    assert calls[2][0] == [
+        "docker",
+        "exec",
+        "-e",
+        "PIP_DISABLE_PIP_VERSION_CHECK=1",
+        "-e",
+        "PIP_NO_INPUT=1",
+        "mirror-neuron-core",
+        str(runtime_env_dir / "bin" / "python"),
+        "-m",
+        "pip",
+        "install",
+        "-r",
+        str(runtime_env_dir / ".mn-requirements.txt"),
+        "requests==2.32.0",
+    ]
+    assert (env_dir / ".ready").is_file()
+    assert (env_dir / ".mn-requirements.txt").read_text(encoding="utf-8") == "gradio==5.0.0\n"
+
+
 def test_doctor_skill_report_reads_declared_dependencies(tmp_path):
     bundle_dir = tmp_path / "bundle"
     config_dir = bundle_dir / "config"

@@ -4,6 +4,7 @@ from ..models import *
 from ..openshell import *
 from ..run_state import *
 from .validate import *
+from mn_cli.runtime_mode import CORE_CONTAINERS
 from mn_sdk.runtime_config import RuntimeConfig
 
 def doctor_bundle(
@@ -535,8 +536,10 @@ def _doctor_prepare_python_env(
         requirement_file = bundle_dir / "payloads" / requirements_path
         requirements_content = requirement_file.read_text(encoding="utf-8")
 
+    core_container = _doctor_running_core_container(timeout)
+    runtime_python = ["docker", "exec", core_container, "python3"] if core_container else [sys.executable]
     version = subprocess.run(
-        [sys.executable, "--version"],
+        [*runtime_python, "--version"],
         capture_output=True,
         text=True,
         timeout=max(timeout, 1.0),
@@ -548,6 +551,7 @@ def _doctor_prepare_python_env(
             {
                 "blueprint_id": blueprint_id,
                 "python": version.stdout.strip() or version.stderr.strip(),
+                "runtime": f"docker:{core_container}" if core_container else "native",
                 "requirements": requirements_content,
                 "packages": packages,
             },
@@ -562,27 +566,58 @@ def _doctor_prepare_python_env(
         )
     ).expanduser()
     env_dir = env_root / digest
+    runtime_env_dir = _doctor_runtime_python_env_path(env_dir)
+    if core_container and not _doctor_path_is_in_host_shared_storage(env_dir):
+        raise RuntimeError(
+            f"{node_id}: Docker Core HostLocal Python environments must be under "
+            f"{RuntimeConfig.from_env().shared_storage_root}"
+        )
     ready = env_dir / ".ready"
     if ready.is_file() and (env_dir / "bin" / "python").is_file():
         return env_dir
 
     if env_dir.exists():
         shutil.rmtree(env_dir)
-    env_dir.parent.mkdir(parents=True, exist_ok=True)
+    env_dir.mkdir(parents=True, exist_ok=True)
+    install_requirement_file = requirement_file
+    if core_container and requirement_file is not None:
+        staged_requirements = env_dir / ".mn-requirements.txt"
+        staged_requirements.write_text(requirements_content, encoding="utf-8")
+        install_requirement_file = runtime_env_dir / staged_requirements.name
+    create_target = runtime_env_dir if core_container else env_dir
+    create_args = [*runtime_python, "-m", "venv"]
+    if not core_container:
+        create_args.append("--copies")
+    create_args.append(str(create_target))
     create = subprocess.run(
-        [sys.executable, "-m", "venv", "--copies", str(env_dir)],
+        create_args,
         capture_output=True,
         text=True,
         timeout=max(timeout, 1.0),
     )
     if create.returncode != 0:
         raise RuntimeError((create.stdout + create.stderr).strip() or "venv creation failed")
-    pip_args = [str(env_dir / "bin" / "python"), "-m", "pip", "install"]
-    if requirement_file is not None:
-        pip_args.extend(["-r", str(requirement_file)])
+    python_executable = (runtime_env_dir if core_container else env_dir) / "bin" / "python"
+    pip_args = [str(python_executable), "-m", "pip", "install"]
+    if install_requirement_file is not None:
+        pip_args.extend(["-r", str(install_requirement_file)])
     pip_args.extend(packages)
+    install_args = (
+        [
+            "docker",
+            "exec",
+            "-e",
+            "PIP_DISABLE_PIP_VERSION_CHECK=1",
+            "-e",
+            "PIP_NO_INPUT=1",
+            core_container,
+            *pip_args,
+        ]
+        if core_container
+        else pip_args
+    )
     install = subprocess.run(
-        pip_args,
+        install_args,
         capture_output=True,
         text=True,
         timeout=max(timeout, 1.0) * 60,
@@ -592,6 +627,31 @@ def _doctor_prepare_python_env(
         raise RuntimeError(_truncate_doctor_detail((install.stdout + install.stderr).strip() or "pip install failed"))
     ready.write_text(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + "\n", encoding="utf-8")
     return env_dir
+
+
+def _doctor_running_core_container(timeout: float) -> str:
+    for container_name in CORE_CONTAINERS:
+        try:
+            result = subprocess.run(
+                ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
+                capture_output=True,
+                text=True,
+                timeout=max(timeout, 1.0),
+            )
+        except (FileNotFoundError, subprocess.SubprocessError):
+            return ""
+        if result.returncode == 0 and result.stdout.strip().lower() == "true":
+            return container_name
+    return ""
+
+
+def _doctor_path_is_in_host_shared_storage(env_dir: Path) -> bool:
+    host_root = Path(RuntimeConfig.from_env().shared_storage_root).expanduser().resolve()
+    try:
+        env_dir.expanduser().resolve().relative_to(host_root)
+    except ValueError:
+        return False
+    return True
 
 
 def _doctor_runtime_python_env_path(env_dir: Path) -> Path:
