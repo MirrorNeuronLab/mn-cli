@@ -369,13 +369,18 @@ def blueprint_web_ui_enabled(config: dict[str, Any] | None) -> bool:
 
 def manifest_nodes(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     agents = manifest.get("agents") if isinstance(manifest.get("agents"), dict) else {}
-    agent_nodes = agents.get("nodes") if isinstance(agents, dict) else None
-    if isinstance(agent_nodes, list):
-        return [node for node in agent_nodes if isinstance(node, dict)]
-    nodes = manifest.get("nodes")
-    if isinstance(nodes, list):
-        return [node for node in nodes if isinstance(node, dict)]
-    return []
+    flow = manifest.get("flow") if isinstance(manifest.get("flow"), dict) else {}
+    groups = (agents.get("nodes"), manifest.get("nodes"), flow.get("nodes"))
+    nodes: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+        for node in group:
+            if isinstance(node, dict) and id(node) not in seen:
+                nodes.append(node)
+                seen.add(id(node))
+    return nodes
 
 
 def lower_manifest_topology_for_runtime_submission(manifest: dict[str, Any]) -> None:

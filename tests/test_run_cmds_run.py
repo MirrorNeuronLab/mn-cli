@@ -321,17 +321,23 @@ def test_run_prepares_sdk_injected_web_ui_python_environment(mocker, tmp_path, m
     (bundle_dir / "manifest.json").write_text(
         json.dumps(
             {
+                "apiVersion": "mn.workflow/v1",
+                "kind": "Workflow",
                 "manifest_version": "1.0",
                 "type": "service",
                 "graph_id": "web-ui-env",
-                "nodes": [
-                    {
-                        "node_id": "worker",
-                        "agent_type": "router",
-                        "config": {},
-                    }
-                ],
-                "entrypoints": ["worker"],
+                "workflow": {"workflow_id": "web-ui-env"},
+                "agents": {
+                    "entrypoints": ["worker"],
+                    "nodes": [
+                        {
+                            "node_id": "worker",
+                            "agent_type": "router",
+                            "config": {},
+                        }
+                    ],
+                    "edges": [],
+                },
             }
         )
     )
@@ -354,7 +360,7 @@ def test_run_prepares_sdk_injected_web_ui_python_environment(mocker, tmp_path, m
     assert result.exit_code == 0
     submitted_manifest = json.loads(mock_submit.call_args.args[0])
     web_ui = next(
-        node for node in submitted_manifest["nodes"] if node["node_id"] == "web_ui_dashboard"
+        node for node in submitted_manifest["flow"]["nodes"] if node["node_id"] == "web_ui_dashboard"
     )
     assert web_ui["config"]["python_environment"]["path"] == str(env_dir)
     assert prepare_env.call_args.kwargs["node_id"] == "web_ui_dashboard"
