@@ -59,7 +59,9 @@ from mn_cli.libs.skill_dependencies import (
     skill_dependency_package_names,
     without_requirements_for_packages,
 )
+from mn_cli.runtime_mode import running_core_container
 from mn_cli.runtime_state import mn_home
+from mn_sdk.runtime_config import RuntimeConfig
 USER_HOME_ENV_KEYS = ("MN_OUTPUT_HOME", "MN_USER_HOME", "OTTERDESK_USER_HOME")
 UPLOAD_SOURCE_EXCLUDED_DIRS = {
     ".git",
@@ -542,14 +544,56 @@ def inject_runtime_web_ui_service_for_submission(
     env_overrides: Optional[dict[str, str]] = None,
 ) -> dict[str, Any] | None:
     ensure_runtime_modules_for_manifest(manifest, config, workspace_root=workspace_root())
+    runtime_runs_root, runtime_env_overrides = _runtime_web_ui_submission_context(
+        runs_root,
+        env_overrides,
+    )
     return inject_runtime_web_ui_service(
         manifest,
         bundle_dir=bundle_dir,
         config=config,
         run_id=run_id,
-        runs_root=runs_root,
-        env_overrides=env_overrides,
+        runs_root=runtime_runs_root,
+        env_overrides=runtime_env_overrides,
     )
+
+
+def _runtime_web_ui_submission_context(
+    runs_root: str,
+    env_overrides: Optional[dict[str, str]],
+) -> tuple[str, dict[str, str]]:
+    overrides = dict(env_overrides or {})
+    if not running_core_container():
+        return runs_root, overrides
+
+    runtime_config = RuntimeConfig.from_env(env=_sdk_runtime_env())
+    runtime_env = runtime_config.runtime_env
+    if runtime_env.get("MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE") != "prepublished":
+        return runs_root, overrides
+
+    for name in (
+        "MN_BLUEPRINT_WEB_UI_BIND_HOST",
+        "MN_BLUEPRINT_WEB_UI_PUBLIC_HOST",
+        "MN_BLUEPRINT_WEB_UI_PORT_START",
+        "MN_BLUEPRINT_WEB_UI_PORT_END",
+        "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE",
+    ):
+        value = str(runtime_env.get(name) or "").strip()
+        if value:
+            overrides.setdefault(name, value)
+    overrides.setdefault("MN_BLUEPRINT_WEB_UI_BIND_HOST", "0.0.0.0")
+
+    host_runs_root = Path(
+        runtime_env.get("MN_HOST_ARTIFACTS_DIR") or runtime_config.mn_home / "runs"
+    ).expanduser().resolve()
+    container_runs_root = str(runtime_env.get("MN_CONTAINER_RUNS_ROOT") or "").strip()
+    if not container_runs_root:
+        return runs_root, overrides
+    try:
+        relative = Path(runs_root).expanduser().resolve().relative_to(host_runs_root)
+    except ValueError:
+        return runs_root, overrides
+    return str(Path(container_runs_root) / relative), overrides
 
 
 def runtime_web_ui_support_payloads_for_manifest(manifest: dict[str, Any]) -> dict[str, bytes]:

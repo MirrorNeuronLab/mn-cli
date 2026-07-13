@@ -4,7 +4,7 @@ from ..models import *
 from ..openshell import *
 from ..run_state import *
 from .validate import *
-from mn_cli.runtime_mode import CORE_CONTAINERS
+from mn_cli.runtime_mode import running_core_container
 from mn_sdk.runtime_config import RuntimeConfig
 
 def doctor_bundle(
@@ -630,19 +630,7 @@ def _doctor_prepare_python_env(
 
 
 def _doctor_running_core_container(timeout: float) -> str:
-    for container_name in CORE_CONTAINERS:
-        try:
-            result = subprocess.run(
-                ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
-                capture_output=True,
-                text=True,
-                timeout=max(timeout, 1.0),
-            )
-        except (FileNotFoundError, subprocess.SubprocessError):
-            return ""
-        if result.returncode == 0 and result.stdout.strip().lower() == "true":
-            return container_name
-    return ""
+    return running_core_container(timeout_seconds=max(timeout, 1.0)) or ""
 
 
 def _doctor_path_is_in_host_shared_storage(env_dir: Path) -> bool:

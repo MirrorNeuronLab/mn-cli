@@ -4294,6 +4294,7 @@ def _write_runtime_compose_cluster_override() -> None:
     ports:
       - "${MN_EPMD_BIND_HOST:-127.0.0.1}:${MN_EPMD_PORT:-54369}:${MN_EPMD_PORT:-54369}"
       - "${MN_DIST_BIND_HOST:-127.0.0.1}:${MN_DIST_PORT:-54370}:${MN_DIST_PORT:-54370}"
+      - "${MN_BLUEPRINT_WEB_UI_BIND_HOST:-0.0.0.0}:${MN_BLUEPRINT_WEB_UI_PORT_START:-61000}-${MN_BLUEPRINT_WEB_UI_PORT_END:-61049}:${MN_BLUEPRINT_WEB_UI_PORT_START:-61000}-${MN_BLUEPRINT_WEB_UI_PORT_END:-61049}"
 """
     path = _runtime_compose_cluster_override_file()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -5383,6 +5384,23 @@ def _build_core_docker_run_command(
     system_name = os.uname().sysname
     if requested_docker_mode != "disabled" and node_alias:
         cmd.extend(_docker_network_run_args(requested_docker_mode, network_name, node_alias))
+    if system_name == "Darwin" or requested_docker_mode != "disabled":
+        blueprint_web_ui_bind_host = _docker_publish_host(
+            str(env.get("MN_BLUEPRINT_WEB_UI_BIND_HOST") or DEFAULT_BLUEPRINT_WEB_UI_BIND_HOST)
+        )
+        blueprint_web_ui_port_start = str(
+            env.get("MN_BLUEPRINT_WEB_UI_PORT_START") or DEFAULT_BLUEPRINT_WEB_UI_PORT_START
+        )
+        blueprint_web_ui_port_end = str(
+            env.get("MN_BLUEPRINT_WEB_UI_PORT_END") or DEFAULT_BLUEPRINT_WEB_UI_PORT_END
+        )
+        cmd.extend(
+            [
+                "-p",
+                f"{blueprint_web_ui_bind_host}:{blueprint_web_ui_port_start}-{blueprint_web_ui_port_end}:"
+                f"{blueprint_web_ui_port_start}-{blueprint_web_ui_port_end}",
+            ]
+        )
     if system_name != "Darwin":
         cmd.extend(["--add-host", "host.docker.internal:host-gateway"])
 

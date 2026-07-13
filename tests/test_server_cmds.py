@@ -2692,6 +2692,17 @@ def test_compose_native_settings_persists_runtime_blueprint_env(mocker, tmp_path
     assert "MN_BLUEPRINT_WEB_UI_PORT_END=61049" in compose_env_text
     assert "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE=prepublished" in compose_env_text
 
+
+def test_compose_cluster_override_publishes_blueprint_web_ui_range(mocker, tmp_path):
+    override = tmp_path / "docker-compose.cluster.yml"
+    mocker.patch("mn_cli.server_cmds._runtime_compose_cluster_override_file", return_value=override)
+
+    server_cmds._write_runtime_compose_cluster_override()
+
+    text = override.read_text(encoding="utf-8")
+    assert "MN_BLUEPRINT_WEB_UI_PORT_START:-61000" in text
+    assert "MN_BLUEPRINT_WEB_UI_PORT_END:-61049" in text
+
 def test_compose_native_settings_defaults_runtime_blueprint_repo(mocker, tmp_path):
     compose_env = tmp_path / "docker-compose.env"
     compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\nMN_BLUEPRINT_REPO=\n")

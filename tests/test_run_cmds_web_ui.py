@@ -12,7 +12,7 @@ from logging.handlers import RotatingFileHandler
 from typer.testing import CliRunner
 from rich.console import Console
 from mn_cli.main import app
-from mn_cli.libs import model_cmds, run_cmds
+from mn_cli.libs import model_cmds, run_cmds, run_manifest
 from mn_cli.libs.ui import JobMonitorState, generate_live_layout
 from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress, _agent_progress_detail
 from mn_cli.libs.run_manifest import prepare_manifest_for_submission
@@ -301,6 +301,35 @@ def test_prepare_manifest_injects_runtime_web_ui_service_from_config(tmp_path, m
     ]
     assert node["services"][0]["name"] == "blueprint-web-ui"
     assert node["resources"]["ports"][0]["port"] == first_port
+
+
+def test_runtime_web_ui_maps_host_runs_into_prepublished_docker_core(tmp_path, mocker):
+    host_runs = tmp_path / "mn" / "runs"
+    mocker.patch("mn_cli.libs.run_manifest.running_core_container", return_value="mirror-neuron-core")
+    mocker.patch(
+        "mn_cli.libs.run_manifest.RuntimeConfig.from_env",
+        return_value=SimpleNamespace(
+            mn_home=tmp_path / "mn",
+            runtime_env={
+                "MN_HOST_ARTIFACTS_DIR": str(host_runs),
+                "MN_CONTAINER_RUNS_ROOT": "/root/.mn/runs",
+                "MN_BLUEPRINT_WEB_UI_BIND_HOST": "0.0.0.0",
+                "MN_BLUEPRINT_WEB_UI_PUBLIC_HOST": "localhost",
+                "MN_BLUEPRINT_WEB_UI_PORT_START": "61000",
+                "MN_BLUEPRINT_WEB_UI_PORT_END": "61049",
+                "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE": "prepublished",
+            },
+        ),
+    )
+
+    runtime_runs, overrides = run_manifest._runtime_web_ui_submission_context(
+        str(host_runs),
+        {"MN_RUN_ID": "run-1"},
+    )
+
+    assert runtime_runs == "/root/.mn/runs"
+    assert overrides["MN_BLUEPRINT_WEB_UI_BIND_HOST"] == "0.0.0.0"
+    assert overrides["MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE"] == "prepublished"
 
 def test_web_ui_port_range_skips_busy_ports(monkeypatch):
     first_port = 28810

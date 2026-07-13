@@ -1,6 +1,6 @@
 import subprocess
 
-from mn_cli.runtime_mode import local_runtime_mode
+from mn_cli.runtime_mode import local_runtime_mode, running_core_container
 
 
 def test_local_runtime_mode_detects_worker_container(mocker):
@@ -55,3 +55,13 @@ def test_local_runtime_mode_fails_quietly_when_docker_times_out(mocker):
     )
 
     assert local_runtime_mode() is None
+
+
+def test_running_core_container_returns_active_container(mocker):
+    run = mocker.patch("mn_cli.runtime_mode.subprocess.run")
+    run.side_effect = [
+        mocker.Mock(returncode=1, stdout="false\n"),
+        mocker.Mock(returncode=0, stdout="true\n"),
+    ]
+
+    assert running_core_container() == "mirror-neuron-core"
