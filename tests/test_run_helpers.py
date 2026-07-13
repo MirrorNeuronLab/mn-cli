@@ -209,7 +209,8 @@ def test_prepare_manifest_auto_patches_skill_binary_deps_to_dockerworker(tmp_pat
     assert node_config["shared_container"] is True
     assert node_config["reuse_shared_container"] is True
     assert "python_environment" not in node_config
-    assert {"source": "__mn_skill_runtime", "target": "__mn_skill_runtime"} in node_config["upload_paths"]
+    assert node_config["upload_path"] == "worker"
+    assert "upload_paths" not in node_config
     assert node_config.get("build_context_upload_paths") in (None, [])
     assert runtime["local_packages"] == []
     assert runtime["generated"] is True

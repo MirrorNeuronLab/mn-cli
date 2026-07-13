@@ -222,7 +222,6 @@ def _patch_node_config_for_docker_worker(config: dict[str, Any], spec: dict[str,
     if python_environment is not None:
         config.setdefault("metadata", {})["python_environment_moved_to_docker_worker"] = python_environment
 
-    _ensure_upload_path(config, spec["context_root"], spec["context_root"])
     for package in spec.get("local_packages", []):
         _ensure_build_context_upload(
             config,
@@ -684,20 +683,6 @@ def _auto_patchable_python_node(config: dict[str, Any]) -> bool:
     if isinstance(command, str):
         return "python" in command.split(maxsplit=1)[0]
     return False
-
-
-def _ensure_upload_path(config: dict[str, Any], source: str, target: str) -> None:
-    upload_paths = config.get("upload_paths")
-    if isinstance(upload_paths, list):
-        paths = upload_paths
-    else:
-        paths = []
-        upload_path = config.get("upload_path")
-        if isinstance(upload_path, str) and upload_path.strip():
-            paths.append({"source": upload_path, "target": config.get("upload_as") or upload_path})
-        config["upload_paths"] = paths
-    if not any(isinstance(item, dict) and item.get("source") == source for item in paths):
-        paths.append({"source": source, "target": target})
 
 
 def _ensure_build_context_upload(config: dict[str, Any], *, base: str = "skills_root", source: str, target: str) -> None:
