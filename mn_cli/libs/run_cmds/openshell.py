@@ -15,9 +15,10 @@ OPENSHELL_RUNNER_MODULES = {
 def _prepare_openshell_custom_images(
     bundle_dir: Path, manifest_dict: dict[str, Any]
 ) -> None:
-    nodes = manifest_dict.get("nodes")
-    if not isinstance(nodes, list):
-        return
+    nodes = manifest_nodes(manifest_dict)
+    flow = manifest_dict.get("flow") if isinstance(manifest_dict.get("flow"), dict) else {}
+    if not nodes and isinstance(flow.get("nodes"), list):
+        nodes = [node for node in flow["nodes"] if isinstance(node, dict)]
 
     for node in nodes:
         if not isinstance(node, dict):
