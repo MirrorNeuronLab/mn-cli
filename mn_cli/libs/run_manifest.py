@@ -1563,6 +1563,8 @@ def _manifest_uses_docker_model_runner_http_endpoint(manifest: dict[str, Any]) -
             return True
         provider = str(environment.get("MN_LLM_PROVIDER") or "").strip().lower()
         api_base = str(environment.get("MN_LLM_API_BASE") or "").strip().lower()
+        if provider == "litellm" and api_base:
+            return True
         if provider in {"docker_model_runner", "docker-model-runner", "dmr"} and api_base:
             return True
         if "host.docker.internal:12434" in api_base or "127.0.0.1:12434" in api_base:

@@ -1408,7 +1408,8 @@ def test_prepare_manifest_injects_docker_model_runner_llm_env_by_node_runtime(tm
 
     host_env = prepared["nodes"][0]["config"]["environment"]
     sandbox_env = prepared["nodes"][1]["config"]["environment"]
-    assert host_env["MN_LLM_PROVIDER"] == "docker_model_runner"
+    assert host_env["MN_LLM_PROVIDER"] == "litellm"
+    assert sandbox_env["MN_LLM_PROVIDER"] == "litellm"
     assert host_env["MN_LLM_MODEL"] == "docker.io/ai/gemma4:E2B"
     assert host_env["MN_LLM_RUNTIME_MODEL"] == "docker.io/ai/gemma4:E2B"
     assert host_env["MN_LLM_API_BASE"] == "http://127.0.0.1:4000/v1"
@@ -1506,7 +1507,7 @@ def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_h
         ]
     }
     env = prepared["nodes"][0]["config"]["environment"]
-    assert env["MN_LLM_PROVIDER"] == "docker_model_runner"
+    assert env["MN_LLM_PROVIDER"] == "litellm"
     assert env["MN_LLM_API_BASE"] == "http://mn-litellm-proxy:4000/v1"
 
 
@@ -1597,9 +1598,9 @@ def test_prepare_manifest_model_only_llm_config_does_not_request_scheduler_model
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
 
     env = prepared["nodes"][0]["config"]["environment"]
-    assert env["MN_LLM_PROVIDER"] == "docker_model_runner"
-    assert env["MN_LLM_MODEL"] == "docker.io/ai/gemma4:E2B"
-    assert "MN_LLM_RUNTIME_MODEL" not in env
+    assert env["MN_LLM_PROVIDER"] == "litellm"
+    assert env["MN_LLM_MODEL"] == "default"
+    assert env["MN_LLM_RUNTIME_MODEL"] == "docker.io/ai/gemma4:E2B"
 
 
 def test_prepare_manifest_for_submission_injects_flow_nodes_and_scheduler_binding(tmp_path):
