@@ -1600,7 +1600,7 @@ def test_prepare_manifest_model_only_llm_config_does_not_request_scheduler_model
     env = prepared["nodes"][0]["config"]["environment"]
     assert env["MN_LLM_PROVIDER"] == "litellm"
     assert env["MN_LLM_MODEL"] == "default"
-    assert env["MN_LLM_RUNTIME_MODEL"] == "docker.io/ai/gemma4:E2B"
+    assert "MN_LLM_RUNTIME_MODEL" not in env
 
 
 def test_prepare_manifest_for_submission_injects_flow_nodes_and_scheduler_binding(tmp_path):
