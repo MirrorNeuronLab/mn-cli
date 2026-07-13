@@ -931,10 +931,18 @@ def _ensure_docker_worker_requirements_install(
     next_text = _replace_skill_dependency_marker_block(dockerfile_text, copy_block)
     if local_context_sources and LOCAL_REQUIREMENTS_COPY_LINE not in next_text:
         next_text = _insert_after_runtime_requirements_copy(next_text, LOCAL_REQUIREMENTS_COPY_LINE)
-    if next_text == dockerfile_text and local_context_sources:
+    if local_context_sources and copy_block not in next_text:
         next_text = _insert_after_runtime_requirements_copy(next_text, copy_block)
     installs_runtime = _dockerfile_installs_runtime_requirements(next_text)
     installs_local = _dockerfile_installs_local_requirements(next_text)
+    if local_context_sources and installs_runtime and not installs_local:
+        with_local_install = _insert_after_runtime_requirements_install(
+            next_text,
+            "\n".join(_local_requirements_install_lines()),
+        )
+        if with_local_install != next_text:
+            next_text = with_local_install
+            installs_local = True
     has_local_copy_block = not local_context_sources or copy_block in next_text
     if installs_runtime and (not local_context_sources or (installs_local and has_local_copy_block)):
         return next_text
@@ -986,6 +994,13 @@ def _insert_after_runtime_requirements_copy(dockerfile_text: str, block: str) ->
             continue
         return "\n".join([*lines[: index + 1], "", block, *lines[index + 1 :]]) + "\n"
     return dockerfile_text
+
+
+def _insert_after_runtime_requirements_install(dockerfile_text: str, block: str) -> str:
+    install_block = "\n".join(_runtime_requirements_install_lines())
+    if install_block not in dockerfile_text:
+        return dockerfile_text
+    return dockerfile_text.replace(install_block, f"{install_block}\n{block}", 1)
 
 
 def _dockerfile_installs_runtime_requirements(dockerfile_text: str) -> bool:

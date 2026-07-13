@@ -472,10 +472,8 @@ def _skill_dependency_requirements_text(
     if not requirements_by_package:
         return ""
     lines = [
-        "--index-url",
-        GAR_PIP_INDEX_URL,
-        "--extra-index-url",
-        PYPI_PIP_INDEX_URL,
+        f"--index-url {GAR_PIP_INDEX_URL}",
+        f"--extra-index-url {PYPI_PIP_INDEX_URL}",
         *requirements_by_package.values(),
     ]
     return "\n".join(lines).strip() + "\n"
