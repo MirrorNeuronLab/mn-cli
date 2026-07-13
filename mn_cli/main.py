@@ -1,4 +1,5 @@
 from importlib import metadata
+import os
 import sys
 
 import typer
@@ -115,7 +116,12 @@ def main(
         help="Alias for --debug.",
     ),
 ):
-    set_debug(debug or verbose)
+    debug_enabled = debug or verbose
+    set_debug(debug_enabled)
+    if debug_enabled:
+        # Native preparation runs in the same process but outside Rich's error
+        # renderer. Keep noisy Docker build progress behind the global flag too.
+        os.environ["MN_DEBUG"] = "1"
     ctx.max_content_width = ui_width()
     if ctx.invoked_subcommand is None:
         typer.echo(format_banner("MirrorNeuron CLI", width=ui_width()))

@@ -272,6 +272,7 @@ def run_bundle(
             payloads,
             bundle_dir=bundle_dir,
             run_id=blueprint_run_id,
+            cluster_client=client,
         )
         manifest = prepared_submission.manifest_json
         payloads = prepared_submission.payloads
