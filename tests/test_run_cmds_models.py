@@ -553,6 +553,30 @@ def test_default_llm_alias_detection_is_explicit():
     assert run_cmds._blueprint_requests_default_llm({"llm": {"model": "default"}}) is True
     assert run_cmds._blueprint_requests_default_llm({"llm": {"model": "gemma4:e2b"}}) is False
 
+
+def test_default_manifest_model_is_satisfied_by_prepared_fallback():
+    summary = {
+        "models": [
+            {
+                "id": "nemotron3",
+                "model": "docker.io/ai/nemotron3:latest",
+                "status": "fallback_model",
+                "fallback": {
+                    "id": "gemma4:e2b",
+                    "model": "docker.io/ai/gemma4:E2B",
+                },
+            }
+        ]
+    }
+
+    manifest, _ = run_cmds._model_validation_inputs_with_prepared_models(
+        {"runtime": {"models": {"primary": {"provider": "docker_model_runner", "model": "default"}}}},
+        {},
+        summary,
+    )
+
+    assert manifest["runtime"]["models"]["primary"]["install_mode"] == "cluster_provided"
+
 def _preferred_large_model_catalog() -> dict:
     return {
         "nemotron3": {

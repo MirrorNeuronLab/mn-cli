@@ -435,6 +435,12 @@ def _model_config_matches_prepared(config: dict[str, Any], prepared: set[str]) -
         str(config.get("model") or "").strip(),
         str(config.get("model_alias") or "").strip(),
     }
+    if any(value.lower() == "default" for value in values):
+        default_runtime_keys: set[str] = set()
+        for model in ("gemma4:e2b", "nemotron3"):
+            default_runtime_keys.update(docker_model_match_keys(model))
+        if any(docker_model_match_keys(item) & default_runtime_keys for item in prepared):
+            return True
     return any(_model_match_keys(value) & prepared for value in values if value)
 
 def _model_match_keys(model: str) -> set[str]:
