@@ -55,8 +55,8 @@ from mn_cli.libs.run_manifest import (
     stage_upload_path_payloads_for_manifest,
     with_shared_run_store_config as _with_shared_run_store_config,
 )
-from mn_cli.libs.skill_runtime import validate_skill_runtime_requirements
-from mn_cli.libs.skill_dependencies import gar_requirements_text, skill_dependency_records
+from mn_sdk.skill_runtime import validate_skill_runtime_requirements
+from mn_sdk.skill_dependencies import gar_requirements_text, skill_dependency_records
 from mn_cli.libs.workflow_validation import (
     _is_workflow_manifest,
     _manifest_workflow_id,

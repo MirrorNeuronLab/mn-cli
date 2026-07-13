@@ -43,11 +43,11 @@ from mn_sdk.blueprint_support import (
     runtime_web_ui_support_payloads,
     stage_local_input_payloads_for_manifest as stage_sdk_local_input_payloads,
 )
-from mn_cli.libs.skill_runtime import (
+from mn_sdk.skill_runtime import (
     prepare_skill_runtime_for_manifest,
     stage_skill_runtime_payloads_for_manifest,
 )
-from mn_cli.libs.skill_dependencies import (
+from mn_sdk.skill_dependencies import (
     DEFAULT_SKILL_PACKAGE_VERSION,
     GAR_PIP_INDEX_URL,
     PYPI_PIP_INDEX_URL,
