@@ -176,6 +176,19 @@ def test_doctor_environment_probe_reports(mocker, tmp_path):
     assert docker_report["status"] == "passing"
     assert docker_report["services"][0]["service"] == "worker"
 
+
+def test_doctor_maps_prepared_python_environment_into_runtime_shared_storage(tmp_path, monkeypatch):
+    host_root = tmp_path / "host-shared"
+    runtime_root = Path("/runtime/shared")
+    monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", str(host_root))
+    monkeypatch.setenv("MN_RUNTIME_SHARED_STORAGE_ROOT", str(runtime_root))
+
+    mapped = run_cmds._doctor_runtime_python_env_path(
+        host_root / "blueprint-python-envs" / "digest"
+    )
+
+    assert mapped == runtime_root / "blueprint-python-envs" / "digest"
+
 def test_doctor_skill_report_reads_declared_dependencies(tmp_path):
     bundle_dir = tmp_path / "bundle"
     config_dir = bundle_dir / "config"

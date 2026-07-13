@@ -4,6 +4,7 @@ from ..models import *
 from ..openshell import *
 from ..run_state import *
 from .validate import *
+from mn_sdk.runtime_config import RuntimeConfig
 
 def doctor_bundle(
     bundle_path: str,
@@ -490,9 +491,16 @@ def _doctor_prepare_hostlocal_python_envs(
                 requirements_path=requirements_path,
                 timeout=timeout,
             )
-            python_env["path"] = str(env_dir)
+            runtime_env_dir = _doctor_runtime_python_env_path(env_dir)
+            python_env["path"] = str(runtime_env_dir)
             config["python_environment"] = python_env
-            prepared.append({"node_id": node_id, "path": str(env_dir)})
+            prepared.append(
+                {
+                    "node_id": node_id,
+                    "path": str(runtime_env_dir),
+                    "host_path": str(env_dir),
+                }
+            )
         except Exception as exc:
             failures.append({"node_id": node_id, "status": "critical", "detail": str(exc)})
 
@@ -546,7 +554,13 @@ def _doctor_prepare_python_env(
             sort_keys=True,
         ).encode("utf-8")
     ).hexdigest()
-    env_root = Path(os.getenv("MN_BLUEPRINT_PYTHON_ENVS_DIR", str(Path.home() / ".mn" / "blueprint-python-envs"))).expanduser()
+    runtime_config = RuntimeConfig.from_env()
+    env_root = Path(
+        os.getenv(
+            "MN_BLUEPRINT_PYTHON_ENVS_DIR",
+            str(Path(runtime_config.shared_storage_root) / "blueprint-python-envs"),
+        )
+    ).expanduser()
     env_dir = env_root / digest
     ready = env_dir / ".ready"
     if ready.is_file() and (env_dir / "bin" / "python").is_file():
@@ -556,7 +570,7 @@ def _doctor_prepare_python_env(
         shutil.rmtree(env_dir)
     env_dir.parent.mkdir(parents=True, exist_ok=True)
     create = subprocess.run(
-        [sys.executable, "-m", "venv", str(env_dir)],
+        [sys.executable, "-m", "venv", "--copies", str(env_dir)],
         capture_output=True,
         text=True,
         timeout=max(timeout, 1.0),
@@ -578,6 +592,16 @@ def _doctor_prepare_python_env(
         raise RuntimeError(_truncate_doctor_detail((install.stdout + install.stderr).strip() or "pip install failed"))
     ready.write_text(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + "\n", encoding="utf-8")
     return env_dir
+
+
+def _doctor_runtime_python_env_path(env_dir: Path) -> Path:
+    runtime_config = RuntimeConfig.from_env()
+    host_root = Path(runtime_config.shared_storage_root).expanduser().resolve()
+    try:
+        relative = env_dir.expanduser().resolve().relative_to(host_root)
+    except ValueError:
+        return env_dir
+    return Path(runtime_config.runtime_shared_storage_root) / relative
 
 def _doctor_skill_report(
     bundle_dir: Path,
