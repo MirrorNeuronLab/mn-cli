@@ -1,8 +1,16 @@
 from .common import *
 from mn_cli.libs.run_manifest import (
     _ensure_docker_worker_requirements_install,
+    _local_skill_dependency_source_records,
+    _local_skill_requirements_text,
     _requirements_text,
+    _safe_dependency_source_name,
 )
+
+OPENSHELL_RUNNER_MODULES = {
+    "MirrorNeuron.Runner.OpenShell",
+    "MirrorNeuron.Sandbox.OpenShell",
+}
 
 def _prepare_openshell_custom_images(
     bundle_dir: Path, manifest_dict: dict[str, Any]
@@ -17,7 +25,7 @@ def _prepare_openshell_custom_images(
         config = node.get("config")
         if not isinstance(config, dict):
             continue
-        if config.get("runner_module") != "MirrorNeuron.Sandbox.OpenShell":
+        if config.get("runner_module") not in OPENSHELL_RUNNER_MODULES:
             continue
 
         custom_image = config.get("custom_openshell_image")
@@ -133,7 +141,8 @@ def _openshell_local_from_path(bundle_dir: Path, source: Any) -> Path | None:
 
 def _openshell_skill_dependency_context(source_path: Path, manifest: dict[str, Any]) -> Path:
     requirements_text = gar_requirements_text(manifest)
-    if not requirements_text:
+    local_sources = _local_skill_dependency_source_records(manifest)
+    if not requirements_text and not local_sources:
         return source_path
 
     source_root = source_path.parent if source_path.is_file() else source_path
@@ -146,10 +155,29 @@ def _openshell_skill_dependency_context(source_path: Path, manifest: dict[str, A
         _requirements_text([*existing_requirements.splitlines(), *requirements_text.splitlines()]),
         encoding="utf-8",
     )
+    local_context_sources: list[str] = []
+    for record in local_sources:
+        local_source = Path(record["source"]).expanduser()
+        if not local_source.exists():
+            continue
+        name = _safe_dependency_source_name(local_source)
+        relative_target = Path("__mn_skill_dependencies") / "local" / name
+        target = temp_context / relative_target
+        if local_source.is_dir():
+            shutil.copytree(local_source, target, dirs_exist_ok=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(local_source, target)
+        local_context_sources.append(relative_target.as_posix())
+    if local_context_sources:
+        (temp_context / "local-requirements.txt").write_text(
+            _local_skill_requirements_text(local_context_sources),
+            encoding="utf-8",
+        )
     dockerfile.write_text(
         _ensure_docker_worker_requirements_install(
             dockerfile.read_text(encoding="utf-8"),
-            local_context_sources=[],
+            local_context_sources=local_context_sources,
         ),
         encoding="utf-8",
     )

@@ -79,7 +79,7 @@ def test_run_prebuilds_custom_openshell_image_from_payload_directory(mocker, tmp
             {
                 "node_id": "detector",
                 "config": {
-                    "runner_module": "MirrorNeuron.Sandbox.OpenShell",
+                    "runner_module": "MirrorNeuron.Runner.OpenShell",
                     "custom_openshell_image": "detector/openshell_sandbox",
                 },
             }
@@ -172,6 +172,50 @@ def test_openshell_skill_dependency_context_injects_pinned_gar_install(tmp_path)
     assert "--extra-index-url https://pypi.org/simple" in requirements
     assert "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt" in dockerfile
     assert "pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
+
+
+def test_openshell_skill_dependency_context_injects_local_dev_sources(tmp_path):
+    sandbox_dir = tmp_path / "openshell_sandbox"
+    sandbox_dir.mkdir()
+    (sandbox_dir / "Dockerfile").write_text("FROM python:3.11-slim\n", encoding="utf-8")
+    local_skill = tmp_path / "example_skill"
+    local_skill.mkdir()
+    (local_skill / "pyproject.toml").write_text(
+        "[project]\nname='mirrorneuron-example-skill'\nversion='1.0.0'\n",
+        encoding="utf-8",
+    )
+    manifest = {
+        "metadata": {
+            "mn_local_skill_dependencies": {
+                "sources": [
+                    {
+                        "package": "mirrorneuron-example-skill",
+                        "source": str(local_skill),
+                    }
+                ]
+            }
+        }
+    }
+
+    context = run_cmds._openshell_skill_dependency_context(sandbox_dir, manifest)
+    try:
+        dockerfile = (context / "Dockerfile").read_text(encoding="utf-8")
+        local_requirements = (context / "local-requirements.txt").read_text(encoding="utf-8")
+        staged_source = (
+            context
+            / "__mn_skill_dependencies"
+            / "local"
+            / "example_skill"
+            / "pyproject.toml"
+        )
+        assert staged_source.is_file()
+    finally:
+        if context != sandbox_dir:
+            run_cmds.shutil.rmtree(context, ignore_errors=True)
+
+    assert "/tmp/mn-skill-runtime/local/example_skill" in local_requirements
+    assert "COPY __mn_skill_dependencies/local/example_skill" in dockerfile
+    assert "-r /tmp/mn-skill-runtime/local-requirements.txt" in dockerfile
 
 
 def test_local_docker_openshell_build_uses_plain_progress(mocker, tmp_path):
