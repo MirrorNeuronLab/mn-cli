@@ -201,7 +201,10 @@ DEFAULT_HOST = "localhost"
 DEFAULT_GRPC_PORT = "55051"
 DEFAULT_API_PORT = "54001"
 DEFAULT_NATIVE_SDK_GRPC_PORT = "55052"
-DEFAULT_NATIVE_SDK_GRPC_HOST = "127.0.0.1"
+# The host-side native SDK must be reachable from Docker's host gateway and from
+# remote cluster coordinators. Endpoint reporting normalizes this wildcard back
+# to loopback for local health checks; cluster advertisement uses its own host.
+DEFAULT_NATIVE_SDK_GRPC_HOST = "0.0.0.0"
 DEFAULT_NATIVE_SDK_GRPC_TARGET_HOST = "host.docker.internal"
 DEFAULT_NATIVE_SDK_GRPC_COMPOSE_SERVICE = "mn-native-sdk-grpc"
 
@@ -4186,7 +4189,17 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
         _env_or_default(adjusted, "MN_NATIVE_SDK_GRPC_PORT", DEFAULT_NATIVE_SDK_GRPC_PORT),
         DEFAULT_NATIVE_SDK_GRPC_PORT,
     )
-    native_sdk_host = adjusted.get("MN_NATIVE_SDK_GRPC_HOST") or DEFAULT_NATIVE_SDK_GRPC_HOST
+    native_sdk_host = str(
+        adjusted.get("MN_NATIVE_SDK_GRPC_HOST") or DEFAULT_NATIVE_SDK_GRPC_HOST
+    ).strip()
+    explicit_native_sdk_host = os.getenv("MN_NATIVE_SDK_GRPC_HOST", "").strip()
+    if explicit_native_sdk_host:
+        native_sdk_host = explicit_native_sdk_host
+    elif native_sdk_host in {"", "127.0.0.1", "localhost", "::1"}:
+        # Older generated Compose environments bound this host service to
+        # loopback. Containers reach it through host.docker.internal, so migrate
+        # generated values to a Docker- and cluster-reachable listener.
+        native_sdk_host = DEFAULT_NATIVE_SDK_GRPC_HOST
     native_sdk_proxy_port = _valid_port_text(
         str(adjusted.get("MN_NATIVE_SDK_GRPC_PROXY_PORT") or native_sdk_port),
         native_sdk_port,

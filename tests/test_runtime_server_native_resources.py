@@ -64,16 +64,45 @@ def test_runtime_compose_template_passes_node_advertisement_contract():
 
 def test_compose_env_includes_native_sdk_grpc_forwarding_target(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "RUNTIME_COMPOSE_ENV", tmp_path / "docker-compose.env")
+    monkeypatch.delenv("MN_NATIVE_SDK_GRPC_HOST", raising=False)
 
     env = server._ensure_compose_native_port_settings({})
 
     assert env["MN_GRPC_ADVERTISE_PORT"] == "55051"
-    assert env["MN_NATIVE_SDK_GRPC_HOST"] == "127.0.0.1"
+    assert env["MN_NATIVE_SDK_GRPC_HOST"] == "0.0.0.0"
     assert env["MN_NATIVE_SDK_GRPC_PORT"] == "55052"
     assert env["MN_NATIVE_SDK_GRPC_TARGET"] == "mn-native-sdk-grpc:55052"
     assert env["MN_NATIVE_SDK_GRPC_PROXY_PORT"] == "55052"
     assert env["MN_NATIVE_SDK_GRPC_PROXY_TARGET_HOST"] == "host.docker.internal"
     assert env["MN_NATIVE_SDK_GRPC_PROXY_TARGET_PORT"] == "55052"
+
+
+def test_compose_env_migrates_generated_native_sdk_loopback_bind(monkeypatch, tmp_path):
+    compose_env = tmp_path / "docker-compose.env"
+    monkeypatch.setattr(server, "RUNTIME_COMPOSE_ENV", compose_env)
+    monkeypatch.delenv("MN_NATIVE_SDK_GRPC_HOST", raising=False)
+
+    env = server._ensure_compose_native_port_settings(
+        {
+            "MN_NATIVE_SDK_GRPC_HOST": "127.0.0.1",
+            "MN_NETWORK_ADVERTISE_HOST": "192.168.5.21",
+        }
+    )
+
+    assert env["MN_NATIVE_SDK_GRPC_HOST"] == "0.0.0.0"
+    assert env["MN_NETWORK_ADVERTISE_HOST"] == "192.168.5.21"
+    assert "MN_NATIVE_SDK_GRPC_HOST=0.0.0.0" in compose_env.read_text(encoding="utf-8")
+
+
+def test_compose_env_preserves_explicit_native_sdk_bind_override(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "RUNTIME_COMPOSE_ENV", tmp_path / "docker-compose.env")
+    monkeypatch.setenv("MN_NATIVE_SDK_GRPC_HOST", "127.0.0.1")
+
+    env = server._ensure_compose_native_port_settings(
+        {"MN_NATIVE_SDK_GRPC_HOST": "127.0.0.1"}
+    )
+
+    assert env["MN_NATIVE_SDK_GRPC_HOST"] == "127.0.0.1"
 
 
 def test_compose_env_migrates_legacy_native_sdk_grpc_target(monkeypatch, tmp_path):
