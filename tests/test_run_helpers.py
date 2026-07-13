@@ -901,6 +901,97 @@ def test_prepare_manifest_adds_sdk_upload_for_manual_blueprint_support_worker(tm
     assert ensure_blueprint_support_sdk_build_context_uploads(prepared)["added"] == 0
 
 
+def test_prepare_manifest_localizes_sdk_with_dev_blueprint_support_worker(tmp_path, monkeypatch):
+    bundle_dir = tmp_path / "bundle"
+    skills_root = tmp_path / "mn-skills"
+    sdk_root = tmp_path / "mn-python-sdk"
+    worker_dir = bundle_dir / "payloads" / "document_workflow" / "docker_worker"
+    worker_dir.mkdir(parents=True)
+    (bundle_dir / "config").mkdir()
+    (bundle_dir / "config" / "default.json").write_text(
+        json.dumps({"identity": {"blueprint_id": "local_support_sdk"}}),
+        encoding="utf-8",
+    )
+    (worker_dir / "Dockerfile").write_text(
+        "FROM python:3.11-slim\n"
+        "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt\n"
+        "# mirrorneuron: skill-dependencies\n"
+        "# mirrorneuron: skill-dependencies-end\n"
+        "RUN if [ -s /tmp/mn-skill-runtime/requirements.txt ]; then \\\n"
+        "      python3 -m pip install --break-system-packages -r /tmp/mn-skill-runtime/requirements.txt; \\\n"
+        "    fi\n",
+        encoding="utf-8",
+    )
+    (worker_dir / "requirements.txt").write_text(
+        "mirrorneuron-python-sdk==1.2.22\n",
+        encoding="utf-8",
+    )
+    _write_skill_pyproject(
+        skills_root,
+        "blueprint_support_skill",
+        "mirrorneuron-blueprint-support-skill",
+        dependencies=["mirrorneuron-python-sdk"],
+    )
+    sdk_root.mkdir()
+    (sdk_root / "pyproject.toml").write_text(
+        "[project]\nname='mirrorneuron-python-sdk'\nversion='0.0.0'\n",
+        encoding="utf-8",
+    )
+    sdk_runtime = sdk_root / "mn_sdk" / "blueprint_support" / "runtime.py"
+    sdk_runtime.parent.mkdir(parents=True)
+    sdk_runtime.write_text("VALUE = 'local-sdk'\n", encoding="utf-8")
+    monkeypatch.setenv("MN_ENV", "dev")
+    monkeypatch.setenv("MN_SKILLS_ROOT", str(skills_root))
+    monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path))
+
+    manifest = {
+        "skill_dependencies": [
+            {
+                "type": "pip",
+                "source": "gar",
+                "name": "mirrorneuron-blueprint-support-skill",
+                "version": "1.2.8",
+            }
+        ],
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.DockerWorker",
+                    "docker_worker_image": "document_workflow/docker_worker",
+                    "upload_path": "document_workflow",
+                    "workdir": "/mn/job/document_workflow",
+                    "environment": {},
+                },
+            }
+        ],
+    }
+
+    prepared = prepare_manifest_for_submission(bundle_dir, manifest)
+    local = prepared["metadata"]["mn_local_skill_dependencies"]
+
+    assert prepared["skill_dependencies"] == []
+    assert local["packages"] == [
+        "mirrorneuron-blueprint-support-skill",
+        "mirrorneuron-python-sdk",
+    ]
+
+    payloads: dict[str, bytes] = {}
+    stage_skill_dependency_payloads_for_manifest(prepared, payloads, bundle_dir=bundle_dir)
+
+    requirements = payloads["document_workflow/docker_worker/requirements.txt"].decode()
+    local_requirements = payloads[
+        "document_workflow/docker_worker/local-requirements.txt"
+    ].decode()
+    dockerfile = payloads["document_workflow/docker_worker/Dockerfile"].decode()
+    assert "mirrorneuron-python-sdk==1.2.22" not in requirements
+    assert "/tmp/mn-skill-runtime/local/blueprint_support_skill" in local_requirements
+    assert "/tmp/mn-skill-runtime/local/mn-python-sdk" in local_requirements
+    assert "COPY __mn_skill_dependencies/local/blueprint_support_skill" in dockerfile
+    assert "COPY __mn_skill_dependencies/local/mn-python-sdk" in dockerfile
+    assert any(key.endswith("mn-python-sdk/mn_sdk/blueprint_support/runtime.py") for key in payloads)
+
+
 def test_prepare_manifest_skill_runtime_node_scope_patches_only_selected_nodes(tmp_path, monkeypatch):
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"
@@ -1320,8 +1411,8 @@ def test_prepare_manifest_injects_docker_model_runner_llm_env_by_node_runtime(tm
     assert host_env["MN_LLM_PROVIDER"] == "docker_model_runner"
     assert host_env["MN_LLM_MODEL"] == "docker.io/ai/gemma4:E2B"
     assert host_env["MN_LLM_RUNTIME_MODEL"] == "docker.io/ai/gemma4:E2B"
-    assert host_env["MN_LLM_API_BASE"] == "http://host.docker.internal:12434/engines/v1"
-    assert sandbox_env["MN_LLM_API_BASE"] == "http://host.docker.internal:12434/engines/v1"
+    assert host_env["MN_LLM_API_BASE"] == "http://127.0.0.1:4000/v1"
+    assert sandbox_env["MN_LLM_API_BASE"] == "http://mn-litellm-proxy:4000/v1"
     assert host_env["MN_LLM_CONTEXT_SIZE"] == "4096"
     assert host_env["MN_LLM_MAX_TOKENS"] == "800"
 
@@ -1416,7 +1507,7 @@ def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_h
     }
     env = prepared["nodes"][0]["config"]["environment"]
     assert env["MN_LLM_PROVIDER"] == "docker_model_runner"
-    assert env["MN_LLM_API_BASE"] == "http://host.docker.internal:12434/engines/v1"
+    assert env["MN_LLM_API_BASE"] == "http://mn-litellm-proxy:4000/v1"
 
 
 def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_fake_llm(tmp_path):

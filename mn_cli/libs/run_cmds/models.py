@@ -58,11 +58,18 @@ def _prepare_runtime_models_for_run_or_exit(
         summary["config_overrides"] = materialized_config
         env_overrides["MN_BLUEPRINT_CONFIG_JSON"] = json.dumps(materialized_config, sort_keys=True)
         env_overrides.update(_runtime_model_fallback_llm_env(materialized_config))
+    if env_overrides is not None and _blueprint_requests_default_llm(base_config):
+        env_overrides["MN_LLM_MODEL"] = "default"
+        env_overrides["LITELLM_MODEL"] = "default"
     if not quiet:
         _print_runtime_model_install_summary(summary)
     if summary["errors"]:
         raise typer.Exit(1)
     return summary
+
+def _blueprint_requests_default_llm(config: dict[str, Any]) -> bool:
+    llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
+    return str(llm.get("model") or "").strip().lower() == "default"
 
 def _sync_litellm_gateway_for_runtime_models(summary: dict[str, Any]) -> dict[str, dict[str, Any]]:
     endpoints = summary.get("endpoints") if isinstance(summary.get("endpoints"), dict) else {}

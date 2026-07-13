@@ -548,6 +548,11 @@ def _preferred_large_model_config(default_model: str = "gemma4:e2b") -> dict:
         }
     }
 
+
+def test_default_llm_alias_detection_is_explicit():
+    assert run_cmds._blueprint_requests_default_llm({"llm": {"model": "default"}}) is True
+    assert run_cmds._blueprint_requests_default_llm({"llm": {"model": "gemma4:e2b"}}) is False
+
 def _preferred_large_model_catalog() -> dict:
     return {
         "nemotron3": {

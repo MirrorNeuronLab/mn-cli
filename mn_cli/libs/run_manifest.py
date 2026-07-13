@@ -76,7 +76,9 @@ UPLOAD_SOURCE_EXCLUDED_DIRS = {
     "venv",
 }
 BLUEPRINT_SUPPORT_SOURCE = "blueprint_support_skill"
+BLUEPRINT_SUPPORT_PACKAGE = "mirrorneuron-blueprint-support-skill"
 SDK_SOURCE = "mn-python-sdk"
+SDK_PACKAGE = "mirrorneuron-python-sdk"
 WORKSPACE_BASES = {"workspace_root", "workspace", "repo_root"}
 HOST_LOCAL_RUNNER = "MirrorNeuron.Runner.HostLocal"
 DOCKER_WORKER_RUNNER = "MirrorNeuron.Runner.DockerWorker"
@@ -146,6 +148,18 @@ def localize_skill_dependencies_for_dev(manifest: dict[str, Any]) -> dict[str, A
 
     if not selected:
         return {"localized": 0, "packages": []}
+
+    # Blueprint-support and the Python SDK share runtime helpers. A dev run that
+    # replaces only the released skill with local source can otherwise combine
+    # it with an older SDK already present in the DockerWorker image. Localize
+    # both packages as one source-compatible unit.
+    if normalize_package_name(BLUEPRINT_SUPPORT_PACKAGE) in selected:
+        sdk_source = workspace_root() / SDK_SOURCE
+        if sdk_source.joinpath("pyproject.toml").is_file():
+            selected.setdefault(
+                normalize_package_name(SDK_PACKAGE),
+                ({"name": SDK_PACKAGE}, sdk_source),
+            )
 
     upload_roots = _docker_worker_upload_roots(manifest)
     if not upload_roots:
