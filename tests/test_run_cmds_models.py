@@ -577,6 +577,37 @@ def test_default_manifest_model_is_satisfied_by_prepared_fallback():
 
     assert manifest["runtime"]["models"]["primary"]["install_mode"] == "cluster_provided"
 
+
+def test_prepared_default_model_marks_inheriting_llm_profile_cluster_provided():
+    summary = {
+        "models": [
+            {
+                "id": "nemotron3",
+                "model": "docker.io/ai/nemotron3:latest",
+                "status": "explicit_config",
+            }
+        ]
+    }
+
+    _, config = run_cmds._model_validation_inputs_with_prepared_models(
+        {},
+        {
+            "llm": {
+                "model": "default",
+                "configs": {
+                    "primary": {
+                        "provider": "docker_model_runner",
+                        "api_base": "http://localhost:12434/engines/v1",
+                    }
+                },
+            }
+        },
+        summary,
+    )
+
+    assert config["llm"]["install_mode"] == "cluster_provided"
+    assert config["llm"]["configs"]["primary"]["install_mode"] == "cluster_provided"
+
 def _preferred_large_model_catalog() -> dict:
     return {
         "nemotron3": {

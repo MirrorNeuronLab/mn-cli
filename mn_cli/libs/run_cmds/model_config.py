@@ -422,10 +422,17 @@ def _model_validation_inputs_with_prepared_models(
             entry["install_mode"] = "cluster_provided"
     llm = config_copy.get("llm") if isinstance(config_copy.get("llm"), dict) else {}
     configs = llm.get("configs") if isinstance(llm.get("configs"), dict) else {}
+    llm_is_prepared = isinstance(llm, dict) and _model_config_matches_prepared(llm, prepared)
     for entry in configs.values():
-        if isinstance(entry, dict) and _model_config_matches_prepared(entry, prepared):
+        if not isinstance(entry, dict):
+            continue
+        inherits_default = llm_is_prepared and not any(
+            str(entry.get(key) or "").strip()
+            for key in ("runtime_model", "model", "model_alias")
+        )
+        if _model_config_matches_prepared(entry, prepared) or inherits_default:
             entry["install_mode"] = "cluster_provided"
-    if isinstance(llm, dict) and _model_config_matches_prepared(llm, prepared):
+    if llm_is_prepared:
         llm["install_mode"] = "cluster_provided"
     return manifest_copy, config_copy
 
