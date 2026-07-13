@@ -270,6 +270,8 @@ def test_run_submits_python_environment_requirements_payload(mocker, tmp_path, m
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_completed"})
     ])
+    env_dir = tmp_path / "prepared-python"
+    mocker.patch("mn_cli.libs.run_cmds._doctor_prepare_python_env", return_value=env_dir)
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
@@ -295,8 +297,67 @@ def test_run_submits_python_environment_requirements_payload(mocker, tmp_path, m
     result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--web-ui"])
 
     assert result.exit_code == 0
+    submitted_manifest = json.loads(mock_submit.call_args.args[0])
+    assert submitted_manifest["nodes"][0]["config"]["python_environment"]["path"] == str(env_dir)
     payloads = mock_submit.call_args.args[1]
     assert payloads["worker/requirements.txt"] == b"opencv-python-headless>=4.10,<5\n"
+
+def test_run_prepares_sdk_injected_web_ui_python_environment(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    mocker.patch("mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="web-ui-env-run")
+    mock_submit = mocker.patch("mn_cli.libs.run_cmds.client.submit_job", return_value="job-123")
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.stream_events",
+        return_value=[json.dumps({"type": "job_completed"})],
+    )
+    env_dir = tmp_path / "prepared-web-ui-python"
+    prepare_env = mocker.patch(
+        "mn_cli.libs.run_cmds._doctor_prepare_python_env",
+        return_value=env_dir,
+    )
+
+    bundle_dir = tmp_path / "web_ui_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "manifest_version": "1.0",
+                "type": "service",
+                "graph_id": "web-ui-env",
+                "nodes": [
+                    {
+                        "node_id": "worker",
+                        "agent_type": "router",
+                        "config": {},
+                    }
+                ],
+                "entrypoints": ["worker"],
+            }
+        )
+    )
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps(
+            {
+                "identity": {"blueprint_id": "web-ui-env", "name": "Web UI Env"},
+                "web_ui": {"enabled": True, "output": {"adapter": "gradio"}},
+            }
+        )
+    )
+
+    result = runner.invoke(
+        app,
+        ["blueprint", "run", "--folder", str(bundle_dir), "--web-ui"],
+    )
+
+    assert result.exit_code == 0
+    submitted_manifest = json.loads(mock_submit.call_args.args[0])
+    web_ui = next(
+        node for node in submitted_manifest["nodes"] if node["node_id"] == "web_ui_dashboard"
+    )
+    assert web_ui["config"]["python_environment"]["path"] == str(env_dir)
+    assert prepare_env.call_args.kwargs["node_id"] == "web_ui_dashboard"
 
 def test_run_injects_blueprint_config_scenario_and_run_id(mocker, tmp_path):
     mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")

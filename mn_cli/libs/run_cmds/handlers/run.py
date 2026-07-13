@@ -7,6 +7,7 @@ from ..outputs import *
 from ..run_state import *
 from ..web_ui import *
 from .validate import *
+from .doctor import _doctor_prepare_hostlocal_python_envs
 
 
 def _record_prevalidated_command_rules(
@@ -223,6 +224,23 @@ def run_bundle(
             config_overrides=config_overrides,
             enable_runtime_web_ui=web_ui,
         )
+        host_python_report = _doctor_prepare_hostlocal_python_envs(
+            bundle_dir,
+            manifest_dict,
+            timeout=float(os.getenv("MN_BLUEPRINT_PYTHON_ENV_TIMEOUT_SECONDS", "30")),
+            check_only=False,
+        )
+        if host_python_report.get("status") == "critical":
+            failures = host_python_report.get("failures") or []
+            detail = "; ".join(
+                f"{item.get('node_id', 'host_local')}: {item.get('detail', 'environment preparation failed')}"
+                for item in failures
+                if isinstance(item, dict)
+            )
+            raise RuntimeError(
+                "HostLocal Python environment preparation failed"
+                + (f": {detail}" if detail else ".")
+            )
         if force:
             _mark_manifest_force(manifest_dict)
         _prepare_openshell_custom_images(bundle_dir, manifest_dict)
