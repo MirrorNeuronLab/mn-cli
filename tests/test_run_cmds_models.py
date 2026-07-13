@@ -58,6 +58,55 @@ def test_manifest_for_model_validation_filters_dmr_models_for_fake_llm():
     assert set(filtered["runtime"]["models"]) == {"external"}
     assert set(manifest["runtime"]["models"]) == {"primary", "secondary", "external"}
 
+
+def test_local_runtime_model_endpoints_routes_installed_cluster_provided_model(mocker):
+    mocker.patch("mn_cli.libs.run_cmds.model_installed", return_value=True)
+    mocker.patch(
+        "mn_cli.libs.run_cmds.resolve_model_entry",
+        return_value={
+            "id": "gemma4:e2b",
+            "provider": "docker_model_runner",
+            "model": "docker.io/ai/gemma4:E2B",
+            "api_model": "docker.io/ai/gemma4:E2B",
+        },
+    )
+
+    endpoints = run_cmds._local_runtime_model_endpoints(
+        {
+            "models": [
+                {
+                    "id": "gemma4:e2b",
+                    "model": "docker.io/ai/gemma4:E2B",
+                    "provider": "docker_model_runner",
+                    "status": "cluster_provided",
+                }
+            ]
+        }
+    )
+
+    assert endpoints["gemma4:e2b"]["api_base"] == "http://host.docker.internal:12434/engines/v1"
+    assert endpoints["docker.io/ai/gemma4:E2B"]["api_model"] == "docker.io/ai/gemma4:E2B"
+
+
+def test_local_runtime_model_endpoints_skips_remote_cluster_provided_model(mocker):
+    mocker.patch("mn_cli.libs.run_cmds.model_installed", return_value=False)
+
+    endpoints = run_cmds._local_runtime_model_endpoints(
+        {
+            "models": [
+                {
+                    "id": "gemma4:e2b",
+                    "model": "docker.io/ai/gemma4:E2B",
+                    "provider": "docker_model_runner",
+                    "status": "cluster_provided",
+                }
+            ]
+        }
+    )
+
+    assert endpoints == {}
+
+
 def test_prefer_default_single_node_agent_placement_uses_local_runtime_node(monkeypatch):
     monkeypatch.delenv("MN_BLUEPRINT_SINGLE_NODE_AGENTS", raising=False)
     monkeypatch.setattr(

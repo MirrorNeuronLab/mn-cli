@@ -91,13 +91,20 @@ def _runtime_litellm_gateway_restart_enabled() -> bool:
 
 def _local_runtime_model_endpoints(summary: dict[str, Any]) -> dict[str, dict[str, Any]]:
     endpoints: dict[str, dict[str, Any]] = {}
-    prepared_statuses = {"installed", "already_installed"}
+    prepared_statuses = {"installed", "already_installed", "cluster_provided"}
     for item in summary.get("models") or []:
-        if not isinstance(item, dict) or str(item.get("status") or "") not in prepared_statuses:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "")
+        if status not in prepared_statuses:
             continue
         if str(item.get("provider") or "docker_model_runner") != "docker_model_runner":
             continue
         model_ref = str(item.get("id") or item.get("model") or "").strip()
+        if status == "cluster_provided" and not model_installed(
+            str(item.get("model") or model_ref)
+        ):
+            continue
         try:
             entry = resolve_model_entry(model_ref)
         except Exception:
