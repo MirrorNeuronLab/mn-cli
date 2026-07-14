@@ -793,6 +793,15 @@ def test_run_detached_starts_without_live_workflow_ui(flag, mocker, tmp_path, mo
 
 def test_run_error_submitting(mocker, tmp_path):
     mocker.patch('mn_cli.libs.run_cmds.client.submit_job', side_effect=Exception("API failure"))
+    mocker.patch(
+        "mn_cli.libs.run_cmds.prepare_job_submission",
+        return_value=SimpleNamespace(
+            manifest_json='{"nodes": []}',
+            payloads={},
+            metadata={"submission_id": "submission-that-failed"},
+        ),
+    )
+    cleanup = mocker.patch("mn_cli.libs.run_cmds.cleanup_docker_worker_services")
     
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
@@ -803,6 +812,7 @@ def test_run_error_submitting(mocker, tmp_path):
     
     assert result.exit_code == 1
     assert "MN_EXECUTION_FAILED" in result.stdout
+    cleanup.assert_called_once_with(submission_id="submission-that-failed")
 
 def test_run_keyboard_interrupt(mocker, tmp_path):
     mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")

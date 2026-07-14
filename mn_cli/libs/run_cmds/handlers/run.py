@@ -114,6 +114,7 @@ def run_bundle(
     submitted_run_dir: Path | None = None
     submitted_web_ui_url: str | None = None
     submitted_config_overrides: dict[str, Any] | None = None
+    prepared_submission: Any | None = None
     try:
         env_overrides = dict(env_overrides or {})
         config_overrides = dict(config_overrides or {})
@@ -427,6 +428,16 @@ def run_bundle(
         )
         raise typer.Exit(130)
     except Exception as e:
+        if prepared_submission is not None and submitted_job_id is None:
+            submission_id = str(prepared_submission.metadata.get("submission_id") or "").strip()
+            if submission_id:
+                try:
+                    cleanup_docker_worker_services(submission_id=submission_id)
+                except Exception:
+                    logger.exception(
+                        "Failed to clean DockerWorker services after submission failure",
+                        extra={"submission_id": submission_id},
+                    )
         _cleanup_pre_launch_artifacts(
             pre_launch_process,
             pre_launch_run_dir,
