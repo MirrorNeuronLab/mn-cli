@@ -980,16 +980,30 @@ def _sync_gateway_runtime_endpoints_across_cluster(
     *,
     restart: bool,
     quiet: bool = False,
+    skip_local: bool = False,
 ) -> list[dict[str, Any]]:
+    """Publish runtime routes to every proxy that does not own their upstream.
+
+    A route backed by another node's LiteLLM proxy must never be installed on
+    that proxy itself: doing so replaces the node-local Docker Model Runner
+    route with a request back to the same proxy.  The owner already configures
+    its local route as part of runtime-model preparation; every other node
+    receives the public gateway route.
+    """
     results: list[dict[str, Any]] = []
     for node_endpoint in _cluster_node_endpoints(quiet=True):
         node_name = str(node_endpoint.get("node_name") or "")
+        if skip_local and _cluster_node_is_local(node_endpoint):
+            continue
+        node_routes = _runtime_endpoints_for_gateway_node(runtime_endpoints, node_endpoint)
+        if not node_routes:
+            continue
         try:
             runtime_client = _native_runtime_client_for_node(node_endpoint)
             response = runtime_client.sync_litellm_gateway(
                 {
                     "node": node_name,
-                    "runtime_endpoints": runtime_endpoints,
+                    "runtime_endpoints": node_routes,
                     "restart": restart,
                     "source": "mn-cli-runtime-endpoint-fanout",
                 }
@@ -1000,6 +1014,39 @@ def _sync_gateway_runtime_endpoints_across_cluster(
             if not quiet:
                 console.print(f"[yellow]Warning: could not sync LiteLLM gateway on {node_name}: {exc}[/yellow]")
     return results
+
+
+def _runtime_endpoints_for_gateway_node(
+    runtime_endpoints: dict[str, dict[str, Any]],
+    node_endpoint: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Return routes safe to configure on ``node_name``.
+
+    Endpoint ownership is optional for manually declared external services, so
+    those routes remain visible to every proxy.  A named owner is excluded
+    only from its own proxy configuration.
+    """
+    target = str(node_endpoint.get("node_name") or "").strip()
+    target_host = str(node_endpoint.get("host") or "").strip().lower()
+
+    def owned_by_target(endpoint: dict[str, Any]) -> bool:
+        if str(endpoint.get("node") or "").strip() == target:
+            return True
+        if str(endpoint.get("source") or "").strip() != "remote_litellm_gateway":
+            return False
+        try:
+            endpoint_host = str(urllib.parse.urlparse(str(endpoint.get("api_base") or "")).hostname or "").lower()
+        except ValueError:
+            return False
+        return bool(target_host and endpoint_host == target_host)
+
+    return {
+        str(key): endpoint
+        for key, endpoint in runtime_endpoints.items()
+        if str(key).strip()
+        and isinstance(endpoint, dict)
+        and not owned_by_target(endpoint)
+    }
 
 
 def _sync_model_route_across_cluster(

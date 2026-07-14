@@ -1,6 +1,7 @@
 from .common import *
 from .model_cluster import *
 from .model_config import *
+from mn_cli.libs.model_cmds import _sync_gateway_runtime_endpoints_across_cluster
 
 def _prepare_runtime_models_for_run_or_exit(
     bundle_dir: Path,
@@ -82,22 +83,21 @@ def _sync_litellm_gateway_for_runtime_models(
     upstream_endpoints.update(_local_runtime_model_endpoints(summary))
     if not upstream_endpoints:
         return {}
-    selected_node = str((env_overrides or {}).get("MN_SELECTED_RUNTIME_NODE") or "").strip()
-    if selected_node and selected_node != _local_runtime_node_name():
-        # Native PrepareRuntimeModel already installs the model and configures
-        # LiteLLM on the selected node.  Re-syncing here would configure the
-        # submitter's gateway with a remote gateway as its upstream, which is
-        # precisely the cross-node loop this placement feature prevents.
-        gateway_endpoints = gateway_endpoint_map(upstream_endpoints)
-        summary["gateway"] = {
-            "status": "prepared_on_selected_node",
-            "node": selected_node,
-        }
-        summary["endpoints"] = gateway_endpoints
-        return gateway_endpoints
+    restart = _runtime_litellm_gateway_restart_enabled()
     gateway = sync_litellm_gateway(
         runtime_endpoints=upstream_endpoints,
-        restart=_runtime_litellm_gateway_restart_enabled(),
+        restart=restart,
+    )
+    # The submitter's proxy may be the one that ultimately runs the workflow.
+    # Publish each remote route to every other live proxy as well.  The owner
+    # is excluded by the shared helper because it already has a node-local DMR
+    # route from PrepareRuntimeModel; pointing it at itself would create a
+    # gateway loop.
+    gateway["cluster_sync"] = _sync_gateway_runtime_endpoints_across_cluster(
+        upstream_endpoints,
+        restart=restart,
+        quiet=True,
+        skip_local=True,
     )
     gateway_endpoints = gateway_endpoint_map(upstream_endpoints)
     summary["gateway"] = gateway

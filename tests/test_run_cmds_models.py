@@ -261,7 +261,11 @@ def test_selected_workflow_node_controls_model_placement_and_gateway_sync(mocker
     assert placement["node"] == "mirror_neuron@spark"
     assert placement["source"] == "workflow_placement"
 
-    sync = mocker.patch("mn_cli.libs.run_cmds.sync_litellm_gateway")
+    sync = mocker.patch("mn_cli.libs.run_cmds.sync_litellm_gateway", return_value={"status": "running"})
+    fanout = mocker.patch(
+        "mn_cli.libs.run_cmds.models._sync_gateway_runtime_endpoints_across_cluster",
+        return_value=[{"node": "mirror_neuron@moon", "status": "ok"}],
+    )
     endpoints = run_cmds._sync_litellm_gateway_for_runtime_models(
         {
             "endpoints": {
@@ -275,7 +279,9 @@ def test_selected_workflow_node_controls_model_placement_and_gateway_sync(mocker
         },
         env_overrides={"MN_SELECTED_RUNTIME_NODE": "mirror_neuron@spark"},
     )
-    sync.assert_not_called()
+    sync.assert_called_once()
+    fanout.assert_called_once()
+    assert fanout.call_args.kwargs["skip_local"] is True
     assert endpoints["gemma4:e2b"]["api_base"] == "http://mn-litellm-proxy:4000/v1"
 
 def test_prepare_runtime_models_installs_missing_model_for_run(

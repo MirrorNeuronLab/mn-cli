@@ -560,6 +560,55 @@ def test_model_install_node_fans_out_gateway_route_to_other_nodes(mocker):
     assert payload["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://192.168.4.173:4000/v1"
 
 
+def test_cluster_runtime_endpoint_sync_excludes_each_route_owner(mocker):
+    node_syncs = []
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.target = kwargs.get("target")
+
+        def sync_litellm_gateway(self, payload):
+            node_syncs.append((self.target, payload))
+            return json.dumps({"status": "running"})
+
+    mocker.patch(
+        "mn_cli.libs.model_cmds.client.get_system_summary",
+        return_value=_cluster_summary(
+            _cluster_node("spark", "192.168.4.173"),
+            _cluster_node("moon", "192.168.4.174"),
+        ),
+    )
+    mocker.patch("mn_cli.libs.model_cmds.Client", FakeClient)
+
+    model_cmds._sync_gateway_runtime_endpoints_across_cluster(
+        {
+            "nemotron3": {
+                "provider": "docker_model_runner",
+                "model": "docker.io/ai/nemotron3:latest",
+                "api_base": "http://192.168.4.173:4000/v1",
+                "node": "spark-display-name",
+                "source": "remote_litellm_gateway",
+            },
+            "small": {
+                "provider": "docker_model_runner",
+                "model": "docker.io/ai/gemma4:E2B",
+                "api_base": "http://192.168.4.174:4000/v1",
+                "node": "moon",
+            },
+        },
+        restart=True,
+    )
+
+    routes_by_target = {
+        target: set(payload["runtime_endpoints"])
+        for target, payload in node_syncs
+    }
+    assert routes_by_target == {
+        "192.168.4.173:55052": {"small"},
+        "192.168.4.174:55052": {"nemotron3"},
+    }
+
+
 def test_model_install_streams_pull_progress(mocker):
     calls = []
 
