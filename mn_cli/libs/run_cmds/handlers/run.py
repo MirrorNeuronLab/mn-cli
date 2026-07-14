@@ -91,6 +91,29 @@ def _record_prevalidated_command_rules(
     }
 
 
+def _docker_worker_node_ids(manifest: dict[str, Any]) -> list[str]:
+    node_ids: list[str] = []
+    for index, node in enumerate(manifest_nodes(manifest)):
+        config = node.get("config") if isinstance(node.get("config"), dict) else {}
+        runner = str(config.get("runner_module") or node.get("runner_module") or "").strip()
+        if runner == "MirrorNeuron.Runner.DockerWorker":
+            node_ids.append(str(node.get("node_id") or node.get("id") or f"worker-{index}"))
+    return node_ids
+
+
+def _print_docker_worker_ready(manifest: dict[str, Any]) -> None:
+    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    summary = metadata.get("mn_docker_workers") if isinstance(metadata.get("mn_docker_workers"), dict) else {}
+    services = summary.get("services") if isinstance(summary.get("services"), list) else []
+    labels = [
+        f"{service.get('node_id', 'DockerWorker')} on {service.get('node', 'the selected node')}"
+        for service in services
+        if isinstance(service, dict)
+    ]
+    if labels:
+        console.print(f"[green]DockerWorker ready:[/green] {', '.join(labels)}")
+
+
 def run_bundle(
     bundle_path: str,
     *,
@@ -284,6 +307,14 @@ def run_bundle(
             force=force,
         )
 
+        docker_worker_nodes = _docker_worker_node_ids(manifest_dict)
+        if docker_worker_nodes:
+            selected_node = str(env_overrides.get("MN_SELECTED_RUNTIME_NODE") or "").strip()
+            target = selected_node or "the selected runtime node"
+            _print_launch_progress(
+                f"Prepare DockerWorker on {target}",
+                "building and starting the shared worker container through that node's native SDK.",
+            )
         prepared_submission = prepare_job_submission(
             manifest_dict,
             payloads,
@@ -294,6 +325,8 @@ def run_bundle(
         manifest = prepared_submission.manifest_json
         payloads = prepared_submission.payloads
         submitted_manifest = json.loads(manifest)
+        if docker_worker_nodes:
+            _print_docker_worker_ready(submitted_manifest)
 
         blueprint_run_dir = (
             _blueprint_run_dir(blueprint_run_id, env_overrides)

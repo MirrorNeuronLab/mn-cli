@@ -814,6 +814,67 @@ def test_run_error_submitting(mocker, tmp_path):
     assert "MN_EXECUTION_FAILED" in result.stdout
     cleanup.assert_called_once_with(submission_id="submission-that-failed")
 
+
+def test_run_reports_remote_docker_worker_preparation(mocker, tmp_path):
+    mocker.patch(
+        "mn_cli.libs.run_cmds._resolve_and_apply_workflow_placement",
+        return_value={
+            "mode": "single_node",
+            "selected_node": "mirror_neuron@spark",
+            "selection": "best_fit_accelerator_headroom",
+        },
+    )
+    mocker.patch("mn_cli.libs.run_cmds.client.submit_job", return_value="job-docker-worker")
+    mocker.patch(
+        "mn_cli.libs.run_cmds.prepare_job_submission",
+        return_value=SimpleNamespace(
+            manifest_json=json.dumps(
+                {
+                    "nodes": [],
+                    "metadata": {
+                        "mn_docker_workers": {
+                            "prepared": True,
+                            "services": [
+                                {
+                                    "node_id": "visual_detector",
+                                    "node": "mirror_neuron@spark",
+                                }
+                            ],
+                        }
+                    },
+                }
+            ),
+            payloads={},
+            metadata={"submission_id": "submission-docker-worker"},
+        ),
+    )
+
+    bundle_dir = tmp_path / "docker_worker_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "nodes": [
+                    {
+                        "node_id": "visual_detector",
+                        "config": {"runner_module": "MirrorNeuron.Runner.DockerWorker"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        ["blueprint", "run", "--folder", str(bundle_dir), "--force", "--detached"],
+    )
+
+    assert result.exit_code == 0
+    assert "Launch: Prepare DockerWorker on mirror_neuron@spark" in result.stdout
+    assert "DockerWorker ready: visual_detector on mirror_neuron@spark" in result.stdout
+
+
 def test_run_keyboard_interrupt(mocker, tmp_path):
     mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', side_effect=KeyboardInterrupt)
