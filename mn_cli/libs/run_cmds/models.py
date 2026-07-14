@@ -19,32 +19,33 @@ def _prepare_runtime_models_for_run_or_exit(
         resolve_cluster_model=_resolve_runtime_cluster_model,
     )
     validation_manifest = _manifest_for_model_validation(manifest, config)
-    summary = blueprint_model_dependency_summary(
-        blueprint_id=_runtime_model_blueprint_id(bundle_dir, manifest, config),
-        blueprint_revision=_runtime_model_blueprint_revision(manifest, config),
-        bundle_root=bundle_dir,
-        manifest=validation_manifest,
-        config=config,
-        install_source=str(bundle_dir),
-        force=force,
-        ops=BlueprintModelOps(
-            load_model_catalog=lambda: catalog,
-            required_blueprint_models=required_blueprint_models,
-            load_model_ownership=load_model_ownership,
-            resolve_model_entry=resolve_model_entry,
-            docker_model_name=docker_model_name,
-            cluster_provided_model=cluster_provided_model,
-            record_model_owner=record_model_owner,
-            model_installed=model_installed,
-            install_model_entry=install_model_entry,
-            resolve_model_endpoint=_resolve_runtime_model_endpoint,
-            notify_model_install_start=None if quiet else _print_runtime_model_install_start,
-            install_model_with_progress=None if quiet else _install_runtime_model_with_progress,
-            resolve_cluster_model=_resolve_runtime_cluster_model,
-            install_cluster_model=_install_runtime_cluster_model,
-        ),
-    )
-    endpoints = _sync_litellm_gateway_for_runtime_models(summary)
+    with _runtime_model_placement_scope(env_overrides):
+        summary = blueprint_model_dependency_summary(
+            blueprint_id=_runtime_model_blueprint_id(bundle_dir, manifest, config),
+            blueprint_revision=_runtime_model_blueprint_revision(manifest, config),
+            bundle_root=bundle_dir,
+            manifest=validation_manifest,
+            config=config,
+            install_source=str(bundle_dir),
+            force=force,
+            ops=BlueprintModelOps(
+                load_model_catalog=lambda: catalog,
+                required_blueprint_models=required_blueprint_models,
+                load_model_ownership=load_model_ownership,
+                resolve_model_entry=resolve_model_entry,
+                docker_model_name=docker_model_name,
+                cluster_provided_model=cluster_provided_model,
+                record_model_owner=record_model_owner,
+                model_installed=model_installed,
+                install_model_entry=install_model_entry,
+                resolve_model_endpoint=_resolve_runtime_model_endpoint,
+                notify_model_install_start=None if quiet else _print_runtime_model_install_start,
+                install_model_with_progress=None if quiet else _install_runtime_model_with_progress,
+                resolve_cluster_model=_resolve_runtime_cluster_model,
+                install_cluster_model=_install_runtime_cluster_model,
+            ),
+        )
+    endpoints = _sync_litellm_gateway_for_runtime_models(summary, env_overrides=env_overrides)
     if endpoints and env_overrides is not None:
         env_overrides.update(ModelEndpointMap(endpoints).to_env_overrides())
     prepared_json = _prepared_runtime_models_json(summary)
@@ -71,12 +72,29 @@ def _blueprint_requests_default_llm(config: dict[str, Any]) -> bool:
     llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
     return str(llm.get("model") or "").strip().lower() == "default"
 
-def _sync_litellm_gateway_for_runtime_models(summary: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _sync_litellm_gateway_for_runtime_models(
+    summary: dict[str, Any],
+    *,
+    env_overrides: Optional[dict[str, str]] = None,
+) -> dict[str, dict[str, Any]]:
     endpoints = summary.get("endpoints") if isinstance(summary.get("endpoints"), dict) else {}
     upstream_endpoints = dict(endpoints)
     upstream_endpoints.update(_local_runtime_model_endpoints(summary))
     if not upstream_endpoints:
         return {}
+    selected_node = str((env_overrides or {}).get("MN_SELECTED_RUNTIME_NODE") or "").strip()
+    if selected_node and selected_node != _local_runtime_node_name():
+        # Native PrepareRuntimeModel already installs the model and configures
+        # LiteLLM on the selected node.  Re-syncing here would configure the
+        # submitter's gateway with a remote gateway as its upstream, which is
+        # precisely the cross-node loop this placement feature prevents.
+        gateway_endpoints = gateway_endpoint_map(upstream_endpoints)
+        summary["gateway"] = {
+            "status": "prepared_on_selected_node",
+            "node": selected_node,
+        }
+        summary["endpoints"] = gateway_endpoints
+        return gateway_endpoints
     gateway = sync_litellm_gateway(
         runtime_endpoints=upstream_endpoints,
         restart=_runtime_litellm_gateway_restart_enabled(),
@@ -91,7 +109,7 @@ def _runtime_litellm_gateway_restart_enabled() -> bool:
 
 def _local_runtime_model_endpoints(summary: dict[str, Any]) -> dict[str, dict[str, Any]]:
     endpoints: dict[str, dict[str, Any]] = {}
-    prepared_statuses = {"installed", "already_installed", "cluster_provided"}
+    prepared_statuses = {"installed", "already_installed"}
     for item in summary.get("models") or []:
         if not isinstance(item, dict):
             continue
@@ -101,10 +119,6 @@ def _local_runtime_model_endpoints(summary: dict[str, Any]) -> dict[str, dict[st
         if str(item.get("provider") or "docker_model_runner") != "docker_model_runner":
             continue
         model_ref = str(item.get("id") or item.get("model") or "").strip()
-        if status == "cluster_provided" and not model_installed(
-            str(item.get("model") or model_ref)
-        ):
-            continue
         try:
             entry = resolve_model_entry(model_ref)
         except Exception:

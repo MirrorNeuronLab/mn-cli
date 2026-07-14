@@ -1,6 +1,7 @@
 from ..common import *
 from ..context import *
 from ..models import *
+from ..model_cluster import _cluster_node_endpoint, _local_runtime_node_name, _prepare_runtime_model_with_retry, _runtime_model_prepare_client
 from ..openshell import *
 from ..run_state import *
 from .validate import *
@@ -52,6 +53,31 @@ def doctor_bundle(
                 allow_local_fallback=False,
             ),
         )
+        placement = _resolve_and_apply_workflow_placement(
+            manifest_dict,
+            env={**os.environ, **env_overrides},
+        )
+        if placement:
+            selected_node = str(placement["selected_node"])
+            env_overrides["MN_SELECTED_RUNTIME_NODE"] = selected_node
+            submission_metadata["selected_node"] = selected_node
+            submission_metadata["workflow_placement"] = {
+                "mode": placement["mode"],
+                "selected_node": selected_node,
+                "selection": placement["selection"],
+            }
+            report["placement"] = _doctor_component(
+                "placement",
+                "passing",
+                f"Pinned the complete workflow to {selected_node}.",
+                placement=placement,
+            )
+        else:
+            report["placement"] = _doctor_component(
+                "placement",
+                "skipped",
+                "Workflow uses distributed placement or has no node-local runtime requirements.",
+            )
 
         if not force:
             _doctor_record_validation(
@@ -122,7 +148,6 @@ def doctor_bundle(
         )
         if not check_only:
             _prepare_openshell_custom_images(bundle_dir, manifest_dict)
-        _prefer_default_single_node_agent_placement(manifest_dict)
         host_env_report = _doctor_prepare_hostlocal_python_envs(
             bundle_dir,
             manifest_dict,
@@ -467,6 +492,10 @@ def _doctor_prepare_hostlocal_python_envs(
     prepared: list[dict[str, Any]] = []
     skipped = 0
     failures: list[dict[str, Any]] = []
+    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    placement = metadata.get("mn_workflow_placement") if isinstance(metadata.get("mn_workflow_placement"), dict) else {}
+    selected_node = str(placement.get("selected_node") or "").strip()
+    remote_selected_node = selected_node and selected_node != _local_runtime_node_name()
     for node in manifest_nodes(manifest):
         config = node.get("config") if isinstance(node.get("config"), dict) else {}
         if config.get("runner_module") != "MirrorNeuron.Runner.HostLocal":
@@ -486,15 +515,39 @@ def _doctor_prepare_hostlocal_python_envs(
             failures.append({"node_id": node_id, "status": "skipped", "detail": "Not prepared in --check-only mode."})
             continue
         try:
-            env_dir = _doctor_prepare_python_env(
-                bundle_dir,
-                blueprint_id=_doctor_blueprint_id(bundle_dir, manifest, {}),
-                node_id=node_id,
-                packages=packages,
-                requirements_path=requirements_path,
-                timeout=timeout,
-            )
-            runtime_env_dir = _doctor_runtime_python_env_path(env_dir)
+            if remote_selected_node:
+                requirements_content = _doctor_requirements_content(
+                    bundle_dir,
+                    node_id=node_id,
+                    requirements_path=requirements_path,
+                )
+                endpoint = _cluster_node_endpoint(selected_node)
+                runtime_client = _runtime_model_prepare_client(selected_node, endpoint)
+                remote_result = _prepare_runtime_model_with_retry(
+                    runtime_client,
+                    {
+                        "node": selected_node,
+                        "ensure_hostlocal_python_environment": True,
+                        "blueprint_id": _doctor_blueprint_id(bundle_dir, manifest, {}),
+                        "node_id": node_id,
+                        "packages": packages,
+                        "requirements_content": requirements_content,
+                        "timeout": timeout,
+                        "source": "mn-cli-workflow-placement",
+                    },
+                )
+                runtime_env_dir = Path(str(remote_result["runtime_path"]))
+                env_dir = Path(str(remote_result.get("host_path") or runtime_env_dir))
+            else:
+                env_dir = _doctor_prepare_python_env(
+                    bundle_dir,
+                    blueprint_id=_doctor_blueprint_id(bundle_dir, manifest, {}),
+                    node_id=node_id,
+                    packages=packages,
+                    requirements_path=requirements_path,
+                    timeout=timeout,
+                )
+                runtime_env_dir = _doctor_runtime_python_env_path(env_dir)
             python_env["path"] = str(runtime_env_dir)
             config["python_environment"] = python_env
             prepared.append(
@@ -530,13 +583,41 @@ def _doctor_prepare_python_env(
     requirements_path: str,
     timeout: float,
 ) -> Path:
-    requirements_content = ""
-    requirement_file: Path | None = None
-    if requirements_path:
-        if not _is_safe_payload_relative_path(requirements_path):
-            raise RuntimeError(f"{node_id}: python_environment.requirements must be relative inside payloads/")
-        requirement_file = bundle_dir / "payloads" / requirements_path
-        requirements_content = requirement_file.read_text(encoding="utf-8")
+    requirements_content = _doctor_requirements_content(
+        bundle_dir,
+        node_id=node_id,
+        requirements_path=requirements_path,
+    )
+    return _doctor_prepare_python_env_from_content(
+        blueprint_id=blueprint_id,
+        node_id=node_id,
+        packages=packages,
+        requirements_content=requirements_content,
+        timeout=timeout,
+    )
+
+
+def _doctor_requirements_content(
+    bundle_dir: Path,
+    *,
+    node_id: str,
+    requirements_path: str,
+) -> str:
+    if not requirements_path:
+        return ""
+    if not _is_safe_payload_relative_path(requirements_path):
+        raise RuntimeError(f"{node_id}: python_environment.requirements must be relative inside payloads/")
+    return (bundle_dir / "payloads" / requirements_path).read_text(encoding="utf-8")
+
+
+def _doctor_prepare_python_env_from_content(
+    *,
+    blueprint_id: str,
+    node_id: str,
+    packages: list[str],
+    requirements_content: str,
+    timeout: float,
+) -> Path:
 
     core_container = _doctor_running_core_container(timeout)
     runtime_python = ["docker", "exec", core_container, "python3"] if core_container else [sys.executable]
@@ -581,11 +662,11 @@ def _doctor_prepare_python_env(
     if env_dir.exists():
         shutil.rmtree(env_dir)
     env_dir.mkdir(parents=True, exist_ok=True)
-    install_requirement_file = requirement_file
-    if core_container and requirement_file is not None:
+    install_requirement_file: Path | None = None
+    if requirements_content:
         staged_requirements = env_dir / ".mn-requirements.txt"
         staged_requirements.write_text(requirements_content, encoding="utf-8")
-        install_requirement_file = runtime_env_dir / staged_requirements.name
+        install_requirement_file = (runtime_env_dir if core_container else env_dir) / staged_requirements.name
     create_target = runtime_env_dir if core_container else env_dir
     create_args = [*runtime_python, "-m", "venv"]
     if not core_container:

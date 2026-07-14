@@ -425,7 +425,7 @@ def test_model_install_local_dmr_fans_out_gateway_route_to_other_nodes(mocker):
     assert target == "10.0.0.2:55052"
     endpoint = payload["runtime_endpoints"]["gemma4:e2b"]
     assert endpoint["api_base"] == "http://10.0.0.1:4000/v1"
-    assert endpoint["source"] == "remote-dmr"
+    assert endpoint["source"] == "remote_litellm_gateway"
 
 
 def test_model_install_node_uses_prepare_runtime_model_not_ssh(mocker):

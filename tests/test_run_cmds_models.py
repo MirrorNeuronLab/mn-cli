@@ -59,102 +59,224 @@ def test_manifest_for_model_validation_filters_dmr_models_for_fake_llm():
     assert set(manifest["runtime"]["models"]) == {"primary", "secondary", "external"}
 
 
-def test_local_runtime_model_endpoints_routes_installed_cluster_provided_model(mocker):
-    mocker.patch("mn_cli.libs.run_cmds.model_installed", return_value=True)
-    mocker.patch(
-        "mn_cli.libs.run_cmds.resolve_model_entry",
-        return_value={
-            "id": "gemma4:e2b",
-            "provider": "docker_model_runner",
-            "model": "docker.io/ai/gemma4:E2B",
-            "api_model": "docker.io/ai/gemma4:E2B",
-        },
-    )
-
-    endpoints = run_cmds._local_runtime_model_endpoints(
-        {
-            "models": [
-                {
-                    "id": "gemma4:e2b",
-                    "model": "docker.io/ai/gemma4:E2B",
-                    "provider": "docker_model_runner",
-                    "status": "cluster_provided",
-                }
-            ]
-        }
-    )
-
-    assert endpoints["gemma4:e2b"]["api_base"] == "http://host.docker.internal:12434/engines/v1"
-    assert endpoints["docker.io/ai/gemma4:E2B"]["api_model"] == "docker.io/ai/gemma4:E2B"
-
-
-def test_local_runtime_model_endpoints_skips_remote_cluster_provided_model(mocker):
-    mocker.patch("mn_cli.libs.run_cmds.model_installed", return_value=False)
-
-    endpoints = run_cmds._local_runtime_model_endpoints(
-        {
-            "models": [
-                {
-                    "id": "gemma4:e2b",
-                    "model": "docker.io/ai/gemma4:E2B",
-                    "provider": "docker_model_runner",
-                    "status": "cluster_provided",
-                }
-            ]
-        }
-    )
-
-    assert endpoints == {}
-
-
-def test_prefer_default_single_node_agent_placement_uses_local_runtime_node(monkeypatch):
-    monkeypatch.delenv("MN_BLUEPRINT_SINGLE_NODE_AGENTS", raising=False)
-    monkeypatch.setattr(
-        run_cmds.client,
-        "get_system_summary",
-        lambda: json.dumps(
-            {
-                "nodes": [
-                    {"name": "mirror_neuron@local", "self?": True},
-                    {"name": "mirror_neuron@spark", "self?": False},
-                ]
-            }
-        ),
-    )
-    manifest = {
+def _mac_and_spark_resources(*, spark_memory_mb=126000):
+    return {
         "nodes": [
-            {"node_id": "default_worker", "config": {}},
             {
-                "node_id": "remote_worker",
-                "policies": {"scheduler": {"preferred_node": "mirror_neuron@spark"}},
-                "config": {},
+                "name": "mirror_neuron@mac",
+                "status": "healthy",
+                "scheduling_eligible": True,
+                "devices": [
+                    {
+                        "kind": "gpu",
+                        "vendor": "apple",
+                        "driver": "metal",
+                        "memory_total_mb": 65536,
+                        "memory_free_mb": 65536,
+                        "capabilities": ["gpu", "metal"],
+                    }
+                ],
             },
             {
-                "node_id": "constrained_worker",
-                "constraints": [{"attribute": "node.name", "operator": "==", "value": "mirror_neuron@spark"}],
-                "config": {},
+                "name": "mirror_neuron@spark",
+                "status": "healthy",
+                "scheduling_eligible": True,
+                "devices": [
+                    {
+                        "kind": "gpu",
+                        "vendor": "nvidia",
+                        "driver": "cuda",
+                        "memory_total_mb": 131072,
+                        "memory_free_mb": spark_memory_mb,
+                        "capabilities": ["gpu", "nvidia", "cuda"],
+                    }
+                ],
             },
         ]
     }
 
-    run_cmds._prefer_default_single_node_agent_placement(manifest)
 
-    assert manifest["nodes"][0]["policies"]["scheduler"]["preferred_node"] == "mirror_neuron@local"
-    assert manifest["nodes"][1]["policies"]["scheduler"]["preferred_node"] == "mirror_neuron@spark"
-    assert "policies" not in manifest["nodes"][2]
+def _cctv_placement_manifest():
+    return {
+        "runtime": {
+            "placement": {"mode": "single_node"},
+            "models": {"primary": {"provider": "docker_model_runner", "model": "gemma4:e2b"}},
+            "memory": {"enabled": True},
+        },
+        "nodes": [
+            {
+                "node_id": "visual_detector",
+                "config": {"runner_module": "MirrorNeuron.Runner.DockerWorker", "gpus": "all"},
+                "constraints": [
+                    {"attribute": "capabilities", "operator": "contains_all", "value": ["nvidia", "cuda"]}
+                ],
+                "resources": {
+                    "gpu_count": 1,
+                    "devices": [
+                        {"kind": "gpu", "vendor": "nvidia", "driver": "cuda", "min_memory_mb": 49152}
+                    ],
+                },
+            },
+            {"node_id": "report_writer", "config": {"runner_module": "MirrorNeuron.Runner.HostLocal"}},
+        ],
+    }
 
-def test_prefer_default_single_node_agent_placement_can_be_disabled(monkeypatch):
-    monkeypatch.setenv("MN_BLUEPRINT_SINGLE_NODE_AGENTS", "0")
-    monkeypatch.setattr(
-        run_cmds.client,
-        "get_system_summary",
-        lambda: json.dumps({"nodes": [{"name": "mirror_neuron@local", "self?": True}]}),
+
+def _matching_system_summary(resources):
+    nodes = []
+    for node in resources["nodes"]:
+        system = {
+            "name": node["name"],
+            "status": node["status"],
+            "scheduling_eligible": node["scheduling_eligible"],
+        }
+        if "spark" in node["name"]:
+            system["native_sdk_grpc"] = {
+                "enabled": True,
+                "host": "192.168.5.12",
+                "port": 55052,
+                "capabilities": ["docker_worker_prepare_v1"],
+            }
+        nodes.append(system)
+    return {"nodes": nodes}
+
+
+def test_single_node_placement_selects_spark_and_pins_all_agents():
+    manifest = _cctv_placement_manifest()
+    resources = _mac_and_spark_resources()
+
+    placement = run_cmds._resolve_and_apply_workflow_placement(
+        manifest,
+        resource_report=resources,
+        system_summary=_matching_system_summary(resources),
     )
-    manifest = {"nodes": [{"node_id": "worker", "config": {}}]}
 
-    run_cmds._prefer_default_single_node_agent_placement(manifest)
+    assert placement["selected_node"] == "mirror_neuron@spark"
+    assert manifest["metadata"]["mn_workflow_placement"]["selected_node"] == "mirror_neuron@spark"
+    for node in manifest["nodes"]:
+        assert node["policies"]["scheduler"]["preferred_node"] == "mirror_neuron@spark"
+        assert {"attribute": "node.name", "operator": "==", "value": "mirror_neuron@spark", "source": "mn-cli-workflow-placement"} in node["constraints"]
 
-    assert "policies" not in manifest["nodes"][0]
+
+def test_single_node_placement_scores_gpu_headroom_then_load():
+    manifest = _cctv_placement_manifest()
+    resources = _mac_and_spark_resources(spark_memory_mb=72000)
+    resources["nodes"].append(
+        {
+            "name": "mirror_neuron@spark-2",
+            "status": "healthy",
+            "scheduling_eligible": True,
+            "cpu_load": 99,
+            "devices": [
+                {
+                    "kind": "gpu",
+                    "vendor": "nvidia",
+                    "driver": "cuda",
+                    "memory_total_mb": 131072,
+                    "memory_free_mb": 126000,
+                    "capabilities": ["gpu", "nvidia", "cuda"],
+                }
+            ],
+        }
+    )
+
+    placement = run_cmds._resolve_and_apply_workflow_placement(
+        manifest,
+        resource_report=resources,
+        system_summary=_matching_system_summary(resources),
+    )
+
+    assert placement["selected_node"] == "mirror_neuron@spark-2"
+
+
+def test_single_node_placement_reports_per_node_rejections():
+    manifest = _cctv_placement_manifest()
+    resources = _mac_and_spark_resources(spark_memory_mb=12000)
+
+    with pytest.raises(RuntimeError, match="Per-node rejection reasons") as exc_info:
+        run_cmds._resolve_and_apply_workflow_placement(
+            manifest,
+            resource_report=resources,
+            system_summary=_matching_system_summary(resources),
+        )
+
+    assert "mirror_neuron@mac" in str(exc_info.value)
+    assert "mirror_neuron@spark" in str(exc_info.value)
+    assert "nvidia_cuda_required" in str(exc_info.value)
+
+
+def test_single_node_placement_requires_remote_native_sdk_prerequisites():
+    manifest = _cctv_placement_manifest()
+    resources = _mac_and_spark_resources()
+    system = _matching_system_summary(resources)
+    system["nodes"][1].pop("native_sdk_grpc")
+
+    with pytest.raises(RuntimeError, match="native_sdk_grpc_missing"):
+        run_cmds._resolve_and_apply_workflow_placement(
+            manifest,
+            resource_report=resources,
+            system_summary=system,
+        )
+
+
+def test_single_node_placement_rejects_conflicting_explicit_agents():
+    manifest = _cctv_placement_manifest()
+    manifest["nodes"][0]["policies"] = {"scheduler": {"preferred_node": "mirror_neuron@spark"}}
+    manifest["nodes"][1]["constraints"] = [
+        {"attribute": "node.name", "operator": "==", "value": "mirror_neuron@mac"}
+    ]
+    resources = _mac_and_spark_resources()
+
+    with pytest.raises(RuntimeError, match="conflicts with explicit per-agent placements"):
+        run_cmds._resolve_and_apply_workflow_placement(
+            manifest,
+            resource_report=resources,
+            system_summary=_matching_system_summary(resources),
+        )
+
+
+def test_distributed_placement_and_legacy_alias_leave_agents_unpinned():
+    resources = _mac_and_spark_resources()
+    legacy_manifest = _cctv_placement_manifest()
+    legacy_manifest["runtime"].pop("placement")
+    for manifest, env in (
+        ({**_cctv_placement_manifest(), "runtime": {"placement": {"mode": "distributed"}}}, {}),
+        (legacy_manifest, {"MN_BLUEPRINT_SINGLE_NODE_AGENTS": "0"}),
+    ):
+        assert run_cmds._resolve_and_apply_workflow_placement(
+            manifest,
+            resource_report=resources,
+            system_summary=_matching_system_summary(resources),
+            env=env,
+        ) is None
+        assert "policies" not in manifest["nodes"][0]
+
+
+def test_selected_workflow_node_controls_model_placement_and_gateway_sync(mocker):
+    with run_cmds._runtime_model_placement_scope({"MN_SELECTED_RUNTIME_NODE": "mirror_neuron@spark"}):
+        placement = run_cmds._resolve_runtime_cluster_model(
+            requirement={"model": "gemma4:e2b"},
+            entry={"id": "gemma4:e2b", "requirements": {"min_vram_gb": 8}},
+        )
+    assert placement["node"] == "mirror_neuron@spark"
+    assert placement["source"] == "workflow_placement"
+
+    sync = mocker.patch("mn_cli.libs.run_cmds.sync_litellm_gateway")
+    endpoints = run_cmds._sync_litellm_gateway_for_runtime_models(
+        {
+            "endpoints": {
+                "gemma4:e2b": {
+                    "provider": "docker_model_runner",
+                    "model": "gemma4:e2b",
+                    "api_base": "http://mirror_neuron@spark:4000/v1",
+                    "node": "mirror_neuron@spark",
+                }
+            }
+        },
+        env_overrides={"MN_SELECTED_RUNTIME_NODE": "mirror_neuron@spark"},
+    )
+    sync.assert_not_called()
+    assert endpoints["gemma4:e2b"]["api_base"] == "http://mn-litellm-proxy:4000/v1"
 
 def test_prepare_runtime_models_installs_missing_model_for_run(
     mocker,
@@ -732,7 +854,7 @@ def test_prepare_runtime_models_promotes_preferred_large_profile_on_capable_clus
                 "api_model": "nemotron3",
                 "api_base": "http://192.168.5.12:4000/v1",
                 "node": "mirror_neuron@192.168.5.12",
-                "source": "remote-dmr",
+                "source": "remote_litellm_gateway",
             },
         },
     )
@@ -932,7 +1054,7 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
     assert payload["backend"] == "llama.cpp"
     assert result["endpoint"]["node"] == "mirror_neuron@192.168.4.173"
     assert result["endpoint"]["api_base"] == "http://192.168.4.173:4000/v1"
-    assert result["endpoint"]["source"] == "remote-dmr"
+    assert result["endpoint"]["source"] == "remote_litellm_gateway"
     output = " ".join(capsys.readouterr().out.split())
     assert (
         "Preparing runtime model nemotron3 on mirror_neuron@192.168.4.173 "

@@ -52,7 +52,6 @@ def test_doctor_bundle_prepares_without_submitting_job(mocker, tmp_path):
         side_effect=lambda _bundle_dir, manifest, **_kwargs: manifest,
     )
     mocker.patch("mn_cli.libs.run_cmds._prepare_openshell_custom_images")
-    mocker.patch("mn_cli.libs.run_cmds._prefer_default_single_node_agent_placement")
     mocker.patch(
         "mn_cli.libs.run_cmds._doctor_prepare_hostlocal_python_envs",
         return_value={"status": "skipped", "detail": "none"},
@@ -104,7 +103,6 @@ def test_doctor_bundle_check_only_skips_openshell_build(mocker, tmp_path):
         side_effect=lambda _bundle_dir, manifest, **_kwargs: manifest,
     )
     mock_build = mocker.patch("mn_cli.libs.run_cmds._prepare_openshell_custom_images")
-    mocker.patch("mn_cli.libs.run_cmds._prefer_default_single_node_agent_placement")
     mocker.patch("mn_cli.libs.run_cmds._stage_bundle_payloads", return_value={})
     mock_prepare_job = mocker.patch("mn_cli.libs.run_cmds.prepare_job_submission")
     mocker.patch("mn_cli.libs.run_cmds._doctor_print_report")
@@ -175,6 +173,44 @@ def test_doctor_environment_probe_reports(mocker, tmp_path):
     assert openshell_report["nodes"] == ["shell"]
     assert docker_report["status"] == "passing"
     assert docker_report["services"][0]["service"] == "worker"
+
+
+def test_doctor_prepares_hostlocal_python_on_selected_remote_node(mocker, tmp_path):
+    manifest = {
+        "metadata": {"mn_workflow_placement": {"selected_node": "mirror_neuron@spark"}},
+        "nodes": [
+            {
+                "node_id": "report_writer",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.HostLocal",
+                    "python_environment": {"packages": ["requests==2.32.0"]},
+                },
+            }
+        ],
+    }
+    runtime_client = object()
+    mocker.patch("mn_cli.libs.run_cmds.handlers.doctor._local_runtime_node_name", return_value="mirror_neuron@mac")
+    mocker.patch("mn_cli.libs.run_cmds.handlers.doctor._cluster_node_endpoint", return_value={"node": {}})
+    mocker.patch("mn_cli.libs.run_cmds.handlers.doctor._runtime_model_prepare_client", return_value=runtime_client)
+    prepare = mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor._prepare_runtime_model_with_retry",
+        return_value={"runtime_path": "/runtime/shared/blueprint-python-envs/remote", "host_path": "/host/shared/blueprint-python-envs/remote"},
+    )
+    local_prepare = mocker.patch("mn_cli.libs.run_cmds.handlers.doctor._doctor_prepare_python_env")
+
+    report = run_cmds._doctor_prepare_hostlocal_python_envs(
+        tmp_path,
+        manifest,
+        timeout=1,
+        check_only=False,
+    )
+
+    assert report["status"] == "passing"
+    assert manifest["nodes"][0]["config"]["python_environment"]["path"] == "/runtime/shared/blueprint-python-envs/remote"
+    assert prepare.call_args.args[0] is runtime_client
+    assert prepare.call_args.args[1]["node"] == "mirror_neuron@spark"
+    assert prepare.call_args.args[1]["ensure_hostlocal_python_environment"] is True
+    local_prepare.assert_not_called()
 
 
 def test_doctor_maps_prepared_python_environment_into_runtime_shared_storage(tmp_path, monkeypatch):

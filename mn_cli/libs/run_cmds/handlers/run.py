@@ -144,6 +144,23 @@ def run_bundle(
             force=force,
             allow_local_fallback=False,
         )
+        placement = _resolve_and_apply_workflow_placement(
+            manifest_dict,
+            env={**os.environ, **env_overrides},
+        )
+        if placement:
+            selected_node = str(placement["selected_node"])
+            env_overrides["MN_SELECTED_RUNTIME_NODE"] = selected_node
+            submission_metadata["selected_node"] = selected_node
+            submission_metadata["workflow_placement"] = {
+                "mode": placement["mode"],
+                "selected_node": selected_node,
+                "selection": placement["selection"],
+            }
+            _print_launch_progress(
+                "Resolve workflow placement",
+                f"selected {selected_node}; all agents and node-local runtime services are pinned there.",
+            )
         blueprint_run_id = submission_metadata.get(
             "blueprint_run_id"
         ) or env_overrides.get("MN_RUN_ID")
@@ -245,7 +262,6 @@ def run_bundle(
         if force:
             _mark_manifest_force(manifest_dict)
         _prepare_openshell_custom_images(bundle_dir, manifest_dict)
-        _prefer_default_single_node_agent_placement(manifest_dict)
 
         payloads = _stage_bundle_payloads(bundle_dir, manifest_dict, web_ui=web_ui)
 

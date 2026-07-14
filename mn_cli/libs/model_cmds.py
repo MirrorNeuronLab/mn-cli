@@ -184,7 +184,7 @@ def install_model(
                 ("Model", entry.get("id")),
                 ("Docker model", target),
                 ("Backend", compatibility.get("backend")),
-                ("Route", "remote-dmr" if selected_node else "local-dmr"),
+                ("Route", "remote-litellm-gateway" if selected_node else "local-litellm-gateway"),
             ],
             next_steps=f"mn model doctor {entry.get('id')}",
         )
@@ -694,7 +694,7 @@ def _cluster_gateway_endpoint(
         "api_base": _node_litellm_gateway_api_base(node_endpoint, payload),
         "api_key": str(endpoint.get("api_key") or "not-needed"),
         "node": str(endpoint.get("node") or node_endpoint.get("node_name") or ""),
-        "source": "remote-dmr",
+        "source": "remote_litellm_gateway",
     }
     aliases = entry.get("route_aliases")
     if isinstance(aliases, list) and aliases:
@@ -1116,7 +1116,7 @@ def _public_gateway_endpoint_for_owner(
     owner_endpoint: dict[str, Any] | None,
     endpoint: dict[str, Any],
 ) -> dict[str, Any] | None:
-    if endpoint.get("source") == "remote-dmr":
+    if endpoint.get("source") in {"remote-dmr", "remote_litellm_gateway"}:
         return endpoint
     if owner_endpoint is None:
         return None
@@ -1134,7 +1134,7 @@ def _public_gateway_endpoint_for_owner(
         "api_base": f"http://{host}:{port}/v1",
         "api_key": "not-needed",
         "node": str(owner_endpoint.get("node_name") or endpoint.get("node") or ""),
-        "source": "remote-dmr" if endpoint.get("source") == "local-dmr" else str(endpoint.get("source") or "gateway-fanout"),
+        "source": "remote_litellm_gateway" if endpoint.get("source") == "local-dmr" else str(endpoint.get("source") or "gateway-fanout"),
     }
 
 
@@ -1177,7 +1177,7 @@ def _remote_model_payloads(*, existing_ids: set[str]) -> list[dict[str, Any]]:
                 "installed": True,
                 "status": "remote",
                 "owner_count": 0,
-                "route_source": "remote-dmr" if remote.get("node") else "manual-remote",
+                "route_source": "remote_litellm_gateway" if remote.get("node") else "manual-remote",
                 "node": remote.get("node") or "",
             }
         )

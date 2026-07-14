@@ -1,6 +1,43 @@
 from .common import *
+from contextlib import contextmanager
+from contextvars import ContextVar
+
+
+_WORKFLOW_PLACEMENT_NODE: ContextVar[str] = ContextVar(
+    "mn_workflow_placement_node", default=""
+)
+
+
+@contextmanager
+def _runtime_model_placement_scope(env_overrides: Optional[dict[str, str]] = None):
+    """Make the workflow node available to model preparation callbacks.
+
+    ``BlueprintModelOps`` only passes a model requirement and catalog entry to
+    its placement callback.  A context variable keeps that callback coupled to
+    the placement selected for this launch without mutating process-wide
+    environment variables (or model catalog entries).
+    """
+
+    selected_node = str(
+        (env_overrides or {}).get("MN_SELECTED_RUNTIME_NODE")
+        or os.environ.get("MN_SELECTED_RUNTIME_NODE")
+        or ""
+    ).strip()
+    token = _WORKFLOW_PLACEMENT_NODE.set(selected_node)
+    try:
+        yield
+    finally:
+        _WORKFLOW_PLACEMENT_NODE.reset(token)
 
 def _resolve_runtime_cluster_model(*, requirement: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any] | None:
+    selected_node = _WORKFLOW_PLACEMENT_NODE.get().strip()
+    if selected_node:
+        return {
+            "source": "workflow_placement",
+            "status": "cluster_node",
+            "node": selected_node,
+            "requirement": _workflow_model_gpu_requirement(entry),
+        }
     if is_custom_model_requirement(requirement):
         resource_report = _runtime_resource_report()
         try:
@@ -125,20 +162,501 @@ def _prepare_runtime_model_with_retry(runtime_client: Client, prepare_payload: d
         logger=logger,
     )
 
-def _prefer_default_single_node_agent_placement(manifest: dict[str, Any]) -> None:
-    if str(os.environ.get("MN_BLUEPRINT_SINGLE_NODE_AGENTS", "1")).strip().lower() in FALSE_VALUES:
-        return
-    node_name = _local_runtime_node_name()
-    if not node_name:
-        return
-    for node in manifest_nodes(manifest):
-        if _node_has_explicit_node_placement(node):
+def _resolve_and_apply_workflow_placement(
+    manifest: dict[str, Any],
+    *,
+    resource_report: Optional[dict[str, Any]] = None,
+    system_summary: Optional[dict[str, Any]] = None,
+    env: Optional[dict[str, str]] = None,
+) -> dict[str, Any] | None:
+    """Select one node that can satisfy the complete native workflow.
+
+    Placement is intentionally resolved before model, context, HostLocal, or
+    DockerWorker preparation.  A workflow that uses node-local resources must
+    not have its lightweight nodes left on the submitter while a GPU worker is
+    sent to another machine: that produces unreachable gateways, context
+    services, and container networks.
+    """
+
+    mode = _workflow_placement_mode(manifest, env=env)
+    if mode == "distributed":
+        return None
+    if mode is None and not _workflow_requires_single_node(manifest):
+        return None
+
+    resources = resource_report if isinstance(resource_report, dict) else _runtime_resource_report()
+    if system_summary is None:
+        try:
+            decoded = json.loads(client.get_system_summary())
+        except Exception as exc:
+            raise RuntimeError(f"could not inspect runtime nodes for workflow placement: {exc}") from exc
+        system_summary = decoded if isinstance(decoded, dict) else {}
+
+    resource_nodes = _workflow_nodes_by_name(resources)
+    system_nodes = _workflow_nodes_by_name(system_summary)
+    names = sorted(set(resource_nodes) | set(system_nodes))
+    if not names:
+        raise RuntimeError("No runtime nodes were reported while resolving single-node workflow placement.")
+
+    explicit = _workflow_explicit_node_placements(manifest)
+    distinct_explicit = sorted(set(explicit.values()))
+    if len(distinct_explicit) > 1:
+        details = ", ".join(f"{node_id}={node_name}" for node_id, node_name in sorted(explicit.items()))
+        raise RuntimeError(
+            "single_node workflow placement conflicts with explicit per-agent placements: " + details
+        )
+
+    requirements = _workflow_node_requirements(manifest)
+    candidates: list[tuple[tuple[float, float, str], str, dict[str, Any]]] = []
+    rejections: dict[str, list[str]] = {}
+    for name in names:
+        resource = resource_nodes.get(name) or system_nodes.get(name) or {}
+        system = system_nodes.get(name) or resource
+        reasons = _workflow_node_rejections(
+            name,
+            resource=resource,
+            system=system,
+            requirements=requirements,
+            explicit_node=distinct_explicit[0] if distinct_explicit else "",
+        )
+        if reasons:
+            rejections[name] = reasons
             continue
+        capacity = _workflow_node_capacity(resource, system)
+        # Higher free GPU-memory headroom wins; after that prefer lower load,
+        # then the node name for deterministic placement.
+        headroom = capacity["gpu_memory_free_mb"] - requirements["min_gpu_memory_mb"]
+        score = (headroom, -_workflow_node_load(resource, system), name)
+        candidates.append((score, name, capacity))
+
+    if not candidates:
+        diagnostics = "; ".join(
+            f"{name}: {', '.join(reasons)}" for name, reasons in sorted(rejections.items())
+        ) or "no eligible runtime nodes"
+        raise RuntimeError(
+            "No single runtime node can run this workflow. Per-node rejection reasons: " + diagnostics
+        )
+
+    _, selected_node, capacity = sorted(
+        candidates,
+        key=lambda item: (-item[0][0], -item[0][1], item[0][2]),
+    )[0]
+    _apply_workflow_node_constraint(manifest, selected_node)
+    placement = {
+        "mode": "single_node",
+        "selected_node": selected_node,
+        "selection": "best_fit_accelerator_headroom",
+        "capacity": capacity,
+        "requirements": requirements,
+        "rejections": rejections,
+    }
+    metadata = manifest.setdefault("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+        manifest["metadata"] = metadata
+    metadata["mn_workflow_placement"] = placement
+    runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
+    if runtime:
+        runtime_placement = runtime.get("placement") if isinstance(runtime.get("placement"), dict) else {}
+        runtime_placement["mode"] = "single_node"
+        runtime_placement["selected_node"] = selected_node
+        runtime["placement"] = runtime_placement
+        manifest["runtime"] = runtime
+    return placement
+
+
+def _workflow_placement_mode(manifest: dict[str, Any], *, env: Optional[dict[str, str]]) -> str | None:
+    runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
+    declaration = runtime.get("placement") if isinstance(runtime.get("placement"), dict) else {}
+    raw_mode = str(declaration.get("mode") or "").strip().lower().replace("-", "_")
+    if raw_mode and raw_mode not in {"single_node", "distributed"}:
+        raise RuntimeError("runtime.placement.mode must be either 'single_node' or 'distributed'.")
+    if raw_mode:
+        return raw_mode
+    values = os.environ if env is None else env
+    # Compatibility only: older callers can explicitly opt into their former
+    # distributed scheduling behavior while they migrate to runtime.placement.
+    if str(values.get("MN_BLUEPRINT_SINGLE_NODE_AGENTS", "")).strip().lower() in FALSE_VALUES:
+        return "distributed"
+    return None
+
+
+def _workflow_requires_single_node(manifest: dict[str, Any]) -> bool:
+    runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
+    if isinstance(runtime.get("models"), dict) and runtime["models"]:
+        return True
+    if isinstance(runtime.get("memory"), dict) and runtime["memory"]:
+        return True
+    for node in manifest_nodes(manifest):
+        config = node.get("config") if isinstance(node.get("config"), dict) else {}
+        runner = str(config.get("runner_module") or "").strip()
+        if runner in {"MirrorNeuron.Runner.DockerWorker", "MirrorNeuron.Runner.HostLocal"}:
+            return True
+        if config.get("gpus") not in (None, "", "none", "None"):
+            return True
+    return False
+
+
+def _workflow_explicit_node_placements(manifest: dict[str, Any]) -> dict[str, str]:
+    placements: dict[str, str] = {}
+    for index, node in enumerate(manifest_nodes(manifest)):
+        node_id = str(node.get("node_id") or node.get("id") or f"node-{index}")
+        explicit = _node_explicit_node_name(node)
+        if explicit:
+            placements[node_id] = explicit
+    return placements
+
+
+def _node_explicit_node_name(node: dict[str, Any]) -> str:
+    policies = node.get("policies") if isinstance(node.get("policies"), dict) else {}
+    scheduler = policies.get("scheduler") if isinstance(policies.get("scheduler"), dict) else {}
+    for value in (
+        scheduler.get("preferred_node"),
+        scheduler.get("preferredNode"),
+        policies.get("preferred_node"),
+        policies.get("preferredNode"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            return text
+    constraints = node.get("constraints") if isinstance(node.get("constraints"), list) else []
+    for constraint in constraints:
+        if not isinstance(constraint, dict) or not _is_node_name_constraint(constraint):
+            continue
+        if str(constraint.get("operator") or "==").strip().lower() not in {"==", "=", "eq", "equals"}:
+            continue
+        value = str(constraint.get("value") or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _workflow_node_requirements(manifest: dict[str, Any]) -> dict[str, Any]:
+    requirements: dict[str, Any] = {
+        "constraints": [],
+        "resources": [],
+        "min_gpu_count": 0.0,
+        "min_gpu_memory_mb": 0.0,
+        "requires_nvidia": False,
+        "requires_native_model_prepare": False,
+        "requires_native_docker_worker_prepare": False,
+        "sources": [],
+    }
+    for index, node in enumerate(manifest_nodes(manifest)):
+        node_id = str(node.get("node_id") or node.get("id") or f"node-{index}")
+        constraints = node.get("constraints") if isinstance(node.get("constraints"), list) else []
+        if constraints:
+            requirements["constraints"].extend(
+                (node_id, constraint) for constraint in constraints if isinstance(constraint, dict)
+            )
+        resources = node.get("resources") if isinstance(node.get("resources"), dict) else {}
+        if resources:
+            requirements["resources"].append((node_id, resources))
+            _merge_workflow_resource_requirement(requirements, resources, source=node_id)
+        config = node.get("config") if isinstance(node.get("config"), dict) else {}
+        if str(config.get("runner_module") or "") == "MirrorNeuron.Runner.DockerWorker":
+            requirements["sources"].append(f"{node_id}:DockerWorker")
+            requirements["requires_native_docker_worker_prepare"] = True
+            if str(config.get("gpus") or "").strip().lower() not in {"", "none", "false", "0"}:
+                requirements["requires_nvidia"] = True
+                requirements["min_gpu_count"] = max(requirements["min_gpu_count"], 1.0)
+        if str(config.get("gpus") or "").strip().lower() not in {"", "none", "false", "0"}:
+            requirements["requires_nvidia"] = True
+            requirements["min_gpu_count"] = max(requirements["min_gpu_count"], 1.0)
+
+    top_level = manifest.get("requirements") if isinstance(manifest.get("requirements"), dict) else {}
+    gpu = top_level.get("gpu") if isinstance(top_level.get("gpu"), dict) else {}
+    if gpu:
+        requirements["min_gpu_count"] = max(requirements["min_gpu_count"], _workflow_number(gpu.get("min_count") or gpu.get("count") or 1))
+        requirements["min_gpu_memory_mb"] = max(requirements["min_gpu_memory_mb"], _workflow_number(gpu.get("min_memory_mb")))
+        requirements["requires_nvidia"] = requirements["requires_nvidia"] or str(gpu.get("vendor") or "").lower() == "nvidia"
+        requirements["sources"].append("manifest.requirements.gpu")
+
+    runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
+    models = runtime.get("models") if isinstance(runtime.get("models"), dict) else {}
+    for name, model in models.items():
+        if not isinstance(model, dict):
+            continue
+        model_ref = str(model.get("runtime_model") or model.get("model") or "").strip()
+        if not model_ref:
+            continue
+        requirements["requires_native_model_prepare"] = True
+        try:
+            entry = resolve_model_entry(model_ref)
+        except Exception:
+            entry = model
+        requirement = _workflow_model_gpu_requirement(entry)
+        if requirement:
+            requirements["min_gpu_count"] = max(requirements["min_gpu_count"], requirement["min_count"])
+            requirements["min_gpu_memory_mb"] = max(requirements["min_gpu_memory_mb"], requirement["min_memory_mb"])
+            requirements["sources"].append(f"runtime.models.{name}")
+    return requirements
+
+
+def _workflow_model_gpu_requirement(entry: dict[str, Any]) -> dict[str, float] | None:
+    raw = entry.get("requirements") if isinstance(entry.get("requirements"), dict) else {}
+    values = [
+        _workflow_number(raw.get("min_vram_gb")) * 1024,
+        _workflow_number(raw.get("min_unified_memory_gb")) * 1024,
+        _workflow_number(raw.get("min_memory_mb")),
+    ]
+    required_memory = max(values, default=0.0)
+    if required_memory <= 0:
+        return None
+    return {"min_count": 1.0, "min_memory_mb": required_memory}
+
+
+def _merge_workflow_resource_requirement(requirements: dict[str, Any], resource: dict[str, Any], *, source: str) -> None:
+    gpu_count = _workflow_number(resource.get("gpu_count"))
+    requirements["min_gpu_count"] = max(requirements["min_gpu_count"], gpu_count)
+    devices = resource.get("devices") if isinstance(resource.get("devices"), list) else []
+    for device in devices:
+        if not isinstance(device, dict):
+            continue
+        kind = str(device.get("kind") or "").lower()
+        if kind != "gpu" and "gpu" not in str(device.get("type") or "").lower():
+            continue
+        requirements["min_gpu_count"] = max(requirements["min_gpu_count"], _workflow_number(device.get("count") or 1))
+        requirements["min_gpu_memory_mb"] = max(
+            requirements["min_gpu_memory_mb"], _workflow_number(device.get("min_memory_mb"))
+        )
+        if str(device.get("vendor") or "").strip().lower() == "nvidia" or str(device.get("driver") or "").strip().lower() == "cuda":
+            requirements["requires_nvidia"] = True
+    if gpu_count or devices:
+        requirements["sources"].append(f"{source}:resources")
+
+
+def _workflow_node_rejections(
+    name: str,
+    *,
+    resource: dict[str, Any],
+    system: dict[str, Any],
+    requirements: dict[str, Any],
+    explicit_node: str,
+) -> list[str]:
+    reasons: list[str] = []
+    for source, facts in (("resource", resource), ("system", system)):
+        status = str(facts.get("status") or "healthy").strip().lower()
+        if status not in {"healthy", "joining"}:
+            reasons.append(f"{source}_status={status}")
+        if facts.get("scheduling_eligible") is False:
+            reasons.append(f"{source}_scheduling_ineligible")
+        if _workflow_truthy(facts.get("drain")):
+            reasons.append(f"{source}_draining")
+        if _workflow_truthy(facts.get("maintenance")):
+            reasons.append(f"{source}_maintenance")
+    if explicit_node and name != explicit_node:
+        reasons.append(f"explicit_placement_requires={explicit_node}")
+    for node_id, constraint in requirements["constraints"]:
+        if not _workflow_constraint_matches(constraint, name, resource, system):
+            reasons.append(f"{node_id}:constraint_unsatisfied")
+    for node_id, requested in requirements["resources"]:
+        if not _workflow_resources_match(requested, resource, system):
+            reasons.append(f"{node_id}:resources_unsatisfied")
+    capacity = _workflow_node_capacity(resource, system)
+    if capacity["gpu_count"] < requirements["min_gpu_count"]:
+        reasons.append(
+            f"gpu_count={int(capacity['gpu_count'])} < required={int(requirements['min_gpu_count'])}"
+        )
+    if capacity["gpu_memory_free_mb"] < requirements["min_gpu_memory_mb"]:
+        reasons.append(
+            f"gpu_memory_free_mb={int(capacity['gpu_memory_free_mb'])} < required={int(requirements['min_gpu_memory_mb'])}"
+        )
+    if requirements["requires_nvidia"] and "nvidia" not in _workflow_node_capabilities(resource, system):
+        reasons.append("nvidia_cuda_required")
+    if not _workflow_node_is_local(system) and (
+        requirements["requires_native_model_prepare"]
+        or requirements["requires_native_docker_worker_prepare"]
+    ):
+        native = _node_native_sdk_grpc_info(system)
+        if not native:
+            reasons.append("native_sdk_grpc_missing")
+        elif native.get("enabled") is False:
+            reasons.append("native_sdk_grpc_disabled")
+        elif not str(native.get("target") or native.get("host") or "").strip() or not str(native.get("port") or "").strip():
+            reasons.append("native_sdk_grpc_incomplete")
+        elif requirements["requires_native_docker_worker_prepare"]:
+            capabilities = native.get("capabilities")
+            if isinstance(capabilities, str):
+                capabilities = [capabilities]
+            if isinstance(capabilities, list) and capabilities and "docker_worker_prepare_v1" not in {
+                str(item) for item in capabilities
+            }:
+                reasons.append("native_sdk_capability_missing:docker_worker_prepare_v1")
+    return list(dict.fromkeys(reasons))
+
+
+def _workflow_constraint_matches(constraint: dict[str, Any], name: str, resource: dict[str, Any], system: dict[str, Any]) -> bool:
+    attribute = str(constraint.get("attribute") or constraint.get("target") or constraint.get("l_target") or "").strip("${}")
+    operator = str(constraint.get("operator") or "==").strip().lower()
+    expected = constraint.get("value")
+    values = _workflow_placement_values(attribute, name, resource, system)
+    expected_values = expected if isinstance(expected, list) else [expected]
+    wanted = {str(value).strip().lower() for value in expected_values if str(value or "").strip()}
+    if operator in {"==", "=", "eq", "equals"}:
+        return bool(wanted) and next(iter(wanted)) in values
+    if operator in {"contains", "in"}:
+        return bool(wanted & values)
+    if operator in {"contains_all", "all"}:
+        return wanted.issubset(values)
+    return False
+
+
+def _workflow_resources_match(requested: dict[str, Any], resource: dict[str, Any], system: dict[str, Any]) -> bool:
+    capacity = _workflow_node_capacity(resource, system)
+    if capacity["gpu_count"] < _workflow_number(requested.get("gpu_count")):
+        return False
+    devices = _workflow_node_devices(resource, system)
+    for needed in requested.get("devices") or []:
+        if not isinstance(needed, dict):
+            continue
+        count = int(_workflow_number(needed.get("count") or 1))
+        matches = [device for device in devices if _workflow_device_matches(needed, device)]
+        if len(matches) < count:
+            return False
+    return True
+
+
+def _workflow_device_matches(needed: dict[str, Any], actual: dict[str, Any]) -> bool:
+    for key in ("kind", "type", "vendor", "driver"):
+        expected = str(needed.get(key) or "").strip().lower()
+        if expected and str(actual.get(key) or "").strip().lower() != expected:
+            return False
+    minimum = _workflow_number(needed.get("min_memory_mb"))
+    memory = _workflow_number(actual.get("memory_free_mb") or actual.get("memory_total_mb"))
+    return memory >= minimum
+
+
+def _workflow_node_capacity(resource: dict[str, Any], system: dict[str, Any]) -> dict[str, float]:
+    devices = [device for device in _workflow_node_devices(resource, system) if _workflow_is_gpu_device(device)]
+    return {
+        "gpu_count": max(_workflow_number(resource.get("gpu_count")), float(len(devices))),
+        "gpu_memory_free_mb": max(
+            _workflow_number(resource.get("gpu_memory_free_mb")),
+            sum(_workflow_number(device.get("memory_free_mb") or device.get("memory_total_mb")) for device in devices),
+        ),
+    }
+
+
+def _workflow_node_devices(resource: dict[str, Any], system: dict[str, Any]) -> list[dict[str, Any]]:
+    devices: list[dict[str, Any]] = []
+    for facts in (resource, system):
+        for container in (facts, facts.get("hardware") if isinstance(facts.get("hardware"), dict) else {}):
+            raw = container.get("devices") or container.get("gpu")
+            if isinstance(raw, list):
+                devices.extend(item for item in raw if isinstance(item, dict))
+            elif isinstance(raw, dict):
+                devices.append(raw)
+    unique: dict[str, dict[str, Any]] = {}
+    for index, device in enumerate(devices):
+        unique[str(device.get("id") or device.get("uuid") or f"{device.get('name')}:{index}")] = device
+    return list(unique.values())
+
+
+def _workflow_node_capabilities(resource: dict[str, Any], system: dict[str, Any]) -> set[str]:
+    capabilities: set[str] = set()
+    for facts in (resource, system):
+        for container in (facts, facts.get("hardware") if isinstance(facts.get("hardware"), dict) else {}):
+            raw = container.get("capabilities")
+            if isinstance(raw, str):
+                capabilities.add(raw.lower())
+            elif isinstance(raw, list):
+                capabilities.update(str(value).lower() for value in raw)
+    for device in _workflow_node_devices(resource, system):
+        capabilities.update(str(value).lower() for value in device.get("capabilities") or [])
+        for key in ("kind", "type", "vendor", "driver"):
+            value = str(device.get(key) or "").strip().lower()
+            if value:
+                capabilities.add(value)
+    return capabilities
+
+
+def _workflow_placement_values(attribute: str, name: str, resource: dict[str, Any], system: dict[str, Any]) -> set[str]:
+    if attribute in {"node", "node.name", "node.unique.name"}:
+        return {name.lower()}
+    if attribute in {"capability", "capabilities"}:
+        return _workflow_node_capabilities(resource, system)
+    values: set[str] = set()
+    for facts in (resource, system):
+        for container in (facts, facts.get("hardware") if isinstance(facts.get("hardware"), dict) else {}):
+            value = container.get(attribute)
+            if isinstance(value, list):
+                values.update(str(item).strip().lower() for item in value)
+            elif value is not None:
+                values.add(str(value).strip().lower())
+    return values
+
+
+def _apply_workflow_node_constraint(manifest: dict[str, Any], selected_node: str) -> None:
+    for index, node in enumerate(manifest_nodes(manifest)):
+        node_id = str(node.get("node_id") or node.get("id") or f"node-{index}")
+        explicit = _node_explicit_node_name(node)
+        if explicit and explicit != selected_node:
+            raise RuntimeError(
+                f"single_node workflow placement selected {selected_node}, but {node_id} explicitly requires {explicit}"
+            )
         policies = node.get("policies") if isinstance(node.get("policies"), dict) else {}
         scheduler = policies.get("scheduler") if isinstance(policies.get("scheduler"), dict) else {}
-        scheduler.setdefault("preferred_node", node_name)
+        scheduler["preferred_node"] = selected_node
         policies["scheduler"] = scheduler
         node["policies"] = policies
+        constraints = node.get("constraints") if isinstance(node.get("constraints"), list) else []
+        existing = [constraint for constraint in constraints if isinstance(constraint, dict)]
+        if not any(
+            _is_node_name_constraint(constraint)
+            and str(constraint.get("operator") or "==").strip().lower() in {"==", "=", "eq", "equals"}
+            and str(constraint.get("value") or "").strip() == selected_node
+            for constraint in existing
+        ):
+            existing.append(
+                {
+                    "attribute": "node.name",
+                    "operator": "==",
+                    "value": selected_node,
+                    "source": "mn-cli-workflow-placement",
+                }
+            )
+        node["constraints"] = existing
+
+
+def _workflow_nodes_by_name(report: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    nodes = report.get("nodes") if isinstance(report, dict) else None
+    return {
+        str(node.get("name") or node.get("node") or "").strip(): node
+        for node in nodes or []
+        if isinstance(node, dict) and str(node.get("name") or node.get("node") or "").strip()
+    }
+
+
+def _workflow_node_load(resource: dict[str, Any], system: dict[str, Any]) -> float:
+    values: list[float] = []
+    for facts in (resource, system):
+        for key in ("load", "cpu_load", "active_jobs", "running_jobs", "allocations"):
+            values.append(_workflow_number(facts.get(key)))
+    return max(values, default=0.0)
+
+
+def _workflow_is_gpu_device(device: dict[str, Any]) -> bool:
+    return (
+        str(device.get("kind") or "").lower() == "gpu"
+        or "gpu" in str(device.get("type") or "").lower()
+        or "gpu" in {str(value).lower() for value in device.get("capabilities") or []}
+    )
+
+
+def _workflow_number(value: Any) -> float:
+    try:
+        return max(float(value or 0), 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _workflow_truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "draining", "maintenance"}
+
+
+def _workflow_node_is_local(node: dict[str, Any]) -> bool:
+    return node.get("self") is True or node.get("self?") is True
 
 def _local_runtime_node_name() -> str:
     try:

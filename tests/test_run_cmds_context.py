@@ -78,6 +78,50 @@ def test_run_ensures_context_engine_when_blueprint_memory_enabled(mocker, tmp_pa
     mock_ensure.assert_called_once_with(force=True)
     mock_submit.assert_called_once()
 
+
+def test_context_engine_prepares_on_selected_workflow_node(mocker, tmp_path):
+    bundle_dir = tmp_path / "remote_context_bundle"
+    bundle_dir.mkdir()
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps({"memory_layer": {"enabled": True, "sdk_import_package": "mn_context_engine_sdk"}}),
+        encoding="utf-8",
+    )
+    manifest = {"runtime": {"memory": {"enabled": True}}}
+    endpoint = {"node": {"name": "mirror_neuron@spark"}}
+    runtime_client = object()
+    mocker.patch("mn_cli.libs.run_cmds.context._cluster_node_endpoint", return_value=endpoint)
+    mocker.patch("mn_cli.libs.run_cmds.context._runtime_model_prepare_client", return_value=runtime_client)
+    prepare = mocker.patch(
+        "mn_cli.libs.run_cmds.context._prepare_runtime_model_with_retry",
+        return_value={
+            "status": "started",
+            "service": "membrane-context-engine",
+            "model": "hf.co/context",
+            "node": "mirror_neuron@spark",
+        },
+    )
+    local_ensure = mocker.patch("mn_cli.libs.run_cmds.context.ensure_context_engine_runtime")
+
+    summary = run_cmds._ensure_context_engine_for_run_if_needed(
+        bundle_dir,
+        manifest,
+        env_overrides={"MN_SELECTED_RUNTIME_NODE": "mirror_neuron@spark"},
+        force=True,
+    )
+
+    assert summary["node"] == "mirror_neuron@spark"
+    assert prepare.call_args.args[0] is runtime_client
+    assert prepare.call_args.args[1] == {
+        "node": "mirror_neuron@spark",
+        "purpose": "context_engine",
+        "ensure_context_engine": True,
+        "force": True,
+        "source": "mn-cli-workflow-placement",
+    }
+    local_ensure.assert_not_called()
+
 def test_runtime_ensure_context_engine_explains_first_launch(mocker):
     mock_ensure = mocker.patch(
         "mn_cli.libs.sys_cmds.ensure_context_engine_runtime",
