@@ -202,6 +202,15 @@ def run_bundle(
         if placement:
             selected_node = str(placement["selected_node"])
             env_overrides["MN_SELECTED_RUNTIME_NODE"] = selected_node
+            model_fallbacks = placement.get("model_fallbacks")
+            if isinstance(model_fallbacks, list) and model_fallbacks:
+                # The placement preflight selected the portable catalog model.
+                # Keep that decision through preparation so the native runtime
+                # installs it on the same pinned node while workers continue to
+                # call LiteLLM's logical ``default`` alias.
+                env_overrides["MN_SELECTED_RUNTIME_MODEL_FALLBACKS_JSON"] = (
+                    json.dumps(model_fallbacks, sort_keys=True)
+                )
             submission_metadata["selected_node"] = selected_node
             submission_metadata["workflow_placement"] = {
                 "mode": placement["mode"],

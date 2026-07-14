@@ -1472,6 +1472,74 @@ def test_runtime_model_preflight_rejects_ineligible_node_before_prepare(mocker):
     prepare.assert_not_called()
 
 
+def test_runtime_model_preflight_selects_small_fallback_for_default_on_small_node():
+    manifest = {"runtime": {"placement": {"mode": "single_node"}}, "nodes": []}
+    requirements = [
+        {
+            "label": "nemotron3",
+            "model": "nemotron3",
+            "entry": {
+                "id": "nemotron3",
+                "model": "nemotron3",
+                "fallback_model": "gemma4:e2b",
+                "requirements": {"min_unified_memory_gb": 48},
+            },
+            "source": "llm.configs.primary",
+        }
+    ]
+    resources = {
+        "nodes": [
+            {
+                "name": "mirror_neuron@mac",
+                "status": "healthy",
+                "scheduling_eligible": True,
+                "devices": [
+                    {
+                        "kind": "gpu",
+                        "memory_free_mb": 24576,
+                        "memory_total_mb": 32768,
+                    }
+                ],
+            }
+        ]
+    }
+    system = {
+        "nodes": [
+            {
+                "name": "mirror_neuron@mac",
+                "status": "healthy",
+                "scheduling_eligible": True,
+                "self": True,
+            }
+        ]
+    }
+
+    placement = run_cmds._preflight_and_apply_runtime_model_placement(
+        manifest,
+        runtime_model_requirements=requirements,
+        resource_report=resources,
+        system_summary=system,
+    )
+
+    assert placement["selected_node"] == "mirror_neuron@mac"
+    assert placement["requirements"]["min_gpu_memory_mb"] == 16384
+    assert placement["model_fallbacks"][0]["fallback"]["id"] == "gemma4:e2b"
+    with run_cmds._runtime_model_placement_scope(
+        {
+            "MN_SELECTED_RUNTIME_NODE": "mirror_neuron@mac",
+            "MN_SELECTED_RUNTIME_MODEL_FALLBACKS_JSON": json.dumps(
+                placement["model_fallbacks"]
+            ),
+        }
+    ):
+        resolved = run_cmds._resolve_runtime_cluster_model(
+            requirement=requirements[0], entry=requirements[0]["entry"]
+        )
+    assert resolved["node"] == "mirror_neuron@mac"
+    assert resolved["status"] == "fallback_model"
+    assert resolved["fallback_entry"]["id"] == "gemma4:e2b"
+
+
 def test_distributed_runtime_model_preflight_rejects_before_prepare(mocker):
     manifest = {"runtime": {"placement": {"mode": "distributed"}}, "nodes": []}
     requirements = [

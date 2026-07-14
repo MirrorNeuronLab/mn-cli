@@ -6,6 +6,9 @@ from contextvars import ContextVar
 _WORKFLOW_PLACEMENT_NODE: ContextVar[str] = ContextVar(
     "mn_workflow_placement_node", default=""
 )
+_WORKFLOW_PLACEMENT_MODEL_FALLBACKS: ContextVar[tuple[dict[str, Any], ...]] = (
+    ContextVar("mn_workflow_placement_model_fallbacks", default=())
+)
 
 
 @contextmanager
@@ -23,10 +26,13 @@ def _runtime_model_placement_scope(env_overrides: Optional[dict[str, str]] = Non
         or os.environ.get("MN_SELECTED_RUNTIME_NODE")
         or ""
     ).strip()
+    fallback_records = _workflow_placement_model_fallback_records(env_overrides)
     token = _WORKFLOW_PLACEMENT_NODE.set(selected_node)
+    fallback_token = _WORKFLOW_PLACEMENT_MODEL_FALLBACKS.set(fallback_records)
     try:
         yield
     finally:
+        _WORKFLOW_PLACEMENT_MODEL_FALLBACKS.reset(fallback_token)
         _WORKFLOW_PLACEMENT_NODE.reset(token)
 
 
@@ -35,6 +41,16 @@ def _resolve_runtime_cluster_model(
 ) -> dict[str, Any] | None:
     selected_node = _WORKFLOW_PLACEMENT_NODE.get().strip()
     if selected_node:
+        fallback_entry = _workflow_placement_fallback_for_entry(entry)
+        if fallback_entry is not None:
+            return {
+                "source": "workflow_placement",
+                "status": "fallback_model",
+                "node": selected_node,
+                "requirement": _workflow_model_gpu_requirement(fallback_entry),
+                "fallback_entry": fallback_entry,
+                "fallback_reason": "no_capable_node_for_preferred_model",
+            }
         return {
             "source": "workflow_placement",
             "status": "cluster_node",
@@ -252,31 +268,50 @@ def _resolve_and_apply_workflow_placement(
             + details
         )
 
-    requirements = _workflow_node_requirements(
+    requested_requirements = _workflow_node_requirements(
         manifest,
         runtime_model_requirements=runtime_model_requirements,
     )
-    candidates: list[tuple[tuple[float, float, str], str, dict[str, Any]]] = []
-    rejections: dict[str, list[str]] = {}
-    for name in names:
-        resource = resource_nodes.get(name) or system_nodes.get(name) or {}
-        system = system_nodes.get(name) or resource
-        reasons = _workflow_node_rejections(
-            name,
-            resource=resource,
-            system=system,
-            requirements=requirements,
-            explicit_node=distinct_explicit[0] if distinct_explicit else "",
+    requirements = requested_requirements
+    candidates, rejections = _workflow_placement_candidates(
+        names,
+        resource_nodes=resource_nodes,
+        system_nodes=system_nodes,
+        requirements=requirements,
+        explicit_node=distinct_explicit[0] if distinct_explicit else "",
+    )
+    model_fallbacks: list[dict[str, Any]] = []
+    if not candidates and runtime_model_requirements:
+        fallback_model_requirements, model_fallbacks = (
+            _workflow_model_fallback_requirements(runtime_model_requirements)
         )
-        if reasons:
-            rejections[name] = reasons
-            continue
-        capacity = _workflow_node_capacity(resource, system)
-        # Higher free GPU-memory headroom wins; after that prefer lower load,
-        # then the node name for deterministic placement.
-        headroom = capacity["gpu_memory_free_mb"] - requirements["min_gpu_memory_mb"]
-        score = (headroom, -_workflow_node_load(resource, system), name)
-        candidates.append((score, name, capacity))
+        if model_fallbacks:
+            requirements = _workflow_node_requirements(
+                manifest,
+                runtime_model_requirements=fallback_model_requirements,
+            )
+            candidates, fallback_rejections = _workflow_placement_candidates(
+                names,
+                resource_nodes=resource_nodes,
+                system_nodes=system_nodes,
+                requirements=requirements,
+                explicit_node=distinct_explicit[0] if distinct_explicit else "",
+            )
+            if candidates:
+                rejections = fallback_rejections
+            else:
+                rejections = {
+                    name: list(
+                        dict.fromkeys(
+                            rejections.get(name, [])
+                            + [
+                                "fallback placement: " + reason
+                                for reason in fallback_rejections.get(name, [])
+                            ]
+                        )
+                    )
+                    for name in sorted(set(rejections) | set(fallback_rejections))
+                }
 
     if not candidates:
         diagnostics = (
@@ -304,6 +339,9 @@ def _resolve_and_apply_workflow_placement(
         "requirements": requirements,
         "rejections": rejections,
     }
+    if model_fallbacks:
+        placement["requested_requirements"] = requested_requirements
+        placement["model_fallbacks"] = model_fallbacks
     metadata = manifest.setdefault("metadata", {})
     if not isinstance(metadata, dict):
         metadata = {}
@@ -323,6 +361,139 @@ def _resolve_and_apply_workflow_placement(
         runtime["placement"] = runtime_placement
         manifest["runtime"] = runtime
     return placement
+
+
+def _workflow_placement_candidates(
+    names: list[str],
+    *,
+    resource_nodes: dict[str, dict[str, Any]],
+    system_nodes: dict[str, dict[str, Any]],
+    requirements: dict[str, Any],
+    explicit_node: str,
+) -> tuple[
+    list[tuple[tuple[float, float, str], str, dict[str, Any]]],
+    dict[str, list[str]],
+]:
+    candidates: list[tuple[tuple[float, float, str], str, dict[str, Any]]] = []
+    rejections: dict[str, list[str]] = {}
+    for name in names:
+        resource = resource_nodes.get(name) or system_nodes.get(name) or {}
+        system = system_nodes.get(name) or resource
+        reasons = _workflow_node_rejections(
+            name,
+            resource=resource,
+            system=system,
+            requirements=requirements,
+            explicit_node=explicit_node,
+        )
+        if reasons:
+            rejections[name] = reasons
+            continue
+        capacity = _workflow_node_capacity(resource, system)
+        # Higher free GPU-memory headroom wins; after that prefer lower load,
+        # then the node name for deterministic placement.
+        headroom = capacity["gpu_memory_free_mb"] - requirements["min_gpu_memory_mb"]
+        score = (headroom, -_workflow_node_load(resource, system), name)
+        candidates.append((score, name, capacity))
+    return candidates, rejections
+
+
+def _workflow_model_fallback_requirements(
+    runtime_model_requirements: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Substitute catalog fallbacks only when preferred placement cannot fit.
+
+    Runtime model preparation already knows how to use a catalog fallback.  This
+    keeps single-node placement aligned with that policy instead of rejecting a
+    workflow before LiteLLM can route ``default`` to its portable model.
+    """
+
+    effective: list[dict[str, Any]] = []
+    records: list[dict[str, Any]] = []
+    for requirement in runtime_model_requirements:
+        if not isinstance(requirement, dict):
+            continue
+        entry = requirement.get("entry") if isinstance(requirement.get("entry"), dict) else requirement
+        fallback_ref = str(entry.get("fallback_model") or "").strip()
+        if not fallback_ref:
+            effective.append(requirement)
+            continue
+        try:
+            fallback_entry = resolve_model_entry(fallback_ref)
+        except Exception:
+            effective.append(requirement)
+            continue
+        fallback_requirement = dict(requirement)
+        fallback_requirement["entry"] = fallback_entry
+        fallback_requirement["model"] = str(
+            fallback_entry.get("id")
+            or fallback_entry.get("model")
+            or fallback_ref
+        )
+        fallback_requirement["label"] = str(
+            fallback_entry.get("id")
+            or fallback_requirement.get("label")
+            or fallback_ref
+        )
+        effective.append(fallback_requirement)
+        records.append(
+            {
+                "preferred": {
+                    "id": str(entry.get("id") or ""),
+                    "model": str(entry.get("model") or ""),
+                    "dmr_model": str(entry.get("dmr_model") or ""),
+                    "aliases": list(entry.get("aliases") or []),
+                },
+                "fallback": fallback_entry,
+            }
+        )
+    return effective, records
+
+
+def _workflow_placement_model_fallback_records(
+    env_overrides: Optional[dict[str, str]],
+) -> tuple[dict[str, Any], ...]:
+    raw = str(
+        (env_overrides or {}).get("MN_SELECTED_RUNTIME_MODEL_FALLBACKS_JSON")
+        or os.environ.get("MN_SELECTED_RUNTIME_MODEL_FALLBACKS_JSON")
+        or ""
+    ).strip()
+    if not raw:
+        return ()
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(decoded, list):
+        return ()
+    return tuple(item for item in decoded if isinstance(item, dict))
+
+
+def _workflow_placement_fallback_for_entry(
+    entry: dict[str, Any],
+) -> dict[str, Any] | None:
+    candidate_keys = _workflow_model_match_keys(entry)
+    if not candidate_keys:
+        return None
+    for record in _WORKFLOW_PLACEMENT_MODEL_FALLBACKS.get():
+        preferred = record.get("preferred")
+        fallback = record.get("fallback")
+        if not isinstance(preferred, dict) or not isinstance(fallback, dict):
+            continue
+        if candidate_keys & _workflow_model_match_keys(preferred):
+            return fallback
+    return None
+
+
+def _workflow_model_match_keys(entry: dict[str, Any]) -> set[str]:
+    values = [
+        entry.get("id"),
+        entry.get("model"),
+        entry.get("dmr_model"),
+        entry.get("api_model"),
+        *(entry.get("aliases") or []),
+    ]
+    return {str(value).strip().lower() for value in values if str(value or "").strip()}
 
 
 def _preflight_and_apply_runtime_model_placement(
