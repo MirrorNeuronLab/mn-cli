@@ -463,7 +463,7 @@ def test_prepare_runtime_models_uses_cluster_model_endpoint(
     assert "MN_LLM_MODEL" not in env_overrides
 
 
-def test_prepare_runtime_models_prunes_node_owned_remote_and_prepares_on_target_node(
+def test_prepare_runtime_models_preserves_node_owned_remote_while_rechecking_target(
     mocker,
     tmp_path,
     monkeypatch,
@@ -543,7 +543,8 @@ def test_prepare_runtime_models_prunes_node_owned_remote_and_prepares_on_target_
     assert summary["models"][0]["status"] == "runtime_node_already_installed"
     install_model.assert_not_called()
     cluster_install.assert_called_once()
-    assert load_model_remotes()["remotes"] == {}
+    remotes = load_model_remotes()["remotes"]
+    assert remotes["spark"]["base_url"] == "http://192.168.4.173:12434/v1"
     endpoints = json.loads(env_overrides["MN_MODEL_ENDPOINTS_JSON"])
     assert (
         endpoints["nemotron3:latest"]["api_base"] == "http://mn-litellm-proxy:4000/v1"

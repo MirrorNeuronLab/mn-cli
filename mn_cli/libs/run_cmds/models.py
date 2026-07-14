@@ -169,6 +169,12 @@ def _sync_litellm_gateway_for_runtime_models(
     upstream_endpoints.update(_local_runtime_model_endpoints(summary))
     if not upstream_endpoints:
         return {}
+    reconcile_cluster_model_remotes(
+        upstream_endpoints,
+        local_installed_models=installed_model_names(),
+        local_node=_local_runtime_node_name(),
+        replace=False,
+    )
     restart = _runtime_litellm_gateway_restart_enabled()
     gateway = sync_litellm_gateway(
         runtime_endpoints=upstream_endpoints,
@@ -211,6 +217,11 @@ def _local_runtime_model_endpoints(
             continue
         if str(item.get("provider") or "docker_model_runner") != "docker_model_runner":
             continue
+        prepared_endpoint = (
+            item.get("endpoint") if isinstance(item.get("endpoint"), dict) else {}
+        )
+        if prepared_endpoint and str(prepared_endpoint.get("source") or "") != "local-dmr":
+            continue
         model_ref = str(item.get("id") or item.get("model") or "").strip()
         try:
             entry = resolve_model_entry(model_ref)
@@ -252,8 +263,6 @@ def _resolve_runtime_model_endpoint(
     except Exception:
         return None
     if _node_owned_dmr_endpoint_requires_prepare(endpoint):
-        if str(endpoint.get("source") or "") == "model_remote":
-            _prune_runtime_model_remote(model=model, entry=entry, endpoint=endpoint)
         return None
     return endpoint
 
@@ -267,58 +276,6 @@ def _node_owned_dmr_endpoint_requires_prepare(endpoint: dict[str, Any] | None) -
         return False
     provider = str(endpoint.get("provider") or "docker_model_runner").strip().lower()
     return provider in {"docker_model_runner", "docker-model-runner", "dmr"}
-
-
-def _prune_runtime_model_remote(
-    *, model: str, entry: dict[str, Any], endpoint: dict[str, Any]
-) -> list[dict[str, Any]]:
-    wanted: set[str] = set()
-    for value in (
-        model,
-        entry.get("id"),
-        entry.get("model"),
-        entry.get("api_model"),
-        endpoint.get("model"),
-        endpoint.get("runtime_model"),
-        endpoint.get("api_model"),
-    ):
-        wanted.update(docker_model_match_keys(str(value or "")))
-    wanted.update(
-        key
-        for alias in entry.get("aliases") or []
-        for key in docker_model_match_keys(str(alias or ""))
-    )
-    if not wanted:
-        return []
-    node = str(endpoint.get("node") or "").strip()
-    remote_name = str(endpoint.get("remote") or "").strip()
-    ledger = load_model_remotes()
-    remotes = ledger.setdefault("remotes", {})
-    removed: list[dict[str, Any]] = []
-    for key, remote in list(remotes.items()):
-        if not isinstance(remote, dict):
-            continue
-        if node and str(remote.get("node") or "").strip() != node:
-            continue
-        candidates = {
-            str(key or "").strip(),
-            str(remote.get("name") or "").strip(),
-            str(remote.get("model") or "").strip(),
-            str(remote.get("api_model") or "").strip(),
-            str(remote.get("runtime_model") or "").strip(),
-        }
-        if remote_name and remote_name in candidates:
-            removed.append(remotes.pop(key))
-            continue
-        if any(
-            docker_model_match_keys(candidate) & wanted
-            for candidate in candidates
-            if candidate
-        ):
-            removed.append(remotes.pop(key))
-    if removed:
-        save_model_remotes(ledger)
-    return removed
 
 
 def _resolve_model_services_for_requirement(

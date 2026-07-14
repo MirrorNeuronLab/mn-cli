@@ -7,6 +7,7 @@ import re
 import subprocess
 import socket
 import urllib.parse
+import uuid
 from pathlib import Path
 from functools import lru_cache
 from typing import Annotated, Any, Callable, Optional
@@ -69,6 +70,13 @@ from mn_sdk import (
 model_app = typer.Typer(help="Manage local Docker Model Runner models")
 remote_app = typer.Typer(help="Manage remote model endpoints")
 model_app.add_typer(remote_app, name="remote")
+
+REMOTE_DMR_SOURCE = "remote-dmr"
+LEGACY_REMOTE_LITELLM_SOURCE = "remote_litellm_gateway"
+CLUSTER_REMOTE_MODEL_SOURCES = {
+    REMOTE_DMR_SOURCE,
+    LEGACY_REMOTE_LITELLM_SOURCE,
+}
 
 
 @model_app.command(name="list")
@@ -136,7 +144,7 @@ def list_models(
                 model_payload["backend"] = "remote-dmr"
                 model_payload["status"] = "remote"
                 model_payload["node"] = preferred.get("node") or ""
-                model_payload["route_source"] = "remote_litellm_gateway"
+                model_payload["route_source"] = REMOTE_DMR_SOURCE
             else:
                 model_payload["route_source"] = _route_source_for_model_payload(model_payload)
         payload["models"].extend(
@@ -728,10 +736,10 @@ def _cluster_gateway_endpoint(
         "model": api_model,
         "runtime_model": str(endpoint.get("runtime_model") or docker_model),
         "api_model": api_model,
-        "api_base": _node_litellm_gateway_api_base(node_endpoint, payload),
+        "api_base": _node_docker_model_runner_api_base(node_endpoint),
         "api_key": str(endpoint.get("api_key") or "not-needed"),
         "node": str(endpoint.get("node") or node_endpoint.get("node_name") or ""),
-        "source": "remote_litellm_gateway",
+        "source": REMOTE_DMR_SOURCE,
     }
     aliases = entry.get("route_aliases")
     if isinstance(aliases, list) and aliases:
@@ -739,18 +747,21 @@ def _cluster_gateway_endpoint(
     return result
 
 
-def _node_litellm_gateway_api_base(node_endpoint: dict[str, Any], payload: dict[str, Any]) -> str:
-    gateway = payload.get("gateway") if isinstance(payload.get("gateway"), dict) else {}
-    host_base = str(gateway.get("host_api_base") or "").strip()
+def _node_docker_model_runner_api_base(node_endpoint: dict[str, Any]) -> str:
+    """Return a cluster-reachable DMR URL without routing through owner LiteLLM."""
+
     host = str(node_endpoint.get("host") or "").strip()
-    if host_base and host:
-        parsed = re.match(r"^(https?://)([^/:]+)(?::([0-9]+))?(/.*)?$", host_base)
-        if parsed:
-            port = parsed.group(3) or "4000"
-            path = parsed.group(4) or "/v1"
-            return f"{parsed.group(1)}{host}:{port}{path}".rstrip("/")
-    port = os.getenv("MN_LITELLM_GATEWAY_PORT", "4000")
-    return f"http://{host}:{port}/v1".rstrip("/")
+    if not host:
+        raise RuntimeError("cluster node does not advertise a Docker Model Runner host")
+
+    parsed = urllib.parse.urlsplit(DOCKER_MODEL_RUNNER_HOST_API_BASE)
+    hostname = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    advertised_host = f"[{hostname}]" if ":" in hostname else hostname
+    port = parsed.port or 12434
+    path = parsed.path or "/engines/v1"
+    return urllib.parse.urlunsplit(
+        (parsed.scheme or "http", f"{advertised_host}:{port}", path, "", "")
+    ).rstrip("/")
 
 
 def _cluster_node_endpoint(node_name: str) -> dict[str, Any]:
@@ -1057,32 +1068,71 @@ def reconcile_cluster_model_routes(
     *,
     restart: bool = True,
     quiet: bool = False,
+    expected_nodes: set[str] | None = None,
 ) -> dict[str, Any]:
     """Rebuild every node's cluster-managed model routes from live inventories."""
 
     node_endpoints = _cluster_node_endpoints(quiet=quiet)
     if not node_endpoints:
-        return {"status": "single_node", "models": 0, "nodes": [], "errors": []}
+        return {
+            "status": "unavailable",
+            "models": 0,
+            "routes": 0,
+            "nodes": [],
+            "errors": [
+                {
+                    "node": "local",
+                    "stage": "membership",
+                    "error": "no runtime nodes were available from system summary",
+                }
+            ],
+            "inventory_complete": False,
+        }
 
     service_fallbacks = _cluster_model_service_inventory()
     inventories: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
     errors: list[dict[str, str]] = []
+    observed_nodes = {
+        str(endpoint.get("node_name") or "").strip()
+        for endpoint in node_endpoints
+        if str(endpoint.get("node_name") or "").strip()
+    }
+    for missing_node in sorted((expected_nodes or set()) - observed_nodes):
+        errors.append(
+            {
+                "node": missing_node,
+                "stage": "membership",
+                "error": "expected cluster node is temporarily absent from system summary",
+            }
+        )
     for node_endpoint in node_endpoints:
         node_name = str(node_endpoint.get("node_name") or "")
         try:
             entries = _runtime_model_inventory_for_node(node_endpoint)
         except Exception as exc:
             entries = service_fallbacks.get(node_name, [])
-            if not entries:
-                errors.append({"node": node_name, "stage": "inventory", "error": str(exc)})
-                if not quiet:
-                    console.print(
-                        f"[yellow]Warning: could not inspect runtime models on {node_name}: {exc}[/yellow]"
-                    )
+            errors.append(
+                {
+                    "node": node_name,
+                    "stage": "inventory",
+                    "error": str(exc),
+                    "fallback": "service_registry" if entries else "none",
+                }
+            )
+            if not quiet:
+                console.print(
+                    f"[yellow]Warning: could not inspect runtime models on {node_name}: {exc}[/yellow]"
+                )
         inventories.append((node_endpoint, entries))
 
     routes = _cluster_routes_from_inventories(inventories)
-    inventory_complete = not any(error.get("stage") == "inventory" for error in errors)
+    inventory_complete = not any(
+        error.get("stage") in {"inventory", "membership"} for error in errors
+    )
+    route_version = hashlib.sha256(
+        json.dumps(routes, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    sync_id = uuid.uuid4().hex
     results: list[dict[str, Any]] = []
     for node_endpoint in node_endpoints:
         node_name = str(node_endpoint.get("node_name") or "")
@@ -1095,9 +1145,17 @@ def reconcile_cluster_model_routes(
                     "cluster_reconcile": inventory_complete,
                     "restart": restart,
                     "source": "mn-cli-cluster-model-reconcile",
+                    "sync_id": sync_id,
+                    "route_version": route_version,
                 }
             )
-            results.append({"node": node_name, "status": "ok", "response": response})
+            ack = _validated_cluster_model_sync_ack(
+                response,
+                node=node_name,
+                sync_id=sync_id,
+                route_version=route_version,
+            )
+            results.append({"node": node_name, "status": "ok", "ack": ack})
         except Exception as exc:
             errors.append({"node": node_name, "stage": "gateway", "error": str(exc)})
             results.append({"node": node_name, "status": "error", "error": str(exc)})
@@ -1117,7 +1175,38 @@ def reconcile_cluster_model_routes(
         "routes": len(routes),
         "nodes": results,
         "errors": errors,
+        "inventory_complete": inventory_complete,
+        "sync_id": sync_id,
+        "route_version": route_version,
     }
+
+
+def _validated_cluster_model_sync_ack(
+    response: Any,
+    *,
+    node: str,
+    sync_id: str,
+    route_version: str,
+) -> dict[str, Any]:
+    if isinstance(response, str):
+        try:
+            response = json.loads(response)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"cluster model sync on {node} returned invalid acknowledgement JSON") from exc
+    if not isinstance(response, dict):
+        raise RuntimeError(f"cluster model sync on {node} returned no acknowledgement")
+    if str(response.get("sync_id") or "") != sync_id:
+        raise RuntimeError(f"cluster model sync on {node} did not acknowledge sync {sync_id}")
+    if str(response.get("route_version") or "") != route_version:
+        raise RuntimeError(
+            f"cluster model sync on {node} acknowledged the wrong route version"
+        )
+    status = str(response.get("status") or "").strip().lower()
+    if status not in {"ok", "configured", "running"}:
+        raise RuntimeError(
+            f"cluster model sync on {node} returned unsuccessful acknowledgement status {status or 'missing'}"
+        )
+    return response
 
 
 def _runtime_model_inventory_for_node(
@@ -1251,10 +1340,10 @@ def _cluster_routes_from_inventories(
                 "model": api_model,
                 "runtime_model": runtime_model,
                 "api_model": api_model,
-                "api_base": f"http://{host}:{os.getenv('MN_LITELLM_GATEWAY_PORT', '4000')}/v1",
+                "api_base": _node_docker_model_runner_api_base(node_endpoint),
                 "api_key": "not-needed",
                 "node": owner,
-                "source": "remote_litellm_gateway",
+                "source": REMOTE_DMR_SOURCE,
                 "cluster_model_id": model_id,
                 "route_aliases": (
                     [str(alias) for alias in explicit_aliases if str(alias or "").strip()]
@@ -1283,7 +1372,7 @@ def _runtime_endpoints_for_gateway_node(
     def owned_by_target(endpoint: dict[str, Any]) -> bool:
         if str(endpoint.get("node") or "").strip() == target:
             return True
-        if str(endpoint.get("source") or "").strip() != "remote_litellm_gateway":
+        if str(endpoint.get("source") or "").strip() not in CLUSTER_REMOTE_MODEL_SOURCES:
             return False
         try:
             endpoint_host = str(urllib.parse.urlparse(str(endpoint.get("api_base") or "")).hostname or "").lower()
@@ -1414,7 +1503,7 @@ def _public_gateway_endpoint_for_owner(
     owner_endpoint: dict[str, Any] | None,
     endpoint: dict[str, Any],
 ) -> dict[str, Any] | None:
-    if endpoint.get("source") in {"remote-dmr", "remote_litellm_gateway"}:
+    if endpoint.get("source") == REMOTE_DMR_SOURCE:
         return endpoint
     if owner_endpoint is None:
         return None
@@ -1423,16 +1512,15 @@ def _public_gateway_endpoint_for_owner(
         return None
     docker_model = docker_model_name(entry)
     api_model = str(entry.get("api_model") or endpoint.get("api_model") or endpoint.get("model") or docker_model)
-    port = os.getenv("MN_LITELLM_GATEWAY_PORT", "4000")
     return {
         "provider": str(entry.get("provider") or "docker_model_runner"),
         "model": api_model,
         "runtime_model": docker_model,
         "api_model": api_model,
-        "api_base": f"http://{host}:{port}/v1",
+        "api_base": _node_docker_model_runner_api_base(owner_endpoint),
         "api_key": "not-needed",
         "node": str(owner_endpoint.get("node_name") or endpoint.get("node") or ""),
-        "source": "remote_litellm_gateway" if endpoint.get("source") == "local-dmr" else str(endpoint.get("source") or "gateway-fanout"),
+        "source": REMOTE_DMR_SOURCE,
     }
 
 
@@ -1482,9 +1570,7 @@ def _remote_installations_for_model(
                 "model": runtime_model,
                 "api_model": remote.get("api_model") or runtime_model,
                 "api_base": base_url,
-                "route_source": (
-                    "remote_litellm_gateway" if node else "manual-remote"
-                ),
+                "route_source": REMOTE_DMR_SOURCE if node else "manual-remote",
             }
         )
     return sorted(
@@ -1563,7 +1649,7 @@ def _remote_model_payloads(
                 "installed": True,
                 "status": "remote",
                 "owner_count": 0,
-                "route_source": "remote_litellm_gateway" if remote.get("node") else "manual-remote",
+                "route_source": REMOTE_DMR_SOURCE if remote.get("node") else "manual-remote",
                 "node": remote.get("node") or "",
                 "installations": installation,
             }

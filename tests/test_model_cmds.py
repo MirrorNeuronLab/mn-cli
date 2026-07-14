@@ -93,7 +93,7 @@ def test_model_list_marks_cluster_remote_installed_and_local_route_wins(mocker):
     upsert_model_remote(
         "nemotron3",
         "docker.io/ai/nemotron3:latest",
-        "http://192.168.4.173:4000/v1",
+        "http://192.168.4.173:12434/engines/v1",
         api_model="docker.io/ai/nemotron3:latest",
         node="mirror_neuron@spark",
     )
@@ -116,7 +116,7 @@ def test_model_list_marks_cluster_remote_installed_and_local_route_wins(mocker):
     )
     assert remote_model["installed"] is True
     assert remote_model["backend"] == "remote-dmr"
-    assert remote_model["route_source"] == "remote_litellm_gateway"
+    assert remote_model["route_source"] == "remote-dmr"
     assert remote_model["installations"] == [
         {
             "node": "mirror_neuron@spark",
@@ -124,8 +124,8 @@ def test_model_list_marks_cluster_remote_installed_and_local_route_wins(mocker):
             "local": False,
             "model": "docker.io/ai/nemotron3:latest",
             "api_model": "docker.io/ai/nemotron3:latest",
-            "api_base": "http://192.168.4.173:4000/v1",
-            "route_source": "remote_litellm_gateway",
+            "api_base": "http://192.168.4.173:12434/engines/v1",
+            "route_source": "remote-dmr",
         }
     ]
 
@@ -175,7 +175,13 @@ def test_cluster_model_reconcile_reads_each_inventory_and_syncs_every_gateway(mo
 
         def sync_litellm_gateway(self, payload):
             synced.append((self.target, payload))
-            return json.dumps({"status": "running"})
+            return json.dumps(
+                {
+                    "status": "running",
+                    "sync_id": payload.get("sync_id"),
+                    "route_version": payload.get("route_version"),
+                }
+            )
 
     mocker.patch(
         "mn_cli.libs.model_cmds._cluster_node_endpoints",
@@ -206,7 +212,13 @@ def test_cluster_model_reconcile_reads_each_inventory_and_syncs_every_gateway(mo
     mocker.patch(
         "mn_cli.libs.model_cmds.client.sync_litellm_gateway",
         side_effect=lambda payload: synced.append(("local", payload))
-        or json.dumps({"status": "running"}),
+        or json.dumps(
+            {
+                "status": "running",
+                "sync_id": payload.get("sync_id"),
+                "route_version": payload.get("route_version"),
+            }
+        ),
     )
 
     result = model_cmds.reconcile_cluster_model_routes(restart=False)
@@ -217,8 +229,116 @@ def test_cluster_model_reconcile_reads_each_inventory_and_syncs_every_gateway(mo
     for _target, payload in synced:
         assert payload["cluster_reconcile"] is True
         assert payload["restart"] is False
+        assert payload["sync_id"] == result["sync_id"]
+        assert payload["route_version"] == result["route_version"]
         assert payload["runtime_endpoints"]["nemotron3"]["node"] == "mirror_neuron@spark"
+        assert (
+            payload["runtime_endpoints"]["nemotron3"]["api_base"]
+            == "http://10.0.0.2:12434/engines/v1"
+        )
         assert payload["runtime_endpoints"]["gemma4:e2b"]["node"] == "mirror_neuron@local"
+        assert (
+            payload["runtime_endpoints"]["gemma4:e2b"]["api_base"]
+            == "http://10.0.0.1:12434/engines/v1"
+        )
+        assert all(
+            endpoint["source"] == "remote-dmr"
+            and ":4000/" not in endpoint["api_base"]
+            for endpoint in payload["runtime_endpoints"].values()
+        )
+
+
+def test_cluster_model_reconcile_requires_matching_ack(mocker):
+    local = _cluster_node("mirror_neuron@local", "10.0.0.1", self_node=True)
+    mocker.patch(
+        "mn_cli.libs.model_cmds._cluster_node_endpoints",
+        return_value=[
+            {
+                "node": local,
+                "node_name": local["name"],
+                "host": local["grpc_host"],
+                "self": True,
+            }
+        ],
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds._installed_model_names",
+        return_value={"docker.io/ai/gemma4:E2B"},
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds.client.list_services",
+        return_value=json.dumps({"services": []}),
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds.client.sync_litellm_gateway",
+        return_value=json.dumps({"status": "running", "sync_id": "wrong"}),
+    )
+
+    result = model_cmds.reconcile_cluster_model_routes(restart=False)
+
+    assert result["status"] == "warning"
+    assert result["nodes"][0]["status"] == "error"
+    assert result["errors"][0]["stage"] == "gateway"
+
+
+def test_cluster_model_reconcile_never_replaces_routes_from_fallback_inventory(mocker):
+    spark = _cluster_node("mirror_neuron@spark", "10.0.0.2")
+    synced = []
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def get_resource(self):
+            raise TimeoutError("inventory timeout")
+
+        def sync_litellm_gateway(self, payload):
+            synced.append(payload)
+            return json.dumps(
+                {
+                    "status": "running",
+                    "sync_id": payload["sync_id"],
+                    "route_version": payload["route_version"],
+                }
+            )
+
+    mocker.patch(
+        "mn_cli.libs.model_cmds._cluster_node_endpoints",
+        return_value=[
+            {
+                "node": spark,
+                "node_name": spark["name"],
+                "host": spark["grpc_host"],
+                "self": False,
+            }
+        ],
+    )
+    mocker.patch("mn_cli.libs.model_cmds.Client", FakeClient)
+    mocker.patch(
+        "mn_cli.libs.model_cmds.client.list_services",
+        return_value=json.dumps(
+            {
+                "services": [
+                    {
+                        "node": "mirror_neuron@spark",
+                        "provider": "docker_model_runner",
+                        "meta": {
+                            "model_id": "nemotron3",
+                            "model": "docker.io/ai/nemotron3:latest",
+                        },
+                    }
+                ]
+            }
+        ),
+    )
+
+    result = model_cmds.reconcile_cluster_model_routes(restart=False)
+
+    assert result["status"] == "warning"
+    assert result["inventory_complete"] is False
+    assert result["errors"][0]["fallback"] == "service_registry"
+    assert synced[0]["cluster_reconcile"] is False
+    assert "nemotron3" in synced[0]["runtime_endpoints"]
 
 
 def test_cluster_route_reconcile_moves_duplicate_model_to_remaining_owner():
@@ -247,6 +367,12 @@ def test_cluster_route_reconcile_moves_duplicate_model_to_remaining_owner():
 
     assert duplicate_routes["nemotron3"]["node"] == "mirror_neuron@local"
     assert remaining_routes["nemotron3"]["node"] == "mirror_neuron@spark"
+
+
+def test_cluster_dmr_api_base_supports_ipv6_owner():
+    assert model_cmds._node_docker_model_runner_api_base(
+        {"host": "2001:db8::10"}
+    ) == "http://[2001:db8::10]:12434/engines/v1"
 
 
 def test_model_show_resolves_gemme_alias(mocker):
@@ -584,8 +710,8 @@ def test_model_install_local_dmr_fans_out_gateway_route_to_other_nodes(mocker):
     target, payload = node_syncs[0]
     assert target == "10.0.0.2:55052"
     endpoint = payload["runtime_endpoints"]["gemma4:e2b"]
-    assert endpoint["api_base"] == "http://10.0.0.1:4000/v1"
-    assert endpoint["source"] == "remote_litellm_gateway"
+    assert endpoint["api_base"] == "http://10.0.0.1:12434/engines/v1"
+    assert endpoint["source"] == "remote-dmr"
 
 
 def test_model_install_node_uses_prepare_runtime_model_not_ssh(mocker):
@@ -640,10 +766,11 @@ def test_model_install_node_uses_prepare_runtime_model_not_ssh(mocker):
     prepare_payload = [payload for kind, payload in calls if kind == "prepare"][0]
     assert prepare_payload["model"] == "docker.io/ai/gemma4:E2B"
     assert prepare_payload["source"] == "mn-cli"
-    assert synced[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://192.168.4.173:4000/v1"
+    assert synced[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://192.168.4.173:12434/engines/v1"
+    assert synced[0]["runtime_endpoints"]["gemma4:e2b"]["source"] == "remote-dmr"
     assert load_model_ownership()["models"] == {}
     remotes = load_model_remotes()["remotes"]
-    assert remotes["spark-gemma4-e2b"]["base_url"] == "http://192.168.4.173:4000/v1"
+    assert remotes["spark-gemma4-e2b"]["base_url"] == "http://192.168.4.173:12434/engines/v1"
     assert remotes["spark-gemma4-e2b"]["node"] == "spark"
 
 
@@ -713,11 +840,11 @@ def test_model_install_node_fans_out_gateway_route_to_other_nodes(mocker):
 
     assert result.exit_code == 0
     assert calls[0][1] == "192.168.4.173:55052"
-    assert local_syncs[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://192.168.4.173:4000/v1"
+    assert local_syncs[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://192.168.4.173:12434/engines/v1"
     assert len(node_syncs) == 1
     target, payload = node_syncs[0]
     assert target == "192.168.4.174:55052"
-    assert payload["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://192.168.4.173:4000/v1"
+    assert payload["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://192.168.4.173:12434/engines/v1"
 
 
 def test_cluster_runtime_endpoint_sync_excludes_each_route_owner(mocker):
@@ -745,14 +872,14 @@ def test_cluster_runtime_endpoint_sync_excludes_each_route_owner(mocker):
             "nemotron3": {
                 "provider": "docker_model_runner",
                 "model": "docker.io/ai/nemotron3:latest",
-                "api_base": "http://192.168.4.173:4000/v1",
+                "api_base": "http://192.168.4.173:12434/engines/v1",
                 "node": "spark-display-name",
-                "source": "remote_litellm_gateway",
+                "source": "remote-dmr",
             },
             "small": {
                 "provider": "docker_model_runner",
                 "model": "docker.io/ai/gemma4:E2B",
-                "api_base": "http://192.168.4.174:4000/v1",
+                "api_base": "http://192.168.4.174:12434/engines/v1",
                 "node": "moon",
             },
         },
