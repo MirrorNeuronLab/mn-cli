@@ -21,6 +21,7 @@ CONTEXT_MESSAGES = {
     "list_jobs": "Error listing jobs",
     "clear": "Error clearing jobs",
     "cancel": "Error cancelling job",
+    "cancel_all": "Error cancelling active jobs",
     "pause": "Error pausing job",
     "resume": "Error resuming job",
     "backup": "Error backing up job",

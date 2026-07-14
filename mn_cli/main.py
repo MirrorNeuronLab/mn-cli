@@ -38,6 +38,7 @@ JOB_HELP = """Submit, inspect, control, and recover workflow jobs.
 Examples:
   mn job submit ./manifest.json
   mn job list --running-only
+  mn job cancel-all -y
   mn job monitor <job-id>
   mn job result <job-id>
 """
@@ -148,6 +149,7 @@ job_app.command(name="status")(job_cmds.status)
 job_app.command(name="list")(job_cmds.list_jobs)
 job_app.command(name="clear")(job_cmds.clear)
 job_app.command(name="cancel")(job_cmds.cancel)
+job_app.command(name="cancel-all")(job_cmds.cancel_all)
 job_app.command(name="pause")(job_cmds.pause)
 job_app.command(name="resume")(job_cmds.resume)
 job_app.command(name="backup")(backup_cmds.backup)

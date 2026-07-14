@@ -16,7 +16,13 @@ import urllib.request
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, Optional
-from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 from rich.live import Live
 from rich.table import Table
 from mn_cli.libs.ui import (
@@ -30,7 +36,10 @@ from mn_cli.libs.ui import (
 )
 from mn_cli.libs.bundles import load_bundle_payloads
 from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress
-from mn_cli.libs.progress_stream import ProgressSnapshotStream, stream_api_workflow_progress
+from mn_cli.libs.progress_stream import (
+    ProgressSnapshotStream,
+    stream_api_workflow_progress,
+)
 from mn_cli.libs.run_logs import (
     JobLogWriter,
     STANDARD_EVENTS,
@@ -102,6 +111,7 @@ from mn_sdk import (
     is_custom_model_requirement,
     resolve_model_endpoint,
     resolve_model_entry,
+    resolve_requirement_entry,
     run_hardware_requirements_validation,
     run_input_validation,
     run_model_validation,
@@ -152,6 +162,7 @@ def _print_launch_progress(label: str, detail: str | None = None) -> None:
     else:
         console.print(f"[cyan]Launch:[/cyan] {label}")
 
+
 def _deep_merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     result = dict(base)
     for key, value in override.items():
@@ -161,12 +172,18 @@ def _deep_merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str
             result[key] = value
     return result
 
+
 def _runtime_resource_report(*, allow_local_fallback: bool = False) -> dict[str, Any]:
     try:
         decoded = json.loads(client.get_resource())
     except Exception:
         return {} if allow_local_fallback else {"nodes": []}
-    return decoded if isinstance(decoded, dict) else ({} if allow_local_fallback else {"nodes": []})
+    return (
+        decoded
+        if isinstance(decoded, dict)
+        else ({} if allow_local_fallback else {"nodes": []})
+    )
+
 
 def _mark_manifest_force(manifest: dict[str, Any]) -> None:
     metadata = manifest.setdefault("metadata", {})
@@ -179,7 +196,13 @@ def _mark_manifest_force(manifest: dict[str, Any]) -> None:
         metadata["mn_validation"] = validation
     validation["force"] = True
     validation["status"] = "skipped"
-    validation["skipped_checks"] = ["services", "models", "input_validation", "soft_requirements"]
+    validation["skipped_checks"] = [
+        "services",
+        "models",
+        "input_validation",
+        "soft_requirements",
+    ]
+
 
 def _is_safe_payload_relative_path(path: str) -> bool:
     candidate = Path(path)
@@ -189,9 +212,14 @@ def _is_safe_payload_relative_path(path: str) -> bool:
         and ".." not in candidate.parts
     )
 
-def _run_schedule_attrs(*, auto_schedule: bool, schedule: Optional[str]) -> Optional[dict[str, Any]]:
+
+def _run_schedule_attrs(
+    *, auto_schedule: bool, schedule: Optional[str]
+) -> Optional[dict[str, Any]]:
     if auto_schedule and schedule:
-        console.print("[red]Error: pass either --auto-schedule or --schedule, not both.[/red]")
+        console.print(
+            "[red]Error: pass either --auto-schedule or --schedule, not both.[/red]"
+        )
         raise typer.Exit(1)
     if auto_schedule:
         return {
@@ -231,6 +259,7 @@ def _run_schedule_attrs(*, auto_schedule: bool, schedule: Optional[str]) -> Opti
         "metadata": {"requested_by": "mn run --schedule"},
     }
 
+
 def _duration_ms_for_schedule(value: str) -> int:
     raw = str(value or "").strip().lower()
     units = {"ms": 1, "s": 1000, "m": 60_000, "h": 3_600_000, "d": 86_400_000}
@@ -238,6 +267,7 @@ def _duration_ms_for_schedule(value: str) -> int:
         if raw.endswith(suffix):
             return int(float(raw[: -len(suffix)]) * multiplier)
     return int(float(raw) * 1000)
+
 
 def _load_bundle_manifest(bundle_path: str) -> tuple[Path, Path, dict[str, Any]]:
     bundle_dir = Path(bundle_path)
@@ -249,14 +279,13 @@ def _load_bundle_manifest(bundle_path: str) -> tuple[Path, Path, dict[str, Any]]
 
     manifest_file = bundle_dir / "manifest.json"
     if not manifest_file.exists():
-        console.print(
-            f"[red]Error: manifest.json not found in '{bundle_path}'[/red]"
-        )
+        console.print(f"[red]Error: manifest.json not found in '{bundle_path}'[/red]")
         raise typer.Exit(1)
 
     with open(manifest_file, "r") as f:
         manifest_dict = json.load(f)
     return bundle_dir, manifest_file, manifest_dict
+
 
 def _configure_bundle_if_required(
     bundle_dir: Path,
@@ -276,17 +305,14 @@ def _configure_bundle_if_required(
     console.print(
         f"[yellow]Bundle requires configuration. Auto-running {config_script.name}...[/yellow]"
     )
-    res = subprocess.run(
-        [sys.executable, config_script.name], cwd=bundle_dir
-    )
+    res = subprocess.run([sys.executable, config_script.name], cwd=bundle_dir)
     if res.returncode != 0:
-        console.print(
-            "[red]Configuration failed or cancelled. Aborting run.[/red]"
-        )
+        console.print("[red]Configuration failed or cancelled. Aborting run.[/red]")
         raise typer.Exit(1)
 
     with open(manifest_file, "r") as f:
         return json.load(f)
+
 
 def _stage_bundle_payloads(
     bundle_dir: Path,
@@ -295,13 +321,22 @@ def _stage_bundle_payloads(
     web_ui: bool,
 ) -> dict[str, bytes]:
     payloads = load_bundle_payloads(bundle_dir)
-    stage_upload_path_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
+    stage_upload_path_payloads_for_manifest(
+        manifest_dict, payloads, bundle_dir=bundle_dir
+    )
     if web_ui:
         payloads.update(runtime_web_ui_support_payloads_for_manifest(manifest_dict))
-    stage_blueprint_support_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
-    stage_skill_runtime_support_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
-    stage_skill_dependency_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
+    stage_blueprint_support_payloads_for_manifest(
+        manifest_dict, payloads, bundle_dir=bundle_dir
+    )
+    stage_skill_runtime_support_payloads_for_manifest(
+        manifest_dict, payloads, bundle_dir=bundle_dir
+    )
+    stage_skill_dependency_payloads_for_manifest(
+        manifest_dict, payloads, bundle_dir=bundle_dir
+    )
     return payloads
+
 
 def _create_schedule_for_bundle(
     bundle_dir: Path,
@@ -309,7 +344,9 @@ def _create_schedule_for_bundle(
     payloads: dict[str, bytes],
     schedule_attrs: dict[str, Any],
 ) -> None:
-    stage_local_input_payloads_for_manifest(manifest_dict, payloads, bundle_dir=bundle_dir)
+    stage_local_input_payloads_for_manifest(
+        manifest_dict, payloads, bundle_dir=bundle_dir
+    )
     promote_large_payloads_to_blob_refs(manifest_dict, payloads)
     manifest = json.dumps(manifest_dict)
     result_json = client.create_schedule(

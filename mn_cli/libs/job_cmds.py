@@ -16,6 +16,9 @@ import typer
 from mn_sdk.runtime_config import default_runs_root
 from mn_sdk import RuntimeService, ValidationError, parse_duration_ms as sdk_parse_duration_ms
 
+_ACTIVE_JOB_STATUSES = {"pending", "validated", "scheduled", "running", "paused"}
+_ALL_JOBS_LIMIT = 2_147_483_647
+
 
 def submit(
     manifest_path: Annotated[
@@ -84,8 +87,7 @@ def list_jobs(running_only: bool = typer.Option(False, "--running-only", help="O
         table = recovery_table("Submitted At")
         for job in data.get("data", []):
             status = job.get("status", "N/A")
-            live_statuses = ["running", "pending", "scheduled", "validated", "paused"]
-            if running_only and status not in live_statuses:
+            if running_only and status not in _ACTIVE_JOB_STATUSES:
                 continue
 
             table.add_row(
@@ -157,6 +159,80 @@ def cancel(
     except Exception as e:
         _cleanup_cancelled_job_web_ui(job_id)
         handle_cli_error(e, console, 'cancel')
+
+
+def cancel_all(
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Cancel all active jobs without prompting."),
+    ] = False,
+):
+    """Cancel all active jobs, stopping on the first failure.
+
+    Active jobs include pending, validated, scheduled, running, and paused jobs.
+
+    Examples:
+      mn job cancel-all
+      mn job cancel-all -y
+    """
+    try:
+        jobs_json = client.list_jobs(limit=_ALL_JOBS_LIMIT, include_terminal=False)
+        data = json.loads(jobs_json)
+        jobs = [
+            job
+            for job in data.get("data", [])
+            if job.get("status") in _ACTIVE_JOB_STATUSES
+            and isinstance(job.get("job_id"), str)
+            and job["job_id"]
+        ]
+
+        if not jobs:
+            print_confirmed(console, "Job cancel-all", status="no active jobs")
+            return
+
+        if not yes and not typer.confirm(f"Cancel all {len(jobs)} active jobs?", default=False):
+            print_confirmed(
+                console,
+                "Job cancel-all",
+                status="aborted",
+                details={"Active jobs": len(jobs)},
+            )
+            return
+
+        cancelled_count = 0
+        for job in jobs:
+            job_id = job["job_id"]
+            try:
+                client.cancel_job(job_id)
+                _cleanup_cancelled_job_web_ui(job_id)
+                cancelled_count += 1
+            except Exception as error:
+                _cleanup_cancelled_job_web_ui(job_id)
+                not_attempted = len(jobs) - cancelled_count - 1
+                console.print(f"[red]Cancellation stopped at job {job_id}.[/red]")
+                console.print(
+                    f"Cancelled {cancelled_count} of {len(jobs)} active jobs; "
+                    f"{not_attempted} not attempted."
+                )
+                handle_cli_error(
+                    error,
+                    console,
+                    "cancel_all",
+                    command_context={"job_id": job_id},
+                )
+
+        logger.info("Cancelled %d active jobs", cancelled_count)
+        print_success_confirmation(
+            console,
+            "Job cancel-all",
+            status="cancelled",
+            details={"Jobs cancelled": cancelled_count},
+            next_steps="mn job list --running-only",
+        )
+    except typer.Exit:
+        raise
+    except Exception as error:
+        handle_cli_error(error, console, "cancel_all")
 
 
 def _cleanup_cancelled_job_web_ui(job_id: str) -> None:

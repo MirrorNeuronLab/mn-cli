@@ -82,3 +82,6 @@ environment variables or uncommitted `.env` files instead.
 - The default gRPC target comes from `MN_GRPC_TARGET`, then local deployment
   settings, then `localhost:55051`.
 - Use `mn blueprint validate` before `mn blueprint run --folder` when checking a local bundle.
+- `mn blueprint run` checks the complete effective model set before preparation;
+  if no node can satisfy it, the command reports per-node capacity reasons and
+  does not start any model installation.

@@ -26,7 +26,11 @@ def _record_prevalidated_command_rules(
 
     passed_commands: dict[int, dict[str, Any]] = {}
     for result in validation_report.get("results") or []:
-        if not isinstance(result, dict) or result.get("type") != "command" or result.get("ok") is not True:
+        if (
+            not isinstance(result, dict)
+            or result.get("type") != "command"
+            or result.get("ok") is not True
+        ):
             continue
         rule_ref = result.get("rule") if isinstance(result.get("rule"), dict) else {}
         index = rule_ref.get("index")
@@ -40,7 +44,9 @@ def _record_prevalidated_command_rules(
     if not passed_commands:
         return
 
-    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    metadata = (
+        manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    )
     validation_candidates = (
         (manifest, "input_validation"),
         (manifest, "inputValidation"),
@@ -61,7 +67,9 @@ def _record_prevalidated_command_rules(
                 )
             ]
             break
-        if isinstance(raw_validation, dict) and isinstance(raw_validation.get("rules"), list):
+        if isinstance(raw_validation, dict) and isinstance(
+            raw_validation.get("rules"), list
+        ):
             rules = raw_validation["rules"]
             raw_validation["rules"] = [
                 rule
@@ -87,7 +95,9 @@ def _record_prevalidated_command_rules(
     validation_metadata["input_validation"] = {
         "status": "passed",
         "validator": "mn-python-sdk",
-        "prevalidated_command_rules": [passed_commands[index] for index in sorted(passed_commands)],
+        "prevalidated_command_rules": [
+            passed_commands[index] for index in sorted(passed_commands)
+        ],
     }
 
 
@@ -95,16 +105,28 @@ def _docker_worker_node_ids(manifest: dict[str, Any]) -> list[str]:
     node_ids: list[str] = []
     for index, node in enumerate(manifest_nodes(manifest)):
         config = node.get("config") if isinstance(node.get("config"), dict) else {}
-        runner = str(config.get("runner_module") or node.get("runner_module") or "").strip()
+        runner = str(
+            config.get("runner_module") or node.get("runner_module") or ""
+        ).strip()
         if runner == "MirrorNeuron.Runner.DockerWorker":
-            node_ids.append(str(node.get("node_id") or node.get("id") or f"worker-{index}"))
+            node_ids.append(
+                str(node.get("node_id") or node.get("id") or f"worker-{index}")
+            )
     return node_ids
 
 
 def _print_docker_worker_ready(manifest: dict[str, Any]) -> None:
-    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
-    summary = metadata.get("mn_docker_workers") if isinstance(metadata.get("mn_docker_workers"), dict) else {}
-    services = summary.get("services") if isinstance(summary.get("services"), list) else []
+    metadata = (
+        manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    )
+    summary = (
+        metadata.get("mn_docker_workers")
+        if isinstance(metadata.get("mn_docker_workers"), dict)
+        else {}
+    )
+    services = (
+        summary.get("services") if isinstance(summary.get("services"), list) else []
+    )
     labels = [
         f"{service.get('node_id', 'DockerWorker')} on {service.get('node', 'the selected node')}"
         for service in services
@@ -162,13 +184,19 @@ def run_bundle(
             "Check runtime resources",
             "confirming the runtime can satisfy this blueprint before submission.",
         )
+        runtime_model_plan = _build_runtime_model_prepare_plan(
+            bundle_dir,
+            manifest_dict,
+            config_overrides=config_overrides,
+        )
         _validate_manifest_hardware_or_exit(
             manifest_dict,
             force=force,
             allow_local_fallback=False,
         )
-        placement = _resolve_and_apply_workflow_placement(
+        placement = _preflight_and_apply_runtime_model_placement(
             manifest_dict,
+            runtime_model_requirements=runtime_model_plan["placement_models"],
             env={**os.environ, **env_overrides},
         )
         if placement:
@@ -221,8 +249,11 @@ def run_bundle(
                 env_overrides=env_overrides,
                 config_overrides=config_overrides,
                 force=force,
+                runtime_model_plan=runtime_model_plan,
             )
-            _merge_runtime_model_config_overrides(config_overrides, model_install_summary)
+            _merge_runtime_model_config_overrides(
+                config_overrides, model_install_summary
+            )
             _validate_manifest_models_or_exit(
                 bundle_dir,
                 manifest_dict,
@@ -251,8 +282,11 @@ def run_bundle(
                 env_overrides=env_overrides,
                 config_overrides=config_overrides,
                 force=force,
+                runtime_model_plan=runtime_model_plan,
             )
-            _merge_runtime_model_config_overrides(config_overrides, model_install_summary)
+            _merge_runtime_model_config_overrides(
+                config_overrides, model_install_summary
+            )
         _print_launch_progress(
             "Package workflow",
             "staging workflow files, local inputs, runtime helpers, and output wiring.",
@@ -288,7 +322,9 @@ def run_bundle(
 
         payloads = _stage_bundle_payloads(bundle_dir, manifest_dict, web_ui=web_ui)
 
-        schedule_attrs = _run_schedule_attrs(auto_schedule=auto_schedule, schedule=schedule)
+        schedule_attrs = _run_schedule_attrs(
+            auto_schedule=auto_schedule, schedule=schedule
+        )
         if schedule_attrs is not None:
             submitted_manifest = manifest_dict
             _create_schedule_for_bundle(
@@ -309,7 +345,9 @@ def run_bundle(
 
         docker_worker_nodes = _docker_worker_node_ids(manifest_dict)
         if docker_worker_nodes:
-            selected_node = str(env_overrides.get("MN_SELECTED_RUNTIME_NODE") or "").strip()
+            selected_node = str(
+                env_overrides.get("MN_SELECTED_RUNTIME_NODE") or ""
+            ).strip()
             target = selected_node or "the selected runtime node"
             _print_launch_progress(
                 f"Prepare DockerWorker on {target}",
@@ -353,7 +391,9 @@ def run_bundle(
                     env_overrides=env_overrides,
                     config_overrides=config_overrides,
                 )
-        web_ui_url = _console_web_ui_url(manifest_dict, blueprint_run_dir) if web_ui else None
+        web_ui_url = (
+            _console_web_ui_url(manifest_dict, blueprint_run_dir) if web_ui else None
+        )
         submitted_web_ui_url = web_ui_url
         resolved_follow_seconds = (
             float(os.getenv("MN_RUN_DETACH_LOG_SECONDS", "30"))
@@ -404,9 +444,13 @@ def run_bundle(
             manifest=manifest_dict,
         )
         if final_status in FINAL_STATUSES:
-            materialized_shared = _materialize_shared_storage_outputs(prepared_submission.metadata)
+            materialized_shared = _materialize_shared_storage_outputs(
+                prepared_submission.metadata
+            )
             if not materialized_shared:
-                _materialize_completed_blueprint_outputs(log_writer.log_dir, manifest_dict)
+                _materialize_completed_blueprint_outputs(
+                    log_writer.log_dir, manifest_dict
+                )
         if blueprint_run_dir is not None:
             _start_background_event_relay_if_needed(
                 bundle_dir,
@@ -478,7 +522,9 @@ def run_bundle(
         raise typer.Exit(130)
     except Exception as e:
         if prepared_submission is not None and submitted_job_id is None:
-            submission_id = str(prepared_submission.metadata.get("submission_id") or "").strip()
+            submission_id = str(
+                prepared_submission.metadata.get("submission_id") or ""
+            ).strip()
             if submission_id:
                 try:
                     cleanup_docker_worker_services(submission_id=submission_id)

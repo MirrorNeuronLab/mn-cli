@@ -3,7 +3,9 @@ import json
 from types import SimpleNamespace
 
 import grpc
+import pytest
 from rich.console import Console
+import typer
 
 import mn_cli.libs.job_cmds as job_cmds
 
@@ -80,6 +82,132 @@ def test_clear_reports_missing_local_admin_token(monkeypatch):
     assert "did not load a gRPC admin token from runtime state" in rendered
     assert "fixed gRPC admin token" not in rendered
     assert "Retry after: mn runtime start; mn job clear" in rendered
+
+
+def test_cancel_all_cancels_every_active_job_without_prompt(monkeypatch):
+    output = _capture_console(monkeypatch)
+    list_calls = []
+    cancelled = []
+    cleaned_up = []
+    jobs = [
+        {"job_id": "job-pending", "status": "pending"},
+        {"job_id": "job-validated", "status": "validated"},
+        {"job_id": "job-scheduled", "status": "scheduled"},
+        {"job_id": "job-running", "status": "running"},
+        {"job_id": "job-paused", "status": "paused"},
+        {"job_id": "job-completed", "status": "completed"},
+    ]
+
+    def list_jobs(*, limit, include_terminal):
+        list_calls.append((limit, include_terminal))
+        return json.dumps({"data": jobs})
+
+    monkeypatch.setattr(
+        job_cmds,
+        "client",
+        SimpleNamespace(
+            list_jobs=list_jobs,
+            cancel_job=lambda job_id: cancelled.append(job_id) or "cancelled",
+        ),
+    )
+    monkeypatch.setattr(job_cmds, "_cleanup_cancelled_job_web_ui", cleaned_up.append)
+    monkeypatch.setattr(
+        job_cmds.typer,
+        "confirm",
+        lambda *_args, **_kwargs: pytest.fail("confirmation should be skipped"),
+    )
+
+    job_cmds.cancel_all(yes=True)
+
+    active_job_ids = [job["job_id"] for job in jobs[:-1]]
+    assert list_calls == [(2_147_483_647, False)]
+    assert cancelled == active_job_ids
+    assert cleaned_up == active_job_ids
+    rendered = output.getvalue()
+    assert "Job cancel-all successful" in rendered
+    assert "Jobs cancelled:" in rendered
+    assert "5" in rendered
+
+
+def test_cancel_all_reports_when_no_active_jobs(monkeypatch):
+    output = _capture_console(monkeypatch)
+    monkeypatch.setattr(
+        job_cmds,
+        "client",
+        SimpleNamespace(
+            list_jobs=lambda **_kwargs: json.dumps(
+                {"data": [{"job_id": "job-completed", "status": "completed"}]}
+            ),
+            cancel_job=lambda _job_id: pytest.fail("no job should be cancelled"),
+        ),
+    )
+    monkeypatch.setattr(
+        job_cmds.typer,
+        "confirm",
+        lambda *_args, **_kwargs: pytest.fail("confirmation should not be shown"),
+    )
+
+    job_cmds.cancel_all(yes=False)
+
+    assert "no active jobs" in output.getvalue()
+
+
+def test_cancel_all_aborts_when_confirmation_is_declined(monkeypatch):
+    output = _capture_console(monkeypatch)
+    monkeypatch.setattr(
+        job_cmds,
+        "client",
+        SimpleNamespace(
+            list_jobs=lambda **_kwargs: json.dumps(
+                {"data": [{"job_id": "job-running", "status": "running"}]}
+            ),
+            cancel_job=lambda _job_id: pytest.fail("no job should be cancelled"),
+        ),
+    )
+    monkeypatch.setattr(job_cmds.typer, "confirm", lambda *_args, **_kwargs: False)
+
+    job_cmds.cancel_all(yes=False)
+
+    rendered = output.getvalue()
+    assert "Job cancel-all confirmed" in rendered
+    assert "aborted" in rendered
+
+
+def test_cancel_all_stops_on_first_failure(monkeypatch):
+    output = _capture_console(monkeypatch)
+    attempted = []
+    cleaned_up = []
+    jobs = [
+        {"job_id": "job-1", "status": "running"},
+        {"job_id": "job-2", "status": "paused"},
+        {"job_id": "job-3", "status": "pending"},
+    ]
+
+    def cancel_job(job_id):
+        attempted.append(job_id)
+        if job_id == "job-2":
+            raise RuntimeError("cancel failed")
+        return "cancelled"
+
+    monkeypatch.setattr(
+        job_cmds,
+        "client",
+        SimpleNamespace(
+            list_jobs=lambda **_kwargs: json.dumps({"data": jobs}),
+            cancel_job=cancel_job,
+        ),
+    )
+    monkeypatch.setattr(job_cmds, "_cleanup_cancelled_job_web_ui", cleaned_up.append)
+
+    with pytest.raises(typer.Exit) as exc_info:
+        job_cmds.cancel_all(yes=True)
+
+    assert exc_info.value.exit_code == 1
+    assert attempted == ["job-1", "job-2"]
+    assert cleaned_up == ["job-1", "job-2"]
+    rendered = output.getvalue()
+    assert "Cancellation stopped at job job-2" in rendered
+    assert "Cancelled 1 of 3 active jobs; 1 not attempted" in rendered
 
 
 def test_node_list_strips_restart_history_and_reasons(monkeypatch):

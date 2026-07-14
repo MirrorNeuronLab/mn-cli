@@ -137,6 +137,15 @@ def test_help_supports_short_help_flag():
     assert "Submit, inspect, control, and recover workflow jobs." in result.stdout
 
 
+def test_cancel_all_help_documents_confirmation_bypass():
+    result = runner.invoke(app, ["job", "cancel-all", "--help"])
+
+    assert result.exit_code == 0
+    assert "Cancel all active jobs" in result.stdout
+    assert "--yes" in result.stdout
+    assert "-y" in result.stdout
+
+
 def test_command_help_includes_argument_description_and_examples():
     result = runner.invoke(app, ["job", "submit", "--help"])
 

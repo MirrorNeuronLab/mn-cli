@@ -16,11 +16,14 @@ from rich.console import Console
 from mn_cli.main import app
 from mn_cli.libs import model_cmds, run_cmds
 from mn_cli.libs.ui import JobMonitorState, generate_live_layout
-from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress, _agent_progress_detail
+from mn_cli.libs.workflow_progress import (
+    BlueprintWorkflowProgress,
+    _agent_progress_detail,
+)
 from mn_cli.libs.run_manifest import prepare_manifest_for_submission
 from mn_sdk import (
     AgentProgress,
-    ModelPrepareTransportError,
+    ModelPrepareRemoteError,
     load_model_ownership,
     load_model_remotes,
     upsert_model_remote,
@@ -37,10 +40,21 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.delenv("MN_RUNTIME_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_CONTAINER_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.setattr(
-        run_cmds,
-        "sync_litellm_gateway",
-        lambda **_kwargs: {"status": "running", "api_base": "http://mn-litellm-proxy:4000/v1"},
+        "mn_cli.libs.run_cmds.models.client.resolve_service",
+        lambda *_args, **_kwargs: json.dumps({"services": []}),
     )
+    monkeypatch.setattr(
+        "mn_cli.libs.run_cmds.models.sync_litellm_gateway",
+        lambda **_kwargs: {
+            "status": "running",
+            "api_base": "http://mn-litellm-proxy:4000/v1",
+        },
+    )
+    monkeypatch.setattr(
+        "mn_cli.libs.run_cmds.models._sync_gateway_runtime_endpoints_across_cluster",
+        lambda *_args, **_kwargs: [],
+    )
+
 
 def test_manifest_for_model_validation_filters_dmr_models_for_fake_llm():
     manifest = {
@@ -53,7 +67,9 @@ def test_manifest_for_model_validation_filters_dmr_models_for_fake_llm():
         }
     }
 
-    filtered = run_cmds._manifest_for_model_validation(manifest, {"llm": {"mode": "fake"}})
+    filtered = run_cmds._manifest_for_model_validation(
+        manifest, {"llm": {"mode": "fake"}}
+    )
 
     assert set(filtered["runtime"]["models"]) == {"external"}
     assert set(manifest["runtime"]["models"]) == {"primary", "secondary", "external"}
@@ -100,24 +116,41 @@ def _cctv_placement_manifest():
     return {
         "runtime": {
             "placement": {"mode": "single_node"},
-            "models": {"primary": {"provider": "docker_model_runner", "model": "gemma4:e2b"}},
+            "models": {
+                "primary": {"provider": "docker_model_runner", "model": "gemma4:e2b"}
+            },
             "memory": {"enabled": True},
         },
         "nodes": [
             {
                 "node_id": "visual_detector",
-                "config": {"runner_module": "MirrorNeuron.Runner.DockerWorker", "gpus": "all"},
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.DockerWorker",
+                    "gpus": "all",
+                },
                 "constraints": [
-                    {"attribute": "capabilities", "operator": "contains_all", "value": ["nvidia", "cuda"]}
+                    {
+                        "attribute": "capabilities",
+                        "operator": "contains_all",
+                        "value": ["nvidia", "cuda"],
+                    }
                 ],
                 "resources": {
                     "gpu_count": 1,
                     "devices": [
-                        {"kind": "gpu", "vendor": "nvidia", "driver": "cuda", "min_memory_mb": 49152}
+                        {
+                            "kind": "gpu",
+                            "vendor": "nvidia",
+                            "driver": "cuda",
+                            "min_memory_mb": 49152,
+                        }
                     ],
                 },
             },
-            {"node_id": "report_writer", "config": {"runner_module": "MirrorNeuron.Runner.HostLocal"}},
+            {
+                "node_id": "report_writer",
+                "config": {"runner_module": "MirrorNeuron.Runner.HostLocal"},
+            },
         ],
     }
 
@@ -152,10 +185,18 @@ def test_single_node_placement_selects_spark_and_pins_all_agents():
     )
 
     assert placement["selected_node"] == "mirror_neuron@spark"
-    assert manifest["metadata"]["mn_workflow_placement"]["selected_node"] == "mirror_neuron@spark"
+    assert (
+        manifest["metadata"]["mn_workflow_placement"]["selected_node"]
+        == "mirror_neuron@spark"
+    )
     for node in manifest["nodes"]:
         assert node["policies"]["scheduler"]["preferred_node"] == "mirror_neuron@spark"
-        assert {"attribute": "node.name", "operator": "==", "value": "mirror_neuron@spark", "source": "mn-cli-workflow-placement"} in node["constraints"]
+        assert {
+            "attribute": "node.name",
+            "operator": "==",
+            "value": "mirror_neuron@spark",
+            "source": "mn-cli-workflow-placement",
+        } in node["constraints"]
 
 
 def test_single_node_placement_scores_gpu_headroom_then_load():
@@ -221,13 +262,17 @@ def test_single_node_placement_requires_remote_native_sdk_prerequisites():
 
 def test_single_node_placement_rejects_conflicting_explicit_agents():
     manifest = _cctv_placement_manifest()
-    manifest["nodes"][0]["policies"] = {"scheduler": {"preferred_node": "mirror_neuron@spark"}}
+    manifest["nodes"][0]["policies"] = {
+        "scheduler": {"preferred_node": "mirror_neuron@spark"}
+    }
     manifest["nodes"][1]["constraints"] = [
         {"attribute": "node.name", "operator": "==", "value": "mirror_neuron@mac"}
     ]
     resources = _mac_and_spark_resources()
 
-    with pytest.raises(RuntimeError, match="conflicts with explicit per-agent placements"):
+    with pytest.raises(
+        RuntimeError, match="conflicts with explicit per-agent placements"
+    ):
         run_cmds._resolve_and_apply_workflow_placement(
             manifest,
             resource_report=resources,
@@ -240,20 +285,31 @@ def test_distributed_placement_and_legacy_alias_leave_agents_unpinned():
     legacy_manifest = _cctv_placement_manifest()
     legacy_manifest["runtime"].pop("placement")
     for manifest, env in (
-        ({**_cctv_placement_manifest(), "runtime": {"placement": {"mode": "distributed"}}}, {}),
+        (
+            {
+                **_cctv_placement_manifest(),
+                "runtime": {"placement": {"mode": "distributed"}},
+            },
+            {},
+        ),
         (legacy_manifest, {"MN_BLUEPRINT_SINGLE_NODE_AGENTS": "0"}),
     ):
-        assert run_cmds._resolve_and_apply_workflow_placement(
-            manifest,
-            resource_report=resources,
-            system_summary=_matching_system_summary(resources),
-            env=env,
-        ) is None
+        assert (
+            run_cmds._resolve_and_apply_workflow_placement(
+                manifest,
+                resource_report=resources,
+                system_summary=_matching_system_summary(resources),
+                env=env,
+            )
+            is None
+        )
         assert "policies" not in manifest["nodes"][0]
 
 
 def test_selected_workflow_node_controls_model_placement_and_gateway_sync(mocker):
-    with run_cmds._runtime_model_placement_scope({"MN_SELECTED_RUNTIME_NODE": "mirror_neuron@spark"}):
+    with run_cmds._runtime_model_placement_scope(
+        {"MN_SELECTED_RUNTIME_NODE": "mirror_neuron@spark"}
+    ):
         placement = run_cmds._resolve_runtime_cluster_model(
             requirement={"model": "gemma4:e2b"},
             entry={"id": "gemma4:e2b", "requirements": {"min_vram_gb": 8}},
@@ -261,7 +317,9 @@ def test_selected_workflow_node_controls_model_placement_and_gateway_sync(mocker
     assert placement["node"] == "mirror_neuron@spark"
     assert placement["source"] == "workflow_placement"
 
-    sync = mocker.patch("mn_cli.libs.run_cmds.sync_litellm_gateway", return_value={"status": "running"})
+    sync = mocker.patch(
+        "mn_cli.libs.run_cmds.sync_litellm_gateway", return_value={"status": "running"}
+    )
     fanout = mocker.patch(
         "mn_cli.libs.run_cmds.models._sync_gateway_runtime_endpoints_across_cluster",
         return_value=[{"node": "mirror_neuron@moon", "status": "ok"}],
@@ -283,6 +341,7 @@ def test_selected_workflow_node_controls_model_placement_and_gateway_sync(mocker
     fanout.assert_called_once()
     assert fanout.call_args.kwargs["skip_local"] is True
     assert endpoints["gemma4:e2b"]["api_base"] == "http://mn-litellm-proxy:4000/v1"
+
 
 def test_prepare_runtime_models_installs_missing_model_for_run(
     mocker,
@@ -337,10 +396,13 @@ def test_prepare_runtime_models_installs_missing_model_for_run(
     record = load_model_ownership()["models"]["docker.io/ai/gemma4:E2B"]
     assert record["owners"]["vc_assistant"]["blueprint_revision"] == "rev-1"
     output = capsys.readouterr().out
-    assert "Runtime model gemma4:e2b (docker.io/ai/gemma4:E2B) is not installed." in output
+    assert (
+        "Runtime model gemma4:e2b (docker.io/ai/gemma4:E2B) is not installed." in output
+    )
     assert "Installing runtime model gemma4:e2b (docker.io/ai/gemma4:E2B)" in output
     assert re.search(r"Docker\s+Model\s+Runner", output)
     assert "Runtime models ready: gemma4:e2b" in output
+
 
 def test_prepare_runtime_models_uses_cluster_model_endpoint(
     mocker,
@@ -400,6 +462,7 @@ def test_prepare_runtime_models_uses_cluster_model_endpoint(
     assert "MN_LLM_API_BASE" not in env_overrides
     assert "MN_LLM_MODEL" not in env_overrides
 
+
 def test_prepare_runtime_models_prunes_node_owned_remote_and_prepares_on_target_node(
     mocker,
     tmp_path,
@@ -446,7 +509,11 @@ def test_prepare_runtime_models_prunes_node_owned_remote_and_prepares_on_target_
     )
     mocker.patch(
         "mn_cli.libs.run_cmds.resolve_cluster_model_placement",
-        return_value={"source": "cluster_node", "status": "cluster_node", "node": "spark"},
+        return_value={
+            "source": "cluster_node",
+            "status": "cluster_node",
+            "node": "spark",
+        },
     )
     cluster_install = mocker.patch(
         "mn_cli.libs.run_cmds._install_runtime_cluster_model",
@@ -478,16 +545,29 @@ def test_prepare_runtime_models_prunes_node_owned_remote_and_prepares_on_target_
     cluster_install.assert_called_once()
     assert load_model_remotes()["remotes"] == {}
     endpoints = json.loads(env_overrides["MN_MODEL_ENDPOINTS_JSON"])
-    assert endpoints["nemotron3:latest"]["api_base"] == "http://mn-litellm-proxy:4000/v1"
+    assert (
+        endpoints["nemotron3:latest"]["api_base"] == "http://mn-litellm-proxy:4000/v1"
+    )
     assert endpoints["nemotron3:latest"]["node"] == "spark"
     resolver = run_cmds._prepared_model_installed_resolver(summary)
-    assert resolver("docker.io/docker.io/ai/nemotron3:latest", {"model": "nemotron3:latest"}) is True
-    validation_manifest, _validation_config = run_cmds._model_validation_inputs_with_prepared_models(
-        manifest,
-        {},
-        summary,
+    assert (
+        resolver(
+            "docker.io/docker.io/ai/nemotron3:latest", {"model": "nemotron3:latest"}
+        )
+        is True
     )
-    assert validation_manifest["runtime"]["models"]["primary"]["install_mode"] == "cluster_provided"
+    validation_manifest, _validation_config = (
+        run_cmds._model_validation_inputs_with_prepared_models(
+            manifest,
+            {},
+            summary,
+        )
+    )
+    assert (
+        validation_manifest["runtime"]["models"]["primary"]["install_mode"]
+        == "cluster_provided"
+    )
+
 
 def test_runtime_model_ready_label_includes_remote_install_node():
     label = run_cmds._runtime_model_ready_label(
@@ -528,6 +608,7 @@ def test_model_remove_remote_records_matches_aliases(tmp_path, monkeypatch):
     assert len(removed) == 1
     assert removed[0]["node"] == "mirror_neuron@192.168.4.173"
     assert load_model_remotes()["remotes"] == {}
+
 
 def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_node(
     mocker,
@@ -611,7 +692,10 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
         "mn_cli.libs.run_cmds.client.resolve_service",
         return_value=json.dumps({"services": []}),
     )
-    mocker.patch("mn_cli.libs.run_cmds.client.get_resource", return_value=json.dumps(resource_report))
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.get_resource",
+        return_value=json.dumps(resource_report),
+    )
     mocker.patch("mn_cli.libs.run_cmds.model_installed", return_value=False)
     cluster_install = mocker.patch(
         "mn_cli.libs.run_cmds._install_runtime_cluster_model",
@@ -633,24 +717,54 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
     )
 
     env_overrides = {}
-    summary = run_cmds._prepare_runtime_models_for_run_or_exit(bundle_dir, manifest, env_overrides=env_overrides)
+    summary = run_cmds._prepare_runtime_models_for_run_or_exit(
+        bundle_dir, manifest, env_overrides=env_overrides
+    )
 
     assert summary["ok"] is True
     assert summary["models"][0]["status"] == "runtime_node_installed"
     assert "MN_MODEL_ENDPOINTS_JSON" in env_overrides
-    assert "docker.io/docker.io/ai/nemotron3:latest" in json.loads(env_overrides["MN_PREPARED_RUNTIME_MODELS_JSON"])
+    assert "docker.io/docker.io/ai/nemotron3:latest" in json.loads(
+        env_overrides["MN_PREPARED_RUNTIME_MODELS_JSON"]
+    )
     install_model.assert_not_called()
     cluster_install.assert_called_once()
-    assert "Installing runtime model nemotron3:latest on spark" not in capsys.readouterr().out
-    resolver = run_cmds._prepared_model_installed_resolver(summary)
-    assert resolver("docker.io/docker.io/ai/nemotron3:latest", {"model": "nemotron3:latest"}) is True
-    validation_manifest, validation_config = run_cmds._model_validation_inputs_with_prepared_models(
-        manifest,
-        {"llm": {"configs": {"primary": {"provider": "docker_model_runner", "model": "nemotron3:latest"}}}},
-        summary,
+    assert (
+        "Installing runtime model nemotron3:latest on spark"
+        not in capsys.readouterr().out
     )
-    assert validation_manifest["runtime"]["models"]["primary"]["install_mode"] == "cluster_provided"
-    assert validation_config["llm"]["configs"]["primary"]["install_mode"] == "cluster_provided"
+    resolver = run_cmds._prepared_model_installed_resolver(summary)
+    assert (
+        resolver(
+            "docker.io/docker.io/ai/nemotron3:latest", {"model": "nemotron3:latest"}
+        )
+        is True
+    )
+    validation_manifest, validation_config = (
+        run_cmds._model_validation_inputs_with_prepared_models(
+            manifest,
+            {
+                "llm": {
+                    "configs": {
+                        "primary": {
+                            "provider": "docker_model_runner",
+                            "model": "nemotron3:latest",
+                        }
+                    }
+                }
+            },
+            summary,
+        )
+    )
+    assert (
+        validation_manifest["runtime"]["models"]["primary"]["install_mode"]
+        == "cluster_provided"
+    )
+    assert (
+        validation_config["llm"]["configs"]["primary"]["install_mode"]
+        == "cluster_provided"
+    )
+
 
 def _preferred_large_model_config(default_model: str = "gemma4:e2b") -> dict:
     return {
@@ -684,7 +798,13 @@ def _preferred_large_model_config(default_model: str = "gemma4:e2b") -> dict:
                     "strict_json": True,
                     "require_live": True,
                     "required": False,
-                    "hardware": {"gpu": {"min_count": 1, "min_memory_mb": 49152, "memory_operator": ">="}},
+                    "hardware": {
+                        "gpu": {
+                            "min_count": 1,
+                            "min_memory_mb": 49152,
+                            "memory_operator": ">=",
+                        }
+                    },
                 },
             },
             "small_model_profile": {
@@ -720,15 +840,26 @@ def _preferred_large_model_config(default_model: str = "gemma4:e2b") -> dict:
                 "num_retries": 1,
                 "strict_json": True,
                 "require_live": True,
-                "hardware": {"gpu": {"min_count": 1, "min_memory_mb": 49152, "memory_operator": ">="}},
+                "hardware": {
+                    "gpu": {
+                        "min_count": 1,
+                        "min_memory_mb": 49152,
+                        "memory_operator": ">=",
+                    }
+                },
             },
         }
     }
 
 
 def test_default_llm_alias_detection_is_explicit():
-    assert run_cmds._blueprint_requests_default_llm({"llm": {"model": "default"}}) is True
-    assert run_cmds._blueprint_requests_default_llm({"llm": {"model": "gemma4:e2b"}}) is False
+    assert (
+        run_cmds._blueprint_requests_default_llm({"llm": {"model": "default"}}) is True
+    )
+    assert (
+        run_cmds._blueprint_requests_default_llm({"llm": {"model": "gemma4:e2b"}})
+        is False
+    )
 
 
 def test_default_manifest_model_is_satisfied_by_prepared_fallback():
@@ -747,12 +878,20 @@ def test_default_manifest_model_is_satisfied_by_prepared_fallback():
     }
 
     manifest, _ = run_cmds._model_validation_inputs_with_prepared_models(
-        {"runtime": {"models": {"primary": {"provider": "docker_model_runner", "model": "default"}}}},
+        {
+            "runtime": {
+                "models": {
+                    "primary": {"provider": "docker_model_runner", "model": "default"}
+                }
+            }
+        },
         {},
         summary,
     )
 
-    assert manifest["runtime"]["models"]["primary"]["install_mode"] == "cluster_provided"
+    assert (
+        manifest["runtime"]["models"]["primary"]["install_mode"] == "cluster_provided"
+    )
 
 
 def test_prepared_default_model_marks_inheriting_llm_profile_cluster_provided():
@@ -785,6 +924,7 @@ def test_prepared_default_model_marks_inheriting_llm_profile_cluster_provided():
     assert config["llm"]["install_mode"] == "cluster_provided"
     assert config["llm"]["configs"]["primary"]["install_mode"] == "cluster_provided"
 
+
 def _preferred_large_model_catalog() -> dict:
     return {
         "nemotron3": {
@@ -807,6 +947,7 @@ def _preferred_large_model_catalog() -> dict:
         },
     }
 
+
 def _spark_gb10_resource_report() -> dict:
     return {
         "nodes": [
@@ -822,12 +963,19 @@ def _spark_gb10_resource_report() -> dict:
                         "model": "NVIDIA GB10",
                         "memory_total_mb": 131072,
                         "memory_free_mb": 126000,
-                        "capabilities": ["gpu", "nvidia", "cuda", "nvidia-gb10", "nvidia-dgx-spark"],
+                        "capabilities": [
+                            "gpu",
+                            "nvidia",
+                            "cuda",
+                            "nvidia-gb10",
+                            "nvidia-dgx-spark",
+                        ],
                     }
                 ],
             }
         ]
     }
+
 
 def test_prepare_runtime_models_promotes_preferred_large_profile_on_capable_cluster_node(
     mocker,
@@ -839,7 +987,9 @@ def test_prepare_runtime_models_promotes_preferred_large_profile_on_capable_clus
     bundle_dir.mkdir()
     config_dir = bundle_dir / "config"
     config_dir.mkdir()
-    (config_dir / "default.json").write_text(json.dumps(_preferred_large_model_config()), encoding="utf-8")
+    (config_dir / "default.json").write_text(
+        json.dumps(_preferred_large_model_config()), encoding="utf-8"
+    )
     manifest = {"metadata": {"blueprint_id": "assistant"}}
     catalog = _preferred_large_model_catalog()
     mocker.patch("mn_cli.libs.run_cmds.load_model_catalog", return_value=catalog)
@@ -847,12 +997,18 @@ def test_prepare_runtime_models_promotes_preferred_large_profile_on_capable_clus
         "mn_cli.libs.run_cmds.client.resolve_service",
         return_value=json.dumps({"services": []}),
     )
-    mocker.patch("mn_cli.libs.run_cmds.client.get_resource", return_value=json.dumps(_spark_gb10_resource_report()))
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.get_resource",
+        return_value=json.dumps(_spark_gb10_resource_report()),
+    )
     mocker.patch("mn_cli.libs.run_cmds.model_installed", return_value=False)
     cluster_install = mocker.patch(
         "mn_cli.libs.run_cmds._install_runtime_cluster_model",
         return_value={
-            "install": {"status": "already_installed", "node": "mirror_neuron@192.168.5.12"},
+            "install": {
+                "status": "already_installed",
+                "node": "mirror_neuron@192.168.5.12",
+            },
             "endpoint": {
                 "provider": "docker_model_runner",
                 "model": "nemotron3",
@@ -867,7 +1023,9 @@ def test_prepare_runtime_models_promotes_preferred_large_profile_on_capable_clus
     install_model = mocker.patch("mn_cli.libs.run_cmds.install_model_entry")
 
     env_overrides = {}
-    summary = run_cmds._prepare_runtime_models_for_run_or_exit(bundle_dir, manifest, env_overrides=env_overrides)
+    summary = run_cmds._prepare_runtime_models_for_run_or_exit(
+        bundle_dir, manifest, env_overrides=env_overrides
+    )
 
     assert summary["ok"] is True
     assert len(summary["models"]) == 1
@@ -882,19 +1040,55 @@ def test_prepare_runtime_models_promotes_preferred_large_profile_on_capable_clus
     effective_config = json.loads(env_overrides["MN_BLUEPRINT_CONFIG_JSON"])
     assert effective_config["llm"]["active_model_profile"] == "large_model_profile"
     assert effective_config["llm"]["model"] == "nemotron3"
-    assert effective_config["llm"]["runtime_model"] == "docker.io/docker.io/ai/nemotron3:latest"
+    assert (
+        effective_config["llm"]["runtime_model"]
+        == "docker.io/docker.io/ai/nemotron3:latest"
+    )
     assert effective_config["llm"]["strict_json"] is True
     assert effective_config["llm"]["configs"]["primary"]["model"] == "nemotron3"
-    assert effective_config["llm"]["configs"]["primary"]["runtime_model"] == "docker.io/docker.io/ai/nemotron3:latest"
-    resolver = run_cmds._prepared_model_installed_resolver(summary)
-    assert resolver("docker.io/docker.io/ai/nemotron3:latest", {"model": "nemotron3"}) is True
-    validation_manifest, validation_config = run_cmds._model_validation_inputs_with_prepared_models(
-        {"runtime": {"models": {"primary": {"provider": "docker_model_runner", "model": "nemotron3"}}}},
-        {"llm": {"configs": {"primary": {"provider": "docker_model_runner", "model": "nemotron3"}}}},
-        summary,
+    assert (
+        effective_config["llm"]["configs"]["primary"]["runtime_model"]
+        == "docker.io/docker.io/ai/nemotron3:latest"
     )
-    assert validation_manifest["runtime"]["models"]["primary"]["install_mode"] == "cluster_provided"
-    assert validation_config["llm"]["configs"]["primary"]["install_mode"] == "cluster_provided"
+    resolver = run_cmds._prepared_model_installed_resolver(summary)
+    assert (
+        resolver("docker.io/docker.io/ai/nemotron3:latest", {"model": "nemotron3"})
+        is True
+    )
+    validation_manifest, validation_config = (
+        run_cmds._model_validation_inputs_with_prepared_models(
+            {
+                "runtime": {
+                    "models": {
+                        "primary": {
+                            "provider": "docker_model_runner",
+                            "model": "nemotron3",
+                        }
+                    }
+                }
+            },
+            {
+                "llm": {
+                    "configs": {
+                        "primary": {
+                            "provider": "docker_model_runner",
+                            "model": "nemotron3",
+                        }
+                    }
+                }
+            },
+            summary,
+        )
+    )
+    assert (
+        validation_manifest["runtime"]["models"]["primary"]["install_mode"]
+        == "cluster_provided"
+    )
+    assert (
+        validation_config["llm"]["configs"]["primary"]["install_mode"]
+        == "cluster_provided"
+    )
+
 
 def test_prepare_runtime_models_keeps_default_model_without_capable_cluster_node(
     mocker,
@@ -906,7 +1100,9 @@ def test_prepare_runtime_models_keeps_default_model_without_capable_cluster_node
     bundle_dir.mkdir()
     config_dir = bundle_dir / "config"
     config_dir.mkdir()
-    (config_dir / "default.json").write_text(json.dumps(_preferred_large_model_config()), encoding="utf-8")
+    (config_dir / "default.json").write_text(
+        json.dumps(_preferred_large_model_config()), encoding="utf-8"
+    )
     manifest = {"metadata": {"blueprint_id": "assistant"}}
     catalog = _preferred_large_model_catalog()
     resource_report = {
@@ -915,7 +1111,9 @@ def test_prepare_runtime_models_keeps_default_model_without_capable_cluster_node
                 "name": "small-node",
                 "status": "healthy",
                 "scheduling_eligible": True,
-                "devices": [{"kind": "gpu", "type": "integrated_gpu", "memory_total_mb": 32768}],
+                "devices": [
+                    {"kind": "gpu", "type": "integrated_gpu", "memory_total_mb": 32768}
+                ],
             }
         ]
     }
@@ -924,13 +1122,23 @@ def test_prepare_runtime_models_keeps_default_model_without_capable_cluster_node
         "mn_cli.libs.run_cmds.client.resolve_service",
         return_value=json.dumps({"services": []}),
     )
-    mocker.patch("mn_cli.libs.run_cmds.client.get_resource", return_value=json.dumps(resource_report))
-    mocker.patch("mn_cli.libs.run_cmds.model_installed", side_effect=lambda model: model == "docker.io/ai/gemma4:E2B")
-    cluster_install = mocker.patch("mn_cli.libs.run_cmds._install_runtime_cluster_model")
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.get_resource",
+        return_value=json.dumps(resource_report),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.model_installed",
+        side_effect=lambda model: model == "docker.io/ai/gemma4:E2B",
+    )
+    cluster_install = mocker.patch(
+        "mn_cli.libs.run_cmds._install_runtime_cluster_model"
+    )
     install_model = mocker.patch("mn_cli.libs.run_cmds.install_model_entry")
 
     env_overrides = {}
-    summary = run_cmds._prepare_runtime_models_for_run_or_exit(bundle_dir, manifest, env_overrides=env_overrides)
+    summary = run_cmds._prepare_runtime_models_for_run_or_exit(
+        bundle_dir, manifest, env_overrides=env_overrides
+    )
 
     assert summary["ok"] is True
     assert len(summary["models"]) == 1
@@ -943,6 +1151,7 @@ def test_prepare_runtime_models_keeps_default_model_without_capable_cluster_node
     assert effective_config["llm"]["model"] == "docker.io/ai/gemma4:E2B"
     assert effective_config["llm"]["runtime_model"] == "docker.io/ai/gemma4:E2B"
 
+
 def test_prepare_runtime_models_surfaces_large_profile_prepare_failure_without_fallback(
     mocker,
     tmp_path,
@@ -954,7 +1163,9 @@ def test_prepare_runtime_models_surfaces_large_profile_prepare_failure_without_f
     bundle_dir.mkdir()
     config_dir = bundle_dir / "config"
     config_dir.mkdir()
-    (config_dir / "default.json").write_text(json.dumps(_preferred_large_model_config()), encoding="utf-8")
+    (config_dir / "default.json").write_text(
+        json.dumps(_preferred_large_model_config()), encoding="utf-8"
+    )
     manifest = {"metadata": {"blueprint_id": "assistant"}}
     catalog = _preferred_large_model_catalog()
     mocker.patch("mn_cli.libs.run_cmds.load_model_catalog", return_value=catalog)
@@ -962,7 +1173,10 @@ def test_prepare_runtime_models_surfaces_large_profile_prepare_failure_without_f
         "mn_cli.libs.run_cmds.client.resolve_service",
         return_value=json.dumps({"services": []}),
     )
-    mocker.patch("mn_cli.libs.run_cmds.client.get_resource", return_value=json.dumps(_spark_gb10_resource_report()))
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.get_resource",
+        return_value=json.dumps(_spark_gb10_resource_report()),
+    )
     mocker.patch("mn_cli.libs.run_cmds.model_installed", return_value=False)
     cluster_install = mocker.patch(
         "mn_cli.libs.run_cmds._install_runtime_cluster_model",
@@ -971,14 +1185,22 @@ def test_prepare_runtime_models_surfaces_large_profile_prepare_failure_without_f
     install_model = mocker.patch("mn_cli.libs.run_cmds.install_model_entry")
 
     with pytest.raises(typer.Exit) as exc:
-        run_cmds._prepare_runtime_models_for_run_or_exit(bundle_dir, manifest, env_overrides={})
+        run_cmds._prepare_runtime_models_for_run_or_exit(
+            bundle_dir, manifest, env_overrides={}
+        )
 
     assert exc.value.exit_code == 1
     cluster_install.assert_called_once()
     install_model.assert_not_called()
-    assert "Runtime model preparation failed unexpectedly" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Runtime model preparation failed: nemotron3" in output
+    assert "remote prepare failed" in output
+    assert "code=model.prepare_install_failed" in output
 
-def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_or_core(mocker, capsys):
+
+def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_or_core(
+    mocker, capsys
+):
     progress_descriptions: list[str] = []
 
     class FakeProgress:
@@ -1026,19 +1248,23 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
                 "provider": "docker_model_runner",
                 "model": "nemotron3",
                 "runtime_model": "nemotron3",
-            "api_model": "nemotron3",
-            "api_base": "http://mn-litellm-proxy:4000/v1",
-            "node": "mirror_neuron@192.168.4.173",
-            "source": "litellm_gateway",
-        },
-        "gateway": {"host_api_base": "http://127.0.0.1:4000/v1"},
-    }
+                "api_model": "nemotron3",
+                "api_base": "http://mn-litellm-proxy:4000/v1",
+                "node": "mirror_neuron@192.168.4.173",
+                "source": "litellm_gateway",
+            },
+            "gateway": {"host_api_base": "http://127.0.0.1:4000/v1"},
+        }
     )
     shell = mocker.patch("mn_cli.libs.run_cmds.subprocess.run")
 
     result = run_cmds._install_runtime_cluster_model(
         requirement={"context_size": 8192},
-        entry={"id": "nemotron3", "model": "nemotron3", "provider": "docker_model_runner"},
+        entry={
+            "id": "nemotron3",
+            "model": "nemotron3",
+            "provider": "docker_model_runner",
+        },
         model={"id": "nemotron3", "model": "nemotron3"},
         cluster={"node": "mirror_neuron@192.168.4.173"},
         backend="llama.cpp",
@@ -1072,7 +1298,10 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
         "waiting for remote Docker Model Runner..."
     ) in progress_descriptions[0]
 
-def test_runtime_cluster_model_install_uses_long_timeout_for_local_runtime_coordinator(mocker):
+
+def test_runtime_cluster_model_install_uses_long_timeout_for_local_runtime_coordinator(
+    mocker,
+):
     mocker.patch(
         "mn_cli.libs.run_cmds.client.get_system_summary",
         return_value=json.dumps(
@@ -1104,7 +1333,11 @@ def test_runtime_cluster_model_install_uses_long_timeout_for_local_runtime_coord
 
     result = run_cmds._install_runtime_cluster_model(
         requirement={"context_size": 4096},
-        entry={"id": "gemma4:e2b", "model": "docker.io/ai/gemma4:E2B", "provider": "docker_model_runner"},
+        entry={
+            "id": "gemma4:e2b",
+            "model": "docker.io/ai/gemma4:E2B",
+            "provider": "docker_model_runner",
+        },
         model={"id": "gemma4:e2b", "model": "docker.io/ai/gemma4:E2B"},
         cluster={"node": "mirror_neuron@192.168.5.10"},
         backend="llama.cpp",
@@ -1122,6 +1355,7 @@ def test_runtime_cluster_model_install_uses_long_timeout_for_local_runtime_coord
     assert result["endpoint"]["source"] == "local-dmr"
     assert result["endpoint"]["node"] == "mirror_neuron@192.168.5.10"
 
+
 class FakePrepareRpcError(grpc.RpcError):
     def __init__(self, code):
         self._code = code
@@ -1132,29 +1366,190 @@ class FakePrepareRpcError(grpc.RpcError):
     def details(self):
         return str(self._code)
 
-def test_prepare_runtime_model_retries_once_on_deadline(mocker, capsys):
+
+def test_prepare_runtime_model_retries_once_on_deadline(mocker, monkeypatch, capsys):
     runtime_client = mocker.Mock()
     runtime_client.prepare_runtime_model.side_effect = [
         FakePrepareRpcError(grpc.StatusCode.DEADLINE_EXCEEDED),
         json.dumps({"status": "installed"}),
     ]
+    waits = []
+    monkeypatch.setattr("mn_sdk.model_access.prepare.time.sleep", waits.append)
 
-    response = run_cmds._prepare_runtime_model_with_retry(runtime_client, {"model": "docker.io/ai/gemma4:E2B"})
+    response = run_cmds._prepare_runtime_model_with_retry(
+        runtime_client, {"model": "docker.io/ai/gemma4:E2B"}
+    )
 
     assert response["status"] == "installed"
     assert runtime_client.prepare_runtime_model.call_count == 2
     assert "retrying once" in capsys.readouterr().out
+    assert waits == [2.0]
+
 
 def test_prepare_runtime_model_does_not_retry_non_transient_errors(mocker):
     runtime_client = mocker.Mock()
-    runtime_client.prepare_runtime_model.side_effect = FakePrepareRpcError(grpc.StatusCode.INVALID_ARGUMENT)
+    runtime_client.prepare_runtime_model.side_effect = FakePrepareRpcError(
+        grpc.StatusCode.INVALID_ARGUMENT
+    )
 
-    with pytest.raises(ModelPrepareTransportError) as exc_info:
-        run_cmds._prepare_runtime_model_with_retry(runtime_client, {"model": "docker.io/ai/gemma4:E2B"})
+    with pytest.raises(ModelPrepareRemoteError) as exc_info:
+        run_cmds._prepare_runtime_model_with_retry(
+            runtime_client, {"model": "docker.io/ai/gemma4:E2B"}
+        )
 
-    assert exc_info.value.code == "model.custom_prepare_transport_failed"
+    assert exc_info.value.code == "model.prepare_request_invalid"
     assert exc_info.value.retryable is False
+    assert exc_info.value.stage == "prepare"
     runtime_client.prepare_runtime_model.assert_called_once()
+
+
+def test_runtime_model_preflight_includes_config_and_rag_models(mocker, tmp_path):
+    config = {
+        "llm": {
+            "configs": {
+                "primary": {"provider": "docker_model_runner", "model": "nemotron3"}
+            }
+        },
+        "knowledge_rag": {
+            "embedding_provider": "docker_model_runner",
+            "embedding_model": "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M",
+        },
+    }
+    mocker.patch("mn_cli.libs.run_cmds.load_blueprint_config", return_value=config)
+
+    plan = run_cmds._build_runtime_model_prepare_plan(tmp_path, {"nodes": []})
+
+    labels = {item["id"] for item in plan["placement_models"]}
+    assert "nemotron3" in labels
+    assert any("jina-embeddings-v5-text-small-retrieval" in label for label in labels)
+
+
+def test_runtime_model_preflight_rejects_ineligible_node_before_prepare(mocker):
+    manifest = {"runtime": {"placement": {"mode": "single_node"}}, "nodes": []}
+    requirements = [
+        {
+            "label": "nemotron3",
+            "model": "docker.io/ai/nemotron3:latest",
+            "entry": {"requirements": {"min_unified_memory_gb": 48}},
+            "source": "llm.configs.primary",
+        }
+    ]
+    resources = {
+        "nodes": [
+            {
+                "name": "mirror_neuron@mac",
+                "status": "healthy",
+                "scheduling_eligible": True,
+                "devices": [
+                    {"kind": "gpu", "memory_free_mb": 32768, "memory_total_mb": 32768}
+                ],
+            }
+        ]
+    }
+    system = {
+        "nodes": [
+            {
+                "name": "mirror_neuron@mac",
+                "status": "healthy",
+                "scheduling_eligible": True,
+                "self": True,
+            }
+        ]
+    }
+    prepare = mocker.patch("mn_cli.libs.run_cmds._install_runtime_cluster_model")
+
+    with pytest.raises(RuntimeError, match="Per-node rejection reasons") as error:
+        run_cmds._preflight_and_apply_runtime_model_placement(
+            manifest,
+            runtime_model_requirements=requirements,
+            resource_report=resources,
+            system_summary=system,
+        )
+
+    assert "model nemotron3: gpu_memory_free_mb=32768 < required=49152" in str(
+        error.value
+    )
+    prepare.assert_not_called()
+
+
+def test_distributed_runtime_model_preflight_rejects_before_prepare(mocker):
+    manifest = {"runtime": {"placement": {"mode": "distributed"}}, "nodes": []}
+    requirements = [
+        {
+            "label": "nemotron3",
+            "model": "docker.io/ai/nemotron3:latest",
+            "entry": {"requirements": {"min_unified_memory_gb": 48}},
+            "source": "llm.configs.primary",
+        }
+    ]
+    resources = {
+        "nodes": [
+            {
+                "name": "mirror_neuron@mac",
+                "status": "healthy",
+                "scheduling_eligible": True,
+                "devices": [
+                    {"kind": "gpu", "memory_free_mb": 32768, "memory_total_mb": 32768}
+                ],
+            }
+        ]
+    }
+    system = {
+        "nodes": [
+            {
+                "name": "mirror_neuron@mac",
+                "status": "healthy",
+                "scheduling_eligible": True,
+                "self": True,
+            }
+        ]
+    }
+    prepare = mocker.patch("mn_cli.libs.run_cmds._install_runtime_cluster_model")
+
+    with pytest.raises(
+        RuntimeError, match="No runtime node can prepare required model nemotron3"
+    ):
+        run_cmds._preflight_and_apply_runtime_model_placement(
+            manifest,
+            runtime_model_requirements=requirements,
+            resource_report=resources,
+            system_summary=system,
+        )
+
+    prepare.assert_not_called()
+
+
+def test_runtime_model_summary_names_failed_model_and_node(capsys):
+    run_cmds._print_runtime_model_install_summary(
+        {
+            "models": [
+                {
+                    "id": "nemotron3",
+                    "status": "failed",
+                    "cluster": {"node": "mirror_neuron@mac"},
+                    "prepare_stage": "compatibility",
+                    "error": "nemotron3 requires at least 48GB unified memory on Apple Silicon.",
+                    "error_code": "model.prepare_incompatible_hardware",
+                },
+                {
+                    "id": "rag-embedding",
+                    "status": "runtime_node_already_installed",
+                    "endpoint": {"node": "mirror_neuron@mac"},
+                },
+            ]
+        }
+    )
+
+    output = capsys.readouterr().out
+    assert "nemotron3 on mirror_neuron@mac" in output
+    assert "(compatibility):" in output
+    assert "model.prepare_incompatible_hardware" in output
+    assert (
+        "Runtime models ready: rag-embedding already installed on mirror_neuron@mac"
+        in output
+    )
+    assert "could not reach" not in output
+
 
 def test_cluster_node_endpoint_is_local_uses_local_host_alias(monkeypatch):
     node_endpoint = {
@@ -1166,6 +1561,7 @@ def test_cluster_node_endpoint_is_local_uses_local_host_alias(monkeypatch):
 
     assert run_cmds._cluster_node_endpoint_is_local(node_endpoint) is True
 
+
 def test_cluster_node_endpoint_is_not_local_for_remote_host(monkeypatch):
     node_endpoint = {
         "node": {"name": "mirror_neuron@192.168.4.173"},
@@ -1175,6 +1571,7 @@ def test_cluster_node_endpoint_is_not_local_for_remote_host(monkeypatch):
     monkeypatch.setattr(run_cmds, "_local_host_addresses", lambda: {"192.168.6.28"})
 
     assert run_cmds._cluster_node_endpoint_is_local(node_endpoint) is False
+
 
 def test_runtime_cluster_model_install_requires_native_sdk_grpc_metadata(mocker):
     mocker.patch(
@@ -1197,7 +1594,11 @@ def test_runtime_cluster_model_install_requires_native_sdk_grpc_metadata(mocker)
     with pytest.raises(RuntimeError, match="does not advertise native SDK gRPC"):
         run_cmds._install_runtime_cluster_model(
             requirement={"context_size": 8192},
-            entry={"id": "nemotron3", "model": "nemotron3", "provider": "docker_model_runner"},
+            entry={
+                "id": "nemotron3",
+                "model": "nemotron3",
+                "provider": "docker_model_runner",
+            },
             model={"id": "nemotron3", "model": "nemotron3"},
             cluster={"node": "mirror_neuron@192.168.4.173"},
             backend="llama.cpp",
@@ -1207,6 +1608,7 @@ def test_runtime_cluster_model_install_requires_native_sdk_grpc_metadata(mocker)
 
     shell.assert_not_called()
     remote_client_class.assert_not_called()
+
 
 def test_prepare_runtime_models_uses_default_model_fallback_without_capable_cluster_node(
     mocker,
@@ -1289,7 +1691,7 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
             "provider": "docker_model_runner",
             "backend": "llama.cpp",
             "context_size": 4096,
-        }
+        },
     }
     resource_report = {
         "nodes": [
@@ -1297,7 +1699,9 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
                 "name": "small-node",
                 "status": "healthy",
                 "scheduling_eligible": True,
-                "devices": [{"kind": "gpu", "type": "integrated_gpu", "memory_total_mb": 32768}],
+                "devices": [
+                    {"kind": "gpu", "type": "integrated_gpu", "memory_total_mb": 32768}
+                ],
             }
         ]
     }
@@ -1307,14 +1711,22 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
         "mn_cli.libs.run_cmds.client.resolve_service",
         return_value=json.dumps({"services": []}),
     )
-    mocker.patch("mn_cli.libs.run_cmds.client.get_resource", return_value=json.dumps(resource_report))
-    mocker.patch("mn_cli.libs.run_cmds.model_installed", side_effect=lambda model: model == "docker.io/ai/gemma4:E2B")
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.get_resource",
+        return_value=json.dumps(resource_report),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.model_installed",
+        side_effect=lambda model: model == "docker.io/ai/gemma4:E2B",
+    )
     install_model = mocker.patch(
         "mn_cli.libs.run_cmds.install_model_entry",
     )
 
     env_overrides = {}
-    summary = run_cmds._prepare_runtime_models_for_run_or_exit(bundle_dir, manifest, env_overrides=env_overrides)
+    summary = run_cmds._prepare_runtime_models_for_run_or_exit(
+        bundle_dir, manifest, env_overrides=env_overrides
+    )
 
     assert summary["ok"] is True
     assert summary["models"][0]["status"] == "fallback_model"
@@ -1329,10 +1741,13 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
     assert effective_config["llm"]["require_live"] is False
     assert effective_config["llm"]["max_tokens"] == 1800
     assert effective_config["llm"]["num_retries"] == 2
-    assert effective_config["llm"]["configs"]["primary"]["runtime_model"] == "gemma4:e2b"
+    assert (
+        effective_config["llm"]["configs"]["primary"]["runtime_model"] == "gemma4:e2b"
+    )
     assert effective_config["llm"]["configs"]["primary"]["max_tokens"] == 1800
     assert effective_config["llm"]["configs"]["primary"]["num_retries"] == 2
     install_model.assert_not_called()
+
 
 def test_runtime_model_profile_applies_large_model_strict_contract():
     config = {
@@ -1462,7 +1877,10 @@ def test_custom_runtime_model_prepare_payload_carries_risk_contract(mocker):
             },
         }
     )
-    mocker.patch("mn_cli.libs.run_cmds._runtime_model_prepare_client", return_value=runtime_client)
+    mocker.patch(
+        "mn_cli.libs.run_cmds._runtime_model_prepare_client",
+        return_value=runtime_client,
+    )
 
     run_cmds._install_runtime_cluster_model(
         requirement={"model": "hf.co/acme/custom:Q4_K_M", "context_size": 4096},
