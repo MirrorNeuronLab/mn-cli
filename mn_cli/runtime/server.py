@@ -2905,6 +2905,15 @@ def _join_network(
         replication = _configure_worker_redis_replica(seed_host, handshake, token)
         if replication:
             details.append(("Replication", replication))
+    model_reconcile = _reconcile_cluster_models_after_membership_change()
+    if model_reconcile and model_reconcile.get("nodes"):
+        details.append(
+            (
+                "Models",
+                f"{int(model_reconcile.get('models') or 0)} shared across "
+                f"{len(model_reconcile.get('nodes') or [])} nodes",
+            )
+        )
     if not _docker_network_uses_internal_identity(requested_mode):
         details.insert(1, ("Remote Redis", f"{redis_host}:{redis_port}"))
         details.append(("Remote Redis URL", redis_url))
@@ -2913,9 +2922,21 @@ def _join_network(
         action,
         status=status,
         details=details,
-        next_steps=("mn node list", "mn resource list"),
+        next_steps=("mn node list", "mn resource list", "mn model list"),
     )
     return handshake
+
+
+def _reconcile_cluster_models_after_membership_change() -> dict[str, Any] | None:
+    try:
+        from mn_cli.libs.model_cmds import reconcile_cluster_model_routes
+
+        return reconcile_cluster_model_routes(restart=True)
+    except Exception as exc:
+        console.print(
+            f"[yellow]Warning: cluster joined, but model route reconciliation failed: {exc}[/yellow]"
+        )
+        return None
 
 
 def _confirm_joined_node(

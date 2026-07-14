@@ -1640,6 +1640,14 @@ def test_add_node_uses_handshake_and_local_core(mocker, tmp_path, capsys):
         ),
     )
     mock_run = mocker.patch('mn_cli.server_cmds.subprocess.run')
+    reconcile_models = mocker.patch(
+        "mn_cli.server_cmds._reconcile_cluster_models_after_membership_change",
+        return_value={
+            "status": "ok",
+            "models": 2,
+            "nodes": [{"node": "local"}, {"node": "worker"}],
+        },
+    )
 
     _join_network(
         "192.168.4.10",
@@ -1649,6 +1657,7 @@ def test_add_node_uses_handshake_and_local_core(mocker, tmp_path, capsys):
 
     mock_run.assert_not_called()
     mock_add_node.assert_called_once_with("mirror_neuron@192.168.4.10", token="join-token")
+    reconcile_models.assert_called_once_with()
     output = capsys.readouterr().out
     assert "Node join successful." in output
     assert "mirror_neuron@192.168.4.10" in output
@@ -1656,6 +1665,7 @@ def test_add_node_uses_handshake_and_local_core(mocker, tmp_path, capsys):
     assert "192.168.4.10" in output
     assert "6380" in output
     assert "Remote Redis URL:" in output
+    assert "2 shared across 2 nodes" in output
     assert "redis://:" in output
     assert "mn node list" in output
     assert "mn resource list" in output

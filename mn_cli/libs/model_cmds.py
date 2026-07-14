@@ -90,6 +90,11 @@ def list_models(
             installed_models=installed_model_ids,
             ownership=ownership,
         )
+        remote_records = [
+            remote
+            for remote in (load_model_remotes().get("remotes") or {}).values()
+            if isinstance(remote, dict)
+        ]
         installed_model_keys = {key for model in installed_model_ids for key in docker_model_match_keys(model)}
 
         def is_installed(entry: dict[str, Any]) -> bool:
@@ -108,8 +113,38 @@ def list_models(
             ]
         }
         for model_payload in payload["models"]:
-            model_payload["route_source"] = _route_source_for_model_payload(model_payload)
-        payload["models"].extend(_remote_model_payloads(existing_ids={str(item.get("id") or "") for item in payload["models"]}))
+            local_installed = bool(model_payload.get("installed"))
+            remote_installations = _remote_installations_for_model(
+                model_payload,
+                remote_records,
+            )
+            installations: list[dict[str, Any]] = []
+            if local_installed:
+                installations.append(
+                    {
+                        "node": _local_runtime_node_name() or "local",
+                        "installed": True,
+                        "local": True,
+                        "route_source": "local-dmr",
+                    }
+                )
+            installations.extend(remote_installations)
+            model_payload["installations"] = installations
+            if remote_installations and not local_installed:
+                preferred = remote_installations[0]
+                model_payload["installed"] = True
+                model_payload["backend"] = "remote-dmr"
+                model_payload["status"] = "remote"
+                model_payload["node"] = preferred.get("node") or ""
+                model_payload["route_source"] = "remote_litellm_gateway"
+            else:
+                model_payload["route_source"] = _route_source_for_model_payload(model_payload)
+        payload["models"].extend(
+            _remote_model_payloads(
+                existing_entries=payload["models"],
+                remote_records=remote_records,
+            )
+        )
         if installed:
             payload["models"] = [entry for entry in payload["models"] if entry.get("installed")]
         if json_output:
@@ -268,6 +303,7 @@ def remove_model(
                 remove_litellm_gateway_route(str(removed_remote.get("api_model") or ""))
             _sync_gateway_best_effort(restart=True)
             _remove_gateway_route_across_cluster(model, origin_node=node, restart=True)
+            reconcile_cluster_model_routes(restart=True)
             print_success_confirmation(
                 console,
                 "Model route remove",
@@ -313,6 +349,7 @@ def remove_model(
             _remove_gateway_route_across_cluster(str(entry.get("id") or ""), restart=True)
         if removed_remotes and not local_installed:
             _remove_gateway_route_across_cluster(model, restart=True)
+        reconcile_cluster_model_routes(restart=True)
         print_success_confirmation(
             console,
             "Model remove",
@@ -1016,6 +1053,220 @@ def _sync_gateway_runtime_endpoints_across_cluster(
     return results
 
 
+def reconcile_cluster_model_routes(
+    *,
+    restart: bool = True,
+    quiet: bool = False,
+) -> dict[str, Any]:
+    """Rebuild every node's cluster-managed model routes from live inventories."""
+
+    node_endpoints = _cluster_node_endpoints(quiet=quiet)
+    if not node_endpoints:
+        return {"status": "single_node", "models": 0, "nodes": [], "errors": []}
+
+    service_fallbacks = _cluster_model_service_inventory()
+    inventories: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+    errors: list[dict[str, str]] = []
+    for node_endpoint in node_endpoints:
+        node_name = str(node_endpoint.get("node_name") or "")
+        try:
+            entries = _runtime_model_inventory_for_node(node_endpoint)
+        except Exception as exc:
+            entries = service_fallbacks.get(node_name, [])
+            if not entries:
+                errors.append({"node": node_name, "stage": "inventory", "error": str(exc)})
+                if not quiet:
+                    console.print(
+                        f"[yellow]Warning: could not inspect runtime models on {node_name}: {exc}[/yellow]"
+                    )
+        inventories.append((node_endpoint, entries))
+
+    routes = _cluster_routes_from_inventories(inventories)
+    inventory_complete = not any(error.get("stage") == "inventory" for error in errors)
+    results: list[dict[str, Any]] = []
+    for node_endpoint in node_endpoints:
+        node_name = str(node_endpoint.get("node_name") or "")
+        try:
+            runtime_client = _native_runtime_client_for_node(node_endpoint)
+            response = runtime_client.sync_litellm_gateway(
+                {
+                    "node": node_name,
+                    "runtime_endpoints": routes,
+                    "cluster_reconcile": inventory_complete,
+                    "restart": restart,
+                    "source": "mn-cli-cluster-model-reconcile",
+                }
+            )
+            results.append({"node": node_name, "status": "ok", "response": response})
+        except Exception as exc:
+            errors.append({"node": node_name, "stage": "gateway", "error": str(exc)})
+            results.append({"node": node_name, "status": "error", "error": str(exc)})
+            if not quiet:
+                console.print(
+                    f"[yellow]Warning: could not reconcile cluster model routes on {node_name}: {exc}[/yellow]"
+                )
+
+    model_ids = {
+        str(endpoint.get("cluster_model_id") or endpoint.get("runtime_model") or key)
+        for key, endpoint in routes.items()
+        if isinstance(endpoint, dict)
+    }
+    return {
+        "status": "ok" if not errors else "warning",
+        "models": len(model_ids),
+        "routes": len(routes),
+        "nodes": results,
+        "errors": errors,
+    }
+
+
+def _runtime_model_inventory_for_node(
+    node_endpoint: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if _cluster_node_is_local(node_endpoint):
+        return _model_entries_for_installed_names(_installed_model_names())
+
+    node_name = str(node_endpoint.get("node_name") or "")
+    native_endpoint = _cluster_node_native_sdk_endpoint(node_name, node_endpoint["node"])
+    runtime_client = Client(
+        target=native_endpoint["target"],
+        timeout=_runtime_model_prepare_timeout_seconds(),
+        auth_token=cli_config.grpc_auth_token,
+        admin_token=cli_config.grpc_admin_token,
+    )
+    payload = json.loads(runtime_client.get_resource())
+    if not isinstance(payload, dict) or payload.get("kind") != "runtime_model_inventory":
+        raise RuntimeError(f"cluster node {node_name} returned an invalid runtime model inventory")
+    models = payload.get("models")
+    if not isinstance(models, list):
+        raise RuntimeError(f"cluster node {node_name} returned a non-list runtime model inventory")
+    return [
+        entry
+        for entry in models
+        if isinstance(entry, dict)
+        and entry.get("installed") is not False
+        and str(entry.get("provider") or "docker_model_runner").strip().lower()
+        == "docker_model_runner"
+    ]
+
+
+def _model_entries_for_installed_names(installed_models: set[str]) -> list[dict[str, Any]]:
+    catalog = load_model_catalog()
+    installed_keys = {
+        key for model in installed_models for key in docker_model_match_keys(model)
+    }
+    matched_keys: set[str] = set()
+    entries: list[dict[str, Any]] = []
+    for entry in list_model_entries(catalog):
+        model_keys = docker_model_match_keys(docker_model_name(entry))
+        if not model_keys & installed_keys:
+            continue
+        entries.append(entry)
+        matched_keys.update(model_keys)
+    for model in sorted(installed_models):
+        if docker_model_match_keys(model) & matched_keys:
+            continue
+        entries.append(
+            {
+                "id": model,
+                "provider": "docker_model_runner",
+                "model": model,
+                "api_model": model,
+                "backend": "unknown",
+                "aliases": [],
+            }
+        )
+    return entries
+
+
+def _cluster_model_service_inventory() -> dict[str, list[dict[str, Any]]]:
+    try:
+        payload = json.loads(
+            client.list_services(
+                name="docker-model-runner",
+                passing_only=True,
+            )
+        )
+    except Exception:
+        return {}
+    services = payload.get("services") if isinstance(payload, dict) else None
+    inventories: dict[str, list[dict[str, Any]]] = {}
+    for service in services or []:
+        if not isinstance(service, dict):
+            continue
+        node_name = str(service.get("node") or "").strip()
+        meta = service.get("meta") if isinstance(service.get("meta"), dict) else {}
+        model_id = str(meta.get("model_id") or meta.get("model") or "").strip()
+        runtime_model = str(meta.get("model") or model_id).strip()
+        if not node_name or not runtime_model:
+            continue
+        aliases = []
+        for tag in service.get("tags") or []:
+            text = str(tag or "")
+            if text.startswith("model:"):
+                aliases.append(text.removeprefix("model:"))
+            elif text.startswith("model-id:"):
+                aliases.append(text.removeprefix("model-id:"))
+        inventories.setdefault(node_name, []).append(
+            {
+                "id": model_id or runtime_model,
+                "provider": service.get("provider") or "docker_model_runner",
+                "model": runtime_model,
+                "api_model": meta.get("api_model") or runtime_model,
+                "aliases": aliases,
+                "installed": True,
+            }
+        )
+    return inventories
+
+
+def _cluster_routes_from_inventories(
+    inventories: list[tuple[dict[str, Any], list[dict[str, Any]]]],
+) -> dict[str, dict[str, Any]]:
+    routes: dict[str, dict[str, Any]] = {}
+    for node_endpoint, entries in sorted(
+        inventories,
+        key=lambda item: str(item[0].get("node_name") or ""),
+    ):
+        owner = str(node_endpoint.get("node_name") or "").strip()
+        host = str(node_endpoint.get("host") or "").strip()
+        if not owner or not host:
+            continue
+        for entry in entries:
+            if (
+                str(entry.get("provider") or "docker_model_runner").strip().lower()
+                != "docker_model_runner"
+            ):
+                continue
+            try:
+                runtime_model = docker_model_name(entry)
+            except Exception:
+                continue
+            model_id = str(entry.get("id") or runtime_model).strip()
+            api_model = str(entry.get("api_model") or runtime_model).strip()
+            route_keys = _model_route_keys(entry)
+            explicit_aliases = entry.get("route_aliases")
+            endpoint = {
+                "provider": str(entry.get("provider") or "docker_model_runner"),
+                "model": api_model,
+                "runtime_model": runtime_model,
+                "api_model": api_model,
+                "api_base": f"http://{host}:{os.getenv('MN_LITELLM_GATEWAY_PORT', '4000')}/v1",
+                "api_key": "not-needed",
+                "node": owner,
+                "source": "remote_litellm_gateway",
+                "cluster_model_id": model_id,
+                "route_aliases": (
+                    [str(alias) for alias in explicit_aliases if str(alias or "").strip()]
+                    if isinstance(explicit_aliases, list) and explicit_aliases
+                    else sorted(route_keys)
+                ),
+            }
+            for key in sorted(route_keys):
+                routes.setdefault(key, endpoint)
+    return routes
+
+
 def _runtime_endpoints_for_gateway_node(
     runtime_endpoints: dict[str, dict[str, Any]],
     node_endpoint: dict[str, Any],
@@ -1205,14 +1456,102 @@ def _route_source_for_model_payload(payload: dict[str, Any]) -> str:
     return ""
 
 
-def _remote_model_payloads(*, existing_ids: set[str]) -> list[dict[str, Any]]:
+def _remote_installations_for_model(
+    model: dict[str, Any],
+    remote_records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    model_keys = _model_payload_match_keys(model)
+    installations: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for remote in remote_records:
+        remote_keys = _remote_record_match_keys(remote)
+        if not model_keys & remote_keys:
+            continue
+        node = str(remote.get("node") or "").strip()
+        runtime_model = str(remote.get("model") or remote.get("api_model") or "").strip()
+        base_url = str(remote.get("base_url") or "").strip()
+        identity = (node, runtime_model, base_url)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        installations.append(
+            {
+                "node": node or "remote",
+                "installed": True,
+                "local": False,
+                "model": runtime_model,
+                "api_model": remote.get("api_model") or runtime_model,
+                "api_base": base_url,
+                "route_source": (
+                    "remote_litellm_gateway" if node else "manual-remote"
+                ),
+            }
+        )
+    return sorted(
+        installations,
+        key=lambda item: (str(item.get("node") or ""), str(item.get("model") or "")),
+    )
+
+
+def _model_payload_match_keys(model: dict[str, Any]) -> set[str]:
+    values = {
+        str(model.get("id") or ""),
+        str(model.get("model") or ""),
+        str(model.get("docker_model") or ""),
+        str(model.get("api_model") or ""),
+    }
+    values.update(str(alias or "") for alias in model.get("aliases") or [])
+    return {
+        key
+        for value in values
+        for key in docker_model_match_keys(value)
+    }
+
+
+def _remote_record_match_keys(remote: dict[str, Any]) -> set[str]:
+    values = {
+        str(remote.get("name") or ""),
+        str(remote.get("model") or ""),
+        str(remote.get("api_model") or ""),
+        str(remote.get("cluster_model_id") or ""),
+    }
+    values.update(str(alias or "") for alias in remote.get("route_aliases") or [])
+    return {
+        key
+        for value in values
+        for key in docker_model_match_keys(value)
+    }
+
+
+def _remote_model_payloads(
+    *,
+    existing_entries: list[dict[str, Any]],
+    remote_records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    existing_keys = {
+        key
+        for entry in existing_entries
+        for key in _model_payload_match_keys(entry)
+    }
     remotes = []
-    for remote in load_model_remotes().get("remotes", {}).values():
-        if not isinstance(remote, dict):
-            continue
+    seen: set[tuple[str, str]] = set()
+    for remote in remote_records:
         model_id = str(remote.get("name") or remote.get("model") or "").strip()
-        if not model_id or model_id in existing_ids:
+        if not model_id or existing_keys & _remote_record_match_keys(remote):
             continue
+        identity = (model_id, str(remote.get("node") or ""))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        installation = _remote_installations_for_model(
+            {
+                "id": model_id,
+                "model": remote.get("model"),
+                "api_model": remote.get("api_model"),
+                "aliases": remote.get("route_aliases") or [],
+            },
+            remote_records,
+        )
         remotes.append(
             {
                 "id": model_id,
@@ -1226,6 +1565,7 @@ def _remote_model_payloads(*, existing_ids: set[str]) -> list[dict[str, Any]]:
                 "owner_count": 0,
                 "route_source": "remote_litellm_gateway" if remote.get("node") else "manual-remote",
                 "node": remote.get("node") or "",
+                "installations": installation,
             }
         )
     return sorted(remotes, key=lambda item: str(item.get("id") or ""))

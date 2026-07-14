@@ -89,6 +89,166 @@ def test_model_list_prints_builtin_catalog_json(mocker):
     assert gemma["status"] == "default"
 
 
+def test_model_list_marks_cluster_remote_installed_and_local_route_wins(mocker):
+    upsert_model_remote(
+        "nemotron3",
+        "docker.io/ai/nemotron3:latest",
+        "http://192.168.4.173:4000/v1",
+        api_model="docker.io/ai/nemotron3:latest",
+        node="mirror_neuron@spark",
+    )
+    installed = set()
+    mocker.patch(
+        "mn_cli.libs.model_cmds._installed_model_names",
+        side_effect=lambda: set(installed),
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds._local_runtime_node_name",
+        return_value="mirror_neuron@local",
+    )
+
+    remote_result = runner.invoke(app, ["model", "list", "--json"])
+    assert remote_result.exit_code == 0
+    remote_model = next(
+        model
+        for model in json.loads(remote_result.stdout)["models"]
+        if model["id"] == "nemotron3"
+    )
+    assert remote_model["installed"] is True
+    assert remote_model["backend"] == "remote-dmr"
+    assert remote_model["route_source"] == "remote_litellm_gateway"
+    assert remote_model["installations"] == [
+        {
+            "node": "mirror_neuron@spark",
+            "installed": True,
+            "local": False,
+            "model": "docker.io/ai/nemotron3:latest",
+            "api_model": "docker.io/ai/nemotron3:latest",
+            "api_base": "http://192.168.4.173:4000/v1",
+            "route_source": "remote_litellm_gateway",
+        }
+    ]
+
+    installed.add("docker.io/ai/nemotron3:latest")
+    local_result = runner.invoke(app, ["model", "list", "--json"])
+    assert local_result.exit_code == 0
+    local_model = next(
+        model
+        for model in json.loads(local_result.stdout)["models"]
+        if model["id"] == "nemotron3"
+    )
+    assert local_model["installed"] is True
+    assert local_model["backend"] == "llama.cpp"
+    assert local_model["route_source"] == "local-dmr"
+    assert [item["node"] for item in local_model["installations"]] == [
+        "mirror_neuron@local",
+        "mirror_neuron@spark",
+    ]
+
+
+def test_cluster_model_reconcile_reads_each_inventory_and_syncs_every_gateway(mocker):
+    local = _cluster_node("mirror_neuron@local", "10.0.0.1", self_node=True)
+    spark = _cluster_node("mirror_neuron@spark", "10.0.0.2")
+    synced = []
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.target = kwargs.get("target")
+
+        def get_resource(self):
+            assert self.target == "10.0.0.2:55052"
+            return json.dumps(
+                {
+                    "kind": "runtime_model_inventory",
+                    "models": [
+                        {
+                            "id": "nemotron3",
+                            "provider": "docker_model_runner",
+                            "model": "docker.io/ai/nemotron3:latest",
+                            "api_model": "docker.io/ai/nemotron3:latest",
+                            "route_aliases": ["nemotron3"],
+                            "installed": True,
+                        }
+                    ],
+                }
+            )
+
+        def sync_litellm_gateway(self, payload):
+            synced.append((self.target, payload))
+            return json.dumps({"status": "running"})
+
+    mocker.patch(
+        "mn_cli.libs.model_cmds._cluster_node_endpoints",
+        return_value=[
+            {
+                "node": local,
+                "node_name": local["name"],
+                "host": local["grpc_host"],
+                "self": True,
+            },
+            {
+                "node": spark,
+                "node_name": spark["name"],
+                "host": spark["grpc_host"],
+                "self": False,
+            },
+        ],
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds._installed_model_names",
+        return_value={"docker.io/ai/gemma4:E2B"},
+    )
+    mocker.patch("mn_cli.libs.model_cmds.Client", FakeClient)
+    mocker.patch(
+        "mn_cli.libs.model_cmds.client.list_services",
+        return_value=json.dumps({"services": []}),
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds.client.sync_litellm_gateway",
+        side_effect=lambda payload: synced.append(("local", payload))
+        or json.dumps({"status": "running"}),
+    )
+
+    result = model_cmds.reconcile_cluster_model_routes(restart=False)
+
+    assert result["status"] == "ok"
+    assert result["models"] == 2
+    assert {target for target, _payload in synced} == {"local", "10.0.0.2:55052"}
+    for _target, payload in synced:
+        assert payload["cluster_reconcile"] is True
+        assert payload["restart"] is False
+        assert payload["runtime_endpoints"]["nemotron3"]["node"] == "mirror_neuron@spark"
+        assert payload["runtime_endpoints"]["gemma4:e2b"]["node"] == "mirror_neuron@local"
+
+
+def test_cluster_route_reconcile_moves_duplicate_model_to_remaining_owner():
+    local = {
+        "node_name": "mirror_neuron@local",
+        "host": "10.0.0.1",
+    }
+    spark = {
+        "node_name": "mirror_neuron@spark",
+        "host": "10.0.0.2",
+    }
+    nemotron = {
+        "id": "nemotron3",
+        "provider": "docker_model_runner",
+        "model": "docker.io/ai/nemotron3:latest",
+        "api_model": "docker.io/ai/nemotron3:latest",
+        "route_aliases": ["nemotron3"],
+    }
+
+    duplicate_routes = model_cmds._cluster_routes_from_inventories(
+        [(local, [nemotron]), (spark, [nemotron])]
+    )
+    remaining_routes = model_cmds._cluster_routes_from_inventories(
+        [(local, []), (spark, [nemotron])]
+    )
+
+    assert duplicate_routes["nemotron3"]["node"] == "mirror_neuron@local"
+    assert remaining_routes["nemotron3"]["node"] == "mirror_neuron@spark"
+
+
 def test_model_show_resolves_gemme_alias(mocker):
     mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=False)
 
