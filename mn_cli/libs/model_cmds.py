@@ -43,6 +43,7 @@ from mn_sdk import (
     load_model_remotes,
     merge_catalog_and_installed_models,
     proxy_model_ids,
+    reconcile_cluster_model_remotes,
     record_manual_model_install,
     remove_litellm_gateway_route,
     remove_model_proxy,
@@ -227,7 +228,7 @@ def install_model(
                 ("Model", entry.get("id")),
                 ("Docker model", target),
                 ("Backend", compatibility.get("backend")),
-                ("Route", "remote-litellm-gateway" if selected_node else "local-litellm-gateway"),
+                ("Route", "remote-dmr" if selected_node else "local-litellm-gateway"),
             ],
             next_steps=f"mn model doctor {entry.get('id')}",
         )
@@ -310,7 +311,6 @@ def remove_model(
                 remove_litellm_gateway_route(str(removed_remote.get("model") or ""))
                 remove_litellm_gateway_route(str(removed_remote.get("api_model") or ""))
             _sync_gateway_best_effort(restart=True)
-            _remove_gateway_route_across_cluster(model, origin_node=node, restart=True)
             reconcile_cluster_model_routes(restart=True)
             print_success_confirmation(
                 console,
@@ -352,11 +352,6 @@ def remove_model(
             remove_litellm_gateway_route(str(removed_remote.get("model") or ""))
             remove_litellm_gateway_route(str(removed_remote.get("api_model") or ""))
         _sync_gateway_best_effort(restart=True)
-        _remove_gateway_route_across_cluster(target, restart=True)
-        if entry:
-            _remove_gateway_route_across_cluster(str(entry.get("id") or ""), restart=True)
-        if removed_remotes and not local_installed:
-            _remove_gateway_route_across_cluster(model, restart=True)
         reconcile_cluster_model_routes(restart=True)
         print_success_confirmation(
             console,
@@ -691,13 +686,11 @@ def _install_model_on_cluster_node(
         runtime_endpoints={key: remote_endpoint for key in _model_route_keys(entry)},
         restart=True,
     )
-    upsert_model_remote(
-        f"{node}-{str(entry.get('id') or docker_model)}",
-        docker_model,
-        remote_endpoint["api_base"],
-        api_key=remote_endpoint.get("api_key") or "not-needed",
-        api_model=remote_endpoint.get("api_model") or remote_endpoint.get("model") or docker_model,
-        node=node,
+    reconcile_cluster_model_remotes(
+        {key: remote_endpoint for key in _model_route_keys(entry)},
+        local_installed_models=_installed_model_names(),
+        local_node=_local_runtime_node_name(),
+        replace=False,
     )
     return {
         "entry": entry,
@@ -786,13 +779,6 @@ def _cluster_node_endpoint(node_name: str) -> dict[str, Any]:
     raise RuntimeError(f"cluster node {node_name} was not found in runtime summary")
 
 
-def _cluster_node_endpoint_optional(node_name: str) -> dict[str, Any] | None:
-    try:
-        return _cluster_node_endpoint(node_name)
-    except Exception:
-        return None
-
-
 def _cluster_node_endpoints(*, quiet: bool = False) -> list[dict[str, Any]]:
     try:
         summary = json.loads(client.get_system_summary())
@@ -823,6 +809,48 @@ def _cluster_node_endpoints(*, quiet: bool = False) -> list[dict[str, Any]]:
     return endpoints
 
 
+def _cluster_runtime_status_endpoints(*, quiet: bool = False) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(client.get_runtime_statuses())
+    except Exception as exc:
+        if not quiet:
+            console.print(
+                f"[yellow]Warning: could not read shared runtime node status: {exc}[/yellow]"
+            )
+        return []
+
+    nodes = payload.get("nodes") if isinstance(payload, dict) else None
+    events = payload.get("events") if isinstance(payload, dict) else None
+    event_ids = [
+        str(event.get("id") or "").strip()
+        for event in events or []
+        if isinstance(event, dict)
+        and str(event.get("domain") or "").strip().lower() == "models"
+        and str(event.get("id") or "").strip()
+    ]
+    endpoints: list[dict[str, Any]] = []
+    for node in nodes or []:
+        if not isinstance(node, dict):
+            continue
+        node_name = str(node.get("name") or node.get("node") or "").strip()
+        host = str(node.get("grpc_host") or node.get("address") or "").strip()
+        if not host and "@" in node_name:
+            host = node_name.split("@", 1)[1].strip()
+        if not node_name or not host:
+            continue
+        endpoint = {
+            "host": host,
+            "node": node,
+            "node_name": node_name,
+            "self": bool(node.get("self") is True or node.get("self?") is True),
+            "self_authoritative": True,
+        }
+        if endpoint["self"] and event_ids:
+            endpoint["status_event_ids"] = event_ids
+        endpoints.append(endpoint)
+    return endpoints
+
+
 def _local_cluster_node_endpoint() -> dict[str, Any] | None:
     for node_endpoint in _cluster_node_endpoints(quiet=True):
         if node_endpoint.get("self"):
@@ -836,6 +864,11 @@ def _local_runtime_node_name() -> str:
 
 
 def _cluster_node_is_local(node_endpoint: dict[str, Any]) -> bool:
+    if node_endpoint.get("self") is True:
+        return True
+    if node_endpoint.get("self_authoritative") is True:
+        return False
+
     node = node_endpoint.get("node")
     if isinstance(node, dict) and (node.get("self?") is True or node.get("self") is True):
         return True
@@ -977,8 +1010,11 @@ def _sync_installed_model_gateway_route(
     endpoint = result.get("endpoint") if isinstance(result.get("endpoint"), dict) else None
     if endpoint is None:
         endpoint = docker_model_runner_endpoint(entry, node=node, source="local-dmr")
-    _sync_gateway_best_effort(runtime_endpoints={key: endpoint for key in _model_route_keys(entry)}, restart=True)
-    _sync_model_route_across_cluster(entry, endpoint=endpoint, origin_node=node, restart=True)
+    _sync_gateway_best_effort(
+        runtime_endpoints={key: endpoint for key in _model_route_keys(entry)},
+        restart=True,
+    )
+    reconcile_cluster_model_routes(restart=True)
 
 
 def _sync_gateway_best_effort(
@@ -1032,11 +1068,9 @@ def _sync_gateway_runtime_endpoints_across_cluster(
 ) -> list[dict[str, Any]]:
     """Publish runtime routes to every proxy that does not own their upstream.
 
-    A route backed by another node's LiteLLM proxy must never be installed on
-    that proxy itself: doing so replaces the node-local Docker Model Runner
-    route with a request back to the same proxy.  The owner already configures
-    its local route as part of runtime-model preparation; every other node
-    receives the public gateway route.
+    A route backed by another node's Docker Model Runner must never be
+    installed on its owner: the owner's local DMR route is authoritative.
+    Every other node receives the owner's direct, cluster-reachable DMR URL.
     """
     results: list[dict[str, Any]] = []
     for node_endpoint in _cluster_node_endpoints(quiet=True):
@@ -1070,9 +1104,9 @@ def reconcile_cluster_model_routes(
     quiet: bool = False,
     expected_nodes: set[str] | None = None,
 ) -> dict[str, Any]:
-    """Rebuild every node's cluster-managed model routes from live inventories."""
+    """Publish local model status and reconcile only this node's LiteLLM proxy."""
 
-    node_endpoints = _cluster_node_endpoints(quiet=quiet)
+    node_endpoints = _cluster_runtime_status_endpoints(quiet=quiet)
     if not node_endpoints:
         return {
             "status": "unavailable",
@@ -1083,15 +1117,15 @@ def reconcile_cluster_model_routes(
                 {
                     "node": "local",
                     "stage": "membership",
-                    "error": "no runtime nodes were available from system summary",
+                    "error": "no runtime nodes were available from shared runtime status",
                 }
             ],
             "inventory_complete": False,
         }
 
-    service_fallbacks = _cluster_model_service_inventory()
     inventories: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
     errors: list[dict[str, str]] = []
+    node_results: list[dict[str, Any]] = []
     observed_nodes = {
         str(endpoint.get("node_name") or "").strip()
         for endpoint in node_endpoints
@@ -1102,27 +1136,92 @@ def reconcile_cluster_model_routes(
             {
                 "node": missing_node,
                 "stage": "membership",
-                "error": "expected cluster node is temporarily absent from system summary",
+                "error": "expected cluster node is temporarily absent from shared runtime status",
             }
         )
+
+    local_endpoint = next(
+        (endpoint for endpoint in node_endpoints if _cluster_node_is_local(endpoint)),
+        None,
+    )
+    local_entries = (
+        _model_entries_for_installed_names(_installed_model_names())
+        if local_endpoint is not None
+        else []
+    )
+    local_revision = _runtime_model_inventory_revision(local_entries)
+    if local_endpoint is None:
+        errors.append(
+            {
+                "node": "local",
+                "stage": "membership",
+                "error": "local runtime node was not present in shared runtime status",
+            }
+        )
+    else:
+        local_node = str(local_endpoint.get("node_name") or "")
+        try:
+            publish_ack = _publish_local_runtime_model_inventory(
+                local_entries,
+                revision=local_revision,
+            )
+            node_results.append(
+                {
+                    "node": local_node,
+                    "status": "ok",
+                    "inventory_revision": local_revision,
+                    "publish_ack": publish_ack,
+                }
+            )
+        except Exception as exc:
+            errors.append(
+                {
+                    "node": local_node,
+                    "stage": "publish",
+                    "error": str(exc),
+                }
+            )
+            node_results.append(
+                {
+                    "node": local_node,
+                    "status": "error",
+                    "inventory_revision": local_revision,
+                    "error": str(exc),
+                }
+            )
+
     for node_endpoint in node_endpoints:
         node_name = str(node_endpoint.get("node_name") or "")
+        if _cluster_node_is_local(node_endpoint):
+            inventories.append((node_endpoint, local_entries))
+            continue
         try:
             entries = _runtime_model_inventory_for_node(node_endpoint)
         except Exception as exc:
-            entries = service_fallbacks.get(node_name, [])
+            entries = []
             errors.append(
                 {
                     "node": node_name,
                     "stage": "inventory",
                     "error": str(exc),
-                    "fallback": "service_registry" if entries else "none",
                 }
+            )
+            node_results.append(
+                {"node": node_name, "status": "error", "error": str(exc)}
             )
             if not quiet:
                 console.print(
-                    f"[yellow]Warning: could not inspect runtime models on {node_name}: {exc}[/yellow]"
+                    f"[yellow]Warning: no synchronized runtime model status for {node_name}: {exc}[/yellow]"
                 )
+        else:
+            snapshot = _runtime_model_status_snapshot(node_endpoint)
+            node_results.append(
+                {
+                    "node": node_name,
+                    "status": "ok",
+                    "inventory_revision": str(snapshot.get("revision") or ""),
+                }
+            )
         inventories.append((node_endpoint, entries))
 
     routes = _cluster_routes_from_inventories(inventories)
@@ -1133,35 +1232,80 @@ def reconcile_cluster_model_routes(
         json.dumps(routes, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     sync_id = uuid.uuid4().hex
-    results: list[dict[str, Any]] = []
-    for node_endpoint in node_endpoints:
-        node_name = str(node_endpoint.get("node_name") or "")
+    if local_endpoint is not None:
+        local_node = str(local_endpoint.get("node_name") or "")
+        failure_stage = "gateway"
         try:
-            runtime_client = _native_runtime_client_for_node(node_endpoint)
-            response = runtime_client.sync_litellm_gateway(
-                {
-                    "node": node_name,
-                    "runtime_endpoints": routes,
-                    "cluster_reconcile": inventory_complete,
-                    "restart": restart,
-                    "source": "mn-cli-cluster-model-reconcile",
+            local_routes = _runtime_endpoints_for_local_gateway(
+                routes,
+                local_endpoint,
+                local_installed_models=_installed_model_names(),
+            )
+            remotes = reconcile_cluster_model_remotes(
+                local_routes,
+                local_installed_models=_installed_model_names(),
+                local_node=local_node,
+                replace=inventory_complete,
+            )
+            gateway = sync_litellm_gateway(
+                runtime_endpoints=local_routes,
+                restart=restart,
+            )
+            gateway_status = str(gateway.get("status") or "configured").strip().lower()
+            if gateway_status not in {"configured", "ok", "running"}:
+                raise RuntimeError(
+                    "local LiteLLM reconciliation returned unsuccessful status "
+                    f"{gateway_status or 'missing'}"
+                )
+            local_result = next(
+                (result for result in node_results if result.get("node") == local_node),
+                None,
+            )
+            if local_result is None:
+                local_result = {"node": local_node, "status": "ok"}
+                node_results.append(local_result)
+            if local_result.get("status") == "ok":
+                local_result["gateway_ack"] = {
+                    "status": gateway_status,
                     "sync_id": sync_id,
                     "route_version": route_version,
+                    "accepted_routes": sorted(local_routes),
+                    "cluster_reconcile": inventory_complete,
+                    "cluster_remote_count": sum(
+                        1
+                        for remote in (remotes.get("remotes") or {}).values()
+                        if isinstance(remote, dict)
+                        and remote.get("managed_by") == "mirror-neuron-cluster"
+                    ),
                 }
-            )
-            ack = _validated_cluster_model_sync_ack(
-                response,
-                node=node_name,
-                sync_id=sync_id,
-                route_version=route_version,
-            )
-            results.append({"node": node_name, "status": "ok", "ack": ack})
+                event_ids = [
+                    str(event_id)
+                    for event_id in local_endpoint.get("status_event_ids") or []
+                    if str(event_id).strip()
+                ]
+                if inventory_complete and not errors and event_ids:
+                    failure_stage = "event_ack"
+                    event_ack = _validated_runtime_status_event_ack(
+                        client.ack_runtime_status_events(event_ids),
+                        event_ids=event_ids,
+                    )
+                    local_result["gateway_ack"]["status_event_ack"] = event_ack
         except Exception as exc:
-            errors.append({"node": node_name, "stage": "gateway", "error": str(exc)})
-            results.append({"node": node_name, "status": "error", "error": str(exc)})
+            errors.append({"node": local_node, "stage": failure_stage, "error": str(exc)})
+            local_result = next(
+                (result for result in node_results if result.get("node") == local_node),
+                None,
+            )
+            if local_result is None:
+                node_results.append(
+                    {"node": local_node, "status": "error", "error": str(exc)}
+                )
+            else:
+                local_result["status"] = "error"
+                local_result["error"] = str(exc)
             if not quiet:
                 console.print(
-                    f"[yellow]Warning: could not reconcile cluster model routes on {node_name}: {exc}[/yellow]"
+                    f"[yellow]Warning: could not reconcile local cluster model routes: {exc}[/yellow]"
                 )
 
     model_ids = {
@@ -1173,7 +1317,7 @@ def reconcile_cluster_model_routes(
         "status": "ok" if not errors else "warning",
         "models": len(model_ids),
         "routes": len(routes),
-        "nodes": results,
+        "nodes": node_results,
         "errors": errors,
         "inventory_complete": inventory_complete,
         "sync_id": sync_id,
@@ -1181,54 +1325,93 @@ def reconcile_cluster_model_routes(
     }
 
 
-def _validated_cluster_model_sync_ack(
+def _validated_runtime_status_ack(
     response: Any,
     *,
-    node: str,
-    sync_id: str,
-    route_version: str,
+    revision: str,
 ) -> dict[str, Any]:
     if isinstance(response, str):
         try:
             response = json.loads(response)
         except json.JSONDecodeError as exc:
-            raise RuntimeError(f"cluster model sync on {node} returned invalid acknowledgement JSON") from exc
+            raise RuntimeError("runtime model status publish returned invalid acknowledgement JSON") from exc
     if not isinstance(response, dict):
-        raise RuntimeError(f"cluster model sync on {node} returned no acknowledgement")
-    if str(response.get("sync_id") or "") != sync_id:
-        raise RuntimeError(f"cluster model sync on {node} did not acknowledge sync {sync_id}")
-    if str(response.get("route_version") or "") != route_version:
-        raise RuntimeError(
-            f"cluster model sync on {node} acknowledged the wrong route version"
-        )
+        raise RuntimeError("runtime model status publish returned no acknowledgement")
+    if str(response.get("domain") or "") != "models":
+        raise RuntimeError("runtime model status publish acknowledged the wrong domain")
+    if str(response.get("revision") or "") != revision:
+        raise RuntimeError("runtime model status publish acknowledged the wrong revision")
     status = str(response.get("status") or "").strip().lower()
-    if status not in {"ok", "configured", "running"}:
+    if status not in {"accepted", "unchanged"}:
         raise RuntimeError(
-            f"cluster model sync on {node} returned unsuccessful acknowledgement status {status or 'missing'}"
+            "runtime model status publish returned unsuccessful acknowledgement "
+            f"status {status or 'missing'}"
         )
     return response
+
+
+def _runtime_model_inventory_revision(entries: list[dict[str, Any]]) -> str:
+    return hashlib.sha256(
+        json.dumps(entries, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _validated_runtime_status_event_ack(
+    response: Any,
+    *,
+    event_ids: list[str],
+) -> dict[str, Any]:
+    if isinstance(response, str):
+        try:
+            response = json.loads(response)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("runtime status event acknowledgement returned invalid JSON") from exc
+    if not isinstance(response, dict) or response.get("status") != "acked":
+        raise RuntimeError("runtime status events were not acknowledged")
+    expected_ids = list(dict.fromkeys(event_ids))
+    acked_ids = [str(event_id) for event_id in response.get("event_ids") or []]
+    if acked_ids != expected_ids or int(response.get("acked_count") or 0) != len(expected_ids):
+        raise RuntimeError("runtime status event acknowledgement was incomplete")
+    return response
+
+
+def _publish_local_runtime_model_inventory(
+    entries: list[dict[str, Any]],
+    *,
+    revision: str,
+) -> dict[str, Any]:
+    response = client.publish_runtime_status(
+        {
+            "domain": "models",
+            "revision": revision,
+            "status": {"models": entries},
+        }
+    )
+    return _validated_runtime_status_ack(response, revision=revision)
+
+
+def _runtime_model_status_snapshot(node_endpoint: dict[str, Any]) -> dict[str, Any]:
+    node = node_endpoint.get("node")
+    runtime_status = node.get("runtime_status") if isinstance(node, dict) else None
+    snapshot = runtime_status.get("models") if isinstance(runtime_status, dict) else None
+    if not isinstance(snapshot, dict):
+        node_name = str(node_endpoint.get("node_name") or "")
+        raise RuntimeError(f"cluster node {node_name} has not published model status")
+    if not str(snapshot.get("revision") or "").strip():
+        node_name = str(node_endpoint.get("node_name") or "")
+        raise RuntimeError(f"cluster node {node_name} published model status without a revision")
+    return snapshot
 
 
 def _runtime_model_inventory_for_node(
     node_endpoint: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    if _cluster_node_is_local(node_endpoint):
-        return _model_entries_for_installed_names(_installed_model_names())
-
     node_name = str(node_endpoint.get("node_name") or "")
-    native_endpoint = _cluster_node_native_sdk_endpoint(node_name, node_endpoint["node"])
-    runtime_client = Client(
-        target=native_endpoint["target"],
-        timeout=_runtime_model_prepare_timeout_seconds(),
-        auth_token=cli_config.grpc_auth_token,
-        admin_token=cli_config.grpc_admin_token,
-    )
-    payload = json.loads(runtime_client.get_resource())
-    if not isinstance(payload, dict) or payload.get("kind") != "runtime_model_inventory":
-        raise RuntimeError(f"cluster node {node_name} returned an invalid runtime model inventory")
-    models = payload.get("models")
+    snapshot = _runtime_model_status_snapshot(node_endpoint)
+    status = snapshot.get("status")
+    models = status.get("models") if isinstance(status, dict) else None
     if not isinstance(models, list):
-        raise RuntimeError(f"cluster node {node_name} returned a non-list runtime model inventory")
+        raise RuntimeError(f"cluster node {node_name} published a non-list model inventory")
     return [
         entry
         for entry in models
@@ -1266,47 +1449,6 @@ def _model_entries_for_installed_names(installed_models: set[str]) -> list[dict[
             }
         )
     return entries
-
-
-def _cluster_model_service_inventory() -> dict[str, list[dict[str, Any]]]:
-    try:
-        payload = json.loads(
-            client.list_services(
-                name="docker-model-runner",
-                passing_only=True,
-            )
-        )
-    except Exception:
-        return {}
-    services = payload.get("services") if isinstance(payload, dict) else None
-    inventories: dict[str, list[dict[str, Any]]] = {}
-    for service in services or []:
-        if not isinstance(service, dict):
-            continue
-        node_name = str(service.get("node") or "").strip()
-        meta = service.get("meta") if isinstance(service.get("meta"), dict) else {}
-        model_id = str(meta.get("model_id") or meta.get("model") or "").strip()
-        runtime_model = str(meta.get("model") or model_id).strip()
-        if not node_name or not runtime_model:
-            continue
-        aliases = []
-        for tag in service.get("tags") or []:
-            text = str(tag or "")
-            if text.startswith("model:"):
-                aliases.append(text.removeprefix("model:"))
-            elif text.startswith("model-id:"):
-                aliases.append(text.removeprefix("model-id:"))
-        inventories.setdefault(node_name, []).append(
-            {
-                "id": model_id or runtime_model,
-                "provider": service.get("provider") or "docker_model_runner",
-                "model": runtime_model,
-                "api_model": meta.get("api_model") or runtime_model,
-                "aliases": aliases,
-                "installed": True,
-            }
-        )
-    return inventories
 
 
 def _cluster_routes_from_inventories(
@@ -1389,46 +1531,35 @@ def _runtime_endpoints_for_gateway_node(
     }
 
 
-def _sync_model_route_across_cluster(
-    entry: dict[str, Any],
+def _runtime_endpoints_for_local_gateway(
+    runtime_endpoints: dict[str, dict[str, Any]],
+    node_endpoint: dict[str, Any],
     *,
-    endpoint: dict[str, Any],
-    origin_node: str | None,
-    restart: bool,
-    quiet: bool = False,
-) -> list[dict[str, Any]]:
-    owner_node = str(origin_node or _local_runtime_node_name() or "").strip()
-    owner_endpoint = None
-    if owner_node:
-        owner_endpoint = _cluster_node_endpoint_optional(owner_node)
-    if owner_endpoint is None and not origin_node:
-        owner_endpoint = _local_cluster_node_endpoint()
-        owner_node = str((owner_endpoint or {}).get("node_name") or owner_node)
-    remote_endpoint = _public_gateway_endpoint_for_owner(entry, owner_endpoint, endpoint)
-    if not remote_endpoint:
-        return []
-    routes = {key: remote_endpoint for key in _model_route_keys(entry)}
-    results: list[dict[str, Any]] = []
-    for node_endpoint in _cluster_node_endpoints(quiet=True):
-        node_name = str(node_endpoint.get("node_name") or "")
-        if owner_node and node_name == owner_node:
-            continue
-        try:
-            runtime_client = _native_runtime_client_for_node(node_endpoint)
-            response = runtime_client.sync_litellm_gateway(
-                {
-                    "node": node_name,
-                    "runtime_endpoints": routes,
-                    "restart": restart,
-                    "source": "mn-cli-model-route-fanout",
-                }
+    local_installed_models: set[str],
+) -> dict[str, dict[str, Any]]:
+    installed_keys = {
+        key
+        for model in local_installed_models
+        for key in docker_model_match_keys(model)
+    }
+    candidates = _runtime_endpoints_for_gateway_node(runtime_endpoints, node_endpoint)
+
+    return {
+        alias: endpoint
+        for alias, endpoint in candidates.items()
+        if not (
+            docker_model_match_keys(alias)
+            | docker_model_match_keys(
+                str(
+                    endpoint.get("runtime_model")
+                    or endpoint.get("model")
+                    or endpoint.get("api_model")
+                    or ""
+                )
             )
-            results.append({"node": node_name, "status": "ok", "response": response})
-        except Exception as exc:
-            results.append({"node": node_name, "status": "error", "error": str(exc)})
-            if not quiet:
-                console.print(f"[yellow]Warning: could not sync model route on {node_name}: {exc}[/yellow]")
-    return results
+        )
+        & installed_keys
+    }
 
 
 def _remove_gateway_route_on_cluster_node(model: str, *, node: str, restart: bool) -> str:
@@ -1496,32 +1627,6 @@ def _remove_gateway_route_across_cluster(
             if not quiet:
                 console.print(f"[yellow]Warning: could not remove LiteLLM route on {node_name}: {exc}[/yellow]")
     return results
-
-
-def _public_gateway_endpoint_for_owner(
-    entry: dict[str, Any],
-    owner_endpoint: dict[str, Any] | None,
-    endpoint: dict[str, Any],
-) -> dict[str, Any] | None:
-    if endpoint.get("source") == REMOTE_DMR_SOURCE:
-        return endpoint
-    if owner_endpoint is None:
-        return None
-    host = str(owner_endpoint.get("host") or "").strip()
-    if not host:
-        return None
-    docker_model = docker_model_name(entry)
-    api_model = str(entry.get("api_model") or endpoint.get("api_model") or endpoint.get("model") or docker_model)
-    return {
-        "provider": str(entry.get("provider") or "docker_model_runner"),
-        "model": api_model,
-        "runtime_model": docker_model,
-        "api_model": api_model,
-        "api_base": _node_docker_model_runner_api_base(owner_endpoint),
-        "api_key": "not-needed",
-        "node": str(owner_endpoint.get("node_name") or endpoint.get("node") or ""),
-        "source": REMOTE_DMR_SOURCE,
-    }
 
 
 def _model_route_keys(entry: dict[str, Any]) -> set[str]:

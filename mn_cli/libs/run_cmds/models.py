@@ -1,7 +1,6 @@
 from .common import *
 from .model_cluster import *
 from .model_config import *
-from mn_cli.libs.model_cmds import _sync_gateway_runtime_endpoints_across_cluster
 
 
 def _build_runtime_model_prepare_plan(
@@ -179,17 +178,6 @@ def _sync_litellm_gateway_for_runtime_models(
     gateway = sync_litellm_gateway(
         runtime_endpoints=upstream_endpoints,
         restart=restart,
-    )
-    # The submitter's proxy may be the one that ultimately runs the workflow.
-    # Publish each remote route to every other live proxy as well.  The owner
-    # is excluded by the shared helper because it already has a node-local DMR
-    # route from PrepareRuntimeModel; pointing it at itself would create a
-    # gateway loop.
-    gateway["cluster_sync"] = _sync_gateway_runtime_endpoints_across_cluster(
-        upstream_endpoints,
-        restart=restart,
-        quiet=True,
-        skip_local=True,
     )
     gateway_endpoints = gateway_endpoint_map(upstream_endpoints)
     summary["gateway"] = gateway

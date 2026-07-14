@@ -51,8 +51,12 @@ def isolated_mn_home(tmp_path, monkeypatch):
         },
     )
     monkeypatch.setattr(
-        "mn_cli.libs.run_cmds.models._sync_gateway_runtime_endpoints_across_cluster",
-        lambda *_args, **_kwargs: [],
+        "mn_cli.libs.run_cmds.models.installed_model_names",
+        lambda: set(),
+    )
+    monkeypatch.setattr(
+        "mn_cli.libs.run_cmds.models._local_runtime_node_name",
+        lambda: "mirror_neuron@local",
     )
 
 
@@ -320,27 +324,27 @@ def test_selected_workflow_node_controls_model_placement_and_gateway_sync(mocker
     sync = mocker.patch(
         "mn_cli.libs.run_cmds.sync_litellm_gateway", return_value={"status": "running"}
     )
-    fanout = mocker.patch(
-        "mn_cli.libs.run_cmds.models._sync_gateway_runtime_endpoints_across_cluster",
-        return_value=[{"node": "mirror_neuron@moon", "status": "ok"}],
-    )
     endpoints = run_cmds._sync_litellm_gateway_for_runtime_models(
         {
             "endpoints": {
                 "gemma4:e2b": {
                     "provider": "docker_model_runner",
-                    "model": "gemma4:e2b",
-                    "api_base": "http://mirror_neuron@spark:4000/v1",
+                    "model": "docker.io/ai/gemma4:E2B",
+                    "runtime_model": "docker.io/ai/gemma4:E2B",
+                    "api_model": "docker.io/ai/gemma4:E2B",
+                    "api_base": "http://spark:12434/engines/v1",
                     "node": "mirror_neuron@spark",
+                    "source": "remote-dmr",
                 }
             }
         },
         env_overrides={"MN_SELECTED_RUNTIME_NODE": "mirror_neuron@spark"},
     )
     sync.assert_called_once()
-    fanout.assert_called_once()
-    assert fanout.call_args.kwargs["skip_local"] is True
     assert endpoints["gemma4:e2b"]["api_base"] == "http://mn-litellm-proxy:4000/v1"
+    remotes = load_model_remotes()["remotes"]
+    assert len(remotes) == 1
+    assert next(iter(remotes.values()))["base_url"] == "http://spark:12434/engines/v1"
 
 
 def test_prepare_runtime_models_installs_missing_model_for_run(
@@ -1015,9 +1019,9 @@ def test_prepare_runtime_models_promotes_preferred_large_profile_on_capable_clus
                 "model": "nemotron3",
                 "runtime_model": "docker.io/docker.io/ai/nemotron3:latest",
                 "api_model": "nemotron3",
-                "api_base": "http://192.168.5.12:4000/v1",
+                "api_base": "http://192.168.5.12:12434/engines/v1",
                 "node": "mirror_neuron@192.168.5.12",
-                "source": "remote_litellm_gateway",
+                "source": "remote-dmr",
             },
         },
     )
@@ -1286,8 +1290,8 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
     assert payload["model"] == "nemotron3"
     assert payload["backend"] == "llama.cpp"
     assert result["endpoint"]["node"] == "mirror_neuron@192.168.4.173"
-    assert result["endpoint"]["api_base"] == "http://192.168.4.173:4000/v1"
-    assert result["endpoint"]["source"] == "remote_litellm_gateway"
+    assert result["endpoint"]["api_base"] == "http://192.168.4.173:12434/engines/v1"
+    assert result["endpoint"]["source"] == "remote-dmr"
     output = " ".join(capsys.readouterr().out.split())
     assert (
         "Preparing runtime model nemotron3 on mirror_neuron@192.168.4.173 "
