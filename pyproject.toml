@@ -28,3 +28,16 @@ local_scheme = "no-local-version"
 
 [tool.setuptools.package-data]
 mn_cli = ["schemas/*.json"]
+
+[tool.ruff.lint.per-file-ignores]
+# The run command is intentionally split through a shared import facade while
+# preserving its established handler API.  Flag ordinary unused imports and
+# unresolved names everywhere else.
+"mn_cli/libs/run_cmds/common.py" = ["F401"]
+"mn_cli/libs/run_cmds/**/*.py" = ["F403", "F405"]
+# The CLI bootstraps environment and the local SDK path before these imports.
+"mn_cli/main.py" = ["E402"]
+"mn_cli/shared.py" = ["E402"]
+# These legacy test modules share fixture-import headers across split files.
+"tests/**/*.py" = ["F401"]
+"tests/test_shared.py" = ["E402"]

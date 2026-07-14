@@ -105,14 +105,14 @@ def test_cleanup_removes_legacy_run_records_by_blueprint_prefix(mocker, tmp_path
 
 def test_cleanup_stops_blueprint_web_ui_process_with_run_record(mocker, tmp_path):
     mocker.patch("mn_cli.libs.blueprint_resources.shutil.which", return_value=None)
-    mock_killpg = mocker.patch("mn_cli.libs.blueprint_resources.os.killpg")
+    mocker.patch("mn_cli.libs.blueprint_resources.os.killpg")
     mocker.patch("mn_cli.libs.blueprint_resources.process_is_running", side_effect=[True, False, False])
     runs_root = tmp_path / "runs"
     run_dir = runs_root / "bp-removed-run"
     _write_run_record(run_dir, "bp-removed")
     (run_dir / "web_ui_process.json").write_text(json.dumps({"pid": 4242, "blueprint_id": "bp-removed"}))
 
-    summary = cleanup_blueprint_resources(
+    cleanup_blueprint_resources(
         blueprint_ids={"bp-removed"},
         python_envs_dir=tmp_path / "missing-envs",
         runs_root=runs_root,
@@ -124,14 +124,14 @@ def test_cleanup_stops_blueprint_web_ui_process_with_run_record(mocker, tmp_path
 
 def test_cleanup_stops_blueprint_pre_launch_process_with_run_record(mocker, tmp_path):
     mocker.patch("mn_cli.libs.blueprint_resources.shutil.which", return_value=None)
-    mock_killpg = mocker.patch("mn_cli.libs.blueprint_resources.os.killpg")
+    mocker.patch("mn_cli.libs.blueprint_resources.os.killpg")
     mocker.patch("mn_cli.libs.blueprint_resources.process_is_running", side_effect=[True, False, False])
     runs_root = tmp_path / "runs"
     run_dir = runs_root / "bp-removed-run"
     _write_run_record(run_dir, "bp-removed")
     (run_dir / "pre_launch_process.json").write_text(json.dumps({"pid": 5252, "blueprint_id": "bp-removed"}))
 
-    summary = cleanup_blueprint_resources(
+    cleanup_blueprint_resources(
         blueprint_ids={"bp-removed"},
         python_envs_dir=tmp_path / "missing-envs",
         runs_root=runs_root,

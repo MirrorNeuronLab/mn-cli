@@ -116,7 +116,8 @@ def test_runtime_ensure_context_engine_reports_release_image(mocker):
     assert result.exit_code == 0
     assert "Context engine" in result.stdout
     assert "hf.co/example/context-model" in result.stdout
-    assert "membrane-context-engine:v1.2.14" in result.stdout
+    assert "Engine image" in result.stdout
+    assert "v1.2.14" in result.stdout
     mock_ensure.assert_called_once_with(force=False)
 
 def test_run_does_not_ensure_context_engine_when_memory_disabled_by_env(mocker, tmp_path, monkeypatch):

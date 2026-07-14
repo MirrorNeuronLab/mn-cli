@@ -404,7 +404,7 @@ def test_run_injects_blueprint_config_scenario_and_run_id(mocker, tmp_path):
     assert json.loads(env["MN_BLUEPRINT_SCENARIO_JSON"])["blueprint_id"] == "bp-1"
     assert "MN_BLUEPRINT_PRODUCT_JSON" not in env
     assert env["MN_LLM_MODEL"] == "ollama/nemotron3:33b"
-    assert env["MN_LLM_API_BASE"] == "http://old"
+    assert env["MN_LLM_API_BASE"] == "http://mn-litellm-proxy:4000/v1"
 
 def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))

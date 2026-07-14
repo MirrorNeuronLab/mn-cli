@@ -24,6 +24,7 @@ runner = CliRunner()
 @pytest.fixture(autouse=True)
 def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.setenv("MN_HOME", str(tmp_path / "mn-home"))
+    monkeypatch.setenv("MN_JOB_MONITOR_DISABLE_API_STREAM", "1")
     monkeypatch.delenv("MN_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_RUNTIME_SHARED_STORAGE_ROOT", raising=False)
@@ -33,6 +34,7 @@ def isolated_mn_home(tmp_path, monkeypatch):
         "sync_litellm_gateway",
         lambda **_kwargs: {"status": "running", "api_base": "http://mn-litellm-proxy:4000/v1"},
     )
+    monkeypatch.setattr(run_cmds.client, "stream_events", lambda *_args, **_kwargs: [])
 
 def test_monitor_success(mocker):
     mocker.patch('mn_cli.libs.run_cmds.client.get_job', return_value=json.dumps({"summary": {"status": "completed", "live?": False}, "job": {"job_name": "test"}, "agents": [{"agent_id": "a1", "status": "running", "processed_messages": 10}]}))

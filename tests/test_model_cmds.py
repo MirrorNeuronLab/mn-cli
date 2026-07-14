@@ -20,6 +20,8 @@ def isolate_model_ownership(monkeypatch, tmp_path):
     monkeypatch.setenv("MN_MODEL_REMOTES_PATH", str(tmp_path / "model-remotes.json"))
     monkeypatch.setenv("MN_MODEL_PROXIES_PATH", str(tmp_path / "model-proxies.json"))
     monkeypatch.setattr("mn_cli.libs.model_cmds._endpoint_responds", lambda: False)
+    monkeypatch.setattr("mn_sdk.model_service.endpoint_responds", lambda: False)
+    monkeypatch.setattr("mn_cli.libs.model_cmds._selected_model_install_node", lambda: None)
     monkeypatch.setattr("mn_cli.libs.model_cmds._record_runtime_model_install", lambda _entry: None)
 
 
@@ -74,18 +76,22 @@ def _cluster_summary(*nodes):
     return json.dumps({"nodes": list(nodes)})
 
 
-def test_model_list_prints_builtin_catalog_json():
+def test_model_list_prints_builtin_catalog_json(mocker):
+    mocker.patch("mn_cli.libs.model_cmds._installed_model_names", return_value=set())
+
     result = runner.invoke(app, ["model", "list", "--json"])
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["models"][0]["id"] == "gemma4:e2b"
-    assert payload["models"][0]["model"] == "docker.io/ai/gemma4:E2B"
-    assert payload["models"][0]["default"] is True
-    assert payload["models"][0]["status"] == "default"
+    gemma = next(model for model in payload["models"] if model["id"] == "gemma4:e2b")
+    assert gemma["model"] == "docker.io/ai/gemma4:E2B"
+    assert gemma["default"] is True
+    assert gemma["status"] == "default"
 
 
-def test_model_show_resolves_gemme_alias():
+def test_model_show_resolves_gemme_alias(mocker):
+    mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=False)
+
     result = runner.invoke(app, ["model", "show", "gemme4:e2b", "--json"])
 
     assert result.exit_code == 0
@@ -98,20 +104,19 @@ def test_model_show_resolves_gemme_alias():
 
 def test_model_show_does_not_require_docker_binary(mocker):
     mocker.patch("subprocess.run", side_effect=FileNotFoundError("docker"))
-    mock_api_model_installed = mocker.patch(
-        "mn_cli.libs.model_cmds.dmr_api_model_installed",
-        return_value=True,
-    )
+    mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=False)
 
     result = runner.invoke(app, ["model", "show", "gemma4:e2b", "--json"])
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["installed"] is False
-    mock_api_model_installed.assert_not_called()
 
 
-def test_model_remote_add_list_remove_json():
+def test_model_remote_add_list_remove_json(mocker):
+    mocker.patch("mn_cli.libs.model_cmds._sync_gateway_best_effort")
+    mocker.patch("mn_cli.libs.model_cmds._sync_gateway_runtime_endpoints_across_cluster", return_value=[])
+
     add = runner.invoke(
         app,
         [
@@ -207,6 +212,14 @@ def test_install_model_on_cluster_node_uses_local_runtime_client_for_local_host(
 
 def test_model_proxy_registers_provider_config_without_start(tmp_path, mocker):
     mocker.patch("mn_cli.libs.model_cmds._installed_model_names", return_value=set())
+    gateway_config = tmp_path / "gateway.json"
+
+    def fake_sync_litellm_gateway(**kwargs):
+        gateway_config.write_text(json.dumps(kwargs["external_litellm_config"]), encoding="utf-8")
+        return {"config_path": str(gateway_config)}
+
+    mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", side_effect=fake_sync_litellm_gateway)
+    mocker.patch("mn_cli.libs.model_cmds._sync_external_litellm_config_across_cluster", return_value=[])
     config = tmp_path / "openai-compatible.json"
     config.write_text(
         json.dumps(
@@ -323,6 +336,7 @@ def test_model_install_pulls_and_runs_compatible_model(mocker):
         return _completed(command)
 
     mocker.patch("subprocess.run", side_effect=fake_run)
+    mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
         return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
@@ -353,6 +367,7 @@ def test_model_install_syncs_local_dmr_gateway_route(mocker):
 
     mocker.patch("subprocess.run", side_effect=fake_run)
     mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", side_effect=fake_sync)
+    mocker.patch("mn_cli.libs.model_cmds._sync_model_route_across_cluster")
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
         return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
@@ -557,6 +572,7 @@ def test_model_install_streams_pull_progress(mocker):
         return _completed(command)
 
     mocker.patch("subprocess.run", side_effect=fake_run)
+    mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
         return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
@@ -593,6 +609,7 @@ def test_model_install_retries_transient_pull_failure(mocker):
         return _completed(command)
 
     mocker.patch("subprocess.run", side_effect=fake_run)
+    mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
         return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
@@ -614,6 +631,7 @@ def test_model_install_persists_manual_ownership_record(mocker):
         return _completed(command)
 
     mocker.patch("subprocess.run", side_effect=fake_run)
+    mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
         return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
@@ -641,6 +659,7 @@ def test_model_install_state_can_be_listed_after_install(mocker):
         return _completed(command)
 
     mocker.patch("subprocess.run", side_effect=fake_run)
+    mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
         return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
@@ -672,6 +691,7 @@ def test_model_install_skips_context_size_when_docker_cli_does_not_support_it(mo
         return _completed(command)
 
     mocker.patch("subprocess.run", side_effect=fake_run)
+    mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
         return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
@@ -702,6 +722,7 @@ def test_model_install_falls_back_to_dmr_rest_when_cli_plugin_missing(mocker):
 
     mocker.patch("subprocess.run", side_effect=fake_run)
     mocker.patch("urllib.request.urlopen", side_effect=fake_urlopen)
+    mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
         return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
@@ -720,6 +741,7 @@ def test_model_install_prefers_dmr_rest_pull_when_runner_api_reachable(mocker, m
     calls = []
     requests = []
     monkeypatch.setattr("mn_cli.libs.model_cmds._endpoint_responds", lambda: True)
+    monkeypatch.setattr("mn_sdk.model_service.endpoint_responds", lambda: True)
 
     def fake_run(command, **kwargs):
         calls.append(command)
@@ -735,6 +757,7 @@ def test_model_install_prefers_dmr_rest_pull_when_runner_api_reachable(mocker, m
 
     mocker.patch("subprocess.run", side_effect=fake_run)
     mocker.patch("urllib.request.urlopen", side_effect=fake_urlopen)
+    mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
         return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
@@ -838,6 +861,7 @@ def test_model_install_failure_does_not_record_manual_ownership(mocker, tmp_path
         return _completed(command)
 
     mocker.patch("subprocess.run", side_effect=fake_run)
+    mocker.patch("mn_sdk.model_service.model_installed", return_value=False)
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
         return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),

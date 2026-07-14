@@ -2265,7 +2265,7 @@ def test_start_server_restarts_existing_api_when_runtime_blueprint_env_changes(m
             "runs_root": "/tmp/mn-runs",
         },
     )
-    mock_run = mocker.patch('mn_cli.server_cmds.subprocess.run')
+    _mock_run = mocker.patch('mn_cli.server_cmds.subprocess.run')
     start_api = mocker.patch('mn_cli.server_cmds._start_api_if_installed')
     start_native_sdk = mocker.patch('mn_cli.runtime.server._start_native_sdk_grpc_if_installed', return_value=True)
     mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed', return_value=False)

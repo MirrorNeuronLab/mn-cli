@@ -8,7 +8,7 @@ import typer
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 from mn_cli.banner import format_banner
-from mn_cli.shared import console
+from mn_cli.shared import console, logger
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.ui import print_success_confirmation
 from mn_cli.terminal import use_progress
