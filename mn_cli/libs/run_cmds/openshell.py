@@ -1,5 +1,5 @@
 from .common import *
-from mn_cli.libs.run_manifest import (
+from mn_sdk.submission_preparation import (
     _ensure_docker_worker_requirements_install,
     _local_skill_dependency_source_records,
     _local_skill_requirements_text,

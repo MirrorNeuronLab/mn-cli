@@ -12,7 +12,7 @@ from mn_cli.libs.run_cmds import (
     _emit_validation_report,
     _normalize_validation_output,
 )
-from mn_cli.libs.run_manifest import blueprint_runtime_environment, load_blueprint_config
+from mn_sdk.submission_preparation import blueprint_runtime_environment, load_blueprint_config
 from mn_cli.shared import client, console
 from mn_sdk import run_service_validation
 

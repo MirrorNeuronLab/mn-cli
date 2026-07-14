@@ -307,7 +307,7 @@ def test_prepare_manifest_stages_local_skill_dependencies_in_dev(tmp_path, monke
     monkeypatch.setenv("MN_ENV", "dev")
     monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setenv("MN_SKILLS_ROOT", str(skills_root))
-    monkeypatch.setattr("mn_cli.libs.run_manifest.mn_home", lambda: tmp_path / ".mn")
+    monkeypatch.setenv("MN_HOME", str(tmp_path / ".mn"))
 
     manifest = {
         "skill_dependencies": [
@@ -383,7 +383,7 @@ def test_prepare_manifest_stages_local_skill_dependencies_from_runtime_env(tmp_p
     monkeypatch.delenv("MN_ENV", raising=False)
     monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setenv("MN_SKILLS_ROOT", str(skills_root))
-    monkeypatch.setattr("mn_cli.libs.run_manifest.mn_home", lambda: runtime_home)
+    monkeypatch.setenv("MN_HOME", str(runtime_home))
     _write_skill_pyproject(
         skills_root,
         "evidence_engine_skill",
@@ -1971,7 +1971,7 @@ def test_prepare_manifest_stages_local_skill_dependencies_from_workspace_fallbac
     monkeypatch.setenv("MN_USE_LOCAL_SKILLS", "1")
     monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setenv("MN_SKILLS_ROOT", str(stale_root))
-    monkeypatch.setattr("mn_cli.libs.run_manifest.mn_home", lambda: tmp_path / ".mn")
+    monkeypatch.setenv("MN_HOME", str(tmp_path / ".mn"))
 
     manifest = {
         "skill_dependencies": [

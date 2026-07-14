@@ -54,7 +54,7 @@ from mn_cli.shared import console, logger
 from mn_cli.terminal import use_progress
 from mn_cli.libs.run_cmds import doctor_bundle as _doctor_bundle
 from mn_cli.libs.run_cmds import run_bundle as _run_bundle
-from mn_cli.libs.run_manifest import load_blueprint_config as _load_blueprint_config
+from mn_sdk.submission_preparation import load_blueprint_config as _load_blueprint_config
 from mn_cli.libs.model_cmds import (
     install_model_entry as _install_model_entry,
     model_installed as _model_installed,

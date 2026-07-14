@@ -39,7 +39,7 @@ from mn_cli.libs.run_logs import (
     write_result_stream_event as _write_result_stream_event,
 )
 from mn_cli.libs.artifacts import promote_large_payloads_to_blob_refs
-from mn_cli.libs.run_manifest import (
+from mn_sdk.submission_preparation import (
     add_mn_llm_aliases as _add_mn_llm_aliases,
     blueprint_runtime_environment as _blueprint_runtime_environment,
     inject_node_environment as _inject_node_environment,

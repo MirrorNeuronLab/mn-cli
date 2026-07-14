@@ -305,9 +305,9 @@ def test_prepare_manifest_injects_runtime_web_ui_service_from_config(tmp_path, m
 
 def test_runtime_web_ui_maps_host_runs_into_prepublished_docker_core(tmp_path, mocker):
     host_runs = tmp_path / "mn" / "runs"
-    mocker.patch("mn_cli.libs.run_manifest.running_core_container", return_value="mirror-neuron-core")
+    mocker.patch("mn_sdk.submission_preparation.running_core_container", return_value="mirror-neuron-core")
     mocker.patch(
-        "mn_cli.libs.run_manifest.RuntimeConfig.from_env",
+        "mn_sdk.submission_preparation.RuntimeConfig.from_env",
         return_value=SimpleNamespace(
             mn_home=tmp_path / "mn",
             runtime_env={
