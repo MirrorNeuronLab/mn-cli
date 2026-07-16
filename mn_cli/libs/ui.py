@@ -215,6 +215,10 @@ def _present(value: Any) -> bool:
 def generate_live_layout(job_id: str, data: Dict[str, Any], state: Optional[JobMonitorState] = None) -> Panel:
     workflow_progress = data.get("workflow_progress")
     if isinstance(workflow_progress, dict) and workflow_progress.get("steps"):
+        monitor_warning = data.get("monitor_warning")
+        if monitor_warning:
+            workflow_progress = dict(workflow_progress)
+            workflow_progress["monitor_warning"] = str(monitor_warning)
         return generate_workflow_progress_layout(job_id, workflow_progress, state=state)
 
     summary = data.get("summary", {})
@@ -258,6 +262,9 @@ def generate_live_layout(job_id: str, data: Dict[str, Any], state: Optional[JobM
     last_event = summary.get("last_event")
     if last_event:
         footer.append(f"\nlatest event: {last_event}", style="dim")
+    monitor_warning = data.get("monitor_warning")
+    if monitor_warning:
+        footer.append(f"\n! Warning: {monitor_warning}", style="yellow")
 
     return Panel(
         Group(header, subtitle, body, footer),
@@ -330,6 +337,9 @@ def generate_workflow_progress_layout(
     messages = [str(message) for message in progress.get("messages", []) if message]
     if messages:
         footer.append(f"\nlatest event: {messages[-1]}", style="dim")
+    monitor_warning = progress.get("monitor_warning")
+    if monitor_warning:
+        footer.append(f"\n! Warning: {monitor_warning}", style="yellow")
     run_tokens = progress.get("resource_tokens")
     if run_tokens:
         footer.append(f"\nrun tokens (resource): {_format_tokens(run_tokens)}", style="dim")

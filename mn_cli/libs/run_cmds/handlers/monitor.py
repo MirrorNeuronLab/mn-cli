@@ -1,9 +1,233 @@
 from ..common import *
 from ..live import *
 from ..outputs import *
+from contextlib import contextmanager
 from mn_cli.libs.workflow_progress import build_workflow_progress_snapshot
 
+
+_MONITOR_JOB_FIELDS = {
+    "agents",
+    "created",
+    "created_at",
+    "description",
+    "graph_id",
+    "id",
+    "job_id",
+    "job_name",
+    "job_type",
+    "manifest",
+    "manifest_ref",
+    "name",
+    "result",
+    "run_id",
+    "runId",
+    "runtime_topology",
+    "started_at",
+    "status",
+    "submitted_at",
+    "type",
+    "workflow_id",
+    "workflow_state",
+}
+
+
+def _job_and_summary_from_data(data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Normalize both flat gRPC and wrapped API job payloads.
+
+    ``Client.get_job`` returns the runtime's flat job JSON, while the HTTP API
+    wraps that object under ``job`` and adds a ``summary``.  The monitor must
+    preserve the runtime topology and workflow ledger in either shape.
+    """
+
+    raw_job = data.get("job") if isinstance(data.get("job"), dict) else None
+    if raw_job is None:
+        job = {
+            key: value
+            for key, value in data.items()
+            if key != "summary"
+        }
+    else:
+        job = dict(raw_job)
+        for key in _MONITOR_JOB_FIELDS:
+            if key not in job and key in data:
+                job[key] = data[key]
+
+    summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+    return job, summary
+
+
+def _monitor_rpc_timeout_seconds() -> float:
+    configured = getattr(config, "grpc_timeout_seconds", None)
+    try:
+        default = max(float(configured or 0), 30.0)
+    except (TypeError, ValueError):
+        default = 30.0
+    raw = os.getenv("MN_JOB_MONITOR_GRPC_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return default
+    try:
+        return max(float(raw), 1.0)
+    except ValueError:
+        return default
+
+
+@contextmanager
+def _temporary_monitor_rpc_timeout():
+    """Give monitor-only RPCs enough time to read large running job ledgers."""
+
+    missing = object()
+    original = getattr(client, "timeout", missing)
+    if original is missing or original is None:
+        yield
+        return
+
+    try:
+        should_extend = float(original) < _monitor_rpc_timeout_seconds()
+    except (TypeError, ValueError):
+        should_extend = False
+    if not should_extend:
+        yield
+        return
+
+    client.timeout = _monitor_rpc_timeout_seconds()
+    try:
+        yield
+    finally:
+        client.timeout = original
+
+
+def _monitor_rpc_code_name(exc: Exception) -> str:
+    code_reader = getattr(exc, "code", None)
+    if callable(code_reader):
+        try:
+            code = code_reader()
+        except Exception:
+            code = None
+        return str(getattr(code, "name", code) or "").upper()
+    return ""
+
+
+def _is_transient_monitor_fetch_error(exc: Exception) -> bool:
+    if _monitor_rpc_code_name(exc) in {"DEADLINE_EXCEEDED", "UNAVAILABLE"}:
+        return True
+
+    text = str(exc).upper()
+    return "DEADLINE_EXCEEDED" in text or "UNAVAILABLE" in text
+
+
+def _monitor_fetch_warning(exc: Exception) -> str:
+    code_name = _monitor_rpc_code_name(exc)
+    if code_name == "DEADLINE_EXCEEDED":
+        return "Temporary job status timeout; retrying."
+    if code_name == "UNAVAILABLE":
+        return "Runtime temporarily unavailable; retrying."
+    return "Temporary job status fetch failure; retrying."
+
+
+def _monitor_retry_attempts() -> int:
+    try:
+        return max(int(os.getenv("MN_JOB_MONITOR_RETRY_ATTEMPTS", "3")), 1)
+    except ValueError:
+        return 3
+
+
+def _monitor_retry_backoff_seconds() -> float:
+    try:
+        return max(float(os.getenv("MN_JOB_MONITOR_RETRY_BACKOFF_SECONDS", "0.25")), 0.0)
+    except ValueError:
+        return 0.25
+
+
+def _get_job_for_monitor(job_id: str) -> str:
+    """Fetch a job with bounded retries for transient gRPC read failures."""
+
+    attempts = _monitor_retry_attempts()
+    backoff = _monitor_retry_backoff_seconds()
+    for attempt in range(attempts):
+        try:
+            with _temporary_monitor_rpc_timeout():
+                return client.get_job(job_id)
+        except Exception as exc:
+            if not _is_transient_monitor_fetch_error(exc) or attempt == attempts - 1:
+                raise
+            delay = backoff * (attempt + 1)
+            logger.warning(
+                "Transient monitor job fetch failure for job_id=%s; retrying in %.2fs: %s",
+                job_id,
+                delay,
+                exc,
+            )
+            if delay:
+                time.sleep(delay)
+    raise RuntimeError(f"Unable to fetch job {job_id}")
+
+
+def _read_monitor_json_object(path: Path) -> dict[str, Any] | None:
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def _local_run_store_manifest(
+    data: dict[str, Any], job: dict[str, Any], summary: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Load the source workflow manifest saved by the local run store.
+
+    The submitted runtime manifest contains lowered start/end/router nodes.
+    ``blueprint run`` starts from the source workflow, which is also persisted
+    as the run-store config/manifest for later observability.
+    """
+
+    run_ids: list[str] = []
+    for mapping in (job, summary, data):
+        if not isinstance(mapping, dict):
+            continue
+        for key in ("run_id", "runId", "blueprint_run_id", "blueprintRunId"):
+            value = str(mapping.get(key) or "").strip()
+            if value and value not in run_ids:
+                run_ids.append(value)
+    job_ids = {
+        str(mapping.get(key) or "").strip()
+        for mapping in (job, summary, data)
+        if isinstance(mapping, dict)
+        for key in ("job_id", "id")
+        if str(mapping.get(key) or "").strip()
+    }
+
+    try:
+        root = Path(default_runs_root()).expanduser()
+    except Exception:
+        return None
+    if not root.is_dir():
+        return None
+
+    run_dirs: list[Path] = []
+    for run_id in run_ids:
+        candidate = root / run_id
+        if candidate.is_dir() and candidate not in run_dirs:
+            run_dirs.append(candidate)
+
+    # A CLI-created run has a small job mapping even when the GetJob response
+    # does not carry run_id.  Resolve that mapping without scanning artifacts.
+    for mapping_path in root.glob("*/job.json"):
+        mapping = _read_monitor_json_object(mapping_path)
+        if not mapping:
+            continue
+        mapped_job_id = str(mapping.get("job_id") or mapping.get("id") or "").strip()
+        if mapped_job_id in job_ids and mapping_path.parent not in run_dirs:
+            run_dirs.append(mapping_path.parent)
+
+    for run_dir in run_dirs:
+        for filename in ("config.json", "manifest.json"):
+            candidate = _read_monitor_json_object(run_dir / filename)
+            if candidate and _workflow_step_ids(candidate):
+                return candidate
+    return None
+
 def _workflow_progress_for_monitor(job_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
+    job, summary = _job_and_summary_from_data(data)
     manifest = _manifest_from_job_data(data)
     events: list[dict[str, Any]] = []
     try:
@@ -20,8 +244,8 @@ def _workflow_progress_for_monitor(job_id: str, data: dict[str, Any]) -> dict[st
         return build_workflow_progress_snapshot(
             manifest,
             events,
-            job=data.get("job") if isinstance(data.get("job"), dict) else {},
-            summary=data.get("summary") if isinstance(data.get("summary"), dict) else {},
+            job=job,
+            summary=summary,
             job_id=job_id,
         )
     except Exception:
@@ -29,13 +253,21 @@ def _workflow_progress_for_monitor(job_id: str, data: dict[str, Any]) -> dict[st
         return None
 
 def _manifest_from_job_data(data: dict[str, Any]) -> dict[str, Any]:
-    job = data.get("job") if isinstance(data.get("job"), dict) else {}
-    summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+    job, summary = _job_and_summary_from_data(data)
     workflow_manifest = _public_workflow_manifest_from_job(job, summary)
+
+    run_manifest = _local_run_store_manifest(data, job, summary)
+    if run_manifest and _matches_public_workflow_contract(run_manifest, workflow_manifest):
+        return run_manifest
+
     for candidate in (data.get("manifest"), job.get("manifest"), summary.get("manifest")):
         if _matches_public_workflow_contract(candidate, workflow_manifest):
             return candidate
-    manifest_ref = job.get("manifest_ref") if isinstance(job.get("manifest_ref"), dict) else summary.get("manifest_ref")
+    manifest_ref = (
+        job.get("manifest_ref")
+        if isinstance(job.get("manifest_ref"), dict)
+        else summary.get("manifest_ref")
+    )
     if isinstance(manifest_ref, dict):
         for raw_path in (
             manifest_ref.get("manifest_path"),
@@ -54,6 +286,9 @@ def _manifest_from_job_data(data: dict[str, Any]) -> dict[str, Any]:
 
     if workflow_manifest:
         return workflow_manifest
+
+    if run_manifest:
+        return run_manifest
 
     return _legacy_manifest_from_job_data(data, job=job, summary=summary)
 
@@ -185,8 +420,11 @@ def _public_step_ids_from_topology(job: dict[str, Any]) -> list[str]:
         if not isinstance(node, dict):
             continue
         node_id = str(node.get("node_id") or node.get("id") or "")
-        node_type = str(node.get("agent_type") or node.get("type") or "").lower()
-        if node_type != "step_source" or not node_id.endswith("__start"):
+        node_types = {
+            str(node.get(key) or "").strip().lower()
+            for key in ("agent_type", "node_type", "type")
+        }
+        if "step_source" not in node_types or not node_id.endswith("__start"):
             continue
         step_id = node_id.removesuffix("__start")
         if step_id and step_id not in step_ids:
@@ -282,13 +520,12 @@ def _public_progress_from_api_snapshot(
     """
 
     try:
-        data = json.loads(client.get_job(job_id))
+        data = json.loads(_get_job_for_monitor(job_id))
     except Exception:
         return snapshot
     if not isinstance(data, dict):
         return snapshot
-    job = data.get("job") if isinstance(data.get("job"), dict) else {}
-    summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+    job, summary = _job_and_summary_from_data(data)
     if not _public_workflow_manifest_from_job(job, summary):
         return snapshot
     try:
@@ -444,6 +681,13 @@ def _live_monitor(job_id: str):
                 from rich.panel import Panel
 
                 return Panel("Connecting...", style="cyan")
+            if self.data.get("retrying"):
+                from rich.panel import Panel
+
+                return Panel(
+                    f"! Warning: {self.data.get('monitor_warning', 'Temporary status fetch failure; retrying...')}",
+                    style="yellow",
+                )
             if "error" in self.data:
                 from rich.panel import Panel
 
@@ -452,6 +696,7 @@ def _live_monitor(job_id: str):
 
     final_status = "unknown"
     data = None
+    last_good_data: dict[str, Any] | None = None
     monitor_state = JobMonitorState()
     view = MonitorView(monitor_state)
 
@@ -465,16 +710,33 @@ def _live_monitor(job_id: str):
         ):
             while True:
                 try:
-                    job_json = client.get_job(job_id)
-                    data = json.loads(job_json)
-                    data["workflow_progress"] = _workflow_progress_for_monitor(job_id, data)
-                except Exception as e:
-                    data = {"error": str(e)}
+                    with _temporary_monitor_rpc_timeout():
+                        job_json = _get_job_for_monitor(job_id)
+                        data = json.loads(job_json)
+                        data["workflow_progress"] = _workflow_progress_for_monitor(job_id, data)
+                    last_good_data = data
+                except Exception as exc:
+                    if _is_transient_monitor_fetch_error(exc):
+                        warning = _monitor_fetch_warning(exc)
+                        if last_good_data is None:
+                            data = {"retrying": True, "monitor_warning": warning}
+                        else:
+                            data = dict(last_good_data)
+                            data["monitor_warning"] = warning
+                            progress = data.get("workflow_progress")
+                            if isinstance(progress, dict):
+                                progress = dict(progress)
+                                progress["monitor_warning"] = warning
+                                data["workflow_progress"] = progress
+                        logger.warning("%s", warning)
+                    else:
+                        data = {"error": str(exc)}
 
                 view.data = data
 
                 if data and "error" not in data:
-                    status = data.get("summary", {}).get("status", "unknown")
+                    job, summary = _job_and_summary_from_data(data)
+                    status = summary.get("status") or job.get("status") or "unknown"
                     if status in ["completed", "failed", "cancelled"]:
                         final_status = status
                         break

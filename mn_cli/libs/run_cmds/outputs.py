@@ -12,7 +12,8 @@ def fetch_and_save_results(job_id: str, data: dict = None):
             logger.exception("Failed to fetch job result for %s", job_id)
             return
 
-    job = data.get("job", {})
+    job = data.get("job") if isinstance(data.get("job"), dict) else data
+    job = job if isinstance(job, dict) else {}
     status = job.get("status")
 
     # Save final result if completed

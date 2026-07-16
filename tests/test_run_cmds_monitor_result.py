@@ -15,7 +15,10 @@ from rich.console import Console
 from mn_cli.main import app
 from mn_cli.libs import model_cmds, run_cmds
 from mn_cli.libs.ui import JobMonitorState, _agent_table, _workflow_agent_table, generate_live_layout
-from mn_cli.libs.run_cmds.handlers.monitor import _workflow_progress_for_monitor
+from mn_cli.libs.run_cmds.handlers.monitor import (
+    _get_job_for_monitor,
+    _workflow_progress_for_monitor,
+)
 from mn_cli.libs.run_cmds.live import _read_monitor_key
 from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress, _agent_progress_detail
 from mn_cli.libs.run_manifest import prepare_manifest_for_submission
@@ -201,6 +204,131 @@ def test_monitor_uses_public_workflow_contract_and_hides_runtime_nodes(mocker):
     assert "Research Sources" in rendered
     assert "detect__start" not in rendered
     assert "research__end" not in rendered
+
+
+def test_monitor_normalizes_flat_grpc_job_payload_and_hides_runtime_nodes(mocker):
+    data = {
+        "job_id": "job-flat",
+        "graph_id": "public-workflow",
+        "job_name": "Public Workflow",
+        "status": "running",
+        "runtime_topology": {
+            "nodes": [
+                {"node_id": "detect__start", "agent_type": "step_source"},
+                {"node_id": "detect__worker", "agent_type": "executor"},
+                {"node_id": "detect__end", "agent_type": "step_sink"},
+                {"node_id": "research__start", "agent_type": "step_source"},
+                {"node_id": "research__worker", "agent_type": "executor"},
+                {"node_id": "research__end", "agent_type": "step_sink"},
+            ]
+        },
+        "agents": [
+            {"agent_id": "detect__start", "status": "completed"},
+            {"agent_id": "detect__worker", "status": "completed"},
+            {"agent_id": "research__worker", "status": "running"},
+        ],
+    }
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor.client.stream_events",
+        return_value=[
+            json.dumps(
+                {
+                    "type": "workflow_step_attempt_started",
+                    "payload": {"step": "research", "worker": "research"},
+                }
+            )
+        ],
+    )
+
+    progress = _workflow_progress_for_monitor("job-flat", data)
+
+    assert progress is not None
+    assert [step["id"] for step in progress["steps"]] == ["detect", "research"]
+    assert progress["current_step"]["id"] == "research"
+    assert [agent["id"] for agent in progress["current_step"]["agents"]] == ["research"]
+
+
+def test_monitor_prefers_source_manifest_from_local_run_store(mocker, tmp_path):
+    run_dir = tmp_path / "runs" / "va-f381a1a2"
+    run_dir.mkdir(parents=True)
+    (run_dir / "job.json").write_text(json.dumps({"job_id": "job-source", "run_id": "va-f381a1a2"}))
+    (run_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "workflow": {
+                    "workflow_id": "source-workflow",
+                    "steps": [
+                        {"id": "detect", "label": "Detect", "run": "detect"},
+                        {"id": "research", "label": "Research", "run": "research_team"},
+                    ],
+                },
+                "runtime": {
+                    "bindings": {
+                        "detect": {"workers": [{"id": "detect", "role": "Detect"}]},
+                        "research_team": {
+                            "workers": [{"id": "research:docs", "role": "Analyze docs"}]
+                        },
+                    }
+                },
+            }
+        )
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor.default_runs_root",
+        return_value=tmp_path / "runs",
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor.client.stream_events",
+        return_value=[
+            json.dumps(
+                {
+                    "type": "workflow_step_attempt_started",
+                    "payload": {"step": "research", "worker": "research:docs"},
+                }
+            )
+        ],
+    )
+
+    data = {
+        "job": {
+            "job_id": "job-source",
+            "run_id": "va-f381a1a2",
+            "manifest": {
+                "workflow": {"steps": [{"id": "detect__start"}, {"id": "research__start"}]},
+                "nodes": [],
+            },
+            "runtime_topology": {
+                "nodes": [
+                    {"node_id": "detect__start", "agent_type": "step_source"},
+                    {"node_id": "research__start", "agent_type": "step_source"},
+                ]
+            },
+        },
+        "summary": {"status": "running"},
+    }
+
+    progress = _workflow_progress_for_monitor("job-source", data)
+
+    assert progress is not None
+    assert [step["id"] for step in progress["steps"]] == ["detect", "research"]
+    assert [agent["id"] for agent in progress["current_step"]["agents"]] == ["research:docs"]
+
+
+def test_monitor_retries_transient_deadline_fetch(mocker, monkeypatch):
+    class DeadlineError(Exception):
+        def code(self):
+            return SimpleNamespace(name="DEADLINE_EXCEEDED")
+
+    payload = json.dumps({"job_id": "job-retry", "status": "running"})
+    get_job = mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor.client.get_job",
+        side_effect=[DeadlineError("Deadline Exceeded"), payload],
+    )
+    monkeypatch.setenv("MN_JOB_MONITOR_RETRY_BACKOFF_SECONDS", "0")
+    monkeypatch.setenv("MN_JOB_MONITOR_GRPC_TIMEOUT_SECONDS", "30")
+
+    assert _get_job_for_monitor("job-retry") == payload
+    assert get_job.call_count == 2
 
 
 def test_agent_selection_has_no_reverse_background():
