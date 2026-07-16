@@ -416,17 +416,14 @@ def _workflow_summary_step_counts(
 
 
 def _workflow_phase_table(steps: list[dict[str, Any]], *, workflow_kind: str = "batch") -> Table:
-    table = Table(title="Phases", box=box.SIMPLE, show_header=False, expand=True)
+    table = Table(title="Workflow", box=box.SIMPLE, show_header=False, expand=True)
     table.add_column("step")
     table.add_column("agents", justify="right", no_wrap=True)
-    has_graph_layers = any("layer" in step or step.get("parents") or step.get("children") for step in steps)
-    for index, step in enumerate(steps, start=1):
+    for step in steps:
         status = str(step.get("status") or "unknown")
         current = bool(step.get("current"))
         icon = _status_icon("running" if current and status not in {"done", "completed"} else status)
-        layer = int(step.get("layer") or 0)
-        branch_prefix = f"L{layer + 1} " if has_graph_layers else ""
-        label = f"{icon} {branch_prefix}{index} {step.get('label') or step.get('id') or 'Step'}"
+        label = f"{icon} {step.get('label') or step.get('id') or 'Step'}"
         if workflow_kind == "service" and status not in {"done", "completed"}:
             label = f"{label} ({status})"
         ready_count = int(step.get("ready_count") or step.get("done_count") or 0)
@@ -435,7 +432,7 @@ def _workflow_phase_table(steps: list[dict[str, Any]], *, workflow_kind: str = "
         count = f"{count_value}/{int(step.get('total_count') or 0)}"
         table.add_row(label, count, style="bright_blue" if current else _status_color(status))
     if not steps:
-        table.add_row(". 1 Runtime", "0/0", style="cyan")
+        table.add_row(". Runtime", "0/0", style="cyan")
     return table
 
 

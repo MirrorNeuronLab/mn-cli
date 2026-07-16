@@ -177,7 +177,7 @@ def test_run_displays_workflow_steps_and_agents(mocker, tmp_path):
     result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
 
     assert result.exit_code == 0
-    assert "Phases" in result.stdout
+    assert "Workflow" in result.stdout
     assert "Research" in result.stdout
     assert "Research" in result.stdout
     assert "Research" in result.stdout
@@ -269,8 +269,13 @@ def test_workflow_monitor_renders_graph_layers_and_multiple_active_steps():
     console.print(generate_live_layout("job-graph", {"workflow_progress": progress}, JobMonitorState()))
     rendered = console.export_text()
 
-    assert "L2 2 Income" in rendered
-    assert "L2 3 Property" in rendered
+    assert "Workflow" in rendered
+    assert "> Income" in rendered
+    assert "> Property" in rendered
+    assert "L2" not in rendered
+    assert " 1 Intake" not in rendered
+    assert " 2 Income" not in rendered
+    assert " 3 Property" not in rendered
     assert "income_agent" in rendered
     assert "property_agent" in rendered
 

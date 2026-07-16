@@ -185,17 +185,17 @@ class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
         return shown_steps, total_steps
 
     def _phase_table(self) -> Table:
-        table = Table(title="Phases", box=box.SIMPLE, show_header=False, expand=True)
-        table.add_column("phase")
+        table = Table(title="Workflow", box=box.SIMPLE, show_header=False, expand=True)
+        table.add_column("step")
         table.add_column("count", justify="right")
-        for index, step in enumerate(self.steps, start=1):
+        for step in self.steps:
             icon = _step_icon(step, step.id == self.current_step_id)
             style = (
                 "bright_blue"
                 if step.id == self.current_step_id and step.status != "done"
                 else None
             )
-            label = f"{icon} {index} {step.label}"
+            label = f"{icon} {step.label}"
             shown_count = step.ready_count if self.workflow_kind == "service" else step.done_count
             table.add_row(label, f"{shown_count}/{step.total_count}", style=style)
         return table
