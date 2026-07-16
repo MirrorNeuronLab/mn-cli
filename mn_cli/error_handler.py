@@ -7,6 +7,7 @@ import typer
 from rich.console import Console
 
 from mn_cli.config import CliConfig
+from mn_cli.libs.ui import print_error
 from mn_cli.logging_config import configure_logging
 from mn_sdk.errors import AppError, normalize_exception, sanitize_context
 
@@ -90,12 +91,10 @@ def handle_cli_error(
 
 
 def print_cli_error(app_error: AppError, console: Console, *, debug: bool = False) -> None:
-    console.print(f"[red]Error {app_error.code}: {app_error.user_message}[/red]")
+    print_error(console, app_error.user_message, code=app_error.code)
     if app_error.hint:
-        console.print()
-        console.print(f"Hint: {app_error.hint}")
+        console.print(f"[bold yellow]! Hint:[/bold yellow] {app_error.hint}")
     if debug and app_error.internal_message:
-        console.print()
         console.print(f"[dim]Diagnostic: {app_error.internal_message}[/dim]")
     if not debug:
         console.print("[dim]See the MirrorNeuron CLI logs for full details.[/dim]")

@@ -2,7 +2,7 @@ from io import StringIO
 
 from rich.console import Console
 
-from mn_cli.libs.ui import print_confirmed, print_success_confirmation
+from mn_cli.libs.ui import print_confirmed, print_error, print_info, print_success_confirmation, print_warning
 
 
 def _capture_console(*, no_color: bool = True, width: int = 120) -> tuple[Console, StringIO]:
@@ -22,11 +22,12 @@ def test_print_success_confirmation_outputs_structured_lines():
     )
 
     output = [line.strip() for line in stream.getvalue().splitlines() if line.strip()]
-    assert any(line == "Node join successful." for line in output)
+    assert any(line == "✓ Node join successful." for line in output)
     assert any("Status:" in line and "connected" in line for line in output)
     assert any("Node:" in line and "mirror_neuron@192.168.4.173" in line for line in output)
     assert any("Remote Redis:" in line and "192.168.4.173:56380" in line for line in output)
     assert any("Next:" in line for line in output)
+    assert "Details" not in stream.getvalue()
 
 
 def test_print_success_confirmation_keeps_detail_labels_readable():
@@ -72,4 +73,18 @@ def test_print_confirmed_skips_empty_values_and_supports_plain_mode(monkeypatch)
         "MirrorNeuron update confirmed.",
         "Status: up to date",
         "Current: 1.2.3",
+    ]
+
+
+def test_status_messages_share_concise_prefixes():
+    console, stream = _capture_console()
+
+    print_info(console, "Starting runtime…")
+    print_warning(console, "The optional Web UI is unavailable.")
+    print_error(console, "The runtime did not respond.", code="MN_RUNTIME_TIMEOUT")
+
+    assert stream.getvalue().splitlines() == [
+        "→ Starting runtime…",
+        "! Warning: The optional Web UI is unavailable.",
+        "× Error: (MN_RUNTIME_TIMEOUT) The runtime did not respond.",
     ]

@@ -72,9 +72,9 @@ def test_run_ensures_context_engine_when_blueprint_memory_enabled(mocker, tmp_pa
     assert "This blueprint uses context memory" in result.stdout
     assert "First launch may download the context model" in stdout_text
     assert "Context memory ready" in result.stdout
-    assert "Launch: Check runtime resources" in result.stdout
-    assert "Launch: Package workflow" in result.stdout
-    assert "Launch: Submit runtime job" in result.stdout
+    assert "→ Check runtime resources" in result.stdout
+    assert "→ Package workflow" in result.stdout
+    assert "→ Submit runtime job" in result.stdout
     mock_ensure.assert_called_once_with(force=True)
     mock_submit.assert_called_once()
 

@@ -1289,9 +1289,7 @@ def _install_runtime_cluster_model(
     node_endpoint = _cluster_node_endpoint(node)
     local_target = _cluster_node_endpoint_is_local(node_endpoint)
     transport = "local runtime coordinator" if local_target else "native SDK gRPC"
-    console.print(
-        f"[cyan]Preparing runtime model {model_label} on {node_label} with {transport}...[/cyan]"
-    )
+    print_info(console, f"Preparing runtime model {model_label} on {node_label} with {transport}…")
     runtime_client = _runtime_model_prepare_client(node, node_endpoint)
     prepare_payload = build_prepare_runtime_model_request(
         requirement=requirement,
@@ -1304,7 +1302,7 @@ def _install_runtime_cluster_model(
         source="mn-cli",
     )
     if entry.get("customize_mode") is True:
-        console.print(f"[yellow]Warning: {CUSTOM_MODEL_WARNING}[/yellow]")
+        print_warning(console, CUSTOM_MODEL_WARNING)
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),

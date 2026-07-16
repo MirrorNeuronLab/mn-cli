@@ -35,7 +35,7 @@ def test_cli_error_output_is_user_safe_and_preserves_code(mocker):
 
     output = stream.getvalue()
     assert raised.value.exit_code == 1
-    assert "Error MN_RUNTIME_TIMEOUT" in output
+    assert "Error: (MN_RUNTIME_TIMEOUT)" in output
     assert "The runtime did not respond" in output
     assert "Traceback" not in output
     assert "Deadline Exceeded" not in output

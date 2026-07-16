@@ -13,7 +13,8 @@ from typer.testing import CliRunner
 from rich.console import Console
 from mn_cli.main import app
 from mn_cli.libs import model_cmds, run_cmds
-from mn_cli.libs.ui import JobMonitorState, generate_live_layout
+from mn_cli.libs.ui import JobMonitorState, _agent_table, _workflow_agent_table, generate_live_layout
+from mn_cli.libs.run_cmds.handlers.monitor import _workflow_progress_for_monitor
 from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress, _agent_progress_detail
 from mn_cli.libs.run_manifest import prepare_manifest_for_submission
 from mn_sdk import AgentProgress, load_model_ownership, load_model_remotes, upsert_model_remote
@@ -45,7 +46,7 @@ def test_monitor_success(mocker):
     assert result.exit_code == 0
     assert "Workflow Job Monitor" in result.stdout
     assert "keys: j/k or arrows select agent" in result.stdout
-    assert "Job Execution Summary" in result.stdout
+    assert "Job summary" in result.stdout
 
 def test_job_monitor_keyboard_state_and_agent_detail():
     state = JobMonitorState()
@@ -85,6 +86,102 @@ def test_job_monitor_keyboard_state_and_agent_detail():
     assert state.detail_mode is False
     assert state.handle_key("\x04", 2) is False
     assert state.handle_key("q", 2) is False
+
+
+def test_monitor_uses_public_workflow_contract_and_hides_runtime_nodes(mocker):
+    data = {
+        "summary": {"status": "running", "job_id": "job-public", "graph_id": "public-workflow"},
+        "job": {
+            "job_id": "job-public",
+            "graph_id": "public-workflow",
+            "job_name": "Public Workflow",
+            "status": "running",
+            "submitted_at": "2026-07-16T10:00:00Z",
+            "workflow_state": {
+                "enabled": True,
+                "step_order": ["detect", "research"],
+                "edges": [
+                    {
+                        "id": "detect_to_research",
+                        "from": "detect",
+                        "to": "research",
+                        "event": "detect_completed",
+                    }
+                ],
+                "steps": {
+                    "detect": {
+                        "id": "detect",
+                        "label": "Detect Sources",
+                        "run": "detect__start",
+                        "status": "completed",
+                    },
+                    "research": {
+                        "id": "research",
+                        "label": "Research Sources",
+                        "run": "research__start",
+                        "status": "running",
+                    },
+                },
+            },
+            "runtime_topology": {
+                "nodes": [
+                    {"node_id": "detect__start", "agent_type": "step_source"},
+                    {"node_id": "detect__worker", "agent_type": "executor"},
+                    {"node_id": "detect__end", "agent_type": "step_sink"},
+                    {"node_id": "research__start", "agent_type": "step_source"},
+                    {"node_id": "research__worker", "agent_type": "executor"},
+                    {"node_id": "research__end", "agent_type": "step_sink"},
+                ]
+            },
+        },
+        "agents": [
+            {"agent_id": "detect__start", "status": "completed"},
+            {"agent_id": "detect__worker", "status": "completed"},
+            {"agent_id": "detect__end", "status": "ready"},
+            {"agent_id": "research__start", "status": "ready"},
+            {"agent_id": "research__worker", "status": "running"},
+            {"agent_id": "research__end", "status": "ready"},
+        ],
+    }
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor.client.stream_events",
+        return_value=[
+            json.dumps(
+                {
+                    "type": "workflow_step_attempt_started",
+                    "agent_id": "research__start",
+                    "step": "research",
+                }
+            )
+        ],
+    )
+
+    progress = _workflow_progress_for_monitor("job-public", data)
+
+    assert progress is not None
+    assert [step["id"] for step in progress["steps"]] == ["detect", "research"]
+    assert progress["current_step"]["id"] == "research"
+    assert [agent["id"] for agent in progress["current_step"]["agents"]] == ["research"]
+
+    console = Console(record=True, width=140)
+    console.print(generate_live_layout("job-public", {"workflow_progress": progress}, JobMonitorState()))
+    rendered = console.export_text()
+    assert "Detect Sources" in rendered
+    assert "Research Sources" in rendered
+    assert "detect__start" not in rendered
+    assert "research__end" not in rendered
+
+
+def test_agent_selection_has_no_reverse_background():
+    workflow_table = _workflow_agent_table(
+        [{"id": "worker", "status": "running", "progress": 0.1}], 0
+    )
+    legacy_table = _agent_table(
+        [{"agent_id": "worker", "status": "running", "progress": 0.1}], 0
+    )
+
+    assert all("reverse" not in str(row.style) for row in workflow_table.rows)
+    assert all("reverse" not in str(row.style) for row in legacy_table.rows)
 
 def test_monitor_error(mocker):
     mocker.patch('sys.stdin.isatty', return_value=False)

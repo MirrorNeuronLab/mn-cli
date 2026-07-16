@@ -117,10 +117,26 @@ def print_confirmation(
     for next_step in _confirmation_next_steps(next_steps):
         rows.append(("Next", next_step))
 
-    console.print(f"[green]{action} {verb}.[/green]")
+    console.print(f"✓ [green]{action} {verb}.[/green]")
     if not rows:
         return
-    console.print(_confirmation_panel(rows))
+    console.print(_detail_table(rows))
+
+
+def print_info(console, message: Any) -> None:
+    """Print one concise, non-terminal progress update."""
+    console.print(f"→ [cyan]{message}[/cyan]")
+
+
+def print_warning(console, message: Any) -> None:
+    """Print a concise warning with a stable visual treatment."""
+    console.print(f"! [yellow]Warning:[/yellow] {message}")
+
+
+def print_error(console, message: Any, *, code: str | None = None) -> None:
+    """Print a concise, actionable error without a decorative panel."""
+    code_text = f" [dim]({code})[/dim]" if code else ""
+    console.print(f"× [bold red]Error:[/bold red]{code_text} {message}")
 
 
 def _is_plain_confirmation_mode() -> bool:
@@ -160,20 +176,14 @@ def _print_confirmation_plain(
                 typer.secho(item, color=None, file=output)
 
 
-def _confirmation_panel(rows: list[tuple[str, Any]]) -> Panel:
+def _detail_table(rows: list[tuple[str, Any]]) -> Table:
     label_width = min(max(len(str(label)) + 1 for label, _ in rows), max(12, ui_width() // 3))
-    table = Table(
-        show_header=False,
-        box=box.SIMPLE,
-        show_lines=False,
-        padding=(0, 1),
-        expand=True,
-    )
-    table.add_column("Field", min_width=label_width, no_wrap=True, overflow="ellipsis")
+    table = Table.grid(padding=(0, 1), expand=False)
+    table.add_column("Field", min_width=label_width, no_wrap=True, overflow="ellipsis", style="bold")
     table.add_column("Value", overflow="fold", ratio=1, no_wrap=False)
     for label, value in rows:
         table.add_row(f"{label}:", _confirmation_value(value))
-    return Panel(table, border_style="green", title="Details", title_align="left")
+    return table
 
 
 def _confirmation_value(value: Any) -> str:
@@ -450,7 +460,9 @@ def _workflow_agent_table(
     for index, agent in enumerate(agents[start : start + 20], start=start):
         status = str(agent.get("status") or "unknown")
         marker = ">" if index == selected_index else " "
-        row_style = "reverse" if index == selected_index else _status_color(status)
+        # Keep selection visible through the marker and weight, without
+        # painting the whole row white in terminals with a dark background.
+        row_style = f"bold {_status_color(status)}" if index == selected_index else _status_color(status)
         table.add_row(
             f"{marker}{index + 1}",
             _agent_id(agent),
@@ -557,7 +569,7 @@ def _agent_table(agents: list[dict[str, Any]], selected_index: int) -> Table:
             _working_on(agent),
             _progress_renderable(agent),
             str(_int_value(agent, "mailbox_depth", "queue_depth", "mailbox")),
-            style="reverse" if index == selected_index else _status_color(status),
+            style=f"bold {_status_color(status)}" if index == selected_index else _status_color(status),
         )
     return table
 
@@ -768,38 +780,50 @@ def _fit_text(value: Any, max_length: int) -> str:
         return text
     return text[: max(0, max_length - 1)] + "..."
 
+
+def _result_panel(
+    title: str,
+    rows: list[tuple[str, Any]],
+    *,
+    status_color: str,
+    message: str | None = None,
+) -> Panel:
+    content: list[Any] = []
+    if message:
+        content.append(Text(message, style=status_color))
+    content.append(_detail_table(rows))
+    return Panel(
+        Group(*content),
+        title=f"[bold]{title}[/bold]",
+        title_align="left",
+        border_style=status_color,
+        box=box.ROUNDED,
+        padding=(0, 1),
+        expand=False,
+    )
+
+
 def generate_summary_panel(job_id: str, status: str, log_dir) -> Panel:
     status_text = "Unknown"
     status_color = "yellow"
     if status == "completed":
-        status_text = "Success"
+        status_text = "Completed"
         status_color = "green"
-    elif status == "failed":
-        status_text = "Failed"
+    elif status in {"failed", "cancelled"}:
+        status_text = status.title()
         status_color = "red"
-    elif status == "cancelled":
-        status_text = "Cancelled"
-        status_color = "red"
-        
-    log_file = log_dir / "events.log"
-    
-    panel_text = (
-        f"[bold {status_color}]Job Status: {status_text}[/bold {status_color}]\n\n"
-        f"Job ID: {job_id}\n"
-        f"Outputs:\n"
-        f"  Logs:   {log_file}"
-    )
+
+    rows: list[tuple[str, Any]] = [
+        ("Status", f"[{status_color}]{status_text}[/{status_color}]"),
+        ("Job ID", f"[bold cyan]{job_id}[/bold cyan]"),
+        ("Logs", log_dir / "events.log"),
+    ]
     if (log_dir / "result.txt").exists():
-        panel_text += f"\n  Result: {log_dir / 'result.txt'}"
+        rows.append(("Result", log_dir / "result.txt"))
     if (log_dir / "result_stream.txt").exists():
-        panel_text += f"\n  Stream: {log_dir / 'result_stream.txt'}"
-        
-    return Panel(
-        panel_text,
-        title="Job Execution Summary",
-        border_style=status_color,
-        expand=False
-    )
+        rows.append(("Stream", log_dir / "result_stream.txt"))
+    return _result_panel("Job summary", rows, status_color=status_color)
+
 
 def generate_run_submitted_panel(
     *,
@@ -814,29 +838,27 @@ def generate_run_submitted_panel(
     web_ui_url: Optional[str] = None,
     detached: bool = False,
 ) -> Panel:
-    table = Table.grid(padding=(0, 1))
-    table.add_column(style="bold")
-    table.add_column()
-    table.add_row("Bundle", bundle_name)
-    table.add_row("Job ID", f"[bold cyan]{job_id}[/bold cyan]")
+    rows: list[tuple[str, Any]] = [
+        ("Bundle", bundle_name),
+        ("Job ID", f"[bold cyan]{job_id}[/bold cyan]"),
+    ]
     if blueprint_run_id:
-        table.add_row("Blueprint Run ID", f"[bold green]{blueprint_run_id}[/bold green]")
+        rows.append(("Blueprint Run ID", f"[bold green]{blueprint_run_id}[/bold green]"))
     if blueprint_revision:
-        table.add_row("Blueprint Revision", blueprint_revision[:12])
-    table.add_row("Type", run_mode)
+        rows.append(("Blueprint Revision", blueprint_revision[:12]))
+    rows.append(("Type", run_mode))
     if web_ui_url:
-        table.add_row("Web UI", f"[bold green]{web_ui_url}[/bold green]")
-    table.add_row("Payloads", str(payload_count))
-    table.add_row("Logs", str(log_dir / "events.log"))
-    table.add_row("Snapshot", str(log_dir / "job_snapshot.json"))
-    table.add_row("Follow", "Detached immediately" if detached else f"{follow_seconds:g}s event tail, then detach")
-
-    return Panel(
-        table,
-        title="Job submit successful",
-        border_style="cyan",
-        expand=False,
+        rows.append(("Web UI", f"[bold green]{web_ui_url}[/bold green]"))
+    rows.extend(
+        [
+            ("Payloads", str(payload_count)),
+            ("Logs", log_dir / "events.log"),
+            ("Snapshot", log_dir / "job_snapshot.json"),
+            ("Follow", "Detached immediately" if detached else f"{follow_seconds:g}s event tail, then detach"),
+        ]
     )
+    return _result_panel("Job submitted", rows, status_color="cyan", message="Job accepted by the runtime.")
+
 
 def generate_detached_panel(
     job_id: str,
@@ -855,27 +877,21 @@ def generate_detached_panel(
     )
     status_label = status.replace("_", " ").title() if status else "Unknown"
 
-    table = Table.grid(padding=(0, 1))
-    table.add_column(style="bold")
-    table.add_column()
-    table.add_row("Status", f"[{status_color}]{status_label}[/{status_color}]")
-    table.add_row("Job ID", f"[bold cyan]{job_id}[/bold cyan]")
-    table.add_row("Events Logged", str(event_count))
-    table.add_row("Raw Events", str(log_dir / "events.log"))
-    table.add_row("Run Log", str(log_dir / "run.log"))
+    rows: list[tuple[str, Any]] = [
+        ("Status", f"[{status_color}]{status_label}[/{status_color}]"),
+        ("Job ID", f"[bold cyan]{job_id}[/bold cyan]"),
+        ("Events Logged", str(event_count)),
+        ("Raw Events", log_dir / "events.log"),
+        ("Run Log", log_dir / "run.log"),
+    ]
     if web_ui_url:
-        table.add_row("Web UI", f"[bold green]{web_ui_url}[/bold green]")
-    table.add_row("Monitor", f"mn job monitor {job_id}")
+        rows.append(("Web UI", f"[bold green]{web_ui_url}[/bold green]"))
+    rows.append(("Monitor", f"mn job monitor {job_id}"))
 
-    message = Text()
-    if status in {"completed", "failed", "cancelled"}:
-        message.append("Final job state reached.", style=status_color)
-    else:
-        message.append("Detached while job is still scheduled/running.", style="yellow")
-
-    return Panel(
-        Group(message, table),
-        title="Run Detached",
-        border_style=status_color,
-        expand=False,
+    message = "Final job state reached." if status in {"completed", "failed", "cancelled"} else "Detached while job is still scheduled or running."
+    return _result_panel(
+        "Run detached",
+        rows,
+        status_color=status_color,
+        message=message,
     )

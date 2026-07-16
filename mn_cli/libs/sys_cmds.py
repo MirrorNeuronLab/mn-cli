@@ -10,7 +10,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from mn_cli.banner import format_banner
 from mn_cli.shared import console, logger
 from mn_cli.error_handler import handle_cli_error
-from mn_cli.libs.ui import print_success_confirmation
+from mn_cli.libs.ui import print_error, print_info, print_success_confirmation
 from mn_cli.terminal import use_progress
 from mn_cli.server_cmds import (
     _start_server,
@@ -79,10 +79,10 @@ def start(
     """Start MirrorNeuron services"""
     console.print(format_banner("MirrorNeuron Local Runtime"))
     if worker_node and join_host:
-        console.print("[red]Error: --worker-node and --join-host cannot be used together.[/red]")
+        print_error(console, "--worker-node and --join-host cannot be used together.")
         raise typer.Exit(1)
     if join_host and not token:
-        console.print("[red]Error: mn runtime start --join-host requires --token from the primary node.[/red]")
+        print_error(console, "mn runtime start --join-host requires --token from the primary node.")
         raise typer.Exit(1)
     if worker_node:
         _start_worker_node(host=host, grpc_port=grpc_port)
@@ -207,12 +207,12 @@ def add_node(
 
 def stop():
     """Stop MirrorNeuron services"""
-    console.print("=> Stopping MirrorNeuron Services...")
+    print_info(console, "Stopping MirrorNeuron services…")
     leave_joined_cluster_before_stop()
     _stop_network_runtime()
     
     if runtime_compose_available():
-        console.print("   Stopping Docker runtime (Compose)...")
+        print_info(console, "Stopping Docker runtime (Compose)…")
         subprocess.run(runtime_compose_cmd("down"), stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
         try:
             from mn_sdk.native_resources import cleanup_docker_worker_services
@@ -223,7 +223,7 @@ def stop():
         subprocess.run(["docker", "rm", "-f", COMPOSE_SENTINEL_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
         subprocess.run(["docker", "rm", "-f", SYNCTHING_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
     else:
-        console.print("   Stopping Core Service (Docker: mirror-neuron-core)...")
+        print_info(console, "Stopping Core service (Docker: mirror-neuron-core)…")
         subprocess.run(["docker", "stop", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
         subprocess.run(["docker", "rm", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
         subprocess.run(["docker", "rm", "-f", SYNCTHING_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
@@ -239,7 +239,7 @@ def stop():
                 pid = int(pid_file.read_text().strip())
                 try:
                     os.kill(pid, 0)
-                    console.print(f"   Stopping {name} (PID: {pid})...")
+                    print_info(console, f"Stopping {name} (PID {pid})…")
                     kill_tree(pid)
                     time.sleep(1)
                 except OSError:
@@ -300,13 +300,13 @@ def restart_sidecars(
         restart_api = True
         restart_web_ui = True
 
-    console.print("=> Restarting MirrorNeuron runtime sidecars...")
+    print_info(console, "Restarting MirrorNeuron runtime sidecars…")
     env = _sidecar_runtime_env()
     details: list[tuple[str, str]] = []
     restarted_any = False
 
     if restart_api:
-        console.print("=> Restarting REST API sidecar...")
+        print_info(console, "Restarting REST API sidecar…")
         _stop_sidecar_processes(api_pid_files())
         _stop_matching_sidecar_processes("mn-api", "REST API")
         api_started = _start_api_if_installed(env)
@@ -314,7 +314,7 @@ def restart_sidecars(
         restarted_any = restarted_any or api_started
 
     if restart_web_ui:
-        console.print("=> Restarting Web UI sidecar...")
+        print_info(console, "Restarting Web UI sidecar…")
         _stop_sidecar_processes(web_ui_pid_files())
         _stop_matching_sidecar_processes("mn-web-ui-server", "Web UI")
         web_ui_started = _start_web_ui_if_installed(env)
@@ -324,7 +324,7 @@ def restart_sidecars(
     _write_runtime_endpoints_file(env, web_ui_available=find_web_ui_dir() is not None)
 
     if not restarted_any:
-        console.print("[red]Error: no selected sidecars could be restarted.[/red]")
+        print_error(console, "No selected sidecars could be restarted.")
         raise typer.Exit(1)
 
     print_success_confirmation(
@@ -405,7 +405,7 @@ def _stop_sidecar_processes(pid_files: tuple[tuple[Path, str], ...]) -> bool:
         except OSError:
             _unlink_pid_file(pid_file)
             continue
-        console.print(f"   Stopping {name} (PID: {pid})...")
+        print_info(console, f"Stopping {name} (PID {pid})…")
         kill_tree(pid)
         stopped = True
         _unlink_pid_file(pid_file)

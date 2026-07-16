@@ -58,11 +58,11 @@ def test_run_success(mocker, tmp_path, monkeypatch):
     result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--web-ui"])
     
     assert result.exit_code == 0
-    assert "Job submit successful" in result.stdout
+    assert "Job submitted" in result.stdout
     assert "run-bundle-auto" in result.stdout
     assert "Type" in result.stdout
     assert "Batch" in result.stdout
-    assert "Job Status: Success" in result.stdout
+    assert "Status: Completed" in result.stdout
     mapping = json.loads((tmp_path / "runs" / "run-bundle-auto" / "job.json").read_text())
     assert mapping["job_id"] == "job-123"
     mock_submit.assert_called_once()
@@ -102,7 +102,7 @@ def test_run_stream_error_falls_back_to_status_polling(mocker, tmp_path, monkeyp
     result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--follow-seconds", "0"])
 
     assert result.exit_code == 0
-    assert "Job submit successful" in result.stdout
+    assert "Job submitted" in result.stdout
     assert "Completed" in result.stdout
     assert "Monitor" in result.stdout
     mock_get.assert_called_once_with("job-stream-fallback")
@@ -786,7 +786,7 @@ def test_run_detached_starts_without_live_workflow_ui(flag, mocker, tmp_path, mo
 
     assert result.exit_code == 0
     assert "Detached immediately" in result.stdout
-    assert "Run Detached" in result.stdout
+    assert "Run detached" in result.stdout
     assert "Submitted" in result.stdout
     mock_submit.assert_called_once()
     mock_stream.assert_not_called()
@@ -871,7 +871,7 @@ def test_run_reports_remote_docker_worker_preparation(mocker, tmp_path):
     )
 
     assert result.exit_code == 0
-    assert "Launch: Prepare DockerWorker on mirror_neuron@spark" in result.stdout
+    assert "→ Prepare DockerWorker on mirror_neuron@spark" in result.stdout
     assert "DockerWorker ready: visual_detector on mirror_neuron@spark" in result.stdout
 
 

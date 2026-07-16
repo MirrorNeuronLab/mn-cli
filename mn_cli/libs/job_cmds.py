@@ -9,7 +9,7 @@ from mn_cli.shared import console, client, config, logger
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.blueprint_resources import cleanup_blueprint_host_hooks, cleanup_web_ui_process
 from mn_cli.libs.blueprint_observability import load_observability_tools
-from mn_cli.libs.ui import print_confirmed, print_success_confirmation
+from mn_cli.libs.ui import print_confirmed, print_error, print_success_confirmation
 
 import typer
 
@@ -115,7 +115,7 @@ def clear():
         )
     except grpc.RpcError as e:
         if e.code() == grpc.StatusCode.PERMISSION_DENIED and "MN_GRPC_ADMIN_TOKEN" in str(e.details()):
-            console.print("[red]Error: ClearJobs admin authorization failed.[/red]")
+            print_error(console, "ClearJobs admin authorization failed.")
             local_admin_token = str(
                 getattr(client, "admin_token", None)
                 or getattr(config, "grpc_admin_token", "")

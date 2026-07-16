@@ -25,4 +25,4 @@ def format_banner(title: str | None = None, *, width: int | None = None) -> str:
         return _compact_title(title, width=width)
     if not title:
         return MN_ASCII_ART
-    return f"{MN_ASCII_ART}\n\n => {title}"
+    return f"{MN_ASCII_ART}\n\n— {title}"

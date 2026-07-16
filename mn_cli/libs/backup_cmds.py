@@ -15,7 +15,7 @@ from mn_sdk.runtime_config import default_runs_root
 
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.blueprint_observability import make_blueprint_run_id
-from mn_cli.libs.ui import print_success_confirmation
+from mn_cli.libs.ui import print_error, print_success_confirmation, print_warning
 from mn_cli.shared import client, console, logger
 
 SCHEMA_VERSION = "mn.backup.v1"
@@ -62,8 +62,9 @@ def backup(
                 "This mn SDK does not support backup yet. Update mirrorneuron-python-sdk and try again."
             )
 
-        console.print(
-            "[yellow]Warning: backups are complete runtime clones and may contain secrets from manifests, config, environment, runtime state, or payloads. Nothing is redacted.[/yellow]"
+        print_warning(
+            console,
+            "Backups are complete runtime clones and may contain secrets from manifests, config, environment, runtime state, or payloads. Nothing is redacted.",
         )
 
         backup_json, bundle_files = client.export_job_backup(job_id)
@@ -78,7 +79,7 @@ def backup(
             next_steps=f"mn job restore <blueprint-id> --input {archive_path}",
         )
     except BackupRestoreError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(console, exc)
         raise typer.Exit(1)
     except Exception as exc:
         handle_cli_error(exc, console, "backup")

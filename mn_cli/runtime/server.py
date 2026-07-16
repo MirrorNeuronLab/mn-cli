@@ -22,7 +22,7 @@ from rich.table import Table
 from mn_sdk.blueprint_source import DEFAULT_BLUEPRINT_REPO, normalize_blueprint_repo_value
 from mn_sdk.native_resources import node_resource_environment
 from mn_cli.config import CliConfig
-from mn_cli.libs.ui import print_confirmed, print_success_confirmation
+from mn_cli.libs.ui import print_confirmed, print_error, print_info, print_success_confirmation, print_warning
 from mn_cli.logging_config import configure_logging
 from mn_cli.runtime_state import (
     mn_home as _runtime_mn_home,
@@ -216,9 +216,9 @@ def _ensure_litellm_gateway_host_config() -> None:
             LITELLM_GATEWAY_CONFIG_FILE.write_text('{"model_list":[]}\n', encoding="utf-8")
     except OSError as exc:
         logger.warning("Could not prepare LiteLLM gateway config path: %s", exc)
-        console.print(
-            "[yellow]=> Warning: LiteLLM gateway config is not host-writable; "
-            "model route sync may fail until file ownership is fixed.[/yellow]"
+        print_warning(
+            console,
+            "LiteLLM gateway config is not host-writable; model route sync may fail until file ownership is fixed.",
         )
 DEFAULT_EPMD_PORT = "54369"
 DEFAULT_DIST_PORT = "54370"
@@ -748,10 +748,10 @@ def _resolve_published_redis_port(
     requested_port = _parse_configured_port(configured_port)
     if explicit:
         if requested_port is None:
-            console.print("[red]Error: MN_REDIS_PORT must be a TCP port between 1 and 65535.[/red]")
+            print_error(console, "MN_REDIS_PORT must be a TCP port between 1 and 65535.")
             raise typer.Exit(1)
         if not _port_available_or_owned(bind_host, requested_port, owner_container, REDIS_CONTAINER_PORT):
-            console.print(f"[red]Error: Redis port {requested_port} is already in use.[/red]")
+            print_error(console, f"Redis port {requested_port} is already in use.")
             raise typer.Exit(1)
         return requested_port
 
@@ -770,9 +770,7 @@ def _resolve_published_redis_port(
         REDIS_CONTAINER_PORT,
     )
     if selected == 0:
-        console.print(
-            f"[red]Error: No Redis port is available in {REDIS_DYNAMIC_PORT_START}-{REDIS_DYNAMIC_PORT_END}.[/red]"
-        )
+        print_error(console, f"No Redis port is available in {REDIS_DYNAMIC_PORT_START}-{REDIS_DYNAMIC_PORT_END}.")
         raise typer.Exit(1)
     return selected
 
@@ -960,13 +958,10 @@ def _shared_storage_env_from_handshake(handshake: Optional[dict]) -> dict[str, s
 
     expanded_host_root = Path(host_root).expanduser()
     if not expanded_host_root.exists():
-        console.print(
-            "[yellow]Warning: remote shared-storage root is not a local path:[/yellow] "
-            f"{host_root}"
-        )
-        console.print(
-            "[yellow]         Joined nodes keep a local shared-storage root; use Syncthing replication "
-            "instead of mounting a remote host path.[/yellow]"
+        print_warning(console, f"Remote shared-storage root is not a local path: {host_root}")
+        print_warning(
+            console,
+            "Joined nodes keep a local shared-storage root; use Syncthing replication instead of mounting a remote host path.",
         )
         return {}
 
@@ -997,9 +992,9 @@ def _syncthing_required(env: dict[str, str]) -> bool:
 
 def _syncthing_warn_or_fail(message: str, env: dict[str, str]) -> None:
     if _syncthing_required(env):
-        console.print(f"[red]Error: {message}[/red]")
+        print_error(console, message)
         raise typer.Exit(1)
-    console.print(f"[yellow]Warning: {message}[/yellow]")
+    print_warning(console, message)
 
 def _syncthing_image(env: dict[str, str]) -> str:
     return str(env.get("MN_SYNCTHING_IMAGE") or os.getenv("MN_SYNCTHING_IMAGE") or DEFAULT_SYNCTHING_IMAGE).strip()
@@ -1108,12 +1103,12 @@ def _resolve_syncthing_port(
     if _port_available_or_owned(bind_host, preferred, SYNCTHING_CONTAINER, target_port):
         return preferred
     if configured:
-        console.print(f"[red]Error: {key}={configured} is already in use.[/red]")
+        print_error(console, f"{key}={configured} is already in use.")
         raise typer.Exit(1)
     for candidate in range(default + 1, default + 50):
         if _port_available_or_owned(bind_host, candidate, SYNCTHING_CONTAINER, target_port):
             return candidate
-    console.print(f"[red]Error: No Syncthing port is available near {default}.[/red]")
+    print_error(console, f"No Syncthing port is available near {default}.")
     raise typer.Exit(1)
 
 def _syncthing_request(
@@ -1324,7 +1319,7 @@ def _ensure_syncthing_for_runtime(env: dict[str, str], *, advertised_host: str) 
         _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
     if device_id:
         _ensure_syncthing_folder(_syncthing_node_info(env, advertised_host))
-    console.print(f"=> Syncthing shared storage ready at {advertised_host}:{sync_port} ({host_root})")
+    print_info(console, f"Syncthing shared storage is ready at {advertised_host}:{sync_port} ({host_root}).")
     return env
 
 def _syncthing_node_info(env: dict[str, str], advertised_host: str) -> dict[str, Any]:
@@ -1364,7 +1359,7 @@ def _connect_syncthing_peers(local_info: dict[str, Any], remote_info: dict[str, 
             _ensure_syncthing_folder(remote_api_info, (local_info,))
         return True
     except Exception as exc:
-        console.print(f"[yellow]Warning: could not connect Syncthing shared-storage peers: {exc}[/yellow]")
+        print_warning(console, f"Could not connect Syncthing shared-storage peers: {exc}")
         return False
 
 def _compose_shared_storage_env_changed(updates: dict[str, str]) -> bool:
@@ -1383,7 +1378,7 @@ def _persist_compose_shared_storage_env(updates: dict[str, str]) -> bool:
 def _recreate_compose_core_for_shared_storage(env: dict[str, str]) -> None:
     if not runtime_compose_available():
         return
-    console.print("=> Recreating MirrorNeuron core so shared-storage changes are visible...")
+    print_info(console, "Recreating MirrorNeuron core so shared-storage changes are visible…")
     try:
         subprocess.run(
             runtime_compose_cmd("up", "-d", "--force-recreate", "mirror-neuron-core"),
@@ -1492,9 +1487,9 @@ def _resolve_node_alias(env: Optional[dict[str, str]] = None) -> str:
     alias = _configured_node_alias(env)
     if alias:
         if not _valid_node_alias(alias):
-            console.print(
-                "[red]Error: MN_NODE_ALIAS must be 1-63 lowercase letters, numbers, or hyphens, "
-                "and must start and end with a letter or number.[/red]"
+            print_error(
+                console,
+                "MN_NODE_ALIAS must be 1–63 lowercase letters, numbers, or hyphens, and must start and end with a letter or number.",
             )
             raise typer.Exit(1)
         _write_node_alias(alias)
@@ -1526,7 +1521,7 @@ def _docker_network_mode(mode: Optional[str] = None, *, default: str = "bridge")
         return "overlay"
     if raw in {"disabled", "disable", "none", "off", "host", "ip"}:
         return "disabled"
-    console.print("[red]Error: Docker network mode must be bridge, overlay, or disabled.[/red]")
+    print_error(console, "Docker network mode must be bridge, overlay, or disabled.")
     raise typer.Exit(1)
 
 def _docker_network_uses_internal_identity(mode: str) -> bool:
@@ -1548,18 +1543,18 @@ def _inspect_docker_network(name: str) -> Optional[dict[str, object]]:
             text=True,
         )
     except FileNotFoundError:
-        console.print("[red]Error: Docker is not installed or not in PATH.[/red]")
+        print_error(console, "Docker is not installed or not in PATH.")
         raise typer.Exit(1)
     if result.returncode != 0:
         return None
     try:
         inspected = json.loads(result.stdout)
     except json.JSONDecodeError:
-        console.print(f"[red]Error: Could not parse Docker network inspect output for {name}.[/red]")
+        print_error(console, f"Could not parse Docker network inspect output for {name}.")
         raise typer.Exit(1)
     if isinstance(inspected, list) and inspected and isinstance(inspected[0], dict):
         return inspected[0]
-    console.print(f"[red]Error: Docker network inspect returned unexpected data for {name}.[/red]")
+    print_error(console, f"Docker network inspect returned unexpected data for {name}.")
     raise typer.Exit(1)
 
 def _ensure_docker_network(mode: str, name: str) -> None:
@@ -1576,20 +1571,20 @@ def _ensure_docker_network(mode: str, name: str) -> None:
             )
             return
         if str(inspected.get("Driver") or "") != "bridge":
-            console.print(f"[red]Error: Docker network {name} exists but is not a bridge network.[/red]")
+            print_error(console, f"Docker network {name} exists but is not a bridge network.")
             raise typer.Exit(1)
         return
 
     if inspected is None:
-        console.print(f"[red]Error: Docker overlay network {name} does not exist.[/red]")
+        print_error(console, f"Docker overlay network {name} does not exist.")
         console.print("Create it first with:")
         console.print(f"  docker network create --driver overlay --attachable {name}")
         raise typer.Exit(1)
     if str(inspected.get("Driver") or "") != "overlay":
-        console.print(f"[red]Error: Docker network {name} exists but is not an overlay network.[/red]")
+        print_error(console, f"Docker network {name} exists but is not an overlay network.")
         raise typer.Exit(1)
     if inspected.get("Attachable") is not True:
-        console.print(f"[red]Error: Docker overlay network {name} is not attachable.[/red]")
+        print_error(console, f"Docker overlay network {name} is not attachable.")
         console.print("Create an attachable overlay network with:")
         console.print(f"  docker network create --driver overlay --attachable {name}")
         raise typer.Exit(1)
@@ -1830,7 +1825,7 @@ def _docker_container_running(name: str) -> bool:
             text=True,
         )
     except FileNotFoundError:
-        console.print("[red]Error: Docker is not installed or not in PATH.[/red]")
+        print_error(console, "Docker is not installed or not in PATH.")
         raise typer.Exit(1)
     return result.returncode == 0 and result.stdout.strip() == "true"
 
@@ -2123,9 +2118,9 @@ def _start_worker_compose_foundation_services(env: dict[str, str]) -> None:
             env={**os.environ.copy(), **env},
         )
     except (FileNotFoundError, subprocess.CalledProcessError):
-        console.print(
-            "[yellow]=> Warning: worker Compose gateway services did not start; "
-            "remote LLM routing may be unavailable on this node.[/yellow]"
+        print_warning(
+            console,
+            "Worker Compose gateway services did not start; remote LLM routing may be unavailable on this node.",
         )
 
 
@@ -2586,8 +2581,8 @@ def _return_running_network_seed(
 ) -> str:
     token = _running_network_token(container_names)
     if not token:
-        console.print("[red]Error: MirrorNeuron is already running, but no network token was found.[/red]")
-        console.print(f"Expected a token in {NETWORK_TOKEN_FILE}.")
+        print_error(console, "MirrorNeuron is already running, but no network token was found.")
+        print_info(console, f"Expected a token in {NETWORK_TOKEN_FILE}.")
         raise typer.Exit(1)
 
     running_tokens = _runtime_grpc_tokens_from_running_container()
@@ -2673,7 +2668,7 @@ def _start_worker_node(
     docker_network_mode: Optional[str] = None,
     docker_network_name: Optional[str] = None,
 ) -> str:
-    console.print("=> Preparing this box as a clean MirrorNeuron worker node...")
+    print_info(console, "Preparing this box as a clean MirrorNeuron worker node…")
     leave_joined_cluster_before_stop()
     _stop_local_runtime_for_worker()
     _clear_join_owner_metadata()
@@ -2726,7 +2721,7 @@ def _start_network_seed(
     node_name = _docker_node_name(node_alias) if use_internal_identity else _network_node_name(host)
     redis_alias = _docker_redis_alias(node_alias)
     if force_new_token:
-        console.print("[yellow]--force-new-token is deprecated; run 'mn node refresh-token' to rotate the join token.[/yellow]")
+        print_warning(console, "--force-new-token is deprecated; run 'mn node refresh-token' to rotate the join token.")
     token = _resolve_network_token()
     external_redis_url = os.getenv("MN_REDIS_URL", "").strip()
     redis_password = _resolve_redis_password(env)
@@ -2758,7 +2753,7 @@ def _start_network_seed(
     if container_network_mode == "disabled" and _docker_host_socket() is not None:
         _ensure_docker_network("bridge", network_name)
     if not external_redis_url:
-        console.print("=> Starting network Redis...")
+        print_info(console, "Starting network Redis…")
         _start_network_redis(
             host,
             selected_redis_port,
@@ -2802,7 +2797,7 @@ def _start_network_seed(
     if worker_node:
         _start_worker_compose_foundation_services(env)
 
-    console.print("=> Starting MirrorNeuron core-only exposed node...")
+    print_info(console, "Starting MirrorNeuron core-only exposed node…")
     _start_network_core(
         env,
         host,
@@ -2876,11 +2871,11 @@ def _join_network(
     redis_host, redis_port, redis_url = _validate_remote_redis_details(handshake, seed_host, token)
     from mn_cli.shared import client as local_client
 
-    console.print(f"=> Adding MirrorNeuron network node {remote_node} from {target}...")
+    print_info(console, f"Adding MirrorNeuron network node {remote_node} from {target}…")
     if _docker_network_uses_internal_identity(requested_mode):
-        console.print("=> Received Docker-internal cluster wiring from the remote node.")
+        print_info(console, "Received Docker-internal cluster wiring from the remote node.")
     else:
-        console.print(f"=> Remote Redis advertised at {redis_host}:{redis_port}.")
+        print_info(console, f"Remote Redis is advertised at {redis_host}:{redis_port}.")
     try:
         status = local_client.add_node(remote_node, token=token)
     except TypeError:
@@ -2933,9 +2928,7 @@ def _reconcile_cluster_models_after_membership_change() -> dict[str, Any] | None
 
         return reconcile_cluster_model_routes(restart=True)
     except Exception as exc:
-        console.print(
-            f"[yellow]Warning: cluster joined, but model route reconciliation failed: {exc}[/yellow]"
-        )
+        print_warning(console, f"Cluster joined, but model route reconciliation failed: {exc}")
         return None
 
 
@@ -3094,12 +3087,12 @@ def leave_joined_cluster_before_stop() -> bool:
         Client(target=target, auth_token=metadata.get("auth_token") or "", timeout=3).remove_node(
             metadata["worker_node"]
         )
-        console.print(f"=> Removed {metadata['worker_node']} from cluster {metadata['owner_node']}.")
+        print_info(console, f"Removed {metadata['worker_node']} from cluster {metadata['owner_node']}.")
         return True
     except Exception as exc:
-        console.print(
-            f"[yellow]=> Could not notify cluster {metadata['owner_node']} before stopping; "
-            "heartbeat cleanup will remove this worker.[/yellow]"
+        print_warning(
+            console,
+            f"Could not notify cluster {metadata['owner_node']} before stopping; heartbeat cleanup will remove this worker.",
         )
         logger.debug("Best-effort cluster leave before stop failed: %s", exc, exc_info=True)
         return False
@@ -3135,7 +3128,7 @@ def _ensure_local_cluster_runtime_for_join(
         return
 
     primary_token = _resolve_network_token()
-    console.print(f"=> Enabling cluster mode for this primary node as {node_name}...")
+    print_info(console, f"Enabling cluster mode for this primary node as {node_name}…")
     env = _ensure_runtime_grpc_tokens(env, persist_compose=True)
     env = _ensure_compose_native_port_settings(env)
     env = _ensure_compose_cluster_bind_settings(env, local_host)
@@ -3218,7 +3211,7 @@ def _wait_for_local_cluster_grpc(
             last_error = exc
             sleep_fn(0.25)
 
-    console.print("[red]Error: Local MirrorNeuron core did not become ready after enabling cluster mode.[/red]")
+    print_error(console, "Local MirrorNeuron core did not become ready after enabling cluster mode.")
     if last_error is not None:
         console.print(f"[dim]{last_error}[/dim]")
     raise typer.Exit(1)
@@ -4409,15 +4402,15 @@ def _validate_remote_redis_details(handshake: dict, seed_host: str, token: str) 
     redis_url = str(handshake.get("redis_url") or "").strip()
 
     if not redis_host or redis_port is None or not redis_url:
-        console.print(f"[red]Error: Remote node at {seed_host} did not advertise complete Redis details.[/red]")
+        print_error(console, f"Remote node at {seed_host} did not advertise complete Redis details.")
         raise typer.Exit(1)
 
     parsed = urlparse(redis_url)
     if parsed.scheme not in {"redis", "rediss"} or not parsed.hostname or not parsed.port:
-        console.print(f"[red]Error: Remote node at {seed_host} returned an invalid Redis URL.[/red]")
+        print_error(console, f"Remote node at {seed_host} returned an invalid Redis URL.")
         raise typer.Exit(1)
     if not parsed.password:
-        console.print(f"[red]Error: Remote node at {seed_host} did not advertise password-authenticated Redis.[/red]")
+        print_error(console, f"Remote node at {seed_host} did not advertise password-authenticated Redis.")
         raise typer.Exit(1)
 
     return redis_host, redis_port, redis_url
@@ -4514,7 +4507,7 @@ def _configure_worker_redis_replica(
 ) -> str | None:
     primary = _primary_redis_details(token)
     if primary is None:
-        console.print("[yellow]Warning: Could not determine primary Redis details; worker Redis replication was skipped.[/yellow]")
+        print_warning(console, "Could not determine primary Redis details; worker Redis replication was skipped.")
         return None
 
     primary_host, primary_port, primary_password = primary
@@ -4526,9 +4519,7 @@ def _configure_worker_redis_replica(
     worker_redis_host = _usable_remote_host(worker_redis_host, worker_host)
     worker_password = _redis_password_from_url(worker_redis_url)
     if worker_redis_host == primary_host and int(worker_redis_port) == int(primary_port):
-        console.print(
-            "[yellow]Worker Redis replication skipped: worker advertised the primary Redis endpoint.[/yellow]"
-        )
+        print_warning(console, "Worker Redis replication was skipped because the worker advertised the primary Redis endpoint.")
         return None
 
     try:
@@ -4573,9 +4564,9 @@ def _configure_worker_redis_replica(
             cause=exc,
         ) from exc
 
-    console.print(
-        f"=> Worker Redis {worker_redis_host}:{worker_redis_port} is replicating from "
-        f"{primary_host}:{primary_port}."
+    print_info(
+        console,
+        f"Worker Redis {worker_redis_host}:{worker_redis_port} is replicating from {primary_host}:{primary_port}.",
     )
     return f"{worker_redis_host}:{worker_redis_port} -> {primary_host}:{primary_port}"
 
@@ -4886,7 +4877,7 @@ def _start_native_sdk_grpc_if_installed(
     restart_reason: str = "",
 ) -> bool:
     if _native_sdk_grpc_command() is None:
-        console.print("[yellow]=> Warning: mn-native-sdk-grpc not found; native model preparation forwarding is unavailable.[/yellow]")
+        print_warning(console, "mn-native-sdk-grpc was not found; native model preparation forwarding is unavailable.")
         return False
 
     env = os.environ.copy()
@@ -4904,13 +4895,13 @@ def _start_native_sdk_grpc_if_installed(
     child_status = check_status(NATIVE_SDK_GRPC_PID_FILE)
     if watchdog_status == 0:
         if _wait_for_tcp(native_host, native_port, timeout_seconds=2.0) and not restart_running:
-            console.print("[yellow]=> Native SDK gRPC watchdog is already running, skipping.[/yellow]")
+            print_warning(console, "Native SDK gRPC watchdog is already running; skipping.")
             return True
         if restart_running:
             detail = f" ({restart_reason})" if restart_reason else ""
-            console.print(f"[yellow]=> Native SDK gRPC watchdog is already running; restarting it{detail}.[/yellow]")
+            print_warning(console, f"Native SDK gRPC watchdog is already running; restarting it{detail}.")
         else:
-            console.print("[yellow]=> Native SDK gRPC watchdog is running, but the service is not responding; restarting it.[/yellow]")
+            print_warning(console, "Native SDK gRPC watchdog is running, but the service is not responding; restarting it.")
         try:
             watchdog_pid = int(NATIVE_SDK_GRPC_WATCHDOG_PID_FILE.read_text().strip())
             kill_tree(watchdog_pid)
@@ -4925,7 +4916,7 @@ def _start_native_sdk_grpc_if_installed(
     if child_status == 0:
         try:
             pid = int(NATIVE_SDK_GRPC_PID_FILE.read_text().strip())
-            console.print(f"=> Restarting existing Native SDK gRPC service (PID: {pid}) under watchdog...")
+            print_info(console, f"Restarting existing Native SDK gRPC service (PID {pid}) under watchdog…")
             kill_tree(pid)
             time.sleep(1)
         except (ValueError, OSError):
@@ -4936,20 +4927,20 @@ def _start_native_sdk_grpc_if_installed(
 
     stop_matching_sidecar_processes("mn-native-sdk-grpc", "Native SDK gRPC")
 
-    console.print(f"=> Starting Native SDK gRPC watchdog (model prep on {native_host}:{native_port})...")
+    print_info(console, f"Starting Native SDK gRPC watchdog (model prep on {native_host}:{native_port})…")
     try:
         p_watchdog = _start_native_sdk_grpc_watchdog(env)
     except FileNotFoundError:
-        console.print("[yellow]=> Warning: mn-native-sdk-grpc not found; native model preparation forwarding is unavailable.[/yellow]")
+        print_warning(console, "mn-native-sdk-grpc was not found; native model preparation forwarding is unavailable.")
         return False
     NATIVE_SDK_GRPC_WATCHDOG_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
     NATIVE_SDK_GRPC_WATCHDOG_PID_FILE.write_text(str(p_watchdog.pid))
     if _wait_for_tcp(native_host, native_port, timeout_seconds=10.0):
-        console.print(f"   [green][Started][/green] Native SDK gRPC watchdog (PID: {p_watchdog.pid})")
+        print_info(console, f"Native SDK gRPC watchdog is running (PID {p_watchdog.pid}).")
     else:
-        console.print(
-            f"   [yellow][Started][/yellow] Native SDK gRPC watchdog (PID: {p_watchdog.pid}); "
-            f"waiting for {native_host}:{native_port} to respond."
+        print_warning(
+            console,
+            f"Native SDK gRPC watchdog started (PID {p_watchdog.pid}); waiting for {native_host}:{native_port} to respond.",
         )
     return True
 
@@ -5018,7 +5009,7 @@ def _start_api_if_installed(
     restart_reason: str = "",
 ) -> bool:
     if _api_command() is None:
-        console.print("[yellow]=> Warning: mn-api not found, skipping.[/yellow]")
+        print_warning(console, "mn-api was not found; skipping.")
         return False
 
     env = os.environ.copy()
@@ -5036,13 +5027,13 @@ def _start_api_if_installed(
     child_status = check_status(API_PID_FILE)
     if watchdog_status == 0:
         if _wait_for_api(api_host, api_port, timeout_seconds=5.0) and not restart_running:
-            console.print("[yellow]=> REST API watchdog is already running, skipping.[/yellow]")
+            print_warning(console, "REST API watchdog is already running; skipping.")
             return True
         if restart_running:
             detail = f" ({restart_reason})" if restart_reason else ""
-            console.print(f"[yellow]=> REST API watchdog is already running; restarting it{detail}.[/yellow]")
+            print_warning(console, f"REST API watchdog is already running; restarting it{detail}.")
         else:
-            console.print("[yellow]=> REST API watchdog is running, but the API is not responding; restarting it.[/yellow]")
+            print_warning(console, "REST API watchdog is running, but the API is not responding; restarting it.")
         try:
             watchdog_pid = int(API_WATCHDOG_PID_FILE.read_text().strip())
             kill_tree(watchdog_pid)
@@ -5057,7 +5048,7 @@ def _start_api_if_installed(
     if child_status == 0:
         try:
             pid = int(API_PID_FILE.read_text().strip())
-            console.print(f"=> Restarting existing REST API (PID: {pid}) under watchdog...")
+            print_info(console, f"Restarting existing REST API (PID {pid}) under watchdog…")
             kill_tree(pid)
             time.sleep(1)
         except (ValueError, OSError):
@@ -5067,23 +5058,23 @@ def _start_api_if_installed(
         API_PID_FILE.unlink(missing_ok=True)
 
     if _wait_for_api(api_host, api_port, timeout_seconds=1.0):
-        console.print("[yellow]=> REST API is responding without the current watchdog; restarting it under watchdog.[/yellow]")
+        print_warning(console, "REST API is responding without the current watchdog; restarting it under watchdog.")
     stop_matching_sidecar_processes("mn-api", "REST API")
 
-    console.print(f"=> Starting mn-api watchdog (REST on port {api_port})...")
+    print_info(console, f"Starting mn-api watchdog (REST on port {api_port})…")
     try:
         p_api_watchdog = _start_api_watchdog(env)
     except FileNotFoundError:
-        console.print("[yellow]=> Warning: mn-api not found, skipping.[/yellow]")
+        print_warning(console, "mn-api was not found; skipping.")
         return False
     API_WATCHDOG_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
     API_WATCHDOG_PID_FILE.write_text(str(p_api_watchdog.pid))
     if _wait_for_api(api_host, api_port, timeout_seconds=10.0):
-        console.print(f"   [green][Started][/green] REST API watchdog (PID: {p_api_watchdog.pid})")
+        print_info(console, f"REST API watchdog is running (PID {p_api_watchdog.pid}).")
     else:
-        console.print(
-            f"   [yellow][Started][/yellow] REST API watchdog (PID: {p_api_watchdog.pid}); "
-            f"waiting for {_api_http_url(api_host, api_port)} to respond."
+        print_warning(
+            console,
+            f"REST API watchdog started (PID {p_api_watchdog.pid}); waiting for {_api_http_url(api_host, api_port)} to respond.",
         )
     return True
 
@@ -5300,15 +5291,15 @@ def _start_web_ui_if_installed(runtime_env: Optional[dict[str, str]] = None) -> 
         and child_status == 2
         and _wait_for_web_ui(web_ui_host, web_ui_port, timeout_seconds=1.0)
     ):
-        console.print("[yellow]=> Web UI is responding without the current watchdog; restarting it under watchdog.[/yellow]")
+        print_warning(console, "Web UI is responding without the current watchdog; restarting it under watchdog.")
         stopped_untracked = stop_matching_sidecar_processes("mn-web-ui-server", "Web UI")
     if watchdog_status == 0:
         if _wait_for_web_ui(web_ui_host, web_ui_port, timeout_seconds=5.0):
-            console.print("[yellow]=> Web UI watchdog is already running, skipping.[/yellow]")
+            print_warning(console, "Web UI watchdog is already running; skipping.")
             return True
         try:
             watchdog_pid = int(WEB_UI_WATCHDOG_PID_FILE.read_text().strip())
-            console.print("[yellow]=> Web UI watchdog is running, but the page is not responding; restarting it.[/yellow]")
+            print_warning(console, "Web UI watchdog is running, but the page is not responding; restarting it.")
             kill_tree(watchdog_pid)
             time.sleep(1)
         except (ValueError, OSError):
@@ -5321,7 +5312,7 @@ def _start_web_ui_if_installed(runtime_env: Optional[dict[str, str]] = None) -> 
     if child_status == 0:
         try:
             pid = int(WEB_UI_PID_FILE.read_text().strip())
-            console.print(f"=> Restarting existing Web UI (PID: {pid}) under watchdog...")
+            print_info(console, f"Restarting existing Web UI (PID {pid}) under watchdog…")
             kill_tree(pid)
             time.sleep(1)
         except (ValueError, OSError):
@@ -5333,19 +5324,19 @@ def _start_web_ui_if_installed(runtime_env: Optional[dict[str, str]] = None) -> 
     if not stopped_untracked:
         stop_matching_sidecar_processes("mn-web-ui-server", "Web UI")
 
-    console.print(f"=> Starting mn-web-ui watchdog (static server on {web_ui_host}:{web_ui_port})...")
+    print_info(console, f"Starting mn-web-ui watchdog (static server on {web_ui_host}:{web_ui_port})…")
     try:
         p_web_watchdog = _start_web_ui_watchdog(web_ui_dir, env, web_ui_host, web_ui_port)
     except FileNotFoundError:
-        console.print("[yellow]=> Warning: Python runtime not found, skipping Web UI.[/yellow]")
+        print_warning(console, "Python runtime was not found; skipping Web UI.")
         return False
     WEB_UI_WATCHDOG_PID_FILE.write_text(str(p_web_watchdog.pid))
     if _wait_for_web_ui(web_ui_host, web_ui_port, timeout_seconds=10.0):
-        console.print(f"   [green][Started][/green] Web UI watchdog (PID: {p_web_watchdog.pid})")
+        print_info(console, f"Web UI watchdog is running (PID {p_web_watchdog.pid}).")
     else:
-        console.print(
-            f"   [yellow][Started][/yellow] Web UI watchdog (PID: {p_web_watchdog.pid}); "
-            f"waiting for {_web_ui_http_url(web_ui_host, web_ui_port)} to respond."
+        print_warning(
+            console,
+            f"Web UI watchdog started (PID {p_web_watchdog.pid}); waiting for {_web_ui_http_url(web_ui_host, web_ui_port)} to respond.",
         )
     return True
 
@@ -5513,10 +5504,10 @@ def _start_server(
 ):
     if check_status(API_PID_FILE) == 0:
         if ip:
-            console.print("[red]Error: MirrorNeuron API is already running.[/red]")
-            console.print("Use 'mn runtime stop' to stop it first.")
+            print_error(console, "MirrorNeuron API is already running.")
+            print_info(console, "Use 'mn runtime stop' to stop it first.")
             raise typer.Exit(1)
-        console.print("[yellow]=> MirrorNeuron API is already running; checking runtime sidecars...[/yellow]")
+        print_warning(console, "MirrorNeuron API is already running; checking runtime sidecars.")
         compose_runtime = runtime_compose_available()
         env = _runtime_base_env(compose_runtime)
         for key, value in _runtime_grpc_tokens_from_running_container().items():
@@ -5542,9 +5533,9 @@ def _start_server(
                 )
             core_running = _docker_container_running("mirror-neuron-core")
             if not core_running:
-                console.print("=> MirrorNeuron Core is not running; starting Docker runtime (Compose)...")
+                print_info(console, "MirrorNeuron Core is not running; starting Docker runtime (Compose)…")
             elif _running_core_has_stale_grpc_tokens():
-                console.print("=> MirrorNeuron Core has stale gRPC tokens; recreating Docker runtime (Compose)...")
+                print_info(console, "MirrorNeuron Core has stale gRPC tokens; recreating Docker runtime (Compose)…")
                 force_runtime_recreate = True
             try:
                 compose_args = ["up", "-d"]
@@ -5553,9 +5544,9 @@ def _start_server(
                 _ensure_litellm_gateway_host_config()
                 subprocess.run(runtime_compose_cmd(*compose_args), check=True, stdout=subprocess.DEVNULL, env=env)
                 if not core_running:
-                    console.print("   [green][Started][/green] Docker runtime (Compose project: mirror-neuron)")
+                    print_info(console, "Docker runtime is running (Compose project: mirror-neuron).")
             except (FileNotFoundError, subprocess.CalledProcessError):
-                console.print("[red]Failed to start MirrorNeuron Docker runtime.[/red]")
+                print_error(console, "Failed to start MirrorNeuron Docker runtime.")
                 raise typer.Exit(1)
         env.setdefault("MN_API_HOST", _api_host())
         env.setdefault("MN_API_PORT", DEFAULT_API_PORT)
@@ -5570,7 +5561,7 @@ def _start_server(
                 f"{key} {active or '(unset)'} -> {expected or '(unset)'}"
                 for key, active, expected in api_mismatches
             )
-            console.print(f"[yellow]=> REST API runtime config changed; restarting API ({mismatch_details}).[/yellow]")
+            print_warning(console, f"REST API runtime config changed; restarting API ({mismatch_details}).")
         _start_api_if_installed(
             env,
             restart_running=bool(api_mismatches),
@@ -5583,7 +5574,7 @@ def _start_server(
         )
         web_ui_available = _start_web_ui_if_installed(env)
         endpoint_snapshot = _write_runtime_endpoints_file(env, web_ui_available=web_ui_available)
-        console.print(f"   Runtime endpoints: {RUNTIME_ENDPOINTS_FILE}")
+        print_info(console, f"Runtime endpoints: {RUNTIME_ENDPOINTS_FILE}")
         logger.info("Refreshed MirrorNeuron runtime endpoints: %s", endpoint_snapshot.get("api", {}))
         _print_service_endpoints(None, web_ui_available)
         return
@@ -5593,18 +5584,18 @@ def _start_server(
         try:
             docker_status = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", "mirror-neuron-core"], capture_output=True, text=True)
             if docker_status.stdout.strip() == "true":
-                console.print("[red]Error: MirrorNeuron Core (Docker) is already running.[/red]")
-                console.print("Use 'mn runtime stop' to stop it first.")
+                print_error(console, "MirrorNeuron Core (Docker) is already running.")
+                print_info(console, "Use 'mn runtime stop' to stop it first.")
                 raise typer.Exit(1)
         except FileNotFoundError:
-            console.print("[red]Error: Docker is not installed or not in PATH.[/red]")
+            print_error(console, "Docker is not installed or not in PATH.")
             raise typer.Exit(1)
 
     PID_DIR.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     if ip and not token:
-        console.print("[red]Error: mn node join requires --token from the main node.[/red]")
+        print_error(console, "mn node join requires --token from the main node.")
         raise typer.Exit(1)
 
     network_token = token or _resolve_network_token()
@@ -5889,7 +5880,7 @@ def _start_server(
 
     if compose_runtime:
         env = _compose_runtime_env(env, ip)
-        console.print("=> Starting MirrorNeuron Docker runtime (Compose)...")
+        print_info(console, "Starting MirrorNeuron Docker runtime (Compose)…")
         logger.info("Starting MirrorNeuron Docker Compose runtime")
         try:
             _ensure_litellm_gateway_host_config()
@@ -5897,12 +5888,12 @@ def _start_server(
             if not ip and not reconnecting_joined_node:
                 _force_compose_redis_primary()
                 _start_compose_sentinel(advertised_host, env)
-            console.print("   [green][Started][/green] Docker runtime (Compose project: mirror-neuron)")
+            print_info(console, "Docker runtime is running (Compose project: mirror-neuron).")
         except (FileNotFoundError, subprocess.CalledProcessError):
-            console.print("[red]Failed to start MirrorNeuron Docker Compose runtime.[/red]")
+            print_error(console, "Failed to start MirrorNeuron Docker Compose runtime.")
             raise typer.Exit(1)
     else:
-        console.print("=> Starting MirrorNeuron Core Service (Docker)...")
+        print_info(console, "Starting MirrorNeuron Core service (Docker)…")
         logger.info("Starting MirrorNeuron Core Docker container")
         subprocess.run(["docker", "rm", "-f", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
@@ -5915,12 +5906,12 @@ def _start_server(
 
         try:
             subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
-            console.print("   [green][Started][/green] Core Service (Docker: mirror-neuron-core)")
+            print_info(console, "Core service is running (Docker: mirror-neuron-core).")
         except subprocess.CalledProcessError:
-            console.print("[red]Failed to start Core Service Docker container.[/red]")
+            print_error(console, "Failed to start Core service Docker container.")
             raise typer.Exit(1)
 
-    console.print("=> Waiting for Elixir to boot...")
+    print_info(console, "Waiting for Elixir to boot…")
     time.sleep(3)
 
     _start_native_sdk_grpc_if_installed(env)
@@ -5929,7 +5920,7 @@ def _start_server(
     web_ui_available = _start_web_ui_if_installed(env)
     if api_started:
         endpoint_snapshot = _write_runtime_endpoints_file(env, web_ui_available=web_ui_available)
-        console.print(f"   Runtime endpoints: {RUNTIME_ENDPOINTS_FILE}")
+        print_info(console, f"Runtime endpoints: {RUNTIME_ENDPOINTS_FILE}")
         logger.info("Wrote MirrorNeuron runtime endpoints: %s", endpoint_snapshot.get("api", {}))
 
     _print_service_endpoints(ip, web_ui_available)

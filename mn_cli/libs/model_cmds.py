@@ -16,7 +16,7 @@ import typer
 from rich.table import Table
 
 from mn_cli.error_handler import handle_cli_error
-from mn_cli.libs.ui import print_confirmation, print_confirmed, print_success_confirmation
+from mn_cli.libs.ui import print_confirmation, print_confirmed, print_success_confirmation, print_warning
 from mn_cli.shared import client, config as cli_config, console, logger
 from mn_sdk import (
     Client,
@@ -234,7 +234,7 @@ def install_model(
         )
         if compatibility.get("warnings"):
             for warning in compatibility["warnings"]:
-                console.print(f"[yellow]Warning: {warning}[/yellow]")
+                print_warning(console, warning)
     except typer.Exit:
         raise
     except Exception as exc:
@@ -784,7 +784,7 @@ def _cluster_node_endpoints(*, quiet: bool = False) -> list[dict[str, Any]]:
         summary = json.loads(client.get_system_summary())
     except Exception as exc:
         if not quiet:
-            console.print(f"[yellow]Warning: could not inspect cluster nodes for LiteLLM gateway sync: {exc}[/yellow]")
+            print_warning(console, f"Could not inspect cluster nodes for LiteLLM gateway sync: {exc}")
         return []
     nodes = summary.get("nodes") if isinstance(summary, dict) else None
     endpoints: list[dict[str, Any]] = []
@@ -814,9 +814,7 @@ def _cluster_runtime_status_endpoints(*, quiet: bool = False) -> list[dict[str, 
         payload = json.loads(client.get_runtime_statuses())
     except Exception as exc:
         if not quiet:
-            console.print(
-                f"[yellow]Warning: could not read shared runtime node status: {exc}[/yellow]"
-            )
+            print_warning(console, f"Could not read shared runtime node status: {exc}")
         return []
 
     nodes = payload.get("nodes") if isinstance(payload, dict) else None
@@ -1027,7 +1025,7 @@ def _sync_gateway_best_effort(
         sync_litellm_gateway(runtime_endpoints=runtime_endpoints or {}, restart=restart)
     except Exception as exc:
         if not quiet:
-            console.print(f"[yellow]Warning: could not sync LiteLLM gateway: {exc}[/yellow]")
+            print_warning(console, f"Could not sync LiteLLM gateway: {exc}")
 
 
 def _sync_external_litellm_config_across_cluster(
@@ -1055,7 +1053,7 @@ def _sync_external_litellm_config_across_cluster(
         except Exception as exc:
             results.append({"node": node_name, "status": "error", "error": str(exc)})
             if not quiet:
-                console.print(f"[yellow]Warning: could not sync LiteLLM proxy config on {node_name}: {exc}[/yellow]")
+                print_warning(console, f"Could not sync LiteLLM proxy config on {node_name}: {exc}")
     return results
 
 
@@ -1094,7 +1092,7 @@ def _sync_gateway_runtime_endpoints_across_cluster(
         except Exception as exc:
             results.append({"node": node_name, "status": "error", "error": str(exc)})
             if not quiet:
-                console.print(f"[yellow]Warning: could not sync LiteLLM gateway on {node_name}: {exc}[/yellow]")
+                print_warning(console, f"Could not sync LiteLLM gateway on {node_name}: {exc}")
     return results
 
 
@@ -1210,9 +1208,7 @@ def reconcile_cluster_model_routes(
                 {"node": node_name, "status": "error", "error": str(exc)}
             )
             if not quiet:
-                console.print(
-                    f"[yellow]Warning: no synchronized runtime model status for {node_name}: {exc}[/yellow]"
-                )
+                print_warning(console, f"No synchronized runtime model status for {node_name}: {exc}")
         else:
             snapshot = _runtime_model_status_snapshot(node_endpoint)
             node_results.append(
@@ -1304,9 +1300,7 @@ def reconcile_cluster_model_routes(
                 local_result["status"] = "error"
                 local_result["error"] = str(exc)
             if not quiet:
-                console.print(
-                    f"[yellow]Warning: could not reconcile local cluster model routes: {exc}[/yellow]"
-                )
+                print_warning(console, f"Could not reconcile local cluster model routes: {exc}")
 
     model_ids = {
         str(endpoint.get("cluster_model_id") or endpoint.get("runtime_model") or key)
@@ -1625,7 +1619,7 @@ def _remove_gateway_route_across_cluster(
         except Exception as exc:
             results.append({"node": node_name, "status": "error", "error": str(exc)})
             if not quiet:
-                console.print(f"[yellow]Warning: could not remove LiteLLM route on {node_name}: {exc}[/yellow]")
+                print_warning(console, f"Could not remove LiteLLM route on {node_name}: {exc}")
     return results
 
 
@@ -1913,7 +1907,7 @@ def _start_litellm_proxy(
         if env_name in os.environ:
             args.extend(["-e", env_name])
         else:
-            console.print(f"[yellow]Warning: environment variable {env_name} is not set for the proxy container.[/yellow]")
+            print_warning(console, f"Environment variable {env_name} is not set for the proxy container.")
             args.extend(["-e", env_name])
     args.extend([image, "--config", "/app/config.yaml"])
     _docker(args, timeout=300)
@@ -2031,7 +2025,7 @@ def _record_runtime_model_install(entry: dict[str, Any]) -> None:
 
         record_runtime_model_install(entry)
     except Exception as exc:
-        console.print(f"[yellow]Warning: could not update runtime model advertisement: {exc}[/yellow]")
+        print_warning(console, f"Could not update runtime model advertisement: {exc}")
 
 
 def _entry_payload(

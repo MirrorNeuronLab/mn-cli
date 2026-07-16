@@ -89,7 +89,7 @@ def test_stream_bad_json(mocker, tmp_path):
     
     result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
     assert result.exit_code == 0
-    assert "Job Status: Failed" in result.stdout
+    assert "Status: Failed" in result.stdout
 
 def test_stream_all_events(mocker, tmp_path):
     events = [
@@ -110,7 +110,7 @@ def test_stream_all_events(mocker, tmp_path):
     
     result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
     assert result.exit_code == 0
-    assert "Job Status: Success" in result.stdout
+    assert "Status: Completed" in result.stdout
     assert "result.txt" in result.stdout
     assert "result_stream.txt" in result.stdout
 
@@ -131,7 +131,7 @@ def test_stream_cancelled_event_is_terminal(mocker, tmp_path, monkeypatch):
     result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
 
     assert result.exit_code == 0
-    assert "Job Status: Cancelled" in result.stdout
+    assert "Status: Cancelled" in result.stdout
     mock_get.assert_not_called()
 
 def test_stream_helper_cancelled_event_is_terminal_without_follow(mocker, tmp_path):
@@ -185,5 +185,5 @@ def test_post_submit_keyboard_interrupt_detaches_without_stopping_job(mocker, tm
 
     assert result.exit_code == 0
     assert "Detached from workflow UI. Job is still running." in result.stdout
-    assert "Run Detached" in result.stdout
+    assert "Run detached" in result.stdout
     assert "Running" in result.stdout

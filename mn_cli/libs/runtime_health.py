@@ -14,6 +14,7 @@ from mn_sdk.litellm_gateway import litellm_gateway_health, validate_litellm_gate
 from mn_sdk.model_runtime import DOCKER_MODEL_RUNNER_HOST_API_BASE, dmr_api_list_models
 
 from mn_cli.runtime_state import read_json_file
+from mn_cli.libs.ui import print_info
 from mn_cli.shared import client, console
 from mn_cli.server_cmds import (
     RUNTIME_ENDPOINTS_FILE,
@@ -406,10 +407,10 @@ def _repair_runtime_sidecars(report: dict[str, Any]) -> bool:
 
     changed = False
     if needs_api:
-        console.print("[yellow]=> Repair: restarting REST API sidecar...[/yellow]")
+        print_info(console, "Repairing REST API sidecar…")
         changed = _start_api_if_installed(env) or changed
     if needs_web_ui:
-        console.print("[yellow]=> Repair: restarting Web UI sidecar...[/yellow]")
+        print_info(console, "Repairing Web UI sidecar…")
         changed = _start_web_ui_if_installed(env) or changed
     if changed:
         _write_runtime_endpoints_file(env, web_ui_available=find_web_ui_dir() is not None)

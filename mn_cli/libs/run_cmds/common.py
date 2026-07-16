@@ -32,7 +32,10 @@ from mn_cli.libs.ui import (
     generate_run_submitted_panel,
     generate_summary_panel,
     print_confirmed,
+    print_error,
+    print_info,
     print_success_confirmation,
+    print_warning,
 )
 from mn_cli.libs.bundles import load_bundle_payloads
 from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress
@@ -159,10 +162,8 @@ _HELPER_COMPAT = (
 
 
 def _print_launch_progress(label: str, detail: str | None = None) -> None:
-    if detail:
-        console.print(f"[cyan]Launch:[/cyan] {label} - {detail}")
-    else:
-        console.print(f"[cyan]Launch:[/cyan] {label}")
+    message = f"{label} — {detail}" if detail else label
+    print_info(console, message)
 
 
 def _deep_merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -219,9 +220,7 @@ def _run_schedule_attrs(
     *, auto_schedule: bool, schedule: Optional[str]
 ) -> Optional[dict[str, Any]]:
     if auto_schedule and schedule:
-        console.print(
-            "[red]Error: pass either --auto-schedule or --schedule, not both.[/red]"
-        )
+        print_error(console, "Pass either --auto-schedule or --schedule, not both.")
         raise typer.Exit(1)
     if auto_schedule:
         return {
@@ -274,14 +273,12 @@ def _duration_ms_for_schedule(value: str) -> int:
 def _load_bundle_manifest(bundle_path: str) -> tuple[Path, Path, dict[str, Any]]:
     bundle_dir = Path(bundle_path)
     if not bundle_dir.is_dir():
-        console.print(
-            f"[red]Error: '{bundle_path}' is not a directory. Expected a bundle folder.[/red]"
-        )
+        print_error(console, f"'{bundle_path}' is not a directory. Expected a bundle folder.")
         raise typer.Exit(1)
 
     manifest_file = bundle_dir / "manifest.json"
     if not manifest_file.exists():
-        console.print(f"[red]Error: manifest.json not found in '{bundle_path}'[/red]")
+        print_error(console, f"manifest.json not found in '{bundle_path}'.")
         raise typer.Exit(1)
 
     with open(manifest_file, "r") as f:
@@ -299,17 +296,13 @@ def _configure_bundle_if_required(
 
     config_script = bundle_dir / "config.py"
     if not config_script.exists():
-        console.print(
-            "[red]Bundle requires configuration, but config.py was not found.[/red]"
-        )
+        print_error(console, "Bundle requires configuration, but config.py was not found.")
         raise typer.Exit(1)
 
-    console.print(
-        f"[yellow]Bundle requires configuration. Auto-running {config_script.name}...[/yellow]"
-    )
+    print_warning(console, f"Bundle requires configuration; auto-running {config_script.name}.")
     res = subprocess.run([sys.executable, config_script.name], cwd=bundle_dir)
     if res.returncode != 0:
-        console.print("[red]Configuration failed or cancelled. Aborting run.[/red]")
+        print_error(console, "Configuration failed or was cancelled; aborting run.")
         raise typer.Exit(1)
 
     with open(manifest_file, "r") as f:

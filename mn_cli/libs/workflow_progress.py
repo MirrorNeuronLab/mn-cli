@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from mn_sdk.workflow_progress import (
@@ -218,6 +219,40 @@ class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
         if step and not step.agents:
             table.add_row("- none declared -", step.goal or "workflow step", "-")
         return table
+
+
+def build_workflow_progress_snapshot(
+    manifest: dict[str, Any] | None,
+    events: list[dict[str, Any]] | None,
+    *,
+    job: dict[str, Any] | None = None,
+    summary: dict[str, Any] | None = None,
+    job_id: str | None = None,
+) -> dict[str, Any]:
+    """Build a monitor snapshot with the same model used by ``blueprint run``.
+
+    Runtime jobs retain their public workflow ledger separately from the lowered
+    agent topology.  Keeping this reconstruction here ensures the live runner
+    and the later monitor render the same public steps and agent contract.
+    """
+
+    job = job if isinstance(job, dict) else {}
+    summary = summary if isinstance(summary, dict) else {}
+    view = BlueprintWorkflowProgress(
+        manifest or {},
+        job_id=job_id or _first_nonempty_text(job, summary, keys=("job_id", "id")),
+        started_at=_job_started_at(job, summary),
+        job=job,
+        summary=summary,
+    )
+    for event in events or []:
+        if not isinstance(event, dict):
+            continue
+        view.record_event_token_usage(event)
+        view.update(event)
+    view.apply_workflow_state(_workflow_state_from(job, summary))
+    view.apply_job_status(job, summary)
+    return view.snapshot()
 
 
 def _step_icon(step: StepProgress, current: bool) -> str:
@@ -457,6 +492,45 @@ def _first_text(mapping: dict[str, Any], *keys: str) -> str | None:
         value = mapping.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
+    return None
+
+
+def _first_nonempty_text(
+    *mappings: dict[str, Any], keys: tuple[str, ...]
+) -> str | None:
+    for mapping in mappings:
+        if not isinstance(mapping, dict):
+            continue
+        value = _first_text(mapping, *keys)
+        if value:
+            return value
+    return None
+
+
+def _workflow_state_from(*mappings: dict[str, Any]) -> dict[str, Any] | None:
+    for mapping in mappings:
+        if not isinstance(mapping, dict):
+            continue
+        workflow_state = mapping.get("workflow_state")
+        if isinstance(workflow_state, dict):
+            return workflow_state
+    return None
+
+
+def _job_started_at(*mappings: dict[str, Any]) -> float | None:
+    for mapping in mappings:
+        if not isinstance(mapping, dict):
+            continue
+        for key in ("submitted_at", "started_at", "created_at", "created"):
+            value = mapping.get(key)
+            if isinstance(value, (int, float)):
+                return float(value)
+            if not isinstance(value, str) or not value.strip():
+                continue
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                continue
     return None
 
 

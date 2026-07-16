@@ -350,7 +350,7 @@ def test_blueprint_list_error(monkeypatch, tmp_path):
     _use_local_blueprint_source(monkeypatch, tmp_path)
     result = runner.invoke(app, ["blueprint", "list"])
     assert result.exit_code == 1
-    assert "Error reading blueprints index" in result.stdout
+    assert "Error: Could not read blueprints index" in result.stdout
 
 
 def test_print_run_table_wraps_on_narrow_console(monkeypatch):
@@ -1017,7 +1017,7 @@ def test_blueprint_doctor_rejects_invalid_target_combinations(mocker, tmp_path):
     result = runner.invoke(app, ["blueprint", "doctor", "bp-1", "--folder", str(bp_dir)])
 
     assert result.exit_code == 1
-    assert "pass either a blueprint ID or --folder" in result.stdout
+    assert "Pass either a blueprint ID or --folder" in result.stdout
     mock_doctor.assert_not_called()
 
 
@@ -1339,7 +1339,7 @@ def test_blueprint_run_not_found(mocker, tmp_path):
     
     result = runner.invoke(app, ["blueprint", "run", "bp-1"])
     assert result.exit_code == 1
-    assert "not found in index" in result.stdout
+    assert "was not found in the index" in result.stdout
 
 def test_blueprint_run_no_manifest(mocker, tmp_path):
     storage_dir = _default_blueprint_storage(tmp_path)

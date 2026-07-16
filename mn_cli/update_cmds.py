@@ -18,7 +18,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 
-from mn_cli.libs.ui import print_confirmed, print_success_confirmation
+from mn_cli.libs.ui import print_confirmed, print_info, print_success_confirmation
 from mn_cli.runtime_state import read_json_object
 from mn_cli.server_cmds import DIR, WEB_UI_DIRS, _start_server
 
@@ -226,7 +226,7 @@ def perform_update(available: list[dict[str, str]] | None = None) -> None:
         print_confirmed(console, "MirrorNeuron update", status="up to date")
         return
 
-    console.print("=> Stopping MirrorNeuron components...")
+    print_info(console, "Stopping MirrorNeuron components…")
     from mn_cli.libs.sys_cmds import stop
 
     stop()
@@ -248,7 +248,7 @@ def perform_update(available: list[dict[str, str]] | None = None) -> None:
         details={"Components": ", ".join(item["component"] for item in available)},
         next_steps="mn runtime health",
     )
-    console.print("=> Restarting MirrorNeuron...")
+    print_info(console, "Restarting MirrorNeuron…")
     _start_server()
 
 
@@ -357,7 +357,7 @@ def _docker_platform() -> str:
 
 
 def _update_python_packages() -> None:
-    console.print("=> Updating Python packages from PyPI...")
+    print_info(console, "Updating Python packages from PyPI…")
     subprocess.run(
         [
             sys.executable,
@@ -372,7 +372,7 @@ def _update_python_packages() -> None:
 
 
 def _update_web_ui() -> None:
-    console.print("=> Updating Web UI from npm...")
+    print_info(console, "Updating Web UI from npm…")
     for web_ui_dir in WEB_UI_DIRS:
         if (web_ui_dir / "package.json").exists():
             subprocess.run(
@@ -461,7 +461,7 @@ def _clear_core_install_dir(install_dir: Path) -> None:
 
 
 def _update_core() -> None:
-    console.print("=> Updating MirrorNeuron core from GitHub Release...")
+    print_info(console, "Updating MirrorNeuron core from GitHub Release…")
     release = _github_latest_release()
     tag = release["tag_name"]
     platform = _docker_platform()

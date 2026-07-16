@@ -21,23 +21,19 @@ def validate(
         output_format = _normalize_validation_output(output)
         bundle_dir = Path(bundle_path)
         if not bundle_dir.is_dir():
-            console.print(
-                f"[red]Error: '{bundle_path}' is not a directory. Expected a bundle folder.[/red]"
-            )
+            print_error(console, f"'{bundle_path}' is not a directory. Expected a bundle folder.")
             raise typer.Exit(1)
 
         manifest_file = bundle_dir / "manifest.json"
         if not manifest_file.exists():
-            console.print(
-                f"[red]Error: manifest.json not found in '{bundle_path}'[/red]"
-            )
+            print_error(console, f"manifest.json not found in '{bundle_path}'.")
             raise typer.Exit(1)
 
         with open(manifest_file, "r") as f:
             try:
                 manifest = json.load(f)
             except json.JSONDecodeError as e:
-                console.print(f"[red]Error: manifest.json is not valid JSON. {e}[/red]")
+                print_error(console, f"manifest.json is not valid JSON: {e}")
                 raise typer.Exit(1)
 
         if is_manifest_source(manifest):
@@ -64,20 +60,16 @@ def validate(
             required_keys = ["manifest_version", "graph_id", "job_name", "entrypoints", "nodes"]
             missing = [k for k in required_keys if k not in manifest]
             if missing:
-                console.print(
-                    f"[red]Error: manifest.json is missing required keys: {', '.join(missing)}[/red]"
-                )
+                print_error(console, f"manifest.json is missing required keys: {', '.join(missing)}")
                 raise typer.Exit(1)
             if not isinstance(manifest.get("nodes"), type([])):
-                console.print("[red]Error: 'nodes' must be a list in manifest.json[/red]")
+                print_error(console, "'nodes' must be a list in manifest.json.")
                 raise typer.Exit(1)
 
         if "requiredContextEngine" in manifest and not isinstance(
             manifest.get("requiredContextEngine"), bool
         ):
-            console.print(
-                "[red]Error: 'requiredContextEngine' must be true or false in manifest.json[/red]"
-            )
+            print_error(console, "'requiredContextEngine' must be true or false in manifest.json.")
             raise typer.Exit(1)
 
         python_environment_errors = validate_python_environments(bundle_dir, manifest)

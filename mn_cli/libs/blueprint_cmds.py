@@ -49,7 +49,7 @@ from mn_cli.libs.blueprint_resources import (
     default_python_envs_dir as _default_python_envs_dir,
     default_runs_root as _default_runs_root,
 )
-from mn_cli.libs.ui import print_confirmed, print_success_confirmation
+from mn_cli.libs.ui import print_confirmed, print_error, print_success_confirmation, print_warning
 from mn_cli.shared import console, logger
 from mn_cli.terminal import use_progress
 from mn_cli.libs.run_cmds import doctor_bundle as _doctor_bundle
@@ -110,13 +110,13 @@ def _is_python_source_blueprint(manifest: dict[str, Any]) -> bool:
 def _load_blueprint_manifest(blueprint_dir: Path, target_name: str) -> dict[str, Any]:
     manifest_path = blueprint_dir / "manifest.json"
     if not manifest_path.exists():
-        console.print(f"[red]Error: Blueprint '{target_name}' is missing manifest.json. Validation failed.[/red]")
+        print_error(console, f"Blueprint '{target_name}' is missing manifest.json. Validation failed.")
         raise typer.Exit(1)
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except Exception as exc:
         logger.exception("Error parsing blueprint manifest")
-        console.print(f"[red]Error parsing manifest.json for blueprint '{target_name}': {exc}[/red]")
+        print_error(console, f"Could not parse manifest.json for blueprint '{target_name}': {exc}")
         raise typer.Exit(1)
     if isinstance(manifest, dict) and _is_manifest_source(manifest):
         return _expand_manifest_source(manifest, root_dir=blueprint_dir)
@@ -358,7 +358,7 @@ def _reject_local_blueprint_path(target: str, *, command: str = "run") -> None:
     blueprint_dir = Path(target).expanduser()
     if not blueprint_dir.exists():
         return
-    console.print("[red]Error: local folders must be passed with --folder.[/red]")
+    print_error(console, "local folders must be passed with --folder.")
     console.print(f"Use [bold]mn blueprint {command} --folder {blueprint_dir}[/bold] for a local blueprint folder.")
     raise typer.Exit(1)
 
@@ -566,7 +566,7 @@ def blueprint_list(ctx: typer.Context):
             )
         )
     except ValueError as exc:
-        console.print(f"[red]Error: {exc}[/red]")
+        print_error(console, exc)
         raise typer.Exit(1)
     index_path = storage_dir / "index.json"
     try:
@@ -582,7 +582,7 @@ def blueprint_list(ctx: typer.Context):
         console.print(table)
     except BlueprintIndexError as e:
         logger.exception("Error reading blueprint index")
-        console.print(f"[red]Error reading blueprints index: {e}[/red]")
+        print_error(console, f"Could not read blueprints index: {e}")
         raise typer.Exit(1)
 
 def run_catalog_blueprint(
@@ -616,7 +616,7 @@ def run_catalog_blueprint(
             revision=revision,
         )
     except ValueError as exc:
-        console.print(f"[red]Error: {exc}[/red]")
+        print_error(console, exc)
         raise typer.Exit(1)
     
     index_path = Path(storage_dir) / "index.json"
@@ -624,7 +624,7 @@ def run_catalog_blueprint(
         blueprints = _load_blueprint_index(index_path, require_paths=True)
     except BlueprintIndexError as e:
         logger.exception("Error parsing blueprint index")
-        console.print(f"[red]Error: {e}[/red]")
+        print_error(console, e)
         raise typer.Exit(1)
         
     target_bp = None
@@ -634,7 +634,7 @@ def run_catalog_blueprint(
             break
             
     if not target_bp:
-        console.print(f"[red]Error: Blueprint '{blueprint_name}' not found in index.[/red]")
+        print_error(console, f"Blueprint '{blueprint_name}' was not found in the index.")
         raise typer.Exit(1)
         
     bp_path = os.path.join(storage_dir, target_bp.get("path"))
@@ -813,7 +813,7 @@ def doctor_catalog_blueprint(
             revision=revision,
         )
     except ValueError as exc:
-        console.print(f"[red]Error: {exc}[/red]")
+        print_error(console, exc)
         raise typer.Exit(1)
 
     index_path = Path(storage_dir) / "index.json"
@@ -821,7 +821,7 @@ def doctor_catalog_blueprint(
         blueprints = _load_blueprint_index(index_path, require_paths=True)
     except BlueprintIndexError as e:
         logger.exception("Error parsing blueprint index")
-        console.print(f"[red]Error: {e}[/red]")
+        print_error(console, e)
         raise typer.Exit(1)
 
     target_bp = None
@@ -831,7 +831,7 @@ def doctor_catalog_blueprint(
             break
 
     if not target_bp:
-        console.print(f"[red]Error: Blueprint '{blueprint_name}' not found in index.[/red]")
+        print_error(console, f"Blueprint '{blueprint_name}' was not found in the index.")
         raise typer.Exit(1)
 
     bp_path = Path(storage_dir) / str(target_bp.get("path"))
@@ -1099,7 +1099,7 @@ def blueprint_doctor(
 ) -> None:
     """Diagnose a catalog blueprint or local folder without submitting a job."""
     if folder and target:
-        console.print("[red]Error: pass either a blueprint ID or --folder, not both.[/red]")
+        print_error(console, "Pass either a blueprint ID or --folder, not both.")
         raise typer.Exit(1)
 
     if folder:
@@ -1116,14 +1116,14 @@ def blueprint_doctor(
         return
 
     if not target:
-        console.print("[red]Error: mn blueprint doctor expects a blueprint ID or --folder <path>.[/red]")
+        print_error(console, "mn blueprint doctor expects a blueprint ID or --folder <path>.")
         console.print("Use [bold]mn blueprint doctor <blueprint-id>[/bold] for catalog blueprints.")
         console.print("Use [bold]mn blueprint doctor --folder <path>[/bold] for local blueprint or bundle folders.")
         raise typer.Exit(1)
 
     target_path = Path(target).expanduser()
     if target_path.exists():
-        console.print("[red]Error: local folders must be passed with --folder.[/red]")
+        print_error(console, "local folders must be passed with --folder.")
         console.print(f"Use [bold]mn blueprint doctor --folder {target_path}[/bold].")
         raise typer.Exit(1)
 
@@ -1262,11 +1262,11 @@ def blueprint_run(
 ):
     """Run a catalog blueprint, or a local folder with --folder."""
     if auto_schedule and schedule:
-        console.print("[red]Error: pass either --auto-schedule or --schedule, not both.[/red]")
+        print_error(console, "Pass either --auto-schedule or --schedule, not both.")
         raise typer.Exit(1)
 
     if folder and target:
-        console.print("[red]Error: pass either a blueprint ID or --folder, not both.[/red]")
+        print_error(console, "Pass either a blueprint ID or --folder, not both.")
         raise typer.Exit(1)
 
     if folder:
@@ -1287,14 +1287,14 @@ def blueprint_run(
         return
 
     if not target:
-        console.print("[red]Error: mn blueprint run expects a blueprint ID or --folder <path>.[/red]")
+        print_error(console, "mn blueprint run expects a blueprint ID or --folder <path>.")
         console.print("Use [bold]mn blueprint run <blueprint-id>[/bold] for catalog blueprints.")
         console.print("Use [bold]mn blueprint run --folder <path>[/bold] for local blueprint or bundle folders.")
         raise typer.Exit(1)
 
     target_path = Path(target).expanduser()
     if target_path.exists():
-        console.print("[red]Error: local folders must be passed with --folder.[/red]")
+        print_error(console, "local folders must be passed with --folder.")
         console.print(f"Use [bold]mn blueprint run --folder {target_path}[/bold].")
         raise typer.Exit(1)
 
@@ -1341,7 +1341,7 @@ def blueprint_install(
     try:
         repo_source, uses_default_repo = _resolved_blueprint_source(source=source, blueprint_repo=blueprint_repo)
     except ValueError as exc:
-        console.print(f"[red]Error: {exc}[/red]")
+        print_error(console, exc)
         raise typer.Exit(1)
     storage_dir = (
         _blueprint_cache_dir_for_repo(repo_source)
@@ -1361,7 +1361,7 @@ def blueprint_install(
     try:
         _load_blueprint_index(storage_dir / "index.json")
     except BlueprintIndexError as e:
-        console.print(f"[red]Error: {e}[/red]")
+        print_error(console, e)
         raise typer.Exit(1)
     print_success_confirmation(
         console,
@@ -1391,7 +1391,7 @@ def _install_catalog_blueprint_with_models(
             )
         )
     except ValueError as exc:
-        console.print(f"[red]Error: {exc}[/red]")
+        print_error(console, exc)
         raise typer.Exit(1)
     entry = _blueprint_entry_from_storage(storage_dir, blueprint_id)
     bundle_root = _blueprint_bundle_root_from_entry(storage_dir, entry)
@@ -1400,7 +1400,7 @@ def _install_catalog_blueprint_with_models(
     try:
         install_source, _uses_default_repo = _resolved_blueprint_source(source=source, blueprint_repo=blueprint_repo)
     except ValueError as exc:
-        console.print(f"[red]Error: {exc}[/red]")
+        print_error(console, exc)
         raise typer.Exit(1)
     model_summary = _install_blueprint_model_dependencies(
         blueprint_id=blueprint_id,
@@ -1605,7 +1605,7 @@ def _blueprint_entry_from_storage(storage_dir: Path, blueprint_id: str) -> dict[
     try:
         entries = _load_blueprint_index(storage_dir / "index.json", require_paths=True)
     except BlueprintIndexError as exc:
-        console.print(f"[red]Error: {exc}[/red]")
+        print_error(console, exc)
         raise typer.Exit(1)
     for entry in entries:
         if entry.get("id") == blueprint_id:
@@ -1786,7 +1786,7 @@ def blueprint_update(
         try:
             repo_source, uses_default_repo = _resolved_blueprint_source(source=None, blueprint_repo=None)
         except ValueError as exc:
-            console.print(f"[red]Error: {exc}[/red]")
+            print_error(console, exc)
             raise typer.Exit(1)
         storage_dir = _default_blueprint_storage_dir() if uses_default_repo else _blueprint_storage_dir_for_source(repo_source)
     if not storage_dir.exists():
@@ -1797,7 +1797,7 @@ def blueprint_update(
     try:
         _load_blueprint_index(storage_dir / "index.json")
     except BlueprintIndexError as e:
-        console.print(f"[red]Error: {e}[/red]")
+        print_error(console, e)
         raise typer.Exit(1)
     after_ids = _blueprint_ids_from_storage(storage_dir)
     removed_ids = before_ids - after_ids
@@ -2014,7 +2014,7 @@ def _print_cleanup_summary(summary: dict[str, Any] | None) -> None:
             status="no resources matched",
         )
     for error in errors:
-        console.print(f"[yellow]Cleanup warning: {error}[/yellow]")
+        print_warning(console, f"Cleanup: {error}")
 
 
 @blueprint_app.command("monitor")
