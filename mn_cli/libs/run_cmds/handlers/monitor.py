@@ -375,16 +375,19 @@ def _live_monitor_api_stream(job_id: str) -> bool:
             transient=bool(is_tty and getattr(console, "is_terminal", False)),
         ):
             while True:
+                if not _handle_live_workflow_key(
+                    monitor_state,
+                    view.data,
+                    is_tty=is_tty,
+                    select_module=select,
+                    block_seconds=0.05 if is_tty else 0.0,
+                ):
+                    # A handled detach must not fall through to the polling
+                    # monitor in _live_monitor.
+                    return True
                 try:
-                    kind, payload = event_queue.get(timeout=0.5)
+                    kind, payload = event_queue.get(timeout=0.05 if is_tty else 0.5)
                 except queue.Empty:
-                    if not _handle_live_workflow_key(
-                        monitor_state,
-                        view.data,
-                        is_tty=is_tty,
-                        select_module=select,
-                    ):
-                        return False
                     continue
                 if kind == "error":
                     if not saw_snapshot:
@@ -403,12 +406,14 @@ def _live_monitor_api_stream(job_id: str) -> bool:
                     }
                     if str(progress.get("status") or "").lower() in FINAL_STATUSES:
                         break
-        return saw_snapshot
+    except KeyboardInterrupt:
+        return True
     finally:
         if is_tty and old_settings:
             import termios
 
             termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
+    return saw_snapshot
 
 def _live_monitor(job_id: str):
     if _live_monitor_api_stream(job_id):

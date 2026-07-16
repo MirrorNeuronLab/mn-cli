@@ -22,30 +22,30 @@ ConfirmationDetails = Union[Mapping[str, Any], Iterable[tuple[str, Any]]]
 
 
 class JobMonitorState:
-    def __init__(self, allow_ctrl_d: bool = True) -> None:
+    def __init__(self) -> None:
         self.selected_index = 0
         self.detail_mode = False
-        self.allow_ctrl_d = allow_ctrl_d
 
     def handle_key(self, key: str, agent_count: int) -> bool:
-        if key in {"q", "Q", "\x03"}:
+        """Apply one of the monitor's supported keys.
+
+        The same small key contract is used by both the blueprint-run and job
+        monitor UIs.  Unknown keys are deliberately ignored so the monitor
+        cannot accidentally retain the old, partially supported shortcuts.
+        """
+        if key in {"q", "\x03"}:
             return False
-        if key == "\x04":
-            return not self.allow_ctrl_d
-        if key in {"j", "J", "\t", "\x1b[B"}:
+        if key == "\x1b[B":
             self.selected_index = min(self.selected_index + 1, max(agent_count - 1, 0))
             return True
-        if key in {"k", "K", "\x1b[A"}:
+        if key == "\x1b[A":
             self.selected_index = max(self.selected_index - 1, 0)
             return True
-        if key in {"d", "D", "\r", "\n"}:
+        if key in {"\r", "\n"}:
             self.detail_mode = True
             return True
-        if key in {"o", "O", "\x1b"}:
+        if key in {"\x08", "\x7f"}:
             self.detail_mode = False
-            return True
-        if key.isdigit() and key != "0":
-            self.selected_index = min(int(key) - 1, max(agent_count - 1, 0))
             return True
         return True
 
@@ -54,11 +54,7 @@ class JobMonitorState:
 
 
 def _monitor_footer_text(state: Optional[JobMonitorState] = None) -> str:
-    allow_ctrl_d = True
-    if state is not None:
-        allow_ctrl_d = bool(getattr(state, "allow_ctrl_d", True))
-    detach_text = "q or Ctrl+C detach" if not allow_ctrl_d else "q or Ctrl+D/Ctrl+C detach"
-    return f"keys: j/k or arrows select agent, Enter/d details, 1-9 jump, o overview, {detach_text}"
+    return "keys: ↑/↓ select agent, Enter details, Backspace overview, q or Ctrl+C detach"
 
 
 def print_success_confirmation(

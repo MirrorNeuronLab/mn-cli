@@ -343,8 +343,13 @@ def test_workflow_renderer_shared_between_live_monitor_and_blueprint_run_paths()
     assert "Research" in job_monitor_view
     assert "run used 100 tok" in workflow_view
     assert "run used 100 tok" in job_monitor_view
+    controls = "keys: ↑/↓ select agent, Enter details, Backspace overview, q or Ctrl+C detach"
+    assert controls in workflow_view
+    assert controls in job_monitor_view
+    assert "j/k" not in workflow_view
+    assert "j/k" not in job_monitor_view
 
-def test_blueprint_workflow_monitor_disables_ctrl_d():
+def test_blueprint_workflow_monitor_uses_shared_detach_keys():
     progress = {
         "workflow_id": "blueprint-no-ctrld",
         "workflow_kind": "batch",
@@ -363,7 +368,7 @@ def test_blueprint_workflow_monitor_disables_ctrl_d():
         ],
     }
 
-    state = JobMonitorState(allow_ctrl_d=False)
+    state = JobMonitorState()
     console = Console(record=True, width=140)
     console.print(
         generate_live_layout(
@@ -375,8 +380,9 @@ def test_blueprint_workflow_monitor_disables_ctrl_d():
     output = console.export_text()
 
     assert state.handle_key("\x04", 0) is True
+    assert state.handle_key("\x03", 0) is False
     assert "q or Ctrl+C detach" in output
-    assert "Ctrl+D/Ctrl+C" not in output
+    assert "Ctrl+D" not in output
 
 def test_workflow_token_tracking_prefers_usage_fields_and_ignores_budget_only_payloads():
     manifest = {
@@ -437,9 +443,9 @@ def test_workflow_token_tracking_prefers_usage_fields_and_ignores_budget_only_pa
 
 def test_workflow_monitor_state_controls_with_shared_renderer():
     state = JobMonitorState()
-    assert state.handle_key("j", 2) is True
+    assert state.handle_key("\x1b[B", 2) is True
     assert state.selected_index == 1
-    assert state.handle_key("d", 2) is True
+    assert state.handle_key("\r", 2) is True
     assert state.detail_mode is True
 
     console = Console(record=True, width=180, force_terminal=False)
@@ -485,6 +491,6 @@ def test_workflow_monitor_state_controls_with_shared_renderer():
     assert "Agent Detail" in output
     assert "agent-b" in output
     assert "Finish B" in output
-    assert state.handle_key("o", 2) is True
+    assert state.handle_key("\x7f", 2) is True
     assert state.detail_mode is False
-    assert state.handle_key("\x04", 2) is False
+    assert state.handle_key("\x04", 2) is True

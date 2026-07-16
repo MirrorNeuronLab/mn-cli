@@ -227,7 +227,7 @@ def _stream_and_format_workflow_events(
         else follow_seconds
     )
     view = BlueprintWorkflowProgress(manifest, job_id=job_id)
-    monitor_state = JobMonitorState(allow_ctrl_d=False)
+    monitor_state = JobMonitorState()
     view.set_monitor_state(monitor_state)
     progress_stream = ProgressSnapshotStream(view)
     status_text = "running"
@@ -246,6 +246,38 @@ def _stream_and_format_workflow_events(
     else:
         select_module = None
 
+    detached = False
+
+    def process_event(event_json: str) -> bool:
+        nonlocal status_text, web_ui_url
+
+        event = json.loads(event_json)
+        if event.get("type") == "stream_heartbeat":
+            return False
+
+        log_writer.write_event_json(event_json)
+        _write_result_stream_event(log_dir, event)
+        web_ui_url = log_writer.record_web_ui_url(event)
+        if web_ui_url:
+            view._remember(f"Blueprint Web UI: {web_ui_url}")
+        view.record_event_token_usage(event)
+        should_render = progress_stream.observe_event(event)
+        if live is not None and should_render:
+            live.update(view.render())
+
+        event_type = event.get("type")
+        if event_type == "job_completed":
+            result = event.get("result")
+            if result is not None:
+                with open(log_dir / "result.txt", "w") as f_res:
+                    json.dump(result, f_res, indent=2)
+            status_text = "completed"
+        elif event_type == "job_failed":
+            status_text = "failed"
+        elif event_type == "job_cancelled":
+            status_text = "cancelled"
+        return event_type in {"job_completed", "job_failed", "job_cancelled"}
+
     try:
         if is_tty:
             live = Live(
@@ -257,55 +289,104 @@ def _stream_and_format_workflow_events(
             )
             live.start()
         try:
-            try:
-                for event_json in client.stream_events(job_id, follow=True, timeout=None, heartbeat_interval_ms=5000):
+            if is_tty:
+                # The SDK stream blocks while a job is quiet. Read terminal
+                # input on the main thread while consuming the stream in a
+                # daemon worker so navigation and detach stay responsive.
+                import queue
+                import threading
+
+                event_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
+                stop_stream = threading.Event()
+                stream = iter(
+                    client.stream_events(
+                        job_id,
+                        follow=True,
+                        timeout=None,
+                        heartbeat_interval_ms=5000,
+                    )
+                )
+
+                def consume_stream() -> None:
                     try:
-                        event = json.loads(event_json)
-                        if event.get("type") == "stream_heartbeat":
-                            continue
-                        log_writer.write_event_json(event_json)
-                        _write_result_stream_event(log_dir, event)
-                        web_ui_url = log_writer.record_web_ui_url(event)
-                        if web_ui_url:
-                            view._remember(f"Blueprint Web UI: {web_ui_url}")
-                        view.record_event_token_usage(event)
-                        should_render = progress_stream.observe_event(event)
-                        if live is not None and should_render:
-                            live.update(view.render())
+                        for event_json in stream:
+                            if stop_stream.is_set():
+                                break
+                            event_queue.put(("event", event_json))
+                    except BaseException as exc:
+                        if not stop_stream.is_set():
+                            event_queue.put(("error", exc))
+                    finally:
+                        event_queue.put(("done", None))
 
-                        event_type = event.get("type")
-                        if event_type == "job_completed":
-                            result = event.get("result")
-                            if result is not None:
-                                with open(log_dir / "result.txt", "w") as f_res:
-                                    json.dump(result, f_res, indent=2)
-                            status_text = "completed"
-                            break
-                        if event_type == "job_failed":
-                            status_text = "failed"
-                            break
-                        if event_type == "job_cancelled":
-                            status_text = "cancelled"
-                            break
-
-                        if select_module is not None and not _handle_live_workflow_key(
+                stream_worker = threading.Thread(target=consume_stream, daemon=True)
+                stream_worker.start()
+                try:
+                    stream_finished = False
+                    while not stream_finished and status_text not in FINAL_STATUSES:
+                        if not _handle_live_workflow_key(
                             monitor_state,
                             {"workflow_progress": view.snapshot()},
                             select_module=select_module,
                             is_tty=True,
+                            block_seconds=0.05,
                         ):
-                            status_text = "unknown"
+                            detached = True
                             break
-                    except Exception:
-                        log_writer.run_logger.exception("Failed to process streamed event")
-                    if live is not None and progress_stream.flush_due():
-                        live.update(view.render())
-            except Exception:
-                log_writer.run_logger.exception(
-                    "Workflow event stream failed; falling back to status polling"
-                )
 
-            if status_text not in FINAL_STATUSES:
+                        try:
+                            kind, payload = event_queue.get_nowait()
+                        except queue.Empty:
+                            if live is not None and progress_stream.flush_due():
+                                live.update(view.render())
+                            continue
+
+                        if kind == "error":
+                            log_writer.run_logger.warning(
+                                "Workflow event stream failed; falling back to status polling: %s",
+                                payload,
+                            )
+                            stream_finished = True
+                        elif kind == "done":
+                            stream_finished = True
+                        elif kind == "event":
+                            try:
+                                process_event(str(payload))
+                            except Exception:
+                                log_writer.run_logger.exception("Failed to process streamed event")
+                            if live is not None and progress_stream.flush_due():
+                                live.update(view.render())
+                finally:
+                    stop_stream.set()
+                    close_stream = getattr(stream, "close", None)
+                    if callable(close_stream):
+                        try:
+                            close_stream()
+                        except Exception:
+                            pass
+            else:
+                try:
+                    for event_json in client.stream_events(
+                        job_id,
+                        follow=True,
+                        timeout=None,
+                        heartbeat_interval_ms=5000,
+                    ):
+                        try:
+                            if process_event(event_json):
+                                break
+                        except Exception:
+                            log_writer.run_logger.exception("Failed to process streamed event")
+                        if live is not None and progress_stream.flush_due():
+                            live.update(view.render())
+                except Exception:
+                    log_writer.run_logger.exception(
+                        "Workflow event stream failed; falling back to status polling"
+                    )
+
+            if detached:
+                status_text, _data = _follow_job_events(job_id, log_writer, 0)
+            elif status_text not in FINAL_STATUSES:
                 status_text = _follow_workflow_job_events(
                     job_id,
                     log_writer,

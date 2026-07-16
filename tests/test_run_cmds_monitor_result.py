@@ -1,3 +1,4 @@
+import io
 import json
 import logging
 import os
@@ -15,6 +16,7 @@ from mn_cli.main import app
 from mn_cli.libs import model_cmds, run_cmds
 from mn_cli.libs.ui import JobMonitorState, _agent_table, _workflow_agent_table, generate_live_layout
 from mn_cli.libs.run_cmds.handlers.monitor import _workflow_progress_for_monitor
+from mn_cli.libs.run_cmds.live import _read_monitor_key
 from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress, _agent_progress_detail
 from mn_cli.libs.run_manifest import prepare_manifest_for_submission
 from mn_sdk import AgentProgress, load_model_ownership, load_model_remotes, upsert_model_remote
@@ -45,14 +47,14 @@ def test_monitor_success(mocker):
     
     assert result.exit_code == 0
     assert "Workflow Job Monitor" in result.stdout
-    assert "keys: j/k or arrows select agent" in result.stdout
+    assert "keys: ↑/↓ select agent" in result.stdout
     assert "Job summary" in result.stdout
 
 def test_job_monitor_keyboard_state_and_agent_detail():
     state = JobMonitorState()
-    assert state.handle_key("j", 2) is True
+    assert state.handle_key("\x1b[B", 2) is True
     assert state.selected_index == 1
-    assert state.handle_key("d", 2) is True
+    assert state.handle_key("\r", 2) is True
     assert state.detail_mode is True
 
     console = Console(record=True, width=160, force_terminal=False)
@@ -82,10 +84,39 @@ def test_job_monitor_keyboard_state_and_agent_detail():
     assert "a2" in output
     assert "Inspect document batch" in output
 
-    assert state.handle_key("o", 2) is True
+    assert state.handle_key("\x7f", 2) is True
     assert state.detail_mode is False
-    assert state.handle_key("\x04", 2) is False
+    assert state.handle_key("\x04", 2) is True
     assert state.handle_key("q", 2) is False
+
+
+def test_job_monitor_ignores_legacy_shortcuts_and_accepts_only_shared_keys():
+    state = JobMonitorState()
+
+    for key in ("j", "k", "d", "1", "o", "\t", "\x04"):
+        assert state.handle_key(key, 3) is True
+    assert state.selected_index == 0
+    assert state.detail_mode is False
+
+    assert state.handle_key("\x1b[B", 3) is True
+    assert state.selected_index == 1
+    assert state.handle_key("\x1b[A", 3) is True
+    assert state.selected_index == 0
+    assert state.handle_key("\n", 3) is True
+    assert state.detail_mode is True
+    assert state.handle_key("\x08", 3) is True
+    assert state.detail_mode is False
+    assert state.handle_key("\x03", 3) is False
+
+
+def test_monitor_key_reader_preserves_arrow_escape_sequences():
+    class ReadyWhenData:
+        def select(self, readers, _writers, _errors, _timeout):
+            stream = readers[0]
+            return (readers, [], []) if stream.tell() < len(payload) else ([], [], [])
+
+    payload = "\x1b[A"
+    assert _read_monitor_key(io.StringIO(payload), ReadyWhenData()) == payload
 
 
 def test_monitor_uses_public_workflow_contract_and_hides_runtime_nodes(mocker):
