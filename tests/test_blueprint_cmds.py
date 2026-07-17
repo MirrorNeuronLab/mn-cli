@@ -4,6 +4,7 @@ from pathlib import Path
 from io import StringIO
 from rich.console import Console
 import typer
+from typer.main import get_command
 from typer.testing import CliRunner
 from mn_cli.main import app
 from mn_cli.libs import blueprint_cmds
@@ -988,8 +989,10 @@ def test_blueprint_run_help_lists_repeatable_set_option():
     result = runner.invoke(app, ["blueprint", "run", "--help"])
 
     assert result.exit_code == 0
-    assert "--set" in result.output
-    assert "PATH=VALUE" in result.output
+    command = get_command(app).commands["blueprint"].commands["run"]
+    set_option = next(parameter for parameter in command.params if parameter.name == "set_values")
+    assert "--set" in set_option.opts
+    assert set_option.metavar == "PATH=VALUE"
 
 
 def test_blueprint_run_set_is_forwarded_to_scheduled_bundle(mocker, tmp_path):

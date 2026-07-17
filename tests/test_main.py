@@ -2,6 +2,7 @@ from importlib import metadata
 import json
 
 import pytest
+from typer.main import get_command
 from typer.testing import CliRunner
 
 from mn_cli.banner import format_banner
@@ -142,8 +143,9 @@ def test_cancel_all_help_documents_confirmation_bypass():
 
     assert result.exit_code == 0
     assert "Cancel all active jobs" in result.stdout
-    assert "--yes" in result.output
-    assert "-y" in result.output
+    command = get_command(app).commands["job"].commands["cancel-all"]
+    option_names = {option for parameter in command.params for option in parameter.opts}
+    assert {"--yes", "-y"}.issubset(option_names)
 
 
 def test_command_help_includes_argument_description_and_examples():
