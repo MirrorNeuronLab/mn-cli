@@ -142,8 +142,8 @@ def test_cancel_all_help_documents_confirmation_bypass():
 
     assert result.exit_code == 0
     assert "Cancel all active jobs" in result.stdout
-    assert "--yes" in result.stdout
-    assert "-y" in result.stdout
+    assert "--yes" in result.output
+    assert "-y" in result.output
 
 
 def test_command_help_includes_argument_description_and_examples():

@@ -2022,8 +2022,8 @@ def test_join_network_skips_replication_when_worker_advertises_primary_redis(moc
     _join_network("192.168.4.20", "join-token", grpc_port=50055)
 
     assert not any(call[3][0] == "REPLICAOF" for call in redis_calls)
-    output = capsys.readouterr().out
-    assert "Worker Redis replication skipped: worker advertised the primary Redis endpoint." in output
+    output = " ".join(capsys.readouterr().out.split())
+    assert "Worker Redis replication was skipped because the worker advertised the primary Redis endpoint." in output
     assert "Replication:" not in output
 
 

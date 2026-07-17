@@ -988,8 +988,8 @@ def test_blueprint_run_help_lists_repeatable_set_option():
     result = runner.invoke(app, ["blueprint", "run", "--help"])
 
     assert result.exit_code == 0
-    assert "--set" in result.stdout
-    assert "PATH=VALUE" in result.stdout
+    assert "--set" in result.output
+    assert "PATH=VALUE" in result.output
 
 
 def test_blueprint_run_set_is_forwarded_to_scheduled_bundle(mocker, tmp_path):
