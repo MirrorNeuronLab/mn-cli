@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 from mn_cli.main import app
 from mn_cli.libs import blueprint_cmds
 from mn_sdk import load_model_ownership
+from mn_sdk.blueprint_support.local_inputs import stage_local_input_payloads
 
 runner = CliRunner()
 
@@ -105,6 +106,95 @@ def _single_model_catalog(
             "backend": backend,
         }
     }
+
+
+def test_parse_blueprint_config_set_overrides_supports_json_and_repeated_paths():
+    overrides = blueprint_cmds._parse_config_set_overrides(
+        [
+            "document_sources.folder_path=/tmp/input=one",
+            "execution.enabled=true",
+            "limits.count=42",
+            "limits.ratio=1.5",
+            "optional=null",
+            'items=["a",2]',
+            'mapping={"key":"value"}',
+            "empty=",
+            "duplicate=first",
+            "duplicate=2",
+        ]
+    )
+
+    assert overrides == {
+        "document_sources": {"folder_path": "/tmp/input=one"},
+        "execution": {"enabled": True},
+        "limits": {"count": 42, "ratio": 1.5},
+        "optional": None,
+        "items": ["a", 2],
+        "mapping": {"key": "value"},
+        "empty": "",
+        "duplicate": 2,
+    }
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    ["missing-equals", "=value", ".path=value", "path.=value", "path..child=value"],
+)
+def test_parse_blueprint_config_set_overrides_rejects_invalid_assignments(assignment):
+    with pytest.raises(ValueError, match="Invalid --set"):
+        blueprint_cmds._parse_config_set_overrides([assignment])
+
+
+def test_blueprint_config_set_stages_vc_style_input_and_rewrites_linked_paths(
+    tmp_path,
+):
+    source = tmp_path / "startup-documents"
+    source.mkdir()
+    (source / "pitch.md").write_text("# Startup")
+    config = {
+        "document_sources": {"folder_path": "@/examples/sample_inputs"},
+        "inputs": {
+            "payload": {
+                "document_folder": "@/examples/sample_inputs",
+                "input_folder": "@/examples/sample_inputs",
+            }
+        },
+        "state": {
+            "document_folder": "@/examples/sample_inputs",
+            "input_folder": "@/examples/sample_inputs",
+        },
+        "local_inputs": {
+            "folders": [
+                {
+                    "config_path": "document_sources.folder_path",
+                    "payload_path": "runtime/mn_local_inputs/vc_documents",
+                    "runtime_path": "mn_local_inputs/vc_documents",
+                    "allowed_extensions": [".pdf", ".txt", ".md", ".json", ".csv"],
+                    "linked_config_paths": [
+                        "inputs.payload.document_folder",
+                        "inputs.payload.input_folder",
+                        "state.document_folder",
+                        "state.input_folder",
+                    ],
+                }
+            ]
+        },
+    }
+    overrides = blueprint_cmds._parse_config_set_overrides(
+        [f"document_sources.folder_path={source}"]
+    )
+    effective = blueprint_cmds._deep_merge(config, overrides)
+    payloads = {}
+
+    summary = stage_local_input_payloads(effective, payloads, bundle_dir=tmp_path)
+
+    assert summary["folders"][0]["file_count"] == 1
+    assert "runtime/mn_local_inputs/vc_documents/pitch.md" in payloads
+    assert effective["document_sources"]["folder_path"] == "mn_local_inputs/vc_documents"
+    assert effective["inputs"]["payload"]["document_folder"] == "mn_local_inputs/vc_documents"
+    assert effective["inputs"]["payload"]["input_folder"] == "mn_local_inputs/vc_documents"
+    assert effective["state"]["document_folder"] == "mn_local_inputs/vc_documents"
+    assert effective["state"]["input_folder"] == "mn_local_inputs/vc_documents"
 
 
 def test_blueprint_model_dependency_records_already_installed_manual_owner(
@@ -808,11 +898,125 @@ def test_blueprint_run_uses_standard_env_local_source(mocker, tmp_path, monkeypa
     monkeypatch.delenv("MN_BLUEPRINT_REPO", raising=False)
     mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
 
-    result = runner.invoke(app, ["blueprint", "run", "bp-1"])
+    result = runner.invoke(
+        app,
+        [
+            "blueprint",
+            "run",
+            "bp-1",
+            "--set",
+            "document_sources.folder_path=/tmp/catalog-input",
+        ],
+    )
 
     assert result.exit_code == 0
     mock_run_bundle.assert_called_once()
     assert mock_run_bundle.call_args.args[0] == str(bp_dir)
+    assert mock_run_bundle.call_args.kwargs["config_overrides"] == {
+        "document_sources": {"folder_path": "/tmp/catalog-input"}
+    }
+
+
+def test_blueprint_run_set_overrides_local_bundle_without_persisting(
+    mocker, tmp_path
+):
+    bp_dir = tmp_path / "bundle"
+    bp_dir.mkdir()
+    (bp_dir / "manifest.json").write_text(json.dumps({}))
+    config_dir = bp_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps({"video_source": {"uri": "default"}})
+    )
+    overwrite_path = config_dir / "overwrite.json"
+    overwrite_text = json.dumps(
+        {"video_source": {"uri": "overwrite"}, "execution": {"fake_skills": False}}
+    )
+    overwrite_path.write_text(overwrite_text)
+    mock_run_bundle = mocker.patch("mn_cli.libs.blueprint_cmds._run_bundle")
+
+    result = runner.invoke(
+        app,
+        [
+            "blueprint",
+            "run",
+            "--folder",
+            str(bp_dir),
+            "--set",
+            "video_source.uri=cli",
+            "--set",
+            "nested.enabled=true",
+            "--set",
+            "execution.fake_skills=false",
+            "--fake-skills",
+            "--detached",
+        ],
+    )
+
+    assert result.exit_code == 0
+    mock_run_bundle.assert_called_once()
+    assert mock_run_bundle.call_args.kwargs["detached"] is True
+    assert mock_run_bundle.call_args.kwargs["config_overrides"] == {
+        "video_source": {"uri": "cli"},
+        "nested": {"enabled": True},
+        "execution": {"fake_skills": True},
+    }
+    assert overwrite_path.read_text() == overwrite_text
+
+
+@pytest.mark.parametrize("assignment", ["missing-equals", "path..child=value"])
+def test_blueprint_run_set_rejects_invalid_assignment_before_submit(
+    mocker, tmp_path, assignment
+):
+    bp_dir = tmp_path / "bundle"
+    bp_dir.mkdir()
+    (bp_dir / "manifest.json").write_text(json.dumps({}))
+    mock_run_bundle = mocker.patch("mn_cli.libs.blueprint_cmds._run_bundle")
+
+    result = runner.invoke(
+        app,
+        ["blueprint", "run", "--folder", str(bp_dir), "--set", assignment],
+    )
+
+    assert result.exit_code == 2
+    assert "Error:" in result.stdout
+    assert "Invalid --set" in result.stdout
+    mock_run_bundle.assert_not_called()
+
+
+def test_blueprint_run_help_lists_repeatable_set_option():
+    result = runner.invoke(app, ["blueprint", "run", "--help"])
+
+    assert result.exit_code == 0
+    assert "--set" in result.stdout
+    assert "PATH=VALUE" in result.stdout
+
+
+def test_blueprint_run_set_is_forwarded_to_scheduled_bundle(mocker, tmp_path):
+    bp_dir = tmp_path / "bundle"
+    bp_dir.mkdir()
+    (bp_dir / "manifest.json").write_text(json.dumps({}))
+    mock_run_bundle = mocker.patch("mn_cli.libs.blueprint_cmds._run_bundle")
+
+    result = runner.invoke(
+        app,
+        [
+            "blueprint",
+            "run",
+            "--folder",
+            str(bp_dir),
+            "--schedule",
+            "30m",
+            "--set",
+            "document_sources.folder_path=/tmp/scheduled-input",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert mock_run_bundle.call_args.kwargs["schedule"] == "30m"
+    assert mock_run_bundle.call_args.kwargs["config_overrides"] == {
+        "document_sources": {"folder_path": "/tmp/scheduled-input"}
+    }
 
 
 def test_blueprint_run_fake_llm_flag_overrides_local_bundle(mocker, tmp_path):
@@ -1270,7 +1474,19 @@ def test_run_folder_generates_local_python_source_bundle(mocker, tmp_path, monke
     )
     mock_run_bundle = mocker.patch("mn_cli.libs.blueprint_cmds._run_bundle")
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(source_dir), "--run-id", "run-source"])
+    result = runner.invoke(
+        app,
+        [
+            "blueprint",
+            "run",
+            "--folder",
+            str(source_dir),
+            "--run-id",
+            "run-source",
+            "--set",
+            "document_sources.folder_path=/tmp/source-input",
+        ],
+    )
 
     assert result.exit_code == 0
     assert "Generating Python workflow bundle" in result.stdout
@@ -1278,6 +1494,9 @@ def test_run_folder_generates_local_python_source_bundle(mocker, tmp_path, monke
     assert mock_generate_bundle.call_args.args[0] == source_dir
     mock_run_bundle.assert_called_once()
     assert mock_run_bundle.call_args.args[0] == str(generated_root / "run-source")
+    assert mock_run_bundle.call_args.kwargs["config_overrides"] == {
+        "document_sources": {"folder_path": "/tmp/source-input"}
+    }
 
 
 def test_root_run_command_is_removed():

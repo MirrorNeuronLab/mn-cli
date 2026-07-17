@@ -23,6 +23,17 @@ mn node list
 mn blueprint run message_routing_trace
 ```
 
+Override blueprint config for one run without changing `config/overwrite.json`:
+
+```bash
+mn blueprint run --folder ./vc_assistant \
+  --set document_sources.folder_path=/path/to/documents \
+  --set execution.debug=true
+```
+
+Repeat `--set` for multiple values. Values use JSON types when possible and
+otherwise remain strings.
+
 ## Configuration
 
 Configuration is loaded by `mn_cli.config`. `.env` files provide defaults, and

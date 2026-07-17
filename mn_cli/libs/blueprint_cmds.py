@@ -166,6 +166,7 @@ def _run_resolved_blueprint(
     source_label: str,
     follow_seconds: Optional[float],
     force: bool,
+    config_overrides: Optional[dict[str, Any]] = None,
     detached: bool = False,
     web_ui: bool = False,
     auto_schedule: bool = False,
@@ -179,7 +180,11 @@ def _run_resolved_blueprint(
     _print_blueprint_run_phase(1, 4, "Prepare blueprint bundle")
     bundle_path = _prepare_blueprint_bundle_for_run(blueprint_dir, manifest, shared_run_id)
     _print_blueprint_run_phase(2, 4, "Review launch config")
-    config_overrides = _collect_init_config_review_overrides(bundle_path, manifest)
+    review_overrides = _collect_init_config_review_overrides(bundle_path, manifest)
+    config_overrides = _deep_merge(
+        review_overrides or {},
+        config_overrides or {},
+    )
     config = _load_blueprint_config(bundle_path, config_overrides=config_overrides)
     if fake_llm:
         fake_overrides = _fake_llm_config_overrides(config or {})
@@ -445,6 +450,27 @@ def _config_path_set(config: dict[str, Any], dotted_path: str, value: Any) -> No
         cursor[parts[-1]] = value
 
 
+def _parse_config_set_overrides(values: list[str] | None) -> dict[str, Any]:
+    overrides: dict[str, Any] = {}
+    for assignment in values or []:
+        if "=" not in assignment:
+            raise ValueError(
+                f"Invalid --set value {assignment!r}; expected dotted.path=value."
+            )
+        raw_path, raw_value = assignment.split("=", 1)
+        path = raw_path.strip()
+        if not path or any(not part for part in path.split(".")):
+            raise ValueError(
+                f"Invalid --set path {raw_path!r}; expected non-empty dotted path segments."
+            )
+        try:
+            value = json.loads(raw_value)
+        except json.JSONDecodeError:
+            value = raw_value
+        _config_path_set(overrides, path, value)
+    return overrides
+
+
 def _parse_review_value(value: str, default_value: Any) -> Any:
     if isinstance(default_value, bool):
         return value.strip().lower() in {"1", "true", "yes", "y", "on"}
@@ -596,6 +622,7 @@ def run_catalog_blueprint(
     revision: Optional[str] = None,
     follow_seconds: Optional[float] = None,
     force: bool = False,
+    config_overrides: Optional[dict[str, Any]] = None,
     detached: bool = False,
     web_ui: bool = False,
     auto_schedule: bool = False,
@@ -652,6 +679,7 @@ def run_catalog_blueprint(
         source_label=str(storage_dir),
         follow_seconds=follow_seconds,
         force=force,
+        config_overrides=config_overrides,
         detached=detached,
         web_ui=web_ui,
         auto_schedule=auto_schedule,
@@ -669,6 +697,7 @@ def run_local_blueprint_folder(
     run_id: Optional[str] = None,
     follow_seconds: Optional[float] = None,
     force: bool = False,
+    config_overrides: Optional[dict[str, Any]] = None,
     detached: bool = False,
     web_ui: bool = False,
     auto_schedule: bool = False,
@@ -703,6 +732,7 @@ def run_local_blueprint_folder(
         source_label=str(blueprint_dir),
         follow_seconds=follow_seconds,
         force=force,
+        config_overrides=config_overrides,
         detached=detached,
         web_ui=web_ui,
         auto_schedule=auto_schedule,
@@ -720,6 +750,7 @@ def _run_local_folder(
     run_id: Optional[str],
     follow_seconds: Optional[float],
     force: bool,
+    config_overrides: Optional[dict[str, Any]] = None,
     detached: bool = False,
     web_ui: bool = False,
     auto_schedule: bool = False,
@@ -737,6 +768,7 @@ def _run_local_folder(
             run_id=run_id,
             follow_seconds=follow_seconds,
             force=force,
+            config_overrides=config_overrides,
             detached=detached,
             web_ui=web_ui,
             auto_schedule=auto_schedule,
@@ -762,7 +794,7 @@ def _run_local_folder(
         submission_metadata["benchmark"] = True
     if debug:
         submission_metadata["debug"] = True
-    config_overrides: dict[str, Any] = {}
+    config_overrides = copy.deepcopy(config_overrides or {})
     if fake_llm:
         config_overrides = _deep_merge(
             config_overrides,
@@ -1195,6 +1227,14 @@ def blueprint_run(
             help="Seconds to keep polling job events after the submit stream detaches. Defaults to MN_RUN_DETACH_LOG_SECONDS or 30.",
         ),
     ] = None,
+    set_values: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--set",
+            metavar="PATH=VALUE",
+            help="Override one config value for this run. Repeat for multiple values.",
+        ),
+    ] = None,
     force: Annotated[
         bool,
         typer.Option(
@@ -1269,12 +1309,19 @@ def blueprint_run(
         print_error(console, "Pass either a blueprint ID or --folder, not both.")
         raise typer.Exit(1)
 
+    try:
+        config_overrides = _parse_config_set_overrides(set_values)
+    except ValueError as exc:
+        print_error(console, str(exc))
+        raise typer.Exit(2)
+
     if folder:
         _run_local_folder(
             folder,
             run_id=run_id,
             follow_seconds=follow_seconds,
             force=force,
+            config_overrides=config_overrides,
             detached=detached,
             web_ui=web_ui,
             auto_schedule=auto_schedule,
@@ -1307,6 +1354,7 @@ def blueprint_run(
         revision=revision,
         follow_seconds=follow_seconds,
         force=force,
+        config_overrides=config_overrides,
         detached=detached,
         web_ui=web_ui,
         auto_schedule=auto_schedule,

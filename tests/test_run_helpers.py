@@ -233,8 +233,8 @@ def test_prepare_manifest_auto_patches_skill_binary_deps_to_dockerworker(tmp_pat
     assert "COPY build_context/w3m_browser_skill" not in dockerfile
     assert "/tmp/mn-local-packages" not in dockerfile
     assert "command -v w3m" in dockerfile
-    assert "mirrorneuron-w3m-browser-skill==1.2.7" in requirements
-    assert "mirrorneuron-blueprint-support-skill==1.2.7" in requirements
+    assert "mirrorneuron-w3m-browser-skill==1.2.24" in requirements
+    assert "mirrorneuron-blueprint-support-skill==1.2.24" in requirements
     assert "example-external>=1" in requirements
 
 
