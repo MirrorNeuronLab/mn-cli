@@ -1,5 +1,6 @@
 from .common import *
 
+
 def fetch_and_save_results(job_id: str, data: dict = None):
     log_dir = Path(f"/tmp/mn_{job_id}")
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -18,7 +19,7 @@ def fetch_and_save_results(job_id: str, data: dict = None):
 
     # Save final result if completed
     if status == "completed":
-        result = job.get("result")
+        result = _resolve_job_result(job)
         if result:
             with open(log_dir / "result.txt", "w") as f:
                 json.dump(result, f, indent=2)
@@ -50,13 +51,30 @@ def fetch_and_save_results(job_id: str, data: dict = None):
             for se in stream_events:
                 f.write(json.dumps(se) + "\n")
 
+
+def _resolve_job_result(job: dict[str, Any]) -> Any:
+    result = job.get("result")
+    reference = job.get("result_ref")
+    if not is_staged_artifact_ref(reference) and isinstance(result, dict):
+        reference = result.get("result_ref")
+    if not is_staged_artifact_ref(reference):
+        return result
+    try:
+        return resolve_json_reference(reference)
+    except StagedArtifactError:
+        logger.exception("Failed to resolve staged job result")
+        return result
+
+
 def _is_vc_final_artifact(value: Any) -> bool:
     if not isinstance(value, dict):
         return False
     reports = value.get("company_reports") or value.get("companyReports")
     return value.get("type") == "vc_early_heuristic_analysis_reports" or (
-        isinstance(reports, list) and any(isinstance(item, dict) and item for item in reports)
+        isinstance(reports, list)
+        and any(isinstance(item, dict) and item for item in reports)
     )
+
 
 def _extract_final_artifact(value: Any, depth: int = 0) -> Optional[dict[str, Any]]:
     if depth > 100 or value is None:
@@ -83,7 +101,16 @@ def _extract_final_artifact(value: Any, depth: int = 0) -> Optional[dict[str, An
     explicit = value.get("final_artifact") or value.get("finalArtifact")
     if isinstance(explicit, dict) and explicit:
         return explicit
-    for key in ("result", "output", "last_message", "lastMessage", "sandbox", "payload", "data", "logs"):
+    for key in (
+        "result",
+        "output",
+        "last_message",
+        "lastMessage",
+        "sandbox",
+        "payload",
+        "data",
+        "logs",
+    ):
         found = _extract_final_artifact(value.get(key), depth + 1)
         if found:
             return found
@@ -93,11 +120,14 @@ def _extract_final_artifact(value: Any, depth: int = 0) -> Optional[dict[str, An
             return found
     return None
 
+
 def _json_values_from_text(text: str) -> list[Any]:
     decoder = json.JSONDecoder()
     values: list[Any] = []
     starts = [0] if text and text[0] in "{[" else []
-    starts.extend(index for index, char in enumerate(text) if char in "{[" and index != 0)
+    starts.extend(
+        index for index, char in enumerate(text) if char in "{[" and index != 0
+    )
     for start in starts[:50]:
         try:
             value, _end = decoder.raw_decode(text[start:])
@@ -108,9 +138,10 @@ def _json_values_from_text(text: str) -> list[Any]:
             break
     return values
 
+
 def _manifest_config(manifest: dict[str, Any]) -> dict[str, Any]:
     for node in manifest_nodes(manifest):
-        environment = ((node.get("config") or {}).get("environment") or {})
+        environment = (node.get("config") or {}).get("environment") or {}
         raw_config = environment.get("MN_BLUEPRINT_CONFIG_JSON")
         if isinstance(raw_config, str) and raw_config.strip():
             try:
@@ -120,6 +151,7 @@ def _manifest_config(manifest: dict[str, Any]) -> dict[str, Any]:
             if isinstance(decoded, dict):
                 return decoded
     return {}
+
 
 def _expand_user_output_path(value: str) -> Path:
     text = str(value or "").strip()
@@ -135,8 +167,9 @@ def _expand_user_output_path(value: str) -> Path:
         return Path(home).expanduser() / text[2:]
     return Path(text).expanduser()
 
+
 def _configured_output_folder(config: dict[str, Any]) -> Optional[Path]:
-    payload = ((config.get("inputs") or {}).get("payload") or {})
+    payload = (config.get("inputs") or {}).get("payload") or {}
     outputs = config.get("outputs") or {}
     for value in (
         payload.get("output_folder"),
@@ -147,13 +180,18 @@ def _configured_output_folder(config: dict[str, Any]) -> Optional[Path]:
             return _expand_user_output_path(value)
     return None
 
+
 def _safe_slug(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
     return slug or "company"
 
+
 def _write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(value, indent=2, sort_keys=False) + "\n", encoding="utf-8"
+    )
+
 
 def _render_vc_analysis_markdown(report: dict[str, Any]) -> str:
     lines = [
@@ -170,15 +208,17 @@ def _render_vc_analysis_markdown(report: dict[str, Any]) -> str:
         if not isinstance(method, dict):
             continue
         summary = method.get("evidence_summary") or {}
-        lines.extend([
-            f"### {method_id.replace('_', ' ').title()}",
-            "",
-            f"- Status: {method.get('status', 'unknown')}",
-            f"- Score: {method.get('score', 'n/a')}",
-            f"- Evidence refs: {', '.join(method.get('evidence_refs') or []) or 'none'}",
-            f"- Why: {summary.get('status_reason') or method.get('evidence_summary') or 'No method explanation provided.'}",
-            "",
-        ])
+        lines.extend(
+            [
+                f"### {method_id.replace('_', ' ').title()}",
+                "",
+                f"- Status: {method.get('status', 'unknown')}",
+                f"- Score: {method.get('score', 'n/a')}",
+                f"- Evidence refs: {', '.join(method.get('evidence_refs') or []) or 'none'}",
+                f"- Why: {summary.get('status_reason') or method.get('evidence_summary') or 'No method explanation provided.'}",
+                "",
+            ]
+        )
         missing = method.get("missing_evidence") or []
         if missing:
             lines.append(f"- Missing evidence: {'; '.join(map(str, missing))}")
@@ -190,7 +230,10 @@ def _render_vc_analysis_markdown(report: dict[str, Any]) -> str:
         lines.append("")
     return "\n".join(lines)
 
-def _write_vc_final_artifact_outputs(final_artifact: dict[str, Any], output_folder: Path) -> list[dict[str, str]]:
+
+def _write_vc_final_artifact_outputs(
+    final_artifact: dict[str, Any], output_folder: Path
+) -> list[dict[str, str]]:
     reports = final_artifact.get("company_reports")
     if not isinstance(reports, list) or not reports:
         return []
@@ -202,7 +245,8 @@ def _write_vc_final_artifact_outputs(final_artifact: dict[str, Any], output_fold
         "companies": [
             {
                 "company_name": report.get("company_name"),
-                "company_slug": report.get("company_slug") or _safe_slug(report.get("company_name")),
+                "company_slug": report.get("company_slug")
+                or _safe_slug(report.get("company_name")),
                 "composite_score": report.get("composite_score"),
                 "confidence": report.get("confidence"),
                 "method_count": report.get("method_count"),
@@ -213,10 +257,18 @@ def _write_vc_final_artifact_outputs(final_artifact: dict[str, Any], output_fold
     }
     _write_json(output_folder / "final_artifact.json", final_artifact)
     _write_json(output_folder / "company_index.json", company_index)
-    output_files.extend([
-        {"kind": "final_artifact_json", "path": str(output_folder / "final_artifact.json")},
-        {"kind": "company_index_json", "path": str(output_folder / "company_index.json")},
-    ])
+    output_files.extend(
+        [
+            {
+                "kind": "final_artifact_json",
+                "path": str(output_folder / "final_artifact.json"),
+            },
+            {
+                "kind": "company_index_json",
+                "path": str(output_folder / "company_index.json"),
+            },
+        ]
+    )
     diagnostic_artifacts = [
         ("action_ledger", "action_ledger_json", "action_ledger.json"),
         ("artifact_quality", "artifact_quality_json", "artifact_quality.json"),
@@ -233,41 +285,67 @@ def _write_vc_final_artifact_outputs(final_artifact: dict[str, Any], output_fold
         index_lines.append(
             f"- {company.get('company_name')}: score {company.get('composite_score', 'n/a')}, confidence {company.get('confidence', 'n/a')}"
         )
-    (output_folder / "company_index.md").write_text("\n".join(index_lines) + "\n", encoding="utf-8")
+    (output_folder / "company_index.md").write_text(
+        "\n".join(index_lines) + "\n", encoding="utf-8"
+    )
     (output_folder / "run_summary.md").write_text(
-        str(final_artifact.get("executive_summary") or "VC Assistant run completed.") + "\n",
+        str(final_artifact.get("executive_summary") or "VC Assistant run completed.")
+        + "\n",
         encoding="utf-8",
     )
-    output_files.extend([
-        {"kind": "company_index_markdown", "path": str(output_folder / "company_index.md")},
-        {"kind": "run_summary_markdown", "path": str(output_folder / "run_summary.md")},
-    ])
+    output_files.extend(
+        [
+            {
+                "kind": "company_index_markdown",
+                "path": str(output_folder / "company_index.md"),
+            },
+            {
+                "kind": "run_summary_markdown",
+                "path": str(output_folder / "run_summary.md"),
+            },
+        ]
+    )
     for report in reports:
         if not isinstance(report, dict):
             continue
         slug = report.get("company_slug") or _safe_slug(report.get("company_name"))
         company_dir = output_folder / slug
         _write_json(company_dir / "analysis.json", report)
-        (company_dir / "analysis.md").write_text(_render_vc_analysis_markdown(report), encoding="utf-8")
+        (company_dir / "analysis.md").write_text(
+            _render_vc_analysis_markdown(report), encoding="utf-8"
+        )
         _write_json(company_dir / "method_scores.json", report.get("methods") or {})
         _write_json(company_dir / "evidence.json", report.get("evidence") or [])
         _write_json(company_dir / "warnings.json", report.get("warnings") or [])
-        _write_json(company_dir / "research_sources.json", report.get("research_sources") or [])
-        output_files.extend([
-            {"kind": "analysis", "path": str(company_dir / "analysis.json")},
-            {"kind": "analysis_markdown", "path": str(company_dir / "analysis.md")},
-            {"kind": "method_scores", "path": str(company_dir / "method_scores.json")},
-        ])
+        _write_json(
+            company_dir / "research_sources.json", report.get("research_sources") or []
+        )
+        output_files.extend(
+            [
+                {"kind": "analysis", "path": str(company_dir / "analysis.json")},
+                {"kind": "analysis_markdown", "path": str(company_dir / "analysis.md")},
+                {
+                    "kind": "method_scores",
+                    "path": str(company_dir / "method_scores.json"),
+                },
+            ]
+        )
     return output_files
 
-def _materialize_completed_blueprint_outputs(log_dir: Path, manifest: dict[str, Any]) -> None:
+
+def _materialize_completed_blueprint_outputs(
+    log_dir: Path, manifest: dict[str, Any]
+) -> None:
     result_path = log_dir / "result.txt"
     if not result_path.exists():
         return
     try:
         result = json.loads(result_path.read_text(encoding="utf-8"))
     except Exception:
-        logger.exception("Failed to decode blueprint result for output materialization: %s", result_path)
+        logger.exception(
+            "Failed to decode blueprint result for output materialization: %s",
+            result_path,
+        )
         return
     final_artifact = _extract_final_artifact(result)
     if not final_artifact:
@@ -279,9 +357,12 @@ def _materialize_completed_blueprint_outputs(log_dir: Path, manifest: dict[str, 
     try:
         materialized = _write_vc_final_artifact_outputs(final_artifact, output_folder)
         if materialized:
-            console.print(f"[green]Materialized blueprint outputs:[/green] {output_folder}")
+            console.print(
+                f"[green]Materialized blueprint outputs:[/green] {output_folder}"
+            )
     except Exception:
         logger.exception("Failed to materialize blueprint outputs to %s", output_folder)
+
 
 def _materialize_shared_storage_outputs(storage: dict[str, Any]) -> bool:
     if not isinstance(storage, dict):

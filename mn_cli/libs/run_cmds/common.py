@@ -69,6 +69,11 @@ from mn_sdk.submission_preparation import (
 )
 from mn_sdk.skill_runtime import validate_skill_runtime_requirements
 from mn_sdk.skill_dependencies import gar_requirements_text, skill_dependency_records
+from mn_sdk.staged_artifacts import (
+    StagedArtifactError,
+    is_staged_artifact_ref,
+    resolve_json_reference,
+)
 from mn_cli.libs.workflow_validation import (
     _is_workflow_manifest,
     _manifest_workflow_id,
@@ -273,7 +278,9 @@ def _duration_ms_for_schedule(value: str) -> int:
 def _load_bundle_manifest(bundle_path: str) -> tuple[Path, Path, dict[str, Any]]:
     bundle_dir = Path(bundle_path)
     if not bundle_dir.is_dir():
-        print_error(console, f"'{bundle_path}' is not a directory. Expected a bundle folder.")
+        print_error(
+            console, f"'{bundle_path}' is not a directory. Expected a bundle folder."
+        )
         raise typer.Exit(1)
 
     manifest_file = bundle_dir / "manifest.json"
@@ -296,10 +303,14 @@ def _configure_bundle_if_required(
 
     config_script = bundle_dir / "config.py"
     if not config_script.exists():
-        print_error(console, "Bundle requires configuration, but config.py was not found.")
+        print_error(
+            console, "Bundle requires configuration, but config.py was not found."
+        )
         raise typer.Exit(1)
 
-    print_warning(console, f"Bundle requires configuration; auto-running {config_script.name}.")
+    print_warning(
+        console, f"Bundle requires configuration; auto-running {config_script.name}."
+    )
     res = subprocess.run([sys.executable, config_script.name], cwd=bundle_dir)
     if res.returncode != 0:
         print_error(console, "Configuration failed or was cancelled; aborting run.")

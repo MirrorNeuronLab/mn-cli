@@ -47,8 +47,7 @@ class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
             if not isinstance(raw, dict):
                 continue
             step_id = str(raw.get("id") or f"step_{len(steps) + 1}")
-            binding_key = str(raw.get("run") or step_id)
-            binding = bindings.get(binding_key) if isinstance(bindings, dict) else None
+            binding = _workflow_step_binding(bindings, raw, step_id)
             binding_dict = binding if isinstance(binding, dict) else {}
             emits = str(raw.get("emits") or "") or None
             transition = raw.get("on") if isinstance(raw.get("on"), dict) else {}
@@ -147,10 +146,9 @@ class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
             if not isinstance(raw_step, dict):
                 continue
             step_id = str(raw_step.get("id") or "")
-            run_key = str(raw_step.get("run") or "")
-            if not step_id or not run_key or run_key == step_id:
+            if not step_id:
                 continue
-            binding = bindings.get(run_key)
+            binding = _workflow_step_binding(bindings, raw_step, step_id)
             step = self.steps_by_id.get(step_id)
             if not isinstance(binding, dict) or step is None:
                 continue
@@ -163,6 +161,22 @@ class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
             self.agent_to_step = {
                 agent.id: step.id for step in self.steps for agent in step.agents
             }
+
+    def update(self, event: dict[str, Any]) -> None:
+        """Keep public steps current when the runtime reports attempt events.
+
+        Lowered workflows emit attempt lifecycle events from ``__start``
+        nodes.  The SDK updates the worker but does not select the public step
+        when that internal node is not part of the source-facing agent list.
+        """
+
+        event_type = str(event.get("type") or "") if isinstance(event, dict) else ""
+        if event_type in {"workflow_step_attempt_started", "workflow_step_beacon"}:
+            payload = event.get("payload") if isinstance(event.get("payload"), dict) else event
+            step_id = str(payload.get("step") or payload.get("step_id") or "")
+            if step_id in self.steps_by_id:
+                self._start_step(step_id, _workflow_event_epoch(event))
+        super().update(event)
 
     def render(self) -> Panel:
         return generate_workflow_progress_layout(
@@ -451,6 +465,35 @@ def _attach_workflow_token_usage(
             used = _optional_int(token_usage.get(agent_id))
             if used is not None:
                 agent["tokens_used"] = used
+
+
+def _workflow_step_binding(
+    bindings: dict[str, Any], raw_step: dict[str, Any], step_id: str
+) -> dict[str, Any] | None:
+    """Resolve bindings from both source and lowered workflow step shapes."""
+
+    for value in (step_id, raw_step.get("action"), raw_step.get("run")):
+        if not isinstance(value, str) or not value.strip():
+            continue
+        binding = bindings.get(value.strip())
+        if isinstance(binding, dict):
+            return binding
+    return None
+
+
+def _workflow_event_epoch(event: dict[str, Any]) -> float:
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    for mapping in (event, payload):
+        for key in ("timestamp", "ts", "started_at", "created_at"):
+            value = mapping.get(key)
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, str) and value.strip():
+                try:
+                    return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+                except ValueError:
+                    continue
+    return datetime.now().timestamp()
 
 
 def _agents_from_runtime_binding(

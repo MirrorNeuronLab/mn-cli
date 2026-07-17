@@ -38,6 +38,8 @@ def _write_blueprint_job_mapping(
     job_id: str,
     metadata: dict[str, Any],
     env_overrides: dict[str, str],
+    *,
+    monitor_manifest: dict[str, Any] | None = None,
 ) -> None:
     run_dir = _blueprint_run_dir(blueprint_run_id, env_overrides)
     try:
@@ -47,6 +49,7 @@ def _write_blueprint_job_mapping(
             "job_id": job_id,
             "blueprint_id": metadata.get("blueprint_id"),
             "blueprint_revision": metadata.get("blueprint_revision"),
+            "blueprint_source": metadata.get("blueprint_source"),
             "submitted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         tmp = run_dir / f".job.json.{os.getpid()}.tmp"
@@ -54,12 +57,176 @@ def _write_blueprint_job_mapping(
             json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         tmp.replace(run_dir / "job.json")
+        if isinstance(monitor_manifest, dict) and monitor_manifest:
+            monitor_contract = _monitor_manifest_contract(monitor_manifest)
+            manifest_tmp = run_dir / f".manifest.json.{os.getpid()}.tmp"
+            manifest_tmp.write_text(
+                json.dumps(monitor_contract, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            manifest_tmp.replace(run_dir / "manifest.json")
     except OSError:
         logger.exception(
             "Failed to write blueprint job mapping for run_id=%s job_id=%s",
             blueprint_run_id,
             job_id,
         )
+
+
+def _monitor_manifest_contract(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Persist only source-facing monitor fields, never runtime environment."""
+
+    contract = {
+        key: manifest[key]
+        for key in (
+            "apiVersion",
+            "kind",
+            "id",
+            "name",
+            "description",
+            "graph_id",
+            "job_name",
+            "job_type",
+            "type",
+            "policies",
+        )
+        if key in manifest
+    }
+    metadata = manifest.get("metadata")
+    if isinstance(metadata, dict):
+        safe_metadata = {
+            key: metadata[key]
+            for key in ("blueprint_id", "name", "description")
+            if key in metadata
+        }
+        if safe_metadata:
+            contract["metadata"] = safe_metadata
+
+    workflow = manifest.get("workflow")
+    if isinstance(workflow, dict):
+        safe_workflow = {
+            key: workflow[key]
+            for key in (
+                "workflow_id",
+                "name",
+                "description",
+                "entrypoint",
+                "kind",
+                "execution",
+            )
+            if key in workflow
+        }
+        steps = workflow.get("steps")
+        if isinstance(steps, list):
+            safe_workflow["steps"] = [
+                {
+                    key: step[key]
+                    for key in (
+                        "id",
+                        "label",
+                        "goal",
+                        "action",
+                        "run",
+                        "emits",
+                        "on",
+                        "needs",
+                        "kind",
+                        "live",
+                        "requires",
+                        "provides",
+                        "agent_id",
+                        "start_agent_id",
+                        "end_agent_id",
+                        "agent_ids",
+                    )
+                    if key in step
+                }
+                for step in steps
+                if isinstance(step, dict)
+            ]
+        contract["workflow"] = safe_workflow
+
+    runtime = manifest.get("runtime")
+    bindings = runtime.get("bindings") if isinstance(runtime, dict) else None
+    if isinstance(bindings, dict):
+        contract["runtime"] = {
+            "bindings": {
+                str(binding_id): _monitor_binding_contract(binding)
+                for binding_id, binding in bindings.items()
+                if isinstance(binding, dict)
+            }
+        }
+
+    nodes = manifest.get("nodes")
+    if isinstance(nodes, list):
+        contract["nodes"] = [
+            _monitor_worker_contract(node) for node in nodes if isinstance(node, dict)
+        ]
+    return contract
+
+
+def _monitor_binding_contract(binding: dict[str, Any]) -> dict[str, Any]:
+    result = {
+        key: binding[key]
+        for key in (
+            "id",
+            "node_id",
+            "type",
+            "kind",
+            "strategy",
+            "role",
+            "working_on",
+            "model",
+            "uses",
+            "live",
+            "alias",
+            "display_name",
+            "label",
+            "name",
+            "tools",
+            "tokens",
+            "token_budget",
+        )
+        if key in binding
+    }
+    worker = binding.get("worker")
+    if isinstance(worker, dict):
+        result["worker"] = _monitor_worker_contract(worker)
+    workers = binding.get("workers")
+    if isinstance(workers, list):
+        result["workers"] = [
+            _monitor_worker_contract(item)
+            if isinstance(item, dict)
+            else {"id": str(item)}
+            for item in workers
+        ]
+    return result
+
+
+def _monitor_worker_contract(worker: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: worker[key]
+        for key in (
+            "id",
+            "node_id",
+            "agent_type",
+            "type",
+            "role",
+            "working_on",
+            "model",
+            "uses",
+            "live",
+            "alias",
+            "display_name",
+            "label",
+            "name",
+            "tools",
+            "tokens",
+            "token_budget",
+        )
+        if key in worker
+    }
+
 
 def _blueprint_run_dir(blueprint_run_id: str, env_overrides: dict[str, str]) -> Path:
     configured = env_overrides.get("MN_RUNS_ROOT")

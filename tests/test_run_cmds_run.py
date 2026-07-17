@@ -65,6 +65,10 @@ def test_run_success(mocker, tmp_path, monkeypatch):
     assert "Status: Completed" in result.stdout
     mapping = json.loads((tmp_path / "runs" / "run-bundle-auto" / "job.json").read_text())
     assert mapping["job_id"] == "job-123"
+    monitor_manifest = json.loads(
+        (tmp_path / "runs" / "run-bundle-auto" / "manifest.json").read_text()
+    )
+    assert monitor_manifest["nodes"] == []
     mock_submit.assert_called_once()
     submitted_payloads = mock_submit.call_args.args[1]
     assert submitted_payloads["test.txt"] == b"hello"
@@ -694,12 +698,22 @@ def test_run_records_blueprint_run_id_mapping(mocker, tmp_path, monkeypatch):
     run_cmds.run_bundle(
         str(bundle_dir),
         env_overrides={"MN_RUN_ID": "bp-run"},
-        submission_metadata={"blueprint_run_id": "bp-run", "blueprint_revision": "rev-1"},
+        submission_metadata={
+            "blueprint_run_id": "bp-run",
+            "blueprint_revision": "rev-1",
+            "blueprint_source": "/catalog/blueprints",
+        },
     )
 
     mapping = json.loads((tmp_path / "runs" / "bp-run" / "job.json").read_text())
     assert mapping["job_id"] == "job-abc"
     assert mapping["blueprint_revision"] == "rev-1"
+    assert mapping["blueprint_source"] == "/catalog/blueprints"
+    monitor_manifest = json.loads(
+        (tmp_path / "runs" / "bp-run" / "manifest.json").read_text()
+    )
+    assert monitor_manifest["nodes"] == [{"node_id": "worker"}]
+    assert "environment" not in json.dumps(monitor_manifest)
     assert not (tmp_path / "blueprints" / "worker" / "runs").exists()
     manifest = json.loads(mock_submit.call_args.args[0])
     env = manifest["nodes"][0]["config"]["environment"]

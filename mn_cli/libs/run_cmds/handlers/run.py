@@ -391,7 +391,11 @@ def run_bundle(
         submitted_log_writer = log_writer
         if blueprint_run_id:
             _write_blueprint_job_mapping(
-                blueprint_run_id, job_id, submission_metadata, env_overrides
+                blueprint_run_id,
+                job_id,
+                submission_metadata,
+                env_overrides,
+                monitor_manifest=manifest_dict,
             )
             if web_ui:
                 _write_local_web_ui_handle(

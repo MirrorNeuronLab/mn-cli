@@ -19,6 +19,7 @@ _MONITOR_JOB_FIELDS = {
     "manifest_ref",
     "name",
     "result",
+    "result_ref",
     "run_id",
     "runId",
     "runtime_topology",
@@ -28,10 +29,15 @@ _MONITOR_JOB_FIELDS = {
     "type",
     "workflow_id",
     "workflow_state",
+    "workflow_state_ref",
 }
+_MONITOR_MANIFEST_CACHE: dict[str, tuple[int, int, dict[str, Any]]] = {}
+_MONITOR_EVENTS_CACHE: dict[str, tuple[int, int, list[dict[str, Any]]]] = {}
 
 
-def _job_and_summary_from_data(data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def _job_and_summary_from_data(
+    data: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Normalize both flat gRPC and wrapped API job payloads.
 
     ``Client.get_job`` returns the runtime's flat job JSON, while the HTTP API
@@ -41,11 +47,7 @@ def _job_and_summary_from_data(data: dict[str, Any]) -> tuple[dict[str, Any], di
 
     raw_job = data.get("job") if isinstance(data.get("job"), dict) else None
     if raw_job is None:
-        job = {
-            key: value
-            for key, value in data.items()
-            if key != "summary"
-        }
+        job = {key: value for key, value in data.items() if key != "summary"}
     else:
         job = dict(raw_job)
         for key in _MONITOR_JOB_FIELDS:
@@ -133,7 +135,9 @@ def _monitor_retry_attempts() -> int:
 
 def _monitor_retry_backoff_seconds() -> float:
     try:
-        return max(float(os.getenv("MN_JOB_MONITOR_RETRY_BACKOFF_SECONDS", "0.25")), 0.0)
+        return max(
+            float(os.getenv("MN_JOB_MONITOR_RETRY_BACKOFF_SECONDS", "0.25")), 0.0
+        )
     except ValueError:
         return 0.25
 
@@ -162,24 +166,21 @@ def _get_job_for_monitor(job_id: str) -> str:
     raise RuntimeError(f"Unable to fetch job {job_id}")
 
 
-def _read_monitor_json_object(path: Path) -> dict[str, Any] | None:
+def _read_monitor_json_value(path: Path) -> Any:
     try:
-        loaded = json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
+
+
+def _read_monitor_json_object(path: Path) -> dict[str, Any] | None:
+    loaded = _read_monitor_json_value(path)
     return loaded if isinstance(loaded, dict) else None
 
 
-def _local_run_store_manifest(
+def _local_run_store_entries(
     data: dict[str, Any], job: dict[str, Any], summary: dict[str, Any]
-) -> dict[str, Any] | None:
-    """Load the source workflow manifest saved by the local run store.
-
-    The submitted runtime manifest contains lowered start/end/router nodes.
-    ``blueprint run`` starts from the source workflow, which is also persisted
-    as the run-store config/manifest for later observability.
-    """
-
+) -> list[tuple[Path, dict[str, Any]]]:
     run_ids: list[str] = []
     for mapping in (job, summary, data):
         if not isinstance(mapping, dict):
@@ -199,15 +200,17 @@ def _local_run_store_manifest(
     try:
         root = Path(default_runs_root()).expanduser()
     except Exception:
-        return None
+        return []
     if not root.is_dir():
-        return None
+        return []
 
-    run_dirs: list[Path] = []
+    entries: list[tuple[Path, dict[str, Any]]] = []
     for run_id in run_ids:
         candidate = root / run_id
-        if candidate.is_dir() and candidate not in run_dirs:
-            run_dirs.append(candidate)
+        if candidate.is_dir():
+            entries.append(
+                (candidate, _read_monitor_json_object(candidate / "job.json") or {})
+            )
 
     # A CLI-created run has a small job mapping even when the GetJob response
     # does not carry run_id.  Resolve that mapping without scanning artifacts.
@@ -216,17 +219,152 @@ def _local_run_store_manifest(
         if not mapping:
             continue
         mapped_job_id = str(mapping.get("job_id") or mapping.get("id") or "").strip()
-        if mapped_job_id in job_ids and mapping_path.parent not in run_dirs:
-            run_dirs.append(mapping_path.parent)
+        if mapped_job_id in job_ids and all(
+            mapping_path.parent != run_dir for run_dir, _mapping in entries
+        ):
+            entries.append((mapping_path.parent, mapping))
+    return entries
 
-    for run_dir in run_dirs:
-        for filename in ("config.json", "manifest.json"):
-            candidate = _read_monitor_json_object(run_dir / filename)
-            if candidate and _workflow_step_ids(candidate):
-                return candidate
+
+def _read_monitor_manifest(path: Path) -> dict[str, Any] | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    cache_key = str(path)
+    cached = _MONITOR_MANIFEST_CACHE.get(cache_key)
+    if cached and cached[:2] == (stat.st_mtime_ns, stat.st_size):
+        return cached[2]
+
+    candidate = _read_monitor_json_object(path)
+    if not candidate:
+        return None
+    try:
+        if is_manifest_source(candidate):
+            candidate = expand_manifest_source(candidate, root_dir=path.parent)
+    except Exception:
+        logger.exception("Failed to expand monitor manifest at %s", path)
+        return None
+    _MONITOR_MANIFEST_CACHE[cache_key] = (
+        stat.st_mtime_ns,
+        stat.st_size,
+        candidate,
+    )
+    return candidate
+
+
+def _blueprint_manifest_from_mapping(
+    mapping: dict[str, Any],
+) -> dict[str, Any] | None:
+    blueprint_id = str(mapping.get("blueprint_id") or "").strip()
+    source_values: list[str] = []
+    explicit_source = str(mapping.get("blueprint_source") or "").strip()
+    if explicit_source:
+        source_values.append(explicit_source)
+
+    try:
+        from mn_cli.libs.blueprint_repository import (
+            blueprint_storage_dir_for_source,
+            resolved_blueprint_source,
+        )
+
+        source, uses_default_cache = resolved_blueprint_source(
+            source=None, blueprint_repo=None
+        )
+        storage = str(
+            blueprint_storage_dir_for_source(
+                source, use_default_cache=uses_default_cache
+            )
+        )
+        if storage and storage not in source_values:
+            source_values.append(storage)
+    except Exception:
+        logger.debug("Default blueprint source is unavailable", exc_info=True)
+
+    for raw_source in source_values:
+        source_path = Path(raw_source).expanduser()
+        candidates: list[Path] = []
+        if source_path.is_file():
+            candidates.append(source_path)
+        else:
+            candidates.append(source_path / "manifest.json")
+            if blueprint_id:
+                candidates.append(source_path / blueprint_id / "manifest.json")
+            index = _read_monitor_json_value(source_path / "index.json")
+            raw_blueprints = (
+                index.get("blueprints") if isinstance(index, dict) else None
+            )
+            if not isinstance(raw_blueprints, list) and isinstance(index, list):
+                raw_blueprints = index
+            for entry in raw_blueprints if isinstance(raw_blueprints, list) else []:
+                if not isinstance(entry, dict):
+                    continue
+                if blueprint_id and str(entry.get("id") or "") != blueprint_id:
+                    continue
+                relative = str(entry.get("path") or "").strip()
+                if relative:
+                    candidates.append(source_path / relative / "manifest.json")
+
+        for candidate_path in candidates:
+            manifest = _read_monitor_manifest(candidate_path)
+            if manifest and _workflow_step_ids(manifest):
+                return manifest
     return None
 
-def _workflow_progress_for_monitor(job_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
+
+def _local_run_store_manifest(
+    data: dict[str, Any], job: dict[str, Any], summary: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Load the source workflow contract used by ``blueprint run``."""
+
+    entries = _local_run_store_entries(data, job, summary)
+    for run_dir, _mapping in entries:
+        for filename in ("manifest.json", "config.json"):
+            candidate = _read_monitor_manifest(run_dir / filename)
+            if candidate and _workflow_step_ids(candidate):
+                return candidate
+    for _run_dir, mapping in entries:
+        candidate = _blueprint_manifest_from_mapping(mapping)
+        if candidate:
+            return candidate
+    return None
+
+
+def _local_run_store_events(job_id: str) -> list[dict[str, Any]]:
+    data = {"job_id": job_id}
+    entries = _local_run_store_entries(data, data, {})
+    if not entries:
+        return []
+    path = entries[0][0] / "events.jsonl"
+    try:
+        stat = path.stat()
+    except OSError:
+        return []
+    cache_key = str(path)
+    cached = _MONITOR_EVENTS_CACHE.get(cache_key)
+    if cached and cached[:2] == (stat.st_mtime_ns, stat.st_size):
+        return list(cached[2])
+
+    events: list[dict[str, Any]] = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict):
+                events.append(event)
+    except (OSError, UnicodeDecodeError):
+        return []
+    _MONITOR_EVENTS_CACHE[cache_key] = (stat.st_mtime_ns, stat.st_size, events)
+    return list(events)
+
+
+def _workflow_progress_for_monitor(
+    job_id: str, data: dict[str, Any]
+) -> dict[str, Any] | None:
     job, summary = _job_and_summary_from_data(data)
     manifest = _manifest_from_job_data(data)
     events: list[dict[str, Any]] = []
@@ -252,15 +390,22 @@ def _workflow_progress_for_monitor(job_id: str, data: dict[str, Any]) -> dict[st
         logger.exception("Failed to build workflow progress for monitor")
         return None
 
+
 def _manifest_from_job_data(data: dict[str, Any]) -> dict[str, Any]:
     job, summary = _job_and_summary_from_data(data)
     workflow_manifest = _public_workflow_manifest_from_job(job, summary)
 
     run_manifest = _local_run_store_manifest(data, job, summary)
-    if run_manifest and _matches_public_workflow_contract(run_manifest, workflow_manifest):
+    if run_manifest and _matches_public_workflow_contract(
+        run_manifest, workflow_manifest
+    ):
         return run_manifest
 
-    for candidate in (data.get("manifest"), job.get("manifest"), summary.get("manifest")):
+    for candidate in (
+        data.get("manifest"),
+        job.get("manifest"),
+        summary.get("manifest"),
+    ):
         if _matches_public_workflow_contract(candidate, workflow_manifest):
             return candidate
     manifest_ref = (
@@ -271,7 +416,9 @@ def _manifest_from_job_data(data: dict[str, Any]) -> dict[str, Any]:
     if isinstance(manifest_ref, dict):
         for raw_path in (
             manifest_ref.get("manifest_path"),
-            Path(str(manifest_ref.get("job_path") or "")) / "manifest.json" if manifest_ref.get("job_path") else None,
+            Path(str(manifest_ref.get("job_path") or "")) / "manifest.json"
+            if manifest_ref.get("job_path")
+            else None,
         ):
             if not raw_path:
                 continue
@@ -301,13 +448,21 @@ def _matches_public_workflow_contract(
     if public_manifest is None:
         return True
     candidate_steps = _workflow_step_ids(candidate)
-    return bool(candidate_steps) and candidate_steps == _workflow_step_ids(public_manifest)
+    return bool(candidate_steps) and candidate_steps == _workflow_step_ids(
+        public_manifest
+    )
 
 
 def _workflow_step_ids(manifest: dict[str, Any]) -> list[str]:
-    workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
+    workflow = (
+        manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
+    )
     steps = workflow.get("steps") if isinstance(workflow.get("steps"), list) else []
-    return [str(step.get("id")) for step in steps if isinstance(step, dict) and step.get("id")]
+    return [
+        str(step.get("id"))
+        for step in steps
+        if isinstance(step, dict) and step.get("id")
+    ]
 
 
 def _public_workflow_manifest_from_job(
@@ -322,13 +477,18 @@ def _public_workflow_manifest_from_job(
 
     workflow_state = _workflow_state_from_job(job, summary)
     steps_by_id = (
-        workflow_state.get("steps")
-        if isinstance(workflow_state.get("steps"), dict)
+        (
+            workflow_state.get("steps")
+            if isinstance(workflow_state.get("steps"), dict)
+            else {}
+        )
+        if isinstance(workflow_state, dict)
         else {}
-    ) if isinstance(workflow_state, dict) else {}
+    )
     step_order = (
         workflow_state.get("step_order")
-        if isinstance(workflow_state, dict) and isinstance(workflow_state.get("step_order"), list)
+        if isinstance(workflow_state, dict)
+        and isinstance(workflow_state.get("step_order"), list)
         else []
     )
     step_ids = [str(step_id) for step_id in step_order if str(step_id) in steps_by_id]
@@ -354,8 +514,7 @@ def _public_workflow_manifest_from_job(
         record = steps_by_id.get(step_id)
         record = record if isinstance(record, dict) else {}
         transitions = {
-            event_name: target
-            for event_name, target in outgoing.get(step_id, [])
+            event_name: target for event_name, target in outgoing.get(step_id, [])
         }
         steps.append(
             {
@@ -368,18 +527,36 @@ def _public_workflow_manifest_from_job(
                 "run": str(record.get("run") or f"{step_id}__start"),
                 "emits": _step_emit_name(step_id, outgoing.get(step_id, [])),
                 "on": transitions,
-                "needs": [str(edge.get("from")) for edge in edges if str(edge.get("to") or "") == step_id],
-                "kind": "source" if index == 0 else "sink" if index == len(step_ids) - 1 else "stage",
+                "needs": [
+                    str(edge.get("from"))
+                    for edge in edges
+                    if str(edge.get("to") or "") == step_id
+                ],
+                "kind": "source"
+                if index == 0
+                else "sink"
+                if index == len(step_ids) - 1
+                else "stage",
             }
         )
 
     workflow_id = str(
         workflow_state.get("workflow_id")
         if isinstance(workflow_state, dict) and workflow_state.get("workflow_id")
-        else job.get("workflow_id") or summary.get("workflow_id")
-        or job.get("graph_id") or summary.get("graph_id") or job.get("job_id") or "workflow"
+        else job.get("workflow_id")
+        or summary.get("workflow_id")
+        or job.get("graph_id")
+        or summary.get("graph_id")
+        or job.get("job_id")
+        or "workflow"
     )
-    job_type = str(job.get("job_type") or job.get("type") or summary.get("job_type") or summary.get("type") or "")
+    job_type = str(
+        job.get("job_type")
+        or job.get("type")
+        or summary.get("job_type")
+        or summary.get("type")
+        or ""
+    )
     policies = {"stream_mode": "live"} if job_type.lower() == "service" else {}
     return {
         "apiVersion": "mn.workflow/v1",
@@ -413,7 +590,11 @@ def _workflow_state_from_job(
 
 
 def _public_step_ids_from_topology(job: dict[str, Any]) -> list[str]:
-    topology = job.get("runtime_topology") if isinstance(job.get("runtime_topology"), dict) else {}
+    topology = (
+        job.get("runtime_topology")
+        if isinstance(job.get("runtime_topology"), dict)
+        else {}
+    )
     nodes = topology.get("nodes") if isinstance(topology.get("nodes"), list) else []
     step_ids: list[str] = []
     for node in nodes:
@@ -437,10 +618,18 @@ def _public_workflow_edges(
     job: dict[str, Any],
     step_ids: list[str],
 ) -> list[dict[str, Any]]:
-    raw_edges = workflow_state.get("edges") if isinstance(workflow_state, dict) else None
+    raw_edges = (
+        workflow_state.get("edges") if isinstance(workflow_state, dict) else None
+    )
     if not isinstance(raw_edges, list):
-        topology = job.get("runtime_topology") if isinstance(job.get("runtime_topology"), dict) else {}
-        raw_edges = topology.get("edges") if isinstance(topology.get("edges"), list) else []
+        topology = (
+            job.get("runtime_topology")
+            if isinstance(job.get("runtime_topology"), dict)
+            else {}
+        )
+        raw_edges = (
+            topology.get("edges") if isinstance(topology.get("edges"), list) else []
+        )
 
     known_steps = set(step_ids)
     edges: list[dict[str, Any]] = []
@@ -457,10 +646,18 @@ def _public_workflow_edges(
             continue
         edges.append(
             {
-                "id": str(raw_edge.get("id") or raw_edge.get("edge_id") or f"{source}_to_{target}"),
+                "id": str(
+                    raw_edge.get("id")
+                    or raw_edge.get("edge_id")
+                    or f"{source}_to_{target}"
+                ),
                 "from": source,
                 "to": target,
-                "event": str(raw_edge.get("event") or raw_edge.get("message_type") or f"{source}_completed"),
+                "event": str(
+                    raw_edge.get("event")
+                    or raw_edge.get("message_type")
+                    or f"{source}_completed"
+                ),
             }
         )
     return edges
@@ -471,35 +668,71 @@ def _step_emit_name(step_id: str, transitions: list[tuple[str, str]]) -> str:
 
 
 def _humanize_identifier(value: str) -> str:
-    return " ".join(part.capitalize() for part in value.replace("-", "_").split("_") if part)
+    return " ".join(
+        part.capitalize() for part in value.replace("-", "_").split("_") if part
+    )
 
 
 def _legacy_manifest_from_job_data(
     data: dict[str, Any], *, job: dict[str, Any], summary: dict[str, Any]
 ) -> dict[str, Any]:
-    topology = job.get("runtime_topology") if isinstance(job.get("runtime_topology"), dict) else {}
-    topology_nodes = topology.get("nodes") if isinstance(topology.get("nodes"), list) else []
-    agents = topology_nodes or (data.get("agents") if isinstance(data.get("agents"), list) else [])
+    topology = (
+        job.get("runtime_topology")
+        if isinstance(job.get("runtime_topology"), dict)
+        else {}
+    )
+    topology_nodes = (
+        topology.get("nodes") if isinstance(topology.get("nodes"), list) else []
+    )
+    agents = topology_nodes or (
+        data.get("agents") if isinstance(data.get("agents"), list) else []
+    )
     nodes = []
     for index, agent in enumerate(agents):
         if not isinstance(agent, dict):
             continue
-        agent_id = str(agent.get("agent_id") or agent.get("id") or agent.get("node_id") or f"agent_{index + 1}")
+        agent_id = str(
+            agent.get("agent_id")
+            or agent.get("id")
+            or agent.get("node_id")
+            or f"agent_{index + 1}"
+        )
         nodes.append(
             {
                 "node_id": agent_id,
-                "agent_type": str(agent.get("agent_type") or agent.get("type") or "worker"),
-                "role": str(agent.get("role") or agent.get("current_task") or agent.get("agent_type") or "worker"),
+                "agent_type": str(
+                    agent.get("agent_type") or agent.get("type") or "worker"
+                ),
+                "role": str(
+                    agent.get("role")
+                    or agent.get("current_task")
+                    or agent.get("agent_type")
+                    or "worker"
+                ),
                 "type": str(agent.get("node_type") or agent.get("type") or ""),
                 "live": agent.get("live?", agent.get("live", False)),
-                "config": {"llm_config": str(agent.get("model") or agent.get("llm_config") or "runtime")},
+                "config": {
+                    "llm_config": str(
+                        agent.get("model") or agent.get("llm_config") or "runtime"
+                    )
+                },
             }
         )
-    job_type = str(job.get("job_type") or job.get("type") or summary.get("job_type") or summary.get("type") or "")
+    job_type = str(
+        job.get("job_type")
+        or job.get("type")
+        or summary.get("job_type")
+        or summary.get("type")
+        or ""
+    )
     policies = {"stream_mode": "live"} if job_type.lower() == "service" else {}
     return {
-        "id": str(job.get("graph_id") or summary.get("graph_id") or job.get("job_id") or "job"),
-        "name": str(job.get("job_name") or summary.get("job_name") or job.get("job_id") or "Job"),
+        "id": str(
+            job.get("graph_id") or summary.get("graph_id") or job.get("job_id") or "job"
+        ),
+        "name": str(
+            job.get("job_name") or summary.get("job_name") or job.get("job_id") or "Job"
+        ),
         "description": str(summary.get("description") or job.get("description") or ""),
         "graph_id": str(job.get("graph_id") or summary.get("graph_id") or ""),
         "type": job_type,
@@ -514,10 +747,26 @@ def _public_progress_from_api_snapshot(
 ) -> dict[str, Any]:
     """Project API stream updates onto the source-facing workflow contract.
 
-    The API snapshot may be produced from the lowered runtime topology.  Fetch
-    the job ledger when that contract is available so API-stream monitoring
-    stays identical to the polling monitor and to ``blueprint run``.
+    Prefer the source manifest and event relay persisted by ``blueprint run``.
+    This avoids downloading an ever-growing runtime ledger for every stream
+    update and keeps attached monitoring identical to the launch-time view.
     """
+
+    local_progress = _local_progress_from_run_store(job_id, snapshot)
+    if local_progress:
+        return local_progress
+
+    local_data = {"job_id": job_id}
+    local_manifest = _local_run_store_manifest(local_data, local_data, {})
+    if local_manifest:
+        public_ids = _workflow_step_ids(local_manifest)
+        snapshot_ids = [
+            str(step.get("id"))
+            for step in snapshot.get("steps", [])
+            if isinstance(step, dict) and step.get("id")
+        ]
+        if snapshot_ids == public_ids:
+            return snapshot
 
     try:
         data = json.loads(_get_job_for_monitor(job_id))
@@ -540,17 +789,65 @@ def _public_progress_from_api_snapshot(
         logger.exception("Failed to project API workflow progress onto source contract")
         return snapshot
 
+    return _merge_api_progress_metadata(progress, snapshot)
+
+
+def _local_progress_from_run_store(
+    job_id: str, snapshot: dict[str, Any]
+) -> dict[str, Any] | None:
+    local_data = {"job_id": job_id}
+    manifest = _local_run_store_manifest(local_data, local_data, {})
+    events = _local_run_store_events(job_id) if manifest else []
+    if not manifest or not events:
+        return None
+    try:
+        progress = build_workflow_progress_snapshot(
+            manifest,
+            events,
+            job={
+                "job_id": job_id,
+                "status": snapshot.get("status"),
+                "submitted_at": snapshot.get("submitted_at"),
+            },
+            summary={"status": snapshot.get("status")},
+            job_id=job_id,
+        )
+        return _merge_api_progress_metadata(progress, snapshot)
+    except Exception:
+        logger.exception("Failed to build progress from the local run store")
+        return None
+
+
+def _merge_api_progress_metadata(
+    progress: dict[str, Any], snapshot: dict[str, Any]
+) -> dict[str, Any]:
     for key in ("messages", "resource_tokens", "observability_summary", "trace_id"):
         if key not in progress and key in snapshot:
             progress[key] = snapshot[key]
     stream_status = str(snapshot.get("status") or "").lower()
-    if stream_status in FINAL_STATUSES and str(progress.get("status") or "").lower() not in FINAL_STATUSES:
+    if (
+        stream_status in FINAL_STATUSES
+        and str(progress.get("status") or "").lower() not in FINAL_STATUSES
+    ):
         progress["status"] = stream_status
     return progress
 
+
+def _monitor_api_stream_timeout_seconds() -> float:
+    raw = os.getenv("MN_JOB_MONITOR_API_STREAM_TIMEOUT", "").strip()
+    if not raw:
+        return _monitor_rpc_timeout_seconds()
+    try:
+        return max(float(raw), 1.0)
+    except ValueError:
+        return _monitor_rpc_timeout_seconds()
+
+
 def _live_monitor_api_stream(job_id: str) -> bool:
     api_base_url = str(getattr(config, "api_base_url", "") or "").strip()
-    if not api_base_url or os.getenv("MN_JOB_MONITOR_DISABLE_API_STREAM", "").strip().lower() in {"1", "true", "yes", "on"}:
+    if not api_base_url or os.getenv(
+        "MN_JOB_MONITOR_DISABLE_API_STREAM", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}:
         return False
 
     import queue
@@ -566,7 +863,7 @@ def _live_monitor_api_stream(job_id: str) -> bool:
                 api_base_url,
                 job_id,
                 api_token=str(getattr(config, "api_token", "") or ""),
-                timeout=float(os.getenv("MN_JOB_MONITOR_API_STREAM_TIMEOUT", "10")),
+                timeout=_monitor_api_stream_timeout_seconds(),
             ):
                 event_queue.put(("snapshot", snapshot))
                 if str(snapshot.get("status") or "").lower() in FINAL_STATUSES:
@@ -577,8 +874,20 @@ def _live_monitor_api_stream(job_id: str) -> bool:
             event_queue.put(("done", None))
 
     class MonitorView:
-        def __init__(self, state: JobMonitorState):
-            self.data: dict[str, Any] | None = None
+        def __init__(
+            self,
+            state: JobMonitorState,
+            initial_progress: dict[str, Any] | None = None,
+        ):
+            self.data: dict[str, Any] | None = (
+                {
+                    "workflow_progress": initial_progress,
+                    "summary": {"status": initial_progress.get("status")},
+                    "job": {"job_id": job_id, "status": initial_progress.get("status")},
+                }
+                if initial_progress
+                else None
+            )
             self.state = state
 
         def __rich__(self):
@@ -588,8 +897,11 @@ def _live_monitor_api_stream(job_id: str) -> bool:
                 return Panel("Connecting to workflow progress stream...", style="cyan")
             return generate_live_layout(job_id, self.data, state=self.state)
 
+    initial_progress = _local_progress_from_run_store(
+        job_id, {"job_id": job_id, "status": "running"}
+    )
     monitor_state = JobMonitorState()
-    view = MonitorView(monitor_state)
+    view = MonitorView(monitor_state, initial_progress)
     worker = threading.Thread(target=reader, daemon=True)
     worker.start()
     is_tty = _interactive_live_output()
@@ -602,7 +914,7 @@ def _live_monitor_api_stream(job_id: str) -> bool:
         old_settings = termios.tcgetattr(fd)
         tty.setcbreak(fd)
 
-    saw_snapshot = False
+    saw_snapshot = initial_progress is not None
     try:
         with Live(
             view,
@@ -651,6 +963,7 @@ def _live_monitor_api_stream(job_id: str) -> bool:
 
             termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
     return saw_snapshot
+
 
 def _live_monitor(job_id: str):
     if _live_monitor_api_stream(job_id):
@@ -713,7 +1026,9 @@ def _live_monitor(job_id: str):
                     with _temporary_monitor_rpc_timeout():
                         job_json = _get_job_for_monitor(job_id)
                         data = json.loads(job_json)
-                        data["workflow_progress"] = _workflow_progress_for_monitor(job_id, data)
+                        data["workflow_progress"] = _workflow_progress_for_monitor(
+                            job_id, data
+                        )
                     last_good_data = data
                 except Exception as exc:
                     if _is_transient_monitor_fetch_error(exc):
@@ -770,6 +1085,7 @@ def _live_monitor(job_id: str):
     else:
         console.print(f"\n[yellow]Exited live monitor for {job_id}[/yellow]")
         fetch_and_save_results(job_id, data)
+
 
 def monitor(job_id: str):
     """Stream live events for a job"""

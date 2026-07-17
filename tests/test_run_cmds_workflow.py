@@ -184,6 +184,59 @@ def test_run_displays_workflow_steps_and_agents(mocker, tmp_path):
     assert "Research  |  2 agents" in result.stdout
     assert "1.8k" in result.stdout
 
+
+def test_workflow_progress_resolves_lowered_start_node_to_public_binding():
+    manifest = {
+        "apiVersion": "mn.workflow/v1",
+        "kind": "Workflow",
+        "workflow": {
+            "steps": [
+                {
+                    "id": "audit",
+                    "label": "Audit",
+                    "action": "audit",
+                    "run": "audit__start",
+                }
+            ]
+        },
+        "runtime": {
+            "bindings": {
+                "audit": {
+                    "worker": {
+                        "id": "audit__score_consistency_auditor",
+                        "role": "Score Consistency Auditor",
+                    }
+                }
+            }
+        },
+    }
+    view = BlueprintWorkflowProgress(manifest, job_id="job-lowered")
+
+    view.update(
+        {
+            "type": "workflow_step_attempt_started",
+            "step_id": "audit",
+            "agent_id": "audit__start",
+        }
+    )
+    view.update(
+        {
+            "type": "workflow_worker_started",
+            "payload": {
+                "step_id": "audit",
+                "worker": "audit__score_consistency_auditor",
+            },
+        }
+    )
+    snapshot = view.snapshot()
+
+    assert snapshot["current_step"]["id"] == "audit"
+    assert [agent["id"] for agent in snapshot["current_step"]["agents"]] == [
+        "audit__score_consistency_auditor"
+    ]
+    assert snapshot["current_step"]["agents"][0]["status"] == "running"
+
+
 def test_workflow_monitor_renders_service_idle_and_ready_counts():
     progress = {
         "workflow_id": "video_watch_assistant_v1",
