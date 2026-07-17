@@ -60,7 +60,12 @@ def _resolve_job_result(job: dict[str, Any]) -> Any:
     if not is_staged_artifact_ref(reference):
         return result
     try:
-        return resolve_json_reference(reference)
+        resolution_env = dict(os.environ)
+        resolution_env.setdefault(
+            "MN_HOST_SHARED_STORAGE_ROOT",
+            RuntimeConfig.from_env().shared_storage_root,
+        )
+        return resolve_json_reference(reference, env=resolution_env)
     except StagedArtifactError:
         logger.exception("Failed to resolve staged job result")
         return result

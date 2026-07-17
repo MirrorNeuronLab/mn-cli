@@ -69,6 +69,7 @@ from mn_sdk.submission_preparation import (
 )
 from mn_sdk.skill_runtime import validate_skill_runtime_requirements
 from mn_sdk.skill_dependencies import gar_requirements_text, skill_dependency_records
+from mn_sdk.runtime_config import RuntimeConfig
 from mn_sdk.staged_artifacts import (
     StagedArtifactError,
     is_staged_artifact_ref,

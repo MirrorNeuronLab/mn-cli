@@ -330,15 +330,23 @@ def test_resolve_job_result_reads_staged_snapshot(monkeypatch):
         "size_bytes": 11,
         "sha256": "a" * 64,
     }
-    monkeypatch.setattr(
-        run_cmds,
-        "resolve_json_reference",
-        lambda selected: {"final_artifact": {"ok": selected == reference}},
-    )
+    captured = {}
+
+    class RuntimeConfig:
+        shared_storage_root = "/tmp/mn-shared"
+
+    def resolve(selected, **kwargs):
+        captured.update(kwargs)
+        return {"final_artifact": {"ok": selected == reference}}
+
+    monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
+    monkeypatch.setattr(run_cmds.RuntimeConfig, "from_env", lambda: RuntimeConfig())
+    monkeypatch.setattr(run_cmds, "resolve_json_reference", resolve)
 
     assert run_cmds._resolve_job_result({"result_ref": reference}) == {
         "final_artifact": {"ok": True}
     }
+    assert captured["env"]["MN_HOST_SHARED_STORAGE_ROOT"] == "/tmp/mn-shared"
 
 
 def test_materialize_shared_storage_outputs_copies_host_runtime_path(tmp_path):
