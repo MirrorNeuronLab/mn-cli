@@ -32,6 +32,7 @@ from mn_cli.server_cmds import (
     _runtime_endpoint_snapshot,
     _valid_port_text,
     _write_runtime_endpoints_file,
+    compose_web_ui_enabled,
     find_web_ui_dir,
     runtime_compose_available,
 )
@@ -89,7 +90,7 @@ def collect_runtime_health(timeout: float = 3.0, *, core_client: Any | None = No
 
 
 def collect_runtime_status(timeout: float = 3.0, *, core_client: Any | None = None) -> dict[str, Any]:
-    installed_web_ui = find_web_ui_dir() is not None
+    installed_web_ui = compose_web_ui_enabled() or find_web_ui_dir() is not None
     config = _runtime_config(web_ui_installed=installed_web_ui)
     return sdk_collect_runtime_status(
         config=config,
@@ -413,7 +414,10 @@ def _repair_runtime_sidecars(report: dict[str, Any]) -> bool:
         print_info(console, "Repairing Web UI sidecar…")
         changed = _start_web_ui_if_installed(env) or changed
     if changed:
-        _write_runtime_endpoints_file(env, web_ui_available=find_web_ui_dir() is not None)
+        _write_runtime_endpoints_file(
+            env,
+            web_ui_available=compose_web_ui_enabled() or find_web_ui_dir() is not None,
+        )
     return changed
 
 

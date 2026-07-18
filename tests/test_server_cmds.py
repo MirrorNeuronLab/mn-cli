@@ -3661,6 +3661,19 @@ def test_default_web_ui_dirs_use_nested_install_path():
     assert ORIGINAL_WEB_UI_DIRS[0].name == "webui"
     assert ORIGINAL_WEB_UI_DIRS[1] == ORIGINAL_WEB_UI_DIRS[0].parent / "web-ui-source"
 
+def test_compose_web_ui_enabled_requires_service_and_profile(mocker, tmp_path):
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_env = tmp_path / "docker-compose.env"
+    compose_file.write_text("services:\n  web-ui:\n    image: node:22-alpine\n")
+    compose_env.write_text("COMPOSE_PROFILES=web-ui,openshell\n")
+    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_FILE", compose_file)
+    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+
+    assert server_cmds.compose_web_ui_enabled() is True
+
+    compose_env.write_text("COMPOSE_PROFILES=openshell\n")
+    assert server_cmds.compose_web_ui_enabled() is False
+
 def test_web_ui_dirs_use_runtime_home_only_when_runtime_home_is_custom(mocker, tmp_path):
     custom_home = tmp_path / "custom-home"
 
@@ -3868,6 +3881,24 @@ def test_start_web_ui_if_installed(mocker, tmp_path):
         call("localhost", "55173", timeout_seconds=10.0),
     ]
     stop_matching.assert_called_once_with("mn-web-ui-server", "Web UI")
+
+def test_start_web_ui_uses_compose_service(mocker, tmp_path):
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_env = tmp_path / "docker-compose.env"
+    compose_file.write_text("services:\n  web-ui:\n    image: node:22-alpine\n")
+    compose_env.write_text(
+        "COMPOSE_PROFILES=web-ui\nMN_WEB_UI_HOST=localhost\nMN_WEB_UI_PORT=55173\n"
+    )
+    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_FILE", compose_file)
+    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+    mock_run = mocker.patch("mn_cli.server_cmds.subprocess.run")
+    mocker.patch("mn_cli.server_cmds._wait_for_web_ui", return_value=True)
+    mock_popen = mocker.patch("mn_cli.server_cmds.subprocess.Popen")
+
+    assert _start_web_ui_if_installed() is True
+
+    assert mock_run.call_args.args[0][-3:] == ["up", "-d", "web-ui"]
+    mock_popen.assert_not_called()
 
 def test_start_web_ui_reports_available_when_watchdog_starts_before_health(mocker, tmp_path):
     web_ui_dir = tmp_path / "web-ui"

@@ -3259,6 +3259,23 @@ def check_status(pid_file: Path) -> int:
 def runtime_compose_available() -> bool:
     return RUNTIME_COMPOSE_FILE.exists() and RUNTIME_COMPOSE_ENV.exists()
 
+def compose_web_ui_enabled() -> bool:
+    """Return whether this installed Compose runtime owns the Web UI service."""
+    if not runtime_compose_available():
+        return False
+    try:
+        compose_text = RUNTIME_COMPOSE_FILE.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    if re.search(r"^  web-ui:\s*$", compose_text, flags=re.MULTILINE) is None:
+        return False
+    profiles = {
+        profile.strip()
+        for profile in _read_env_file(RUNTIME_COMPOSE_ENV).get("COMPOSE_PROFILES", "").split(",")
+        if profile.strip()
+    }
+    return "web-ui" in profiles
+
 def _read_env_file(path: Path) -> dict[str, str]:
     return _runtime_read_env_file(path)
 
@@ -5262,6 +5279,34 @@ def _print_service_endpoints(ip: Optional[str], web_ui_available: bool):
         console.print("[dim]Redis and Erlang cluster traffic use Docker internal networking.[/dim]")
 
 def _start_web_ui_if_installed(runtime_env: Optional[dict[str, str]] = None) -> bool:
+    if compose_web_ui_enabled():
+        env = os.environ.copy()
+        if runtime_env:
+            env.update(runtime_env)
+        web_ui_host = env.get("MN_WEB_UI_HOST") or _web_ui_host()
+        web_ui_port = _valid_port_text(
+            str(env.get("MN_WEB_UI_PORT") or os.getenv("MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT)),
+            DEFAULT_WEB_UI_PORT,
+        )
+        try:
+            subprocess.run(
+                runtime_compose_cmd("up", "-d", "web-ui"),
+                check=True,
+                stdout=subprocess.DEVNULL,
+                env=env,
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            print_warning(console, "Failed to start the Web UI Compose service.")
+            return False
+        if _wait_for_web_ui(web_ui_host, web_ui_port, timeout_seconds=20.0):
+            print_info(console, "Web UI Compose service is running.")
+        else:
+            print_warning(
+                console,
+                f"Web UI Compose service is starting; waiting for {_web_ui_http_url(web_ui_host, web_ui_port)} to respond.",
+            )
+        return True
+
     web_ui_dir = find_web_ui_dir()
     if not web_ui_dir:
         return False

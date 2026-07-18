@@ -374,6 +374,7 @@ def _patch_targets(mocker, tmp_path: Path, *, web_ui_installed: bool) -> Path:
     endpoints = tmp_path / "runtime-endpoints.json"
     mocker.patch("mn_cli.libs.runtime_health.RUNTIME_ENDPOINTS_FILE", endpoints)
     mocker.patch("mn_cli.libs.runtime_health.runtime_compose_available", return_value=False)
+    mocker.patch("mn_cli.libs.runtime_health.compose_web_ui_enabled", return_value=False)
     mocker.patch("mn_cli.libs.runtime_health._runtime_base_env", return_value={})
     mocker.patch(
         "mn_cli.libs.runtime_health._runtime_endpoint_snapshot",
