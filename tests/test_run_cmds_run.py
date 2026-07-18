@@ -839,6 +839,29 @@ def test_run_error_submitting(mocker, tmp_path):
     cleanup.assert_called_once_with(submission_id="submission-that-failed")
 
 
+def test_run_command_debug_prints_preparation_diagnostic(mocker, tmp_path):
+    mocker.patch(
+        "mn_cli.libs.run_cmds.prepare_job_submission",
+        side_effect=RuntimeError(
+            "DockerWorker startup_folder_watcher has no eligible node: "
+            "status_ineligible (offline)"
+        ),
+    )
+
+    bundle_dir = tmp_path / "run_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text('{"nodes": []}')
+
+    result = runner.invoke(
+        app,
+        ["blueprint", "run", "--folder", str(bundle_dir), "--debug"],
+    )
+
+    assert result.exit_code == 1
+    assert "Diagnostic:" in result.stdout
+    assert "status_ineligible (offline)" in result.stdout
+
+
 def test_run_reports_remote_docker_worker_preparation(mocker, tmp_path):
     mocker.patch(
         "mn_cli.libs.run_cmds._resolve_and_apply_workflow_placement",

@@ -90,7 +90,7 @@ from mn_cli.libs.blueprint_resources import cleanup_blueprint_host_hooks
 from mn_cli.server_cmds import ensure_context_engine_runtime
 from mn_cli.shared import console, client, config, logger
 from mn_cli.terminal import use_progress
-from mn_cli.error_handler import handle_cli_error
+from mn_cli.error_handler import debug_enabled, handle_cli_error
 from mn_sdk import (
     Client,
     BlueprintModelOps,

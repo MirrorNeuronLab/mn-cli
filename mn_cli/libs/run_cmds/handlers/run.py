@@ -148,6 +148,7 @@ def run_bundle(
     web_ui: bool = False,
     auto_schedule: bool = False,
     schedule: Optional[str] = None,
+    debug: bool = False,
 ):
     """Run a bundle after applying optional runtime metadata and environment."""
     pre_launch_process: subprocess.Popen[Any] | None = None
@@ -551,7 +552,11 @@ def run_bundle(
             pre_launch_run_dir,
             reason="launch_failed",
         )
-        handle_cli_error(e, console, "run bundle")
+        # ``blueprint run --debug`` is a command-local option, so it cannot
+        # update the root callback's debug state. Pass it explicitly here;
+        # otherwise preparation failures only show the generic error even
+        # though the run has already enabled debug settings in its payload.
+        handle_cli_error(e, console, "run bundle", debug=debug or debug_enabled())
         raise typer.Exit(1)
 
 

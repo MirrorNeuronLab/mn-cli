@@ -12,7 +12,7 @@ bootstrap_environment()
 
 from mn_cli import update_cmds
 from mn_cli.banner import format_banner
-from mn_cli.libs import backup_cmds, deployment_cmds, job_cmds, model_cmds, resource_cmds, run_cmds, schedule_cmds, service_cmds, sys_cmds
+from mn_cli.libs import backup_cmds, deployment_cmds, job_cmds, model_cmds, operation_cmds, resource_cmds, run_cmds, schedule_cmds, service_cmds, sys_cmds
 from mn_cli.libs.blueprint_cmds import blueprint_app
 from mn_cli.error_handler import handle_cli_error, set_debug
 from mn_cli.runtime_mode import local_runtime_mode
@@ -71,6 +71,7 @@ app = typer.Typer(
 )
 job_app = typer.Typer(help=JOB_HELP, context_settings=CONTEXT_SETTINGS)
 node_app = typer.Typer(help=NODE_HELP, context_settings=CONTEXT_SETTINGS)
+operation_app = typer.Typer(help="Inspect or reattach to durable group operations.", context_settings=CONTEXT_SETTINGS)
 runtime_app = typer.Typer(help=RUNTIME_HELP, context_settings=CONTEXT_SETTINGS)
 
 
@@ -171,6 +172,10 @@ node_app.command(name="add")(sys_cmds.add_node)
 node_app.command(name="leave")(sys_cmds.leave)
 node_app.command(name="refresh-token")(sys_cmds.refresh_token)
 
+# Durable group operations
+operation_app.command(name="status")(operation_cmds.status)
+operation_app.command(name="watch")(operation_cmds.watch)
+
 # Runtime commands
 runtime_app.command(name="start")(sys_cmds.start)
 runtime_app.command(name="stop")(sys_cmds.stop)
@@ -189,6 +194,7 @@ deployment_cmds.deployment_app.command(name="deploy")(deployment_cmds.deploy)
 app.add_typer(blueprint_app, name="blueprint")
 app.add_typer(job_app, name="job")
 app.add_typer(node_app, name="node")
+app.add_typer(operation_app, name="operation")
 app.add_typer(runtime_app, name="runtime")
 app.add_typer(resource_cmds.resource_app, name="resource")
 app.add_typer(service_cmds.service_app, name="service")

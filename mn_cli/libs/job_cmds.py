@@ -9,6 +9,7 @@ from mn_cli.shared import console, client, config, logger
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.blueprint_resources import cleanup_blueprint_host_hooks, cleanup_web_ui_process
 from mn_cli.libs.blueprint_observability import load_observability_tools
+from mn_cli.libs.operation_cmds import start_and_watch
 from mn_cli.libs.ui import print_confirmed, print_error, print_success_confirmation
 
 import typer
@@ -16,7 +17,7 @@ import typer
 from mn_sdk.runtime_config import default_runs_root
 from mn_sdk import RuntimeService, ValidationError, parse_duration_ms as sdk_parse_duration_ms
 
-_ACTIVE_JOB_STATUSES = {"pending", "validated", "scheduled", "running", "paused"}
+_ACTIVE_JOB_STATUSES = {"pending", "validated", "scheduled", "running", "paused", "cancelling"}
 _ALL_JOBS_LIMIT = 2_147_483_647
 
 
@@ -102,17 +103,17 @@ def list_jobs(running_only: bool = typer.Option(False, "--running-only", help="O
         handle_cli_error(e, console, 'list_jobs')
 
 
-def clear():
+def clear(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Clear terminal jobs without prompting."),
+):
     """Remove all job records except running ones"""
     try:
-        cleared_count = client.clear_jobs()
-        logger.info("Cleared %d non-running jobs", cleared_count)
-        print_success_confirmation(
-            console,
-            "Job clear",
-            details={"Jobs cleared": f"{cleared_count} non-running"},
-            next_steps="mn job list",
-        )
+        if not yes and not typer.confirm("Clear all terminal job records?", default=False):
+            print_confirmed(console, "Job clear", status="aborted")
+            return
+
+        result = start_and_watch("clear_jobs", {}, action="Job clear")
+        logger.info("Finished clear operation %s", result.get("operation_id"))
     except grpc.RpcError as e:
         if e.code() == grpc.StatusCode.PERMISSION_DENIED and "MN_GRPC_ADMIN_TOKEN" in str(e.details()):
             print_error(console, "ClearJobs admin authorization failed.")
@@ -199,65 +200,13 @@ def cancel_all(
             )
             return
 
-        result = json.loads(client.cancel_all_jobs())
-        results = result.get("results") if isinstance(result, dict) else []
-        results = results if isinstance(results, list) else []
-
-        result_ids = {
-            item.get("job_id")
-            for item in results
-            if isinstance(item, dict) and isinstance(item.get("job_id"), str)
-        }
-        missing_results = [
-            {
-                "job_id": job["job_id"],
-                "status": "failed",
-                "error": "runtime returned no cancellation result",
-            }
-            for job in jobs
-            if job["job_id"] not in result_ids
-        ]
-        results.extend(missing_results)
-
-        cancelled = [
-            item
-            for item in results
-            if isinstance(item, dict) and item.get("status") == "cancelled"
-        ]
-        failed = [
-            item
-            for item in results
-            if not isinstance(item, dict) or item.get("status") != "cancelled"
-        ]
-
-        for item in cancelled:
-            job_id = item.get("job_id")
-            if isinstance(job_id, str) and job_id:
-                _cleanup_cancelled_job_web_ui(job_id)
-
-        cancelled_count = len(cancelled)
-        failed_count = len(failed)
-        logger.info("Cancelled %d active jobs; %d cancellation(s) failed", cancelled_count, failed_count)
-
-        if failed_count:
-            print_error(console, "Job cancel-all completed with failures.")
-            console.print(f"Cancelled {cancelled_count} of {len(results)} active jobs.")
-            for item in failed:
-                if not isinstance(item, dict):
-                    continue
-                console.print(
-                    f"! Warning: {item.get('job_id', 'unknown job')}: "
-                    f"{item.get('error', item.get('status', 'cancellation failed'))}"
-                )
-            raise typer.Exit(1)
-
-        print_success_confirmation(
-            console,
-            "Job cancel-all",
-            status="cancelled",
-            details={"Jobs cancelled": cancelled_count},
-            next_steps="mn job list --running-only",
+        result = start_and_watch(
+            "cancel_all_jobs",
+            {},
+            action="Job cancel-all",
+            on_accepted_item=lambda event: _cleanup_cancelled_job_web_ui(str(event.get("item_id") or "")),
         )
+        logger.info("Finished cancel-all operation %s", result.get("operation_id"))
     except typer.Exit:
         raise
     except Exception as error:
@@ -524,12 +473,10 @@ def reconcile_node(
 ):
     """Reconcile jobs affected by an unavailable node"""
     try:
-        result_json = client.reconcile_node(node_name, reason=reason, dry_run=dry_run)
-        _print_node_mutation_confirmation(
-            "Node reconcile",
-            json.loads(result_json),
-            node_name=node_name,
-            details={"Dry run": dry_run},
+        start_and_watch(
+            "reconcile_node",
+            {"node_name": node_name, "reason": reason, "dry_run": dry_run},
+            action="Node reconcile",
         )
     except Exception as e:
         handle_cli_error(e, console, 'reconcile-node')
@@ -550,28 +497,17 @@ def drain_node(
     """Drain a node and move safe workloads elsewhere"""
     try:
         deadline_ms = parse_duration_ms(deadline)
-        result_json = client.drain_node(
-            node_name,
-            reason=reason,
-            deadline_ms=deadline_ms,
-            dry_run=dry_run,
-            ignore_system_jobs=ignore_system_jobs,
-            wait=wait,
-        )
-        result = json.loads(result_json)
-
-        if wait and not dry_run:
-            result = wait_for_drain(node_name, result)
-
-        _print_node_mutation_confirmation(
-            "Node drain",
-            result,
-            node_name=node_name,
-            details={
-                "Deadline": deadline,
-                "Dry run": dry_run,
-                "System jobs": "ignored" if ignore_system_jobs else "included",
+        start_and_watch(
+            "drain_node",
+            {
+                "node_name": node_name,
+                "reason": reason,
+                "deadline_ms": deadline_ms,
+                "dry_run": dry_run,
+                "ignore_system_jobs": ignore_system_jobs,
             },
+            action="Node drain",
+            stop_on_deferred=not wait and not dry_run,
         )
     except Exception as e:
         handle_cli_error(e, console, 'drain-node')

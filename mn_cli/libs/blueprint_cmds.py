@@ -246,6 +246,7 @@ def _run_resolved_blueprint(
         web_ui=web_ui,
         auto_schedule=auto_schedule,
         schedule=schedule,
+        debug=debug,
     )
 
 
@@ -815,6 +816,7 @@ def _run_local_folder(
         web_ui=web_ui,
         auto_schedule=auto_schedule,
         schedule=schedule,
+        debug=debug,
     )
 
 

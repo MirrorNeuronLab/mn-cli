@@ -1090,6 +1090,7 @@ def test_blueprint_run_testing_flags_override_local_bundle(mocker, tmp_path):
     assert kwargs["submission_metadata"]["fake_skills"] is True
     assert kwargs["submission_metadata"]["benchmark"] is True
     assert kwargs["submission_metadata"]["debug"] is True
+    assert kwargs["debug"] is True
     assert kwargs["config_overrides"]["execution"]["fake_skills"] is True
     assert kwargs["config_overrides"]["execution"]["benchmark"] is True
     assert kwargs["config_overrides"]["execution"]["debug"] is True
