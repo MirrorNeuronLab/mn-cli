@@ -10,6 +10,7 @@ def _build_runtime_model_prepare_plan(
     *,
     config_overrides: Optional[dict[str, Any]] = None,
     dependencies: RuntimeModelDependencies | None = None,
+    lazy: bool = False,
 ) -> dict[str, Any]:
     config_loader = (
         dependencies.load_blueprint_config
@@ -40,10 +41,14 @@ def _build_runtime_model_prepare_plan(
             )
         )
     )
-    config = _config_with_auto_runtime_model_profile(
-        base_config,
-        catalog=catalog,
-        resolve_cluster_model=profile_cluster_resolver,
+    config = (
+        base_config
+        if lazy
+        else _config_with_auto_runtime_model_profile(
+            base_config,
+            catalog=catalog,
+            resolve_cluster_model=profile_cluster_resolver,
+        )
     )
     validation_manifest = _manifest_for_model_validation(manifest, config)
     requirements = required_blueprint_models(
@@ -74,6 +79,13 @@ def _build_runtime_model_prepare_plan(
                 "label": str(
                     entry.get("id") or requirement.get("name") or docker_model
                 ),
+                "logical_model": (
+                    "default"
+                    if requirement.get("default") is True
+                    else str(requirement.get("model") or "")
+                ),
+                "requested_model": str(requirement.get("model") or ""),
+                "requirement_name": str(requirement.get("name") or ""),
                 "model": docker_model,
                 "entry": entry,
                 "source": str(
@@ -93,6 +105,49 @@ def _build_runtime_model_prepare_plan(
     }
 
 
+def _defer_runtime_models_for_run_or_exit(
+    bundle_dir: Path,
+    manifest: dict[str, Any],
+    *,
+    env_overrides: Optional[dict[str, str]] = None,
+    config_overrides: Optional[dict[str, Any]] = None,
+    force: bool = False,
+    quiet: bool = False,
+    debug: bool = False,
+    runtime_model_plan: Optional[dict[str, Any]] = None,
+    dependencies: RuntimeModelDependencies | None = None,
+) -> dict[str, Any]:
+    plan = runtime_model_plan or _build_runtime_model_prepare_plan(
+        bundle_dir,
+        manifest,
+        config_overrides=config_overrides,
+        dependencies=dependencies,
+        lazy=True,
+    )
+    if debug:
+        _print_runtime_model_deferred_debug_plan(plan, env_overrides=env_overrides)
+    summary = _deferred_runtime_model_summary(bundle_dir, manifest, plan)
+    if env_overrides is not None and summary["models"]:
+        llm = plan["config"].get("llm") if isinstance(plan["config"].get("llm"), dict) else {}
+        provider = str(llm.get("provider") or "docker_model_runner").strip().lower()
+        if provider in {"", "docker_model_runner", "docker-model-runner", "dmr"}:
+            env_overrides["MN_RUNTIME_MODEL_MANAGED"] = "1"
+            env_overrides["MN_LLM_PROVIDER"] = "docker_model_runner"
+            env_overrides["LITELLM_PROVIDER"] = "docker_model_runner"
+            env_overrides["MN_LLM_API_BASE"] = "auto"
+            env_overrides["LITELLM_API_BASE"] = "auto"
+        if _blueprint_requests_default_llm(plan["base_config"]):
+            env_overrides["MN_LLM_MODEL"] = "default"
+            env_overrides["LITELLM_MODEL"] = "default"
+    if not quiet:
+        console.print(
+            "[cyan]Runtime model installation is deferred until each model is first used by the job.[/cyan]"
+        )
+    if debug:
+        _print_runtime_model_deferred_debug_response(summary)
+    return summary
+
+
 def _prepare_runtime_models_for_run_or_exit(
     bundle_dir: Path,
     manifest: dict[str, Any],
@@ -101,9 +156,12 @@ def _prepare_runtime_models_for_run_or_exit(
     config_overrides: Optional[dict[str, Any]] = None,
     force: bool = False,
     quiet: bool = False,
+    debug: bool = False,
     runtime_model_plan: Optional[dict[str, Any]] = None,
     dependencies: RuntimeModelDependencies | None = None,
 ) -> dict[str, Any]:
+    """Eager compatibility helper used by explicit prepare/doctor workflows."""
+
     plan = runtime_model_plan or _build_runtime_model_prepare_plan(
         bundle_dir,
         manifest,
@@ -115,6 +173,8 @@ def _prepare_runtime_models_for_run_or_exit(
     config = plan["config"]
     validation_manifest = plan["validation_manifest"]
     model_ops = dependencies.model_ops if dependencies is not None else None
+    if debug:
+        _print_runtime_model_prepare_debug_plan(plan, env_overrides=env_overrides)
     if model_ops is None:
         model_ops = BlueprintModelOps(
             load_model_catalog=lambda: catalog,
@@ -127,12 +187,8 @@ def _prepare_runtime_models_for_run_or_exit(
             model_installed=model_installed,
             install_model_entry=install_model_entry,
             resolve_model_endpoint=_resolve_runtime_model_endpoint,
-            notify_model_install_start=None
-            if quiet
-            else _print_runtime_model_install_start,
-            install_model_with_progress=None
-            if quiet
-            else _install_runtime_model_with_progress,
+            notify_model_install_start=None if quiet else _print_runtime_model_install_start,
+            install_model_with_progress=None if quiet else _install_runtime_model_with_progress,
             resolve_cluster_model=_resolve_runtime_cluster_model,
             install_cluster_model=_install_runtime_cluster_model,
         )
@@ -162,27 +218,226 @@ def _prepare_runtime_models_for_run_or_exit(
     if prepared_json and env_overrides is not None:
         env_overrides["MN_PREPARED_RUNTIME_MODELS_JSON"] = prepared_json
     materialized_config = _config_with_runtime_model_endpoints(config, summary)
-    materialized_config = _config_with_runtime_model_fallbacks(
-        materialized_config, summary
-    )
+    materialized_config = _config_with_runtime_model_fallbacks(materialized_config, summary)
     materialized_config = _config_with_runtime_model_profile(materialized_config)
-    materialized_config = _config_with_runtime_model_endpoints(
-        materialized_config, summary
-    )
-    if (
-        config is not base_config or materialized_config is not config
-    ) and env_overrides is not None:
+    materialized_config = _config_with_runtime_model_endpoints(materialized_config, summary)
+    if (config is not base_config or materialized_config is not config) and env_overrides is not None:
         summary["config_overrides"] = materialized_config
-        env_overrides["MN_BLUEPRINT_CONFIG_JSON"] = json.dumps(
-            materialized_config, sort_keys=True
-        )
+        env_overrides["MN_BLUEPRINT_CONFIG_JSON"] = json.dumps(materialized_config, sort_keys=True)
         env_overrides.update(_runtime_model_fallback_llm_env(materialized_config))
     if env_overrides is not None and _blueprint_requests_default_llm(base_config):
         env_overrides["MN_LLM_MODEL"] = "default"
         env_overrides["LITELLM_MODEL"] = "default"
     if not quiet:
         _print_runtime_model_install_summary(summary)
+    if debug:
+        _print_runtime_model_prepare_debug_response(summary)
     return summary
+
+
+def _deferred_runtime_model_summary(
+    bundle_dir: Path,
+    manifest: dict[str, Any],
+    plan: dict[str, Any],
+) -> dict[str, Any]:
+    models: list[dict[str, Any]] = []
+    for item in plan.get("placement_models") or []:
+        if not isinstance(item, dict):
+            continue
+        entry = item.get("entry") if isinstance(item.get("entry"), dict) else {}
+        logical = str(item.get("logical_model") or item.get("requested_model") or entry.get("id") or "").strip()
+        policy = (
+            ["nemotron3", "gemma4:e2b"]
+            if logical.lower() == "default"
+            else [str(entry.get("id") or logical)]
+        )
+        models.append(
+            {
+                "id": logical or str(entry.get("id") or "runtime model"),
+                "name": str(item.get("requirement_name") or logical or entry.get("id") or "runtime model"),
+                "model": logical or str(entry.get("model") or ""),
+                "runtime_model": str(entry.get("model") or ""),
+                "provider": "docker_model_runner",
+                "status": "deferred_runtime_install",
+                "install_policy": "on_first_model_call",
+                "selection_policy": policy,
+                "source": str(item.get("source") or "config"),
+            }
+        )
+    return {
+        "ok": True,
+        "deferred": True,
+        "blueprint_id": _runtime_model_blueprint_id(bundle_dir, manifest, plan["config"]),
+        "models": models,
+        "services": [],
+        "errors": [],
+        "env": {},
+        "config_overrides": {},
+    }
+
+
+def _print_runtime_model_deferred_debug_plan(
+    plan: dict[str, Any],
+    *,
+    env_overrides: Optional[dict[str, str]] = None,
+) -> None:
+    selected_node = "the best compatible cluster node selected on first use"
+    placement_models = [
+        item
+        for item in plan.get("placement_models") or []
+        if isinstance(item, dict)
+    ]
+    print_info(
+        console,
+        "Runtime model prepare plan (logical alias → profile → catalog model → DMR artifact)",
+    )
+    if not placement_models:
+        console.print("  No Docker Model Runner models are required.", markup=False)
+        return
+
+    fallback_records = _workflow_placement_model_fallback_records(env_overrides)
+    for item in placement_models:
+        entry = item.get("entry") if isinstance(item.get("entry"), dict) else {}
+        fallback = _runtime_model_plan_fallback_entry(entry, fallback_records)
+        effective_entry = fallback or entry
+        logical = str(item.get("logical_model") or "").strip().lower()
+        chain = (
+            ["default", "nemotron3", "gemma4:e2b"]
+            if logical == "default"
+            else _runtime_model_debug_chain(item, effective_entry)
+        )
+        detail = (
+            f"  {' -> '.join(chain)} on {selected_node}; "
+            "action=defer selection and install until first model call"
+        )
+        if fallback is not None:
+            preferred = str(entry.get("id") or item.get("requested_model") or "preferred model")
+            detail += f"; fallback={preferred} is not runnable on the selected topology"
+        console.print(detail, markup=False)
+
+
+def _runtime_model_plan_fallback_entry(
+    entry: dict[str, Any],
+    records: tuple[dict[str, Any], ...],
+) -> dict[str, Any] | None:
+    keys = _workflow_model_match_keys(entry)
+    for record in records:
+        preferred = record.get("preferred")
+        fallback = record.get("fallback")
+        if (
+            isinstance(preferred, dict)
+            and isinstance(fallback, dict)
+            and keys & _workflow_model_match_keys(preferred)
+        ):
+            return fallback
+    return None
+
+
+def _runtime_model_debug_chain(
+    item: dict[str, Any], entry: dict[str, Any]
+) -> list[str]:
+    values = [
+        item.get("logical_model"),
+        item.get("requested_model"),
+        entry.get("id"),
+        docker_model_name(entry),
+    ]
+    chain: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text and (not chain or text.lower() != chain[-1].lower()):
+            chain.append(text)
+    return chain or ["runtime model"]
+
+
+def _print_runtime_model_deferred_debug_response(summary: dict[str, Any]) -> None:
+    print_info(console, "Deferred runtime model policies")
+    models = [item for item in summary.get("models") or [] if isinstance(item, dict)]
+    if not models:
+        console.print("  No Docker Model Runner models are required.", markup=False)
+        return
+    for item in models:
+        fallback = item.get("fallback") if isinstance(item.get("fallback"), dict) else {}
+        effective = fallback or item
+        model = str(effective.get("model") or item.get("model") or "runtime model")
+        node = "selected at first use"
+        status = _runtime_model_prepare_response_status(item, effective)
+        provider = str(effective.get("provider") or item.get("provider") or "")
+        detail = f"  {model} on {node}: status={status}"
+        if provider:
+            detail += f", provider={provider}"
+        console.print(detail, markup=False)
+
+
+def _print_runtime_model_prepare_debug_plan(
+    plan: dict[str, Any],
+    *,
+    env_overrides: Optional[dict[str, str]] = None,
+) -> None:
+    selected_node = str(
+        (env_overrides or {}).get("MN_SELECTED_RUNTIME_NODE")
+        or os.environ.get("MN_SELECTED_RUNTIME_NODE")
+        or ""
+    ).strip() or "the selected runtime node"
+    placement_models = [
+        item for item in plan.get("placement_models") or [] if isinstance(item, dict)
+    ]
+    print_info(
+        console,
+        "Runtime model prepare plan (logical alias → profile → catalog model → DMR artifact)",
+    )
+    if not placement_models:
+        console.print("  No Docker Model Runner models are required.", markup=False)
+        return
+    fallback_records = _workflow_placement_model_fallback_records(env_overrides)
+    for item in placement_models:
+        entry = item.get("entry") if isinstance(item.get("entry"), dict) else {}
+        fallback = _runtime_model_plan_fallback_entry(entry, fallback_records)
+        effective_entry = fallback or entry
+        chain = _runtime_model_debug_chain(item, effective_entry)
+        detail = (
+            f"  {' -> '.join(chain)} on {selected_node}; "
+            "action=inspect selected-node DMR, install if missing"
+        )
+        if fallback is not None:
+            preferred = str(entry.get("id") or item.get("requested_model") or "preferred model")
+            detail += f"; fallback={preferred} is not runnable on the selected topology"
+        console.print(detail, markup=False)
+
+
+def _print_runtime_model_prepare_debug_response(summary: dict[str, Any]) -> None:
+    print_info(console, "Runtime model prepare responses")
+    models = [item for item in summary.get("models") or [] if isinstance(item, dict)]
+    if not models:
+        console.print("  No Docker Model Runner prepare requests were sent.", markup=False)
+        return
+    for item in models:
+        fallback = item.get("fallback") if isinstance(item.get("fallback"), dict) else {}
+        effective = fallback or item
+        model = str(effective.get("model") or item.get("model") or "runtime model")
+        node = _runtime_model_ready_node(item) or "the selected runtime node"
+        status = _runtime_model_prepare_response_status(item, effective)
+        provider = str(effective.get("provider") or item.get("provider") or "")
+        detail = f"  {model} on {node}: status={status}"
+        if provider:
+            detail += f", provider={provider}"
+        console.print(detail, markup=False)
+
+
+def _runtime_model_prepare_response_status(
+    item: dict[str, Any], effective: dict[str, Any]
+) -> str:
+    install = item.get("install") if isinstance(item.get("install"), dict) else {}
+    values = (
+        (effective.get("status"), item.get("status"))
+        if effective is not item
+        else (install.get("status"), item.get("status"))
+    )
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return "unknown"
 
 
 def _blueprint_requests_default_llm(config: dict[str, Any]) -> bool:

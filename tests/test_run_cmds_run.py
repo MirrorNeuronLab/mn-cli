@@ -34,6 +34,22 @@ def isolated_mn_home(tmp_path, monkeypatch):
         lambda **_kwargs: {"status": "running", "api_base": "http://mn-litellm-proxy:4000/v1"},
     )
 
+
+def test_runtime_model_events_report_model_and_node_immediately():
+    event = {
+        "type": "runtime_model_install_started",
+        "payload": {
+            "model": "gemma4:e2b",
+            "node": "mirror_neuron@local",
+            "message": "Installing gemma4:e2b on mirror_neuron@local.",
+        },
+    }
+
+    assert run_cmds._runtime_model_event_message(event) == (
+        "Installing gemma4:e2b on mirror_neuron@local."
+    )
+
+
 def test_run_success(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="run-bundle-auto")
@@ -111,7 +127,7 @@ def test_run_stream_error_falls_back_to_status_polling(mocker, tmp_path, monkeyp
     assert "Monitor" in result.stdout
     mock_get.assert_called_once_with("job-stream-fallback")
 
-def test_run_prepares_runtime_models_before_model_validation(mocker, tmp_path, monkeypatch):
+def test_run_records_lazy_runtime_models_before_model_validation(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="run-order")
     mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-order")
@@ -125,8 +141,8 @@ def test_run_prepares_runtime_models_before_model_validation(mocker, tmp_path, m
         side_effect=lambda *args, **kwargs: order.append("services") or {"ok": True},
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds._prepare_runtime_models_for_run_or_exit",
-        side_effect=lambda *args, **kwargs: order.append("prepare_models") or {"ok": True},
+        "mn_cli.libs.run_cmds._defer_runtime_models_for_run_or_exit",
+        side_effect=lambda *args, **kwargs: order.append("defer_models") or {"ok": True},
     )
     mocker.patch(
         "mn_cli.libs.run_cmds._validate_manifest_models_or_exit",
@@ -143,10 +159,10 @@ def test_run_prepares_runtime_models_before_model_validation(mocker, tmp_path, m
 
     run_cmds.run_bundle(str(bundle_dir), follow_seconds=0)
 
-    assert order == ["services", "prepare_models", "validate_models", "inputs"]
+    assert order == ["services", "defer_models", "validate_models", "inputs"]
 
 
-def test_run_uses_injected_cluster_for_model_selection_preparation_and_gateway(
+def test_run_defers_injected_cluster_model_selection_preparation_and_gateway(
     mocker,
     tmp_path,
     monkeypatch,
@@ -220,33 +236,13 @@ def test_run_uses_injected_cluster_for_model_selection_preparation_and_gateway(
         runtime_model_dependencies=dependencies,
     )
 
-    assert {call["node"] for call in cluster.prepare_calls} == {
-        "mirror_neuron@spark"
-    }
-    assert {call["runtime_model"] for call in cluster.prepare_calls} == {
-        "docker.io/ai/nemotron3:latest",
-        "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M",
-    }
-    assert len(cluster.gateway_syncs) == 1
-    assert {
-        endpoint["api_base"]
-        for endpoint in cluster.gateway_syncs[0]["runtime_endpoints"].values()
-    } == {"http://10.0.0.2:4000/v1"}
+    assert cluster.prepare_calls == []
+    assert cluster.gateway_syncs == []
     submitted_manifest = json.loads(submit.call_args.args[0])
     assistant = submitted_manifest["nodes"][0]
-    assert assistant["policies"]["scheduler"]["preferred_node"] == (
-        "mirror_neuron@spark"
-    )
     assert assistant["config"]["environment"]["MN_LLM_MODEL"] == "default"
-    assert assistant["config"]["environment"]["MN_LLM_API_BASE"] == (
-        "http://127.0.0.1:4000/v1"
-    )
-    worker_endpoints = json.loads(
-        assistant["config"]["environment"]["MN_MODEL_ENDPOINTS_JSON"]
-    )
-    assert {
-        endpoint["api_base"] for endpoint in worker_endpoints.values()
-    } == {"http://mn-litellm-proxy:4000/v1"}
+    assert assistant["config"]["environment"]["MN_LLM_API_BASE"] == "auto"
+    assert assistant["config"]["environment"]["MN_RUNTIME_MODEL_MANAGED"] == "1"
 
 def test_run_auto_schedule_creates_resource_wait_schedule(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
@@ -975,7 +971,9 @@ def test_run_reports_remote_docker_worker_preparation(mocker, tmp_path):
             "selection": "best_fit_accelerator_headroom",
         },
     )
-    mocker.patch("mn_cli.libs.run_cmds.client.submit_job", return_value="job-docker-worker")
+    submit = mocker.patch(
+        "mn_cli.libs.run_cmds.client.submit_job", return_value="job-docker-worker"
+    )
     mocker.patch(
         "mn_cli.libs.run_cmds.prepare_job_submission",
         return_value=SimpleNamespace(
@@ -989,6 +987,20 @@ def test_run_reports_remote_docker_worker_preparation(mocker, tmp_path):
                                 {
                                     "node_id": "visual_detector",
                                     "node": "mirror_neuron@spark",
+                                    "image": "mirror-neuron/cctv-operator:local",
+                                    "build": {
+                                        "action": "built",
+                                        "image": "mirror-neuron/cctv-operator:local",
+                                        "command": [
+                                            "docker",
+                                            "build",
+                                            "--progress=plain",
+                                            "-t",
+                                            "mirror-neuron/cctv-operator:local",
+                                            "/tmp/cctv-context",
+                                        ],
+                                        "output": "#1 build complete",
+                                    },
                                 }
                             ],
                         }
@@ -1018,12 +1030,25 @@ def test_run_reports_remote_docker_worker_preparation(mocker, tmp_path):
 
     result = runner.invoke(
         app,
-        ["blueprint", "run", "--folder", str(bundle_dir), "--force", "--detached"],
+        [
+            "blueprint",
+            "run",
+            "--folder",
+            str(bundle_dir),
+            "--force",
+            "--detached",
+            "--debug",
+        ],
     )
 
     assert result.exit_code == 0
     assert "→ Prepare DockerWorker on mirror_neuron@spark" in result.stdout
     assert "DockerWorker ready: visual_detector on mirror_neuron@spark" in result.stdout
+    assert "Docker build on mirror_neuron@spark: action=built" in result.stdout
+    assert "docker build --progress=plain" in result.stdout
+    assert "#1 build complete" in result.stdout
+    submitted = json.loads(submit.call_args.args[0])
+    assert "build" not in submitted["metadata"]["mn_docker_workers"]["services"][0]
 
 
 def test_run_keyboard_interrupt(mocker, tmp_path):

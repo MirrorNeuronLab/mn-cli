@@ -1408,7 +1408,7 @@ def test_prepare_runtime_model_does_not_retry_non_transient_errors(mocker):
     runtime_client.prepare_runtime_model.assert_called_once()
 
 
-def test_runtime_model_preflight_includes_config_and_rag_models(mocker, tmp_path):
+def test_runtime_model_preflight_ignores_skill_owned_rag_model(mocker, tmp_path):
     config = {
         "llm": {
             "configs": {
@@ -1425,8 +1425,7 @@ def test_runtime_model_preflight_includes_config_and_rag_models(mocker, tmp_path
     plan = run_cmds._build_runtime_model_prepare_plan(tmp_path, {"nodes": []})
 
     labels = {item["id"] for item in plan["placement_models"]}
-    assert "nemotron3" in labels
-    assert any("jina-embeddings-v5-text-small-retrieval" in label for label in labels)
+    assert labels == {"nemotron3"}
 
 
 def _write_adaptive_source_model_config(bundle_dir: Path) -> dict:
@@ -1480,10 +1479,7 @@ def test_runtime_model_plan_reads_source_manifest_defaults(tmp_path):
     assert {
         (requirement["path"], requirement["model"])
         for requirement in plan["requirements"]
-    } == {
-        ("llm.configs.primary", "medium"),
-        ("knowledge_rag.embedding_model", "rag-embedding"),
-    }
+    } == {("llm.configs.primary", "medium")}
 
 
 @pytest.mark.parametrize(
@@ -1496,6 +1492,7 @@ def test_runtime_model_plan_reads_source_manifest_defaults(tmp_path):
 def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_through_litellm(
     tmp_path,
     fake_runtime_model_cluster_factory,
+    capsys,
     include_spark,
     expected_node,
     expected_chat_model,
@@ -1513,7 +1510,6 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
     assert set(plan["catalog"]) == {
         "gemma4:e2b",
         "nemotron3",
-        "rag-embedding",
     }
     placement = run_cmds._preflight_and_apply_runtime_model_placement(
         manifest,
@@ -1533,6 +1529,7 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
         env_overrides=env_overrides,
         runtime_model_plan=plan,
         quiet=True,
+        debug=True,
         dependencies=dependencies,
     )
 
@@ -1540,7 +1537,6 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
     assert {item["node"] for item in cluster.prepare_calls} == {expected_node}
     assert {item["runtime_model"] for item in cluster.prepare_calls} == {
         expected_chat_model,
-        "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M",
     }
     assert {item["endpoint"]["node"] for item in summary["models"]} == {
         expected_node
@@ -1583,6 +1579,18 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
     assert worker_environment["MN_LLM_API_BASE"] == (
         "http://mn-litellm-proxy:4000/v1"
     )
+    debug_output = capsys.readouterr().out
+    assert "Runtime model prepare plan" in debug_output
+    assert f"on {expected_node}" in debug_output
+    assert expected_chat_model in debug_output
+    assert "action=inspect selected-node DMR, install if missing" in debug_output
+    assert "Runtime model prepare responses" in debug_output
+    if include_spark:
+        assert "default -> medium -> nemotron3" in debug_output
+        assert "fallback=" not in debug_output
+    else:
+        assert "default -> medium -> gemma4:e2b" in debug_output
+        assert "fallback=nemotron3 is not runnable" in debug_output
 
 
 def test_injected_remote_installed_state_remains_routed_through_local_litellm(
@@ -1594,7 +1602,6 @@ def test_injected_remote_installed_state_remains_routed_through_local_litellm(
     cluster = fake_runtime_model_cluster_factory(include_spark=True)
     cluster.installed_by_node["mirror_neuron@spark"] = {
         "docker.io/ai/nemotron3:latest",
-        "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M",
     }
     dependencies = cluster.dependencies()
     plan = run_cmds._build_runtime_model_prepare_plan(

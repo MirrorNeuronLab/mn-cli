@@ -550,6 +550,8 @@ def _validate_distributed_runtime_model_feasibility(
     resource_report: Optional[dict[str, Any]] = None,
     system_summary: Optional[dict[str, Any]] = None,
 ) -> None:
+    if not runtime_model_requirements:
+        return
     resources = (
         resource_report
         if isinstance(resource_report, dict)
@@ -573,33 +575,58 @@ def _validate_distributed_runtime_model_feasibility(
         )
 
     for model_requirement in runtime_model_requirements:
-        requirements = _workflow_node_requirements(
-            {"nodes": []},
-            runtime_model_requirements=[model_requirement],
+        variants = [model_requirement]
+        fallback_requirements, fallback_records = _workflow_model_fallback_requirements(
+            [model_requirement]
         )
-        rejections: dict[str, list[str]] = {}
-        for name in names:
-            resource = resource_nodes.get(name) or system_nodes.get(name) or {}
-            system = system_nodes.get(name) or resource
-            reasons = _workflow_node_rejections(
-                name,
-                resource=resource,
-                system=system,
-                requirements=requirements,
-                explicit_node="",
+        if fallback_records:
+            variants.append(fallback_requirements[0])
+
+        final_rejections: dict[str, list[str]] = {}
+        feasible = False
+        for variant in variants:
+            requirements = _workflow_node_requirements(
+                {"nodes": []},
+                runtime_model_requirements=[variant],
             )
-            if reasons:
-                rejections[name] = reasons
-        if len(rejections) != len(names):
+            rejections: dict[str, list[str]] = {}
+            for name in names:
+                resource = resource_nodes.get(name) or system_nodes.get(name) or {}
+                system = system_nodes.get(name) or resource
+                reasons = _workflow_node_rejections(
+                    name,
+                    resource=resource,
+                    system=system,
+                    requirements=requirements,
+                    explicit_node="",
+                )
+                if reasons:
+                    rejections[name] = reasons
+            if len(rejections) != len(names):
+                feasible = True
+                break
+            final_rejections = rejections
+        if feasible:
             continue
+
         label = str(
             model_requirement.get("label")
             or model_requirement.get("model")
             or "runtime model"
         )
+        if fallback_records:
+            fallback_entry = fallback_requirements[0].get("entry")
+            fallback_label = str(
+                (fallback_entry or {}).get("id")
+                if isinstance(fallback_entry, dict)
+                else fallback_requirements[0].get("label")
+                or fallback_requirements[0].get("model")
+                or "catalog fallback"
+            )
+            label = f"{label} or fallback {fallback_label}"
         diagnostics = "; ".join(
             f"{name}: {', '.join(reasons)}"
-            for name, reasons in sorted(rejections.items())
+            for name, reasons in sorted(final_rejections.items())
         )
         raise RuntimeError(
             f"No runtime node can prepare required model {label}. Per-node rejection reasons: {diagnostics}"

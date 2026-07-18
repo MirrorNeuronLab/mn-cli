@@ -40,16 +40,20 @@ Run the focused gate from this workspace:
   -k "adaptive_model_placement or injected_remote_installed_state or injected_cluster"
 ```
 
-The required scenarios are:
+The runtime-selection scenarios are:
 
-- a local-only 16 GB Apple node selects the portable Gemma model;
-- adding a healthy 128 GB CUDA node selects Nemotron and prepares every DMR
-  model on that node;
+- a local-only 16 GB Apple node validates the portable Gemma fallback policy;
+- adding a healthy 128 GB CUDA node validates that Nemotron is feasible;
 - already-installed remote models remain usable without a second install;
-- the submitter's LiteLLM receives the selected node's reachable LiteLLM
-  upstream, while submitted workers receive only their local
-  `mn-litellm-proxy:4000` endpoint; the selected node's proxy owns the direct
-  route to its local DMR.
+- the first SDK model call selects and prepares the owner node, then uses that
+  node's reachable LiteLLM gateway route.
+
+`mn blueprint run --debug` prints the deferred policy for blueprint-declared
+foundational LLMs. RAG and OCR model details are owned by their skills and
+appear only in runtime events when those skills first call the SDK wrapper.
+Those events report the selected model/node, fallback reason, and install/reuse state. Debug mode
+also prints DockerWorker build commands and complete captured build output,
+including builds performed through a remote node's native SDK service.
 
 Live Spark checks are a separate, opt-in boundary smoke after this injected
 gate passes; they are not the development loop for placement policy.
@@ -159,18 +163,18 @@ snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
 - The default gRPC target comes from `MN_GRPC_TARGET`, then local deployment
   settings, then `localhost:55051`.
 - Use `mn blueprint validate` before `mn blueprint run --folder` when checking a local bundle.
-- `mn blueprint run` checks the complete effective model set before preparation;
-  if no node can satisfy it, the command reports per-node capacity reasons and
-  does not start any model installation.
-- The selected node is carried through model, context, and DockerWorker
-  preparation. Workers call their local LiteLLM gateway; it routes to the
-  selected node's cluster-reachable LiteLLM gateway, which owns the direct
-  local DMR route. This supports a selected node on another machine, such as
-  Spark, even when DMR itself is not bound to the LAN.
+- `mn blueprint run` validates model declarations but does not install models.
+  Workers select, install, and route each managed model on its first actual use.
+- Docker workers receive a worker-reachable model-control target and use the
+  SDK to select the best cluster node independently for LLM and for model
+  specifications supplied at runtime by RAG and OCR skills.
 - `default` is a LiteLLM model group, not a concrete model: it prefers
-  `nemotron3` and falls back to `gemma4:e2b`. The existing cluster model monitor
+  `nemotron3` and falls back to `gemma4:e2b` when no healthy node can run
+  Nemotron. The existing cluster model monitor
   rebuilds these routes as nodes join, rejoin, or leave; incomplete peer
   snapshots retain the last safe routes until departure is confirmed.
   Gateway route names and `fallback_model` are read from the SDK's merged model
   catalog, including `~/.mn/models/catalog.json` (or `$MN_HOME`) and the
   highest-priority `MN_MODEL_CATALOG_PATH` override.
+- `--debug` retains complete Docker build diagnostics and prints deferred model
+  policies. Actual model/node selection appears later in runtime events.

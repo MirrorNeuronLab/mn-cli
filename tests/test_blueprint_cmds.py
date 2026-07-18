@@ -965,6 +965,39 @@ def test_blueprint_run_set_overrides_local_bundle_without_persisting(
     assert overwrite_path.read_text() == overwrite_text
 
 
+def test_blueprint_run_delegates_default_model_preparation_to_runtime_launch(
+    mocker, tmp_path
+):
+    bp_dir = tmp_path / "bundle"
+    bp_dir.mkdir()
+    (bp_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "llm": {
+                    "enabled": True,
+                    "provider": "docker_model_runner",
+                    "model": "default",
+                }
+            }
+        )
+    )
+    config_dir = bp_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps({"llm": {"enabled": True, "model": "default"}})
+    )
+    premature_prepare = mocker.patch(
+        "mn_cli.libs.blueprint_cmds._install_blueprint_model_dependencies"
+    )
+    run_bundle = mocker.patch("mn_cli.libs.blueprint_cmds._run_bundle")
+
+    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bp_dir)])
+
+    assert result.exit_code == 0
+    premature_prepare.assert_not_called()
+    run_bundle.assert_called_once()
+
+
 @pytest.mark.parametrize("assignment", ["missing-equals", "path..child=value"])
 def test_blueprint_run_set_rejects_invalid_assignment_before_submit(
     mocker, tmp_path, assignment

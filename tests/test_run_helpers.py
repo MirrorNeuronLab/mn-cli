@@ -1278,10 +1278,7 @@ def test_stage_blueprint_support_payloads_for_support_dependent_hostlocal_worker
     assert summary == {"staged": True, "sources": ["simulation_loop"]}
     assert "simulation_loop/mn_blueprint_support/__init__.py" in payloads
     assert "simulation_loop/scripts/mn_blueprint_support/__init__.py" in payloads
-    assert (
-        "simulation_loop/scripts/litellm_communicate_skill/src/"
-        "mn_litellm_communicate_skill/__init__.py"
-    ) in payloads
+    assert not any("litellm_communicate_skill" in path for path in payloads)
     assert payloads["simulation_loop/config/default.json"] == b'{"identity": {"blueprint_id": "bp"}}\n'
 
 

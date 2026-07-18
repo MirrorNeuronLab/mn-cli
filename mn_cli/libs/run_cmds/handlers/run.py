@@ -115,7 +115,9 @@ def _docker_worker_node_ids(manifest: dict[str, Any]) -> list[str]:
     return node_ids
 
 
-def _print_docker_worker_ready(manifest: dict[str, Any]) -> None:
+def _print_docker_worker_ready(
+    manifest: dict[str, Any], *, debug: bool = False
+) -> None:
     metadata = (
         manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
     )
@@ -134,6 +136,46 @@ def _print_docker_worker_ready(manifest: dict[str, Any]) -> None:
     ]
     if labels:
         console.print(f"[green]DockerWorker ready:[/green] {', '.join(labels)}")
+    if not debug:
+        return
+    for service in services:
+        if not isinstance(service, dict):
+            continue
+        build = service.get("build") if isinstance(service.get("build"), dict) else {}
+        if not build:
+            continue
+        node = str(service.get("node") or "the selected runtime node")
+        image = str(build.get("image") or service.get("image") or "")
+        action = str(build.get("action") or "unknown")
+        console.print(
+            f"Docker build on {node}: action={action}, image={image}",
+            markup=False,
+        )
+        command = build.get("command")
+        if isinstance(command, list) and command:
+            console.print(
+                "Docker build command: " + " ".join(str(part) for part in command),
+                markup=False,
+            )
+        output = str(build.get("output") or "").strip()
+        if output:
+            console.print("Docker build output:", markup=False)
+            console.print(output, markup=False)
+
+
+def _strip_docker_worker_debug_details(manifest: dict[str, Any]) -> None:
+    metadata = (
+        manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    )
+    summary = (
+        metadata.get("mn_docker_workers")
+        if isinstance(metadata.get("mn_docker_workers"), dict)
+        else {}
+    )
+    services = summary.get("services") if isinstance(summary.get("services"), list) else []
+    for service in services:
+        if isinstance(service, dict):
+            service.pop("build", None)
 
 
 def run_bundle(
@@ -191,6 +233,7 @@ def run_bundle(
             manifest_dict,
             config_overrides=config_overrides,
             dependencies=runtime_model_dependencies,
+            lazy=True,
         )
         runtime_resource_report = (
             runtime_model_dependencies.resource_report()
@@ -210,9 +253,14 @@ def run_bundle(
             allow_local_fallback=False,
             resource_report=runtime_resource_report,
         )
+        _validate_distributed_runtime_model_feasibility(
+            runtime_model_plan["placement_models"],
+            resource_report=runtime_resource_report,
+            system_summary=runtime_system_summary,
+        )
         placement = _preflight_and_apply_runtime_model_placement(
             manifest_dict,
-            runtime_model_requirements=runtime_model_plan["placement_models"],
+            runtime_model_requirements=[],
             resource_report=runtime_resource_report,
             system_summary=runtime_system_summary,
             env={**os.environ, **env_overrides},
@@ -268,14 +316,15 @@ def run_bundle(
             )
             _print_launch_progress(
                 "Prepare runtime models",
-                "installing any missing Docker Model Runner models required by this blueprint.",
+                "validating lazy model policies; installation is deferred until first use.",
             )
-            model_install_summary = _prepare_runtime_models_for_run_or_exit(
+            model_install_summary = _defer_runtime_models_for_run_or_exit(
                 bundle_dir,
                 manifest_dict,
                 env_overrides=env_overrides,
                 config_overrides=config_overrides,
                 force=force,
+                debug=debug,
                 runtime_model_plan=runtime_model_plan,
                 dependencies=runtime_model_dependencies,
             )
@@ -298,18 +347,19 @@ def run_bundle(
             _record_prevalidated_command_rules(manifest_dict, input_validation_report)
         else:
             console.print(
-                "[yellow]Validation skipped because --force was provided; service checks, model checks, input checks, and non-hard runtime requirements will be bypassed, but required runtime models will still be prepared.[/yellow]"
+                "[yellow]Validation skipped because --force was provided; runtime models will still be selected and prepared lazily on first use.[/yellow]"
             )
             _print_launch_progress(
                 "Prepare runtime models",
-                "installing any missing Docker Model Runner models required by this blueprint.",
+                "recording lazy model policies; installation is deferred until first use.",
             )
-            model_install_summary = _prepare_runtime_models_for_run_or_exit(
+            model_install_summary = _defer_runtime_models_for_run_or_exit(
                 bundle_dir,
                 manifest_dict,
                 env_overrides=env_overrides,
                 config_overrides=config_overrides,
                 force=force,
+                debug=debug,
                 runtime_model_plan=runtime_model_plan,
                 dependencies=runtime_model_dependencies,
             )
@@ -394,7 +444,12 @@ def run_bundle(
         payloads = prepared_submission.payloads
         submitted_manifest = json.loads(manifest)
         if docker_worker_nodes:
-            _print_docker_worker_ready(submitted_manifest)
+            _print_docker_worker_ready(submitted_manifest, debug=debug)
+            if debug:
+                # Build logs are diagnostic terminal output. Do not persist
+                # them in the submitted workflow manifest or Core job record.
+                _strip_docker_worker_debug_details(submitted_manifest)
+                manifest = json.dumps(submitted_manifest, sort_keys=True)
 
         blueprint_run_dir = (
             _blueprint_run_dir(blueprint_run_id, env_overrides)

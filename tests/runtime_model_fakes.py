@@ -12,7 +12,7 @@ from mn_sdk.model_access import runtime_model_gateway_name
 
 
 def fake_model_catalog() -> dict[str, dict[str, Any]]:
-    """Return the smallest catalog that exercises adaptive chat and RAG models."""
+    """Return the smallest catalog that exercises adaptive foundational LLMs."""
 
     entries = [
         {
@@ -43,19 +43,6 @@ def fake_model_catalog() -> dict[str, dict[str, Any]]:
                 "min_vram_gb": 48,
                 "min_unified_memory_gb": 48,
             },
-        },
-        {
-            "id": "rag-embedding",
-            "provider": "docker_model_runner",
-            "model": "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M",
-            "api_model": "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M",
-            "aliases": [
-                "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M",
-                "jina-v5-small",
-            ],
-            "backend": "llama.cpp",
-            "context_size": 8192,
-            "requirements": {},
         },
     ]
     return {entry["id"]: entry for entry in entries}

@@ -102,6 +102,22 @@ def _stream_and_format_events(
                                     90,
                                 ),
                             )
+                        elif event_type in {
+                            "runtime_model_selection_started",
+                            "runtime_model_selected",
+                            "runtime_model_install_started",
+                            "runtime_model_ready",
+                            "runtime_model_install_failed",
+                        }:
+                            message = _runtime_model_event_message(event)
+                            progress.console.print(
+                                f"Runtime model: {message}", markup=False
+                            )
+                            progress.update(
+                                job_task,
+                                description=f"[cyan]Runtime model: {message}",
+                                completed=stage_map.get("job_running", 62),
+                            )
                         elif event_type == "job_completed":
                             result = event.get("result")
                             if result is not None:
@@ -277,7 +293,6 @@ def _stream_and_format_workflow_events(
         elif event_type == "job_cancelled":
             status_text = "cancelled"
         return event_type in {"job_completed", "job_failed", "job_cancelled"}
-
     try:
         if is_tty:
             live = Live(
@@ -431,6 +446,17 @@ def _stream_and_format_workflow_events(
             )
         )
     return status_text
+
+
+def _runtime_model_event_message(event: dict[str, Any]) -> str:
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    message = str(payload.get("message") or event.get("message") or "").strip()
+    if message:
+        return message
+    model = str(payload.get("model") or "runtime model").strip()
+    node = str(payload.get("node") or "the selected node").strip()
+    return f"{model} on {node}: {str(event.get('type') or 'update')}"
+
 
 def _follow_workflow_job_events(
     job_id: str,

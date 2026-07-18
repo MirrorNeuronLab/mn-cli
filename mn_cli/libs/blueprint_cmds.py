@@ -177,9 +177,9 @@ def _run_resolved_blueprint(
     debug: bool = False,
 ) -> None:
     shared_run_id = run_id or _make_blueprint_run_id(blueprint_id)
-    _print_blueprint_run_phase(1, 4, "Prepare blueprint bundle")
+    _print_blueprint_run_phase(1, 3, "Prepare blueprint bundle")
     bundle_path = _prepare_blueprint_bundle_for_run(blueprint_dir, manifest, shared_run_id)
-    _print_blueprint_run_phase(2, 4, "Review launch config")
+    _print_blueprint_run_phase(2, 3, "Review launch config")
     review_overrides = _collect_init_config_review_overrides(bundle_path, manifest)
     config_overrides = _deep_merge(
         review_overrides or {},
@@ -194,20 +194,12 @@ def _run_resolved_blueprint(
     if testing_overrides:
         config_overrides = _deep_merge(config_overrides or {}, testing_overrides)
         config = _deep_merge(config or {}, testing_overrides)
-    model_manifest = _fake_llm_manifest_for_model_dependencies(manifest) if fake_llm else manifest
-    _print_blueprint_run_phase(3, 4, "Ensure runtime models")
-    model_summary = _install_blueprint_model_dependencies(
-        blueprint_id=blueprint_id,
-        blueprint_revision=revision,
-        bundle_root=bundle_path,
-        manifest=model_manifest,
-        config=config or {},
-        install_source=source_label,
-        force=force,
-    )
-    if model_summary.get("models"):
-        _print_model_install_summary(model_summary)
-    _print_blueprint_run_phase(4, 4, "Submit runtime job")
+    # Model selection and installation belong to ``run_bundle`` because that
+    # path first evaluates the complete effective model set against the live
+    # runtime nodes.  Preparing here used to perform a second, premature pass
+    # without the workflow's selected-node handoff; it could install a logical
+    # ``default`` model before the runtime had chosen Nemotron versus Gemma.
+    _print_blueprint_run_phase(3, 3, "Prepare and submit runtime job")
     print_confirmed(
         console,
         "Blueprint validation",

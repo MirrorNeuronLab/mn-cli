@@ -70,11 +70,10 @@ those contracts.
 
 ## Runtime-Model Launch Contract
 
-`mn blueprint run` resolves the complete effective model set before performing
-model preparation. One hardware-fitness decision is reused for workflow
-placement and node-local preparation. A capable 128 GB cluster node therefore
-wins over a smaller submitter for a medium model, while a local-only node uses
-the declared portable fallback.
+`mn blueprint run` validates the effective blueprint-declared foundational LLM
+models without installing or routing them. RAG and OCR model specifications are
+not launch declarations; their skills pass them to the SDK on first use, so
+each consumer may choose the best compatible cluster node independently.
 
 The selected node's cluster-reachable LiteLLM endpoint is the submitter
 gateway's upstream. The selected-node gateway owns the direct route to its
@@ -82,6 +81,15 @@ node-local DMR. Worker configuration receives only a local LiteLLM endpoint and
 logical aliases, never a remote node's DMR URL as the worker-facing API base.
 Already-installed and newly-installed models follow the same routing
 projection.
+
+The blueprint run adapter must not prepare models. A logical `default`
+declaration remains blueprint-owned intent; the runtime SDK chooses Nemotron on
+a healthy 48 GB-or-above accelerator node or Gemma when no compatible Nemotron
+node exists. Debug launch output reports the deferred `default -> nemotron3 ->
+gemma4:e2b` policy and complete DockerWorker build command/output details.
+Skill-owned RAG/OCR model details are absent from launch preparation and appear
+in runtime events only when invoked. Runtime events report the actual model,
+selected node, install/reuse state, fallback reason, and duration.
 
 `default` is a logical LiteLLM model group. When a medium route is available it
 aliases to Nemotron and has Gemma as its fallback; without a medium route it
