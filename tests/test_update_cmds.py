@@ -97,18 +97,20 @@ def test_check_due_treats_invalid_or_non_numeric_check_file_as_due():
     update_cmds.CHECK_FILE.write_text("{", encoding="utf-8")
     assert update_cmds._check_due() is True
 
-    update_cmds.CHECK_FILE.write_text(json.dumps({"checked_at": "not-a-time"}), encoding="utf-8")
+    update_cmds.CHECK_FILE.write_text(
+        json.dumps({"checked_at": "not-a-time"}), encoding="utf-8"
+    )
     assert update_cmds._check_due() is True
 
 
 def test_update_yes_stops_updates_and_restarts(mocker, capsys):
     updates = [
-            {
-                "component": "mirrorneuron-cli",
-                "current": "1.0.0",
-                "latest": "1.1.0",
-                "kind": "python",
-            },
+        {
+            "component": "mirrorneuron-cli",
+            "current": "1.0.0",
+            "latest": "1.1.0",
+            "kind": "python",
+        },
         {
             "component": "mirrorneuron-web-ui",
             "current": "1.0.0",
@@ -189,8 +191,12 @@ def test_python_package_updates_use_pinned_gar_requirements(mocker):
     )
 
     command = mock_run.call_args.args[0]
-    assert ["--index-url", update_cmds.GAR_PYTHON_INDEX_URL] == command[command.index("--index-url") : command.index("--index-url") + 2]
-    assert ["--extra-index-url", update_cmds.PYTHON_EXTRA_INDEX_URL] == command[command.index("--extra-index-url") : command.index("--extra-index-url") + 2]
+    assert ["--index-url", update_cmds.GAR_PYTHON_INDEX_URL] == command[
+        command.index("--index-url") : command.index("--index-url") + 2
+    ]
+    assert ["--extra-index-url", update_cmds.PYTHON_EXTRA_INDEX_URL] == command[
+        command.index("--extra-index-url") : command.index("--extra-index-url") + 2
+    ]
     assert command[-1] == "mirrorneuron-cli==1.1.0"
     assert "mirrorneuron-blueprint-support-skill[webui]" not in command
 
@@ -198,8 +204,12 @@ def test_python_package_updates_use_pinned_gar_requirements(mocker):
 def test_web_ui_update_uses_configured_package_name(mocker, tmp_path):
     (tmp_path / "package.json").write_text("{}", encoding="utf-8")
     mocker.patch("mn_cli.update_cmds.WEB_UI_DIRS", [tmp_path])
-    mocker.patch("mn_cli.update_cmds.RUNTIME_COMPOSE_FILE", tmp_path / "missing-compose.yml")
-    mocker.patch("mn_cli.update_cmds.RUNTIME_COMPOSE_ENV", tmp_path / "missing-compose.env")
+    mocker.patch(
+        "mn_cli.update_cmds.RUNTIME_COMPOSE_FILE", tmp_path / "missing-compose.yml"
+    )
+    mocker.patch(
+        "mn_cli.update_cmds.RUNTIME_COMPOSE_ENV", tmp_path / "missing-compose.env"
+    )
     mock_run = mocker.patch("mn_cli.update_cmds.subprocess.run")
 
     update_cmds._update_web_ui("1.1.0")
@@ -260,7 +270,9 @@ version = "1.2.27"
 def test_web_ui_compose_update_pins_snapshot_version(mocker, tmp_path):
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
-    compose_file.write_text("services:\n  web-ui:\n    image: node:22-alpine\n", encoding="utf-8")
+    compose_file.write_text(
+        "services:\n  web-ui:\n    image: node:22-alpine\n", encoding="utf-8"
+    )
     compose_env.write_text("COMPOSE_PROFILES=web-ui\n", encoding="utf-8")
     mocker.patch("mn_cli.update_cmds.RUNTIME_COMPOSE_FILE", compose_file)
     mocker.patch("mn_cli.update_cmds.RUNTIME_COMPOSE_ENV", compose_env)

@@ -298,9 +298,7 @@ def perform_update(available: list[dict[str, str]] | None = None) -> None:
 
 def _print_updates(updates: list[dict[str, str]]) -> None:
     for item in updates:
-        console.print(
-            f"  - {item['component']}: {item['current']} -> {item['latest']}"
-        )
+        console.print(f"  - {item['component']}: {item['current']} -> {item['latest']}")
 
 
 def _check_due() -> bool:
@@ -351,7 +349,9 @@ def _github_contents_text(path: str, *, ref: str) -> str:
     content = _github_contents(path, ref=ref)
     if not isinstance(content, dict) or content.get("type") != "file":
         raise RuntimeError(f"Expected a file at {path} in {DEPLOY_REPO}@{ref}.")
-    if content.get("encoding") != "base64" or not isinstance(content.get("content"), str):
+    if content.get("encoding") != "base64" or not isinstance(
+        content.get("content"), str
+    ):
         raise RuntimeError(f"GitHub did not return base64 file content for {path}.")
     try:
         raw = base64.b64decode(content["content"].replace("\n", ""), validate=True)
@@ -370,7 +370,9 @@ def _release_tag_sort_key(tag: str) -> tuple[int, int, int]:
 def _latest_release_support_tag() -> str:
     entries = _github_contents(DEPLOY_SUPPORT_DIRECTORY, ref=DEPLOY_REF)
     if not isinstance(entries, list):
-        raise RuntimeError(f"Expected a directory listing for {DEPLOY_SUPPORT_DIRECTORY}.")
+        raise RuntimeError(
+            f"Expected a directory listing for {DEPLOY_SUPPORT_DIRECTORY}."
+        )
 
     tags = [
         entry.get("name")
@@ -381,16 +383,22 @@ def _latest_release_support_tag() -> str:
         and STABLE_RELEASE_TAG.fullmatch(entry["name"])
     ]
     if not tags:
-        raise RuntimeError(f"No stable release snapshots were found in {DEPLOY_SUPPORT_DIRECTORY}.")
+        raise RuntimeError(
+            f"No stable release snapshots were found in {DEPLOY_SUPPORT_DIRECTORY}."
+        )
     return max(tags, key=_release_tag_sort_key)
 
 
 def _release_plan() -> ReleasePlan:
     release_tag = _latest_release_support_tag()
-    index_path = f"{DEPLOY_SUPPORT_DIRECTORY}/{release_tag}/package-index/python-packages.toml"
+    index_path = (
+        f"{DEPLOY_SUPPORT_DIRECTORY}/{release_tag}/package-index/python-packages.toml"
+    )
     compose_path = f"{DEPLOY_SUPPORT_DIRECTORY}/{release_tag}/docker-compose.yml"
     try:
-        package_index = tomllib.loads(_github_contents_text(index_path, ref=release_tag))
+        package_index = tomllib.loads(
+            _github_contents_text(index_path, ref=release_tag)
+        )
     except tomllib.TOMLDecodeError as exc:
         raise RuntimeError(f"Release package index is invalid: {index_path}.") from exc
 
@@ -401,15 +409,21 @@ def _release_plan() -> ReleasePlan:
         and isinstance(package.get("name"), str)
         and str(package.get("version", "")).strip()
     }
-    missing_packages = [name for name in PYTHON_PACKAGES if not python_versions.get(name)]
+    missing_packages = [
+        name for name in PYTHON_PACKAGES if not python_versions.get(name)
+    ]
     if missing_packages:
         joined = ", ".join(missing_packages)
-        raise RuntimeError(f"Release package index is missing required packages: {joined}.")
+        raise RuntimeError(
+            f"Release package index is missing required packages: {joined}."
+        )
 
     compose = _github_contents_text(compose_path, ref=release_tag)
     web_ui_match = WEB_UI_VERSION_PATTERN.search(compose)
     if web_ui_match is None:
-        raise RuntimeError(f"Release Compose template is missing the Web UI package version: {compose_path}.")
+        raise RuntimeError(
+            f"Release Compose template is missing the Web UI package version: {compose_path}."
+        )
 
     return {
         "release_tag": release_tag,
@@ -426,7 +440,9 @@ def _installed_python_version(package_name: str) -> str | None:
 
 
 def _web_ui_installed() -> bool:
-    return _web_ui_compose_enabled() or any((path / "package.json").exists() for path in WEB_UI_DIRS)
+    return _web_ui_compose_enabled() or any(
+        (path / "package.json").exists() for path in WEB_UI_DIRS
+    )
 
 
 def _web_ui_compose_enabled() -> bool:
@@ -526,8 +542,13 @@ def _update_python_packages(updates: list[dict[str, str]]) -> None:
 
 def _update_web_ui(version: str) -> None:
     if _web_ui_compose_enabled():
-        print_info(console, "Updating Web UI package version in the runtime Compose configuration…")
-        _write_env_file_values(RUNTIME_COMPOSE_ENV, {"MN_WEB_UI_PACKAGE_VERSION": version})
+        print_info(
+            console,
+            "Updating Web UI package version in the runtime Compose configuration…",
+        )
+        _write_env_file_values(
+            RUNTIME_COMPOSE_ENV, {"MN_WEB_UI_PACKAGE_VERSION": version}
+        )
         return
 
     print_info(console, "Updating Web UI from the release-pinned npm package…")
@@ -554,7 +575,9 @@ def _core_asset_url(release_tag: str, platform: str) -> str:
 
 
 def _download(url: str, target: Path) -> None:
-    request = urllib.request.Request(url, headers={"User-Agent": "mirrorneuron-cli-updater"})
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "mirrorneuron-cli-updater"}
+    )
     with urllib.request.urlopen(request, timeout=60) as response:
         target.write_bytes(response.read())
 
@@ -568,14 +591,20 @@ def _safe_extract_tar(archive: tarfile.TarFile, target: Path) -> None:
 
 def _validate_tar_member(member: tarfile.TarInfo) -> None:
     if not _safe_archive_path(member.name):
-        raise RuntimeError(f"Core release archive contains an unsafe path: {member.name!r}")
+        raise RuntimeError(
+            f"Core release archive contains an unsafe path: {member.name!r}"
+        )
 
     if member.ischr() or member.isblk() or member.isfifo():
-        raise RuntimeError(f"Core release archive contains an unsupported special file: {member.name!r}")
+        raise RuntimeError(
+            f"Core release archive contains an unsupported special file: {member.name!r}"
+        )
 
     if member.issym():
         link_target = _normalized_symlink_target(member.name, member.linkname)
-        if not _safe_archive_path(member.linkname) or not _safe_archive_path(link_target):
+        if not _safe_archive_path(member.linkname) or not _safe_archive_path(
+            link_target
+        ):
             raise RuntimeError(
                 f"Core release archive contains an unsafe symlink: {member.name!r} -> {member.linkname!r}"
             )
@@ -661,7 +690,4 @@ def _write_install_metadata(tag: str, platform: str, asset_url: str) -> None:
             "updated_at": time.time(),
         }
     )
-    INSTALL_METADATA_FILE.write_text(
-        json.dumps(data, indent=2)
-        + "\n"
-    )
+    INSTALL_METADATA_FILE.write_text(json.dumps(data, indent=2) + "\n")
