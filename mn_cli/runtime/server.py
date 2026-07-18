@@ -680,6 +680,7 @@ def _container_publishes_port(container_name: str, target_port: int, published_p
     return False
 
 def _docker_container_running(container_name: str) -> bool:
+    """Return whether a Docker container is running without raising on probes."""
     try:
         result = subprocess.run(
             ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
@@ -688,7 +689,7 @@ def _docker_container_running(container_name: str) -> bool:
         )
     except FileNotFoundError:
         return False
-    return result.stdout.strip().lower() == "true"
+    return result.returncode == 0 and result.stdout.strip().lower() == "true"
 
 def _published_container_port(container_name: str, target_port: int) -> Optional[int]:
     if not _docker_container_running(container_name):
@@ -1816,18 +1817,6 @@ def _raise_join_handshake_error(exc: Exception, target: str) -> None:
         http_status=500,
         cause=exc,
     ) from exc
-
-def _docker_container_running(name: str) -> bool:
-    try:
-        result = subprocess.run(
-            ["docker", "inspect", "-f", "{{.State.Running}}", name],
-            capture_output=True,
-            text=True,
-        )
-    except FileNotFoundError:
-        print_error(console, "Docker is not installed or not in PATH.")
-        raise typer.Exit(1)
-    return result.returncode == 0 and result.stdout.strip() == "true"
 
 def _docker_container_env_value(name: str, key: str) -> Optional[str]:
     try:

@@ -53,6 +53,11 @@ terminal interaction, local service orchestration, and presentation here.
 - Treat runtime responses, catalog files, paths, and user values as untrusted.
 - Keep local runtime mutations in the relevant `mn_cli.runtime` or command
   helper, not in rendering utilities.
+- Avoid oversized production modules. New runtime behavior belongs in a
+  focused module with one clear responsibility; do not add another unrelated
+  section to a file that is already large or split across multiple facades.
+  When decomposing legacy code, move the implementation behind the existing
+  import facade and preserve public names while the migration is in progress.
 - Preserve test injection points. Unit tests must not require a live runtime,
   Docker daemon, Redis, model, or network unless explicitly marked as an
   integration test.
