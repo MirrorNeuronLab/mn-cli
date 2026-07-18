@@ -167,7 +167,7 @@ def cancel_all(
         typer.Option("--yes", "-y", help="Cancel all active jobs without prompting."),
     ] = False,
 ):
-    """Cancel all active jobs, stopping on the first failure.
+    """Cancel all active jobs and report every cancellation result.
 
     Active jobs include pending, validated, scheduled, running, and paused jobs.
 
@@ -199,29 +199,58 @@ def cancel_all(
             )
             return
 
-        cancelled_count = 0
-        for job in jobs:
-            job_id = job["job_id"]
-            try:
-                client.cancel_job(job_id)
-                _cleanup_cancelled_job_web_ui(job_id)
-                cancelled_count += 1
-            except Exception as error:
-                _cleanup_cancelled_job_web_ui(job_id)
-                not_attempted = len(jobs) - cancelled_count - 1
-                console.print(f"[red]Cancellation stopped at job {job_id}.[/red]")
-                console.print(
-                    f"Cancelled {cancelled_count} of {len(jobs)} active jobs; "
-                    f"{not_attempted} not attempted."
-                )
-                handle_cli_error(
-                    error,
-                    console,
-                    "cancel_all",
-                    command_context={"job_id": job_id},
-                )
+        result = json.loads(client.cancel_all_jobs())
+        results = result.get("results") if isinstance(result, dict) else []
+        results = results if isinstance(results, list) else []
 
-        logger.info("Cancelled %d active jobs", cancelled_count)
+        result_ids = {
+            item.get("job_id")
+            for item in results
+            if isinstance(item, dict) and isinstance(item.get("job_id"), str)
+        }
+        missing_results = [
+            {
+                "job_id": job["job_id"],
+                "status": "failed",
+                "error": "runtime returned no cancellation result",
+            }
+            for job in jobs
+            if job["job_id"] not in result_ids
+        ]
+        results.extend(missing_results)
+
+        cancelled = [
+            item
+            for item in results
+            if isinstance(item, dict) and item.get("status") == "cancelled"
+        ]
+        failed = [
+            item
+            for item in results
+            if not isinstance(item, dict) or item.get("status") != "cancelled"
+        ]
+
+        for item in cancelled:
+            job_id = item.get("job_id")
+            if isinstance(job_id, str) and job_id:
+                _cleanup_cancelled_job_web_ui(job_id)
+
+        cancelled_count = len(cancelled)
+        failed_count = len(failed)
+        logger.info("Cancelled %d active jobs; %d cancellation(s) failed", cancelled_count, failed_count)
+
+        if failed_count:
+            print_error(console, "Job cancel-all completed with failures.")
+            console.print(f"Cancelled {cancelled_count} of {len(results)} active jobs.")
+            for item in failed:
+                if not isinstance(item, dict):
+                    continue
+                console.print(
+                    f"! Warning: {item.get('job_id', 'unknown job')}: "
+                    f"{item.get('error', item.get('status', 'cancellation failed'))}"
+                )
+            raise typer.Exit(1)
+
         print_success_confirmation(
             console,
             "Job cancel-all",

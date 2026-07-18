@@ -1943,7 +1943,7 @@ def _ensure_redis_ha_settings(
     adjusted.setdefault("MN_REDIS_DB", os.getenv("MN_REDIS_DB", "").strip() or "0")
     adjusted.setdefault("MN_REDIS_SENTINEL_PORT", str(_redis_sentinel_port(adjusted)))
     adjusted.setdefault("MN_REDIS_SENTINEL_PASSWORD", os.getenv("MN_REDIS_SENTINEL_PASSWORD", "").strip() or redis_password)
-    adjusted.setdefault("MN_REDIS_WAIT_REPLICAS", os.getenv("MN_REDIS_WAIT_REPLICAS", "").strip() or "1")
+    adjusted.setdefault("MN_REDIS_WAIT_REPLICAS", os.getenv("MN_REDIS_WAIT_REPLICAS", "").strip() or "0")
     adjusted.setdefault("MN_REDIS_WAIT_TIMEOUT_MS", os.getenv("MN_REDIS_WAIT_TIMEOUT_MS", "").strip() or "1000")
     for key in REDIS_HA_ENV_KEYS:
         value = os.getenv(key, "").strip()
@@ -2006,7 +2006,6 @@ def _network_core_env(
     env.update(
         {
             "MN_NETWORK_ONLY": "true",
-            "MN_REDIS_FORWARD_PRIMARY": "true",
             "MN_NETWORK_JOIN_TOKEN": token,
             "MN_NETWORK_ADVERTISE_HOST": host,
             "MN_NETWORK_REDIS_HOST": redis_public_host,

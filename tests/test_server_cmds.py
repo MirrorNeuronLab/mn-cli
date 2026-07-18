@@ -409,7 +409,7 @@ def test_network_core_env_defaults_cluster_redis_to_sentinel(monkeypatch):
     assert env["MN_REDIS_HA_MODE"] == "sentinel"
     assert env["MN_REDIS_SENTINELS"] == "192.168.1.10:26379"
     assert env["MN_REDIS_SENTINEL_MASTER"] == "mirror-neuron"
-    assert env["MN_REDIS_WAIT_REPLICAS"] == "1"
+    assert env["MN_REDIS_WAIT_REPLICAS"] == "0"
     assert env["MN_REDIS_WAIT_TIMEOUT_MS"] == "1000"
 
 def test_redis_ha_env_from_handshake_adopts_sentinel_metadata():
@@ -1214,7 +1214,7 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     assert any(value.startswith("MN_GRPC_AUTH_TOKEN=") and value != "MN_GRPC_AUTH_TOKEN=" for value in core_run)
     assert any(value.startswith("MN_GRPC_ADMIN_TOKEN=") and value != "MN_GRPC_ADMIN_TOKEN=" for value in core_run)
     assert "MN_NETWORK_ONLY=true" in core_run
-    assert "MN_REDIS_FORWARD_PRIMARY=true" in core_run
+    assert not any(value.startswith("MN_REDIS_FORWARD_PRIMARY=") for value in core_run)
     assert "MN_NATIVE_SDK_GRPC_TARGET=host.docker.internal:55052" in core_run
     assert "MN_NODE_RUNTIME_MODELS=nemotron3" in core_run
     assert "MN_NODE_ALIAS=mn-seed" in core_run
