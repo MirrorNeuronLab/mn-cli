@@ -218,7 +218,12 @@ def install_model(
         target = result["docker_model"]
         if not selected_node:
             record_manual_model_install(entry, backend=compatibility["backend"])
-        _sync_installed_model_gateway_route(entry, result=result, node=selected_node)
+        # Cluster-node installation already synchronizes and records the direct
+        # DMR route while the target endpoint is authoritative.  Running the
+        # full inventory reconciliation again here can immediately replace that
+        # fresh route with an older shared-status snapshot.
+        if not selected_node:
+            _sync_installed_model_gateway_route(entry, result=result, node=None)
         _record_runtime_model_install(entry)
         print_success_confirmation(
             console,
@@ -311,7 +316,6 @@ def remove_model(
                 remove_litellm_gateway_route(str(removed_remote.get("model") or ""))
                 remove_litellm_gateway_route(str(removed_remote.get("api_model") or ""))
             _sync_gateway_best_effort(restart=True)
-            reconcile_cluster_model_routes(restart=True)
             print_success_confirmation(
                 console,
                 "Model route remove",
