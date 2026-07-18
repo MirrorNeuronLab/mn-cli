@@ -42,6 +42,7 @@ class RuntimeModelDependencies:
 
     load_blueprint_config: RuntimeCallable | None = None
     load_model_catalog: Callable[[], dict[str, dict[str, Any]]] | None = None
+    resolve_cluster_model: RuntimeCallable | None = None
     model_ops: BlueprintModelOps | None = None
     resource_report: Callable[[], dict[str, Any]] | None = None
     system_summary: Callable[[], dict[str, Any]] | None = None

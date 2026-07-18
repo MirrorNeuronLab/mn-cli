@@ -8,6 +8,7 @@ from typing import Any
 
 from mn_cli.libs import run_cmds
 from mn_sdk import BlueprintModelOps
+from mn_sdk.model_access import runtime_model_gateway_name
 
 
 def fake_model_catalog() -> dict[str, dict[str, Any]]:
@@ -194,7 +195,7 @@ class FakeRuntimeModelCluster:
         api_base = (
             "http://host.docker.internal:12434/engines/v1"
             if node == "mirror_neuron@mac"
-            else f"http://{host}:12434/engines/v1"
+            else f"http://{host}:4000/v1"
         )
         call = {
             "node": node,
@@ -204,18 +205,22 @@ class FakeRuntimeModelCluster:
             "api_base": api_base,
         }
         self.prepare_calls.append(call)
+        owner_gateway_model = runtime_model_gateway_name(
+            entry,
+            fallback=runtime_model,
+        )
         return {
             "install": {"status": status},
             "endpoint": {
                 "provider": "docker_model_runner",
-                "model": str(entry.get("api_model") or runtime_model),
+                "model": owner_gateway_model,
                 "runtime_model": runtime_model,
-                "api_model": str(entry.get("api_model") or runtime_model),
+                "api_model": owner_gateway_model,
                 "api_base": api_base,
                 "node": node,
                 "source": "local-dmr"
                 if node == "mirror_neuron@mac"
-                else "remote-dmr",
+                else "remote_litellm_gateway",
             },
         }
 

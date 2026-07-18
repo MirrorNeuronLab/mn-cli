@@ -61,6 +61,27 @@ terminal interaction, local service orchestration, and presentation here.
 - Preserve test injection points. Unit tests must not require a live runtime,
   Docker daemon, Redis, model, or network unless explicitly marked as an
   integration test.
+- For blueprint model-launch changes, use `RuntimeModelDependencies` and the
+  reusable `tests/runtime_model_fakes.py` cluster. Inject the catalog, resource
+  report, system summary, installed-model state, `BlueprintModelOps`, remote
+  reconciliation, and LiteLLM sync. Do not patch the planning or placement
+  function being tested.
+- Always cover both hardware topologies: local-only 16 GB (portable fallback)
+  and local plus healthy 128 GB CUDA (medium model on the remote node). Assert
+  the selected node, exact prepared model IDs, already-installed behavior,
+  selected-node LiteLLM gateway upstreams, and worker-facing local LiteLLM
+  endpoints. The selected node gateway, not the submitter, owns the direct DMR
+  route.
+- Preserve `run_cluster_model_monitor` as the single dynamic lifecycle owner.
+  Join/rejoin must add installed-model owner-gateway routes; confirmed departure
+  must remove them; an incomplete snapshot must preserve existing routes. Keep
+  `default` as a LiteLLM group that prefers Nemotron and falls back to Gemma.
+- Obtain owner-gateway model names from the SDK's
+  `runtime_model_gateway_name`; catalog `route_aliases` may be replaced through
+  `$MN_HOME/models/catalog.json` or `MN_MODEL_CATALOG_PATH`.
+- Treat live Docker/DMR/Spark runs as opt-in boundary smoke tests after the
+  injected gate. Never use them as the first test of selection or routing
+  policy.
 - Update `README.md` and `SPEC.md` for public command, config, or output changes.
 - Do not hand-edit `mirrorneuron_cli.egg-info`.
 
@@ -71,6 +92,14 @@ python -m pytest tests/test_<area>.py -q
 python -m ruff check .
 python -m pytest
 python -m build
+```
+
+Quick model-preparation gate in the sibling workspace:
+
+```bash
+../mn-system-tests/.venv/bin/python -m pytest -q \
+  tests/test_run_cmds_models.py tests/test_run_cmds_run.py \
+  -k "adaptive_model_placement or injected_remote_installed_state or injected_cluster"
 ```
 
 When changing help or terminal output, exercise both ordinary and plain modes

@@ -25,10 +25,25 @@ def _build_runtime_model_prepare_plan(
         config_loader(bundle_dir, config_overrides=config_overrides) or {}
     )
     catalog = catalog_loader()
+    profile_cluster_resolver = (
+        dependencies.resolve_cluster_model
+        if dependencies is not None and dependencies.resolve_cluster_model is not None
+        else (
+            lambda *, requirement, entry: resolve_cluster_model_placement(
+                entry,
+                resource_report=dependencies.resource_report,
+            )
+            if dependencies is not None and dependencies.resource_report is not None
+            else _resolve_runtime_cluster_model(
+                requirement=requirement,
+                entry=entry,
+            )
+        )
+    )
     config = _config_with_auto_runtime_model_profile(
         base_config,
         catalog=catalog,
-        resolve_cluster_model=_resolve_runtime_cluster_model,
+        resolve_cluster_model=profile_cluster_resolver,
     )
     validation_manifest = _manifest_for_model_validation(manifest, config)
     requirements = required_blueprint_models(
@@ -248,6 +263,17 @@ def _local_runtime_model_endpoints(
 ) -> dict[str, dict[str, Any]]:
     endpoints: dict[str, dict[str, Any]] = {}
     prepared_statuses = {"installed", "already_installed"}
+    entry_resolver = (
+        dependencies.resolve_model_entry
+        if dependencies is not None and dependencies.resolve_model_entry is not None
+        else resolve_model_entry
+    )
+    endpoint_builder = (
+        dependencies.docker_model_runner_endpoint
+        if dependencies is not None
+        and dependencies.docker_model_runner_endpoint is not None
+        else docker_model_runner_endpoint
+    )
     for item in summary.get("models") or []:
         if not isinstance(item, dict):
             continue
@@ -262,17 +288,6 @@ def _local_runtime_model_endpoints(
         if prepared_endpoint and str(prepared_endpoint.get("source") or "") != "local-dmr":
             continue
         model_ref = str(item.get("id") or item.get("model") or "").strip()
-        entry_resolver = (
-            dependencies.resolve_model_entry
-            if dependencies is not None and dependencies.resolve_model_entry is not None
-            else resolve_model_entry
-        )
-        endpoint_builder = (
-            dependencies.docker_model_runner_endpoint
-            if dependencies is not None
-            and dependencies.docker_model_runner_endpoint is not None
-            else docker_model_runner_endpoint
-        )
         try:
             entry = entry_resolver(model_ref)
         except Exception:

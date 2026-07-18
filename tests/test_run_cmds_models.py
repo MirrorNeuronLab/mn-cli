@@ -1290,8 +1290,8 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
     assert payload["model"] == "nemotron3"
     assert payload["backend"] == "llama.cpp"
     assert result["endpoint"]["node"] == "mirror_neuron@192.168.4.173"
-    assert result["endpoint"]["api_base"] == "http://192.168.4.173:12434/engines/v1"
-    assert result["endpoint"]["source"] == "remote-dmr"
+    assert result["endpoint"]["api_base"] == "http://192.168.4.173:4000/v1"
+    assert result["endpoint"]["source"] == "remote_litellm_gateway"
     output = " ".join(capsys.readouterr().out.split())
     assert (
         "Preparing runtime model nemotron3 on mirror_neuron@192.168.4.173 "
@@ -1510,6 +1510,11 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
         manifest,
         dependencies=dependencies,
     )
+    assert set(plan["catalog"]) == {
+        "gemma4:e2b",
+        "nemotron3",
+        "rag-embedding",
+    }
     placement = run_cmds._preflight_and_apply_runtime_model_placement(
         manifest,
         runtime_model_requirements=plan["placement_models"],
@@ -1549,13 +1554,88 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
         assert {
             endpoint["api_base"]
             for endpoint in cluster.gateway_syncs[0]["runtime_endpoints"].values()
-        } == {"http://10.0.0.2:12434/engines/v1"}
+        } == {"http://10.0.0.2:4000/v1"}
     worker_endpoints = json.loads(env_overrides["MN_MODEL_ENDPOINTS_JSON"])
     assert worker_endpoints
     assert {
         endpoint["api_base"] for endpoint in worker_endpoints.values()
     } == {"http://mn-litellm-proxy:4000/v1"}
     assert env_overrides["MN_LLM_MODEL"] == "default"
+    prepared_worker_manifest = run_cmds.prepare_manifest_for_submission(
+        bundle_dir,
+        {
+            "nodes": [
+                {
+                    "node_id": "assistant",
+                    "config": {
+                        "runner_module": "MirrorNeuron.Runner.DockerWorker"
+                    },
+                }
+            ]
+        },
+        env_overrides=env_overrides,
+    )
+    worker_environment = prepared_worker_manifest["nodes"][0]["config"][
+        "environment"
+    ]
+    assert worker_environment["MN_LLM_PROVIDER"] == "litellm"
+    assert worker_environment["MN_LLM_MODEL"] == "default"
+    assert worker_environment["MN_LLM_API_BASE"] == (
+        "http://mn-litellm-proxy:4000/v1"
+    )
+
+
+def test_injected_remote_installed_state_remains_routed_through_local_litellm(
+    tmp_path,
+    fake_runtime_model_cluster_factory,
+):
+    bundle_dir = tmp_path / "source-assistant"
+    manifest = _write_adaptive_source_model_config(bundle_dir)
+    cluster = fake_runtime_model_cluster_factory(include_spark=True)
+    cluster.installed_by_node["mirror_neuron@spark"] = {
+        "docker.io/ai/nemotron3:latest",
+        "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M",
+    }
+    dependencies = cluster.dependencies()
+    plan = run_cmds._build_runtime_model_prepare_plan(
+        bundle_dir,
+        manifest,
+        dependencies=dependencies,
+    )
+    placement = run_cmds._preflight_and_apply_runtime_model_placement(
+        manifest,
+        runtime_model_requirements=plan["placement_models"],
+        resource_report=dependencies.resource_report(),
+        system_summary=dependencies.system_summary(),
+    )
+    env_overrides = {
+        "MN_SELECTED_RUNTIME_NODE": placement["selected_node"],
+    }
+
+    summary = run_cmds._prepare_runtime_models_for_run_or_exit(
+        bundle_dir,
+        manifest,
+        env_overrides=env_overrides,
+        runtime_model_plan=plan,
+        quiet=True,
+        dependencies=dependencies,
+    )
+
+    assert placement["selected_node"] == "mirror_neuron@spark"
+    assert {call["status"] for call in cluster.prepare_calls} == {
+        "already_installed"
+    }
+    assert {item["status"] for item in summary["models"]} == {
+        "runtime_node_already_installed"
+    }
+    assert {
+        endpoint["api_base"]
+        for endpoint in cluster.gateway_syncs[0]["runtime_endpoints"].values()
+    } == {"http://10.0.0.2:4000/v1"}
+    worker_endpoints = json.loads(env_overrides["MN_MODEL_ENDPOINTS_JSON"])
+    assert {
+        endpoint["api_base"] for endpoint in worker_endpoints.values()
+    } == {"http://mn-litellm-proxy:4000/v1"}
 
 
 def test_runtime_model_preflight_rejects_ineligible_node_before_prepare(mocker):

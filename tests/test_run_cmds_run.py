@@ -145,6 +145,109 @@ def test_run_prepares_runtime_models_before_model_validation(mocker, tmp_path, m
 
     assert order == ["services", "prepare_models", "validate_models", "inputs"]
 
+
+def test_run_uses_injected_cluster_for_model_selection_preparation_and_gateway(
+    mocker,
+    tmp_path,
+    monkeypatch,
+    fake_runtime_model_cluster_factory,
+):
+    """Exercise the real run handler without Core, DMR, LiteLLM, Docker, or SSH."""
+
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    cluster = fake_runtime_model_cluster_factory(include_spark=True)
+    dependencies = cluster.dependencies()
+    submit = mocker.patch(
+        "mn_cli.libs.run_cmds.client.submit_job", return_value="job-injected-models"
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.stream_events",
+        return_value=[json.dumps({"type": "job_completed"})],
+    )
+
+    bundle_dir = tmp_path / "injected-model-run"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "manifest_version": "1",
+                "graph_id": "injected-model-run",
+                "job_name": "injected-model-run",
+                "entrypoints": ["assistant"],
+                "nodes": [
+                    {
+                        "node_id": "assistant",
+                        "config": {
+                            "runner_module": "MirrorNeuron.Runner.HostLocal"
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps(
+            {
+                "llm": {
+                    "enabled": True,
+                    "model": "default",
+                    "default_config": "primary",
+                    "configs": {
+                        "primary": {
+                            "provider": "docker_model_runner",
+                            "model": "medium",
+                        }
+                    },
+                },
+                "knowledge_rag": {
+                    "enabled": True,
+                    "required": True,
+                    "embedding_provider": "docker_model_runner",
+                    "embedding_model": "rag-embedding",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    run_cmds.run_bundle(
+        str(bundle_dir),
+        follow_seconds=0,
+        force=True,
+        runtime_model_dependencies=dependencies,
+    )
+
+    assert {call["node"] for call in cluster.prepare_calls} == {
+        "mirror_neuron@spark"
+    }
+    assert {call["runtime_model"] for call in cluster.prepare_calls} == {
+        "docker.io/ai/nemotron3:latest",
+        "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M",
+    }
+    assert len(cluster.gateway_syncs) == 1
+    assert {
+        endpoint["api_base"]
+        for endpoint in cluster.gateway_syncs[0]["runtime_endpoints"].values()
+    } == {"http://10.0.0.2:4000/v1"}
+    submitted_manifest = json.loads(submit.call_args.args[0])
+    assistant = submitted_manifest["nodes"][0]
+    assert assistant["policies"]["scheduler"]["preferred_node"] == (
+        "mirror_neuron@spark"
+    )
+    assert assistant["config"]["environment"]["MN_LLM_MODEL"] == "default"
+    assert assistant["config"]["environment"]["MN_LLM_API_BASE"] == (
+        "http://127.0.0.1:4000/v1"
+    )
+    worker_endpoints = json.loads(
+        assistant["config"]["environment"]["MN_MODEL_ENDPOINTS_JSON"]
+    )
+    assert {
+        endpoint["api_base"] for endpoint in worker_endpoints.values()
+    } == {"http://mn-litellm-proxy:4000/v1"}
+
 def test_run_auto_schedule_creates_resource_wait_schedule(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="run-scheduled")

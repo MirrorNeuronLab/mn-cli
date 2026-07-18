@@ -45,6 +45,8 @@ from mn_sdk import (
     proxy_model_ids,
     reconcile_cluster_model_remotes,
     record_manual_model_install,
+    remote_model_api_base,
+    remote_runtime_model_endpoint,
     remove_litellm_gateway_route,
     remove_model_proxy,
     remove_model_remote,
@@ -57,6 +59,7 @@ from mn_sdk import (
     upsert_model_proxy,
     upsert_model_remote,
 )
+from mn_sdk.model_access import runtime_model_gateway_name
 from mn_sdk import (
     docker_status as sdk_docker_status,
     install_model_entry as sdk_install_model_entry,
@@ -73,10 +76,10 @@ remote_app = typer.Typer(help="Manage remote model endpoints")
 model_app.add_typer(remote_app, name="remote")
 
 REMOTE_DMR_SOURCE = "remote-dmr"
-LEGACY_REMOTE_LITELLM_SOURCE = "remote_litellm_gateway"
+REMOTE_LITELLM_GATEWAY_SOURCE = "remote_litellm_gateway"
 CLUSTER_REMOTE_MODEL_SOURCES = {
     REMOTE_DMR_SOURCE,
-    LEGACY_REMOTE_LITELLM_SOURCE,
+    REMOTE_LITELLM_GATEWAY_SOURCE,
 }
 
 
@@ -218,8 +221,8 @@ def install_model(
         target = result["docker_model"]
         if not selected_node:
             record_manual_model_install(entry, backend=compatibility["backend"])
-        # Cluster-node installation already synchronizes and records the direct
-        # DMR route while the target endpoint is authoritative.  Running the
+        # Cluster-node installation already synchronizes and records the owner
+        # gateway route while the target endpoint is authoritative. Running the
         # full inventory reconciliation again here can immediately replace that
         # fresh route with an older shared-status snapshot.
         if not selected_node:
@@ -725,40 +728,27 @@ def _cluster_gateway_endpoint(
     node_endpoint: dict[str, Any],
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    endpoint = payload.get("endpoint") if isinstance(payload.get("endpoint"), dict) else {}
-    docker_model = docker_model_name(entry)
-    api_model = str(endpoint.get("api_model") or endpoint.get("model") or entry.get("api_model") or docker_model)
-    result = {
-        "provider": str(endpoint.get("provider") or entry.get("provider") or "docker_model_runner"),
-        "model": api_model,
-        "runtime_model": str(endpoint.get("runtime_model") or docker_model),
-        "api_model": api_model,
-        "api_base": _node_docker_model_runner_api_base(node_endpoint),
-        "api_key": str(endpoint.get("api_key") or "not-needed"),
-        "node": str(endpoint.get("node") or node_endpoint.get("node_name") or ""),
-        "source": REMOTE_DMR_SOURCE,
-    }
-    aliases = entry.get("route_aliases")
-    if isinstance(aliases, list) and aliases:
-        result["route_aliases"] = [str(alias) for alias in aliases if str(alias or "").strip()]
-    return result
+    return remote_runtime_model_endpoint(
+        entry=entry,
+        node=str(node_endpoint.get("node_name") or ""),
+        node_host=str(node_endpoint.get("host") or ""),
+        payload=payload,
+    )
 
 
-def _node_docker_model_runner_api_base(node_endpoint: dict[str, Any]) -> str:
-    """Return a cluster-reachable DMR URL without routing through owner LiteLLM."""
+def _node_litellm_gateway_api_base(node_endpoint: dict[str, Any]) -> str:
+    """Return the node's cluster-reachable LiteLLM gateway URL."""
 
     host = str(node_endpoint.get("host") or "").strip()
-    if not host:
-        raise RuntimeError("cluster node does not advertise a Docker Model Runner host")
-
-    parsed = urllib.parse.urlsplit(DOCKER_MODEL_RUNNER_HOST_API_BASE)
-    hostname = host[1:-1] if host.startswith("[") and host.endswith("]") else host
-    advertised_host = f"[{hostname}]" if ":" in hostname else hostname
-    port = parsed.port or 12434
-    path = parsed.path or "/engines/v1"
-    return urllib.parse.urlunsplit(
-        (parsed.scheme or "http", f"{advertised_host}:{port}", path, "", "")
-    ).rstrip("/")
+    node = node_endpoint.get("node") if isinstance(node_endpoint.get("node"), dict) else {}
+    gateway = (
+        node_endpoint.get("litellm_gateway")
+        if isinstance(node_endpoint.get("litellm_gateway"), dict)
+        else node.get("litellm_gateway")
+        if isinstance(node.get("litellm_gateway"), dict)
+        else {}
+    )
+    return remote_model_api_base({"gateway": gateway}, {}, host)
 
 
 def _cluster_node_endpoint(node_name: str) -> dict[str, Any]:
@@ -1089,7 +1079,7 @@ def _sync_gateway_runtime_endpoints_across_cluster(
 
     A route backed by another node's Docker Model Runner must never be
     installed on its owner: the owner's local DMR route is authoritative.
-    Every other node receives the owner's direct, cluster-reachable DMR URL.
+    Every other node receives the owner's cluster-reachable LiteLLM URL.
     """
     results: list[dict[str, Any]] = []
     for node_endpoint in _cluster_node_endpoints(quiet=True):
@@ -1489,18 +1479,21 @@ def _cluster_routes_from_inventories(
             except Exception:
                 continue
             model_id = str(entry.get("id") or runtime_model).strip()
-            api_model = str(entry.get("api_model") or runtime_model).strip()
+            owner_gateway_model = runtime_model_gateway_name(
+                entry,
+                fallback=model_id,
+            )
             route_keys = _model_route_keys(entry)
             explicit_aliases = entry.get("route_aliases")
             endpoint = {
                 "provider": str(entry.get("provider") or "docker_model_runner"),
-                "model": api_model,
+                "model": owner_gateway_model,
                 "runtime_model": runtime_model,
-                "api_model": api_model,
-                "api_base": _node_docker_model_runner_api_base(node_endpoint),
+                "api_model": owner_gateway_model,
+                "api_base": _node_litellm_gateway_api_base(node_endpoint),
                 "api_key": "not-needed",
                 "node": owner,
-                "source": REMOTE_DMR_SOURCE,
+                "source": REMOTE_LITELLM_GATEWAY_SOURCE,
                 "cluster_model_id": model_id,
                 "route_aliases": (
                     [str(alias) for alias in explicit_aliases if str(alias or "").strip()]

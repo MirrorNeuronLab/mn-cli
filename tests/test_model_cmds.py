@@ -231,8 +231,13 @@ def test_cluster_model_reconcile_reads_redis_snapshots_and_syncs_only_local_gate
     assert synced[0]["runtime_endpoints"]["nemotron3"]["node"] == "mirror_neuron@spark"
     assert (
         synced[0]["runtime_endpoints"]["nemotron3"]["api_base"]
-        == "http://10.0.0.2:12434/engines/v1"
+        == "http://10.0.0.2:4000/v1"
     )
+    assert (
+        synced[0]["runtime_endpoints"]["nemotron3"]["source"]
+        == "remote_litellm_gateway"
+    )
+    assert synced[0]["runtime_endpoints"]["nemotron3"]["api_model"] == "nemotron3"
     assert "gemma4:e2b" not in synced[0]["runtime_endpoints"]
     assert persisted[0][1]["replace"] is True
     assert persisted[0][1]["local_node"] == "mirror_neuron@local"
@@ -536,10 +541,10 @@ def test_local_gateway_ignores_remote_route_when_same_model_is_installed_locally
     ) == {}
 
 
-def test_cluster_dmr_api_base_supports_ipv6_owner():
-    assert model_cmds._node_docker_model_runner_api_base(
+def test_cluster_litellm_api_base_supports_ipv6_owner():
+    assert model_cmds._node_litellm_gateway_api_base(
         {"host": "2001:db8::10"}
-    ) == "http://[2001:db8::10]:12434/engines/v1"
+    ) == "http://[2001:db8::10]:4000/v1"
 
 
 def test_model_show_resolves_gemme_alias(mocker):
@@ -720,9 +725,9 @@ def test_install_model_on_cluster_node_uses_local_runtime_client_for_local_host(
             "model": "docker.io/ai/gemma4:E2B",
             "runtime_model": "docker.io/ai/gemma4:E2B",
             "api_model": "docker.io/ai/gemma4:E2B",
-            "api_base": "http://192.168.6.28:12434/engines/v1",
+            "api_base": "http://192.168.6.28:4000/v1",
             "node": node,
-            "source": "remote-dmr",
+            "source": "remote_litellm_gateway",
             "cluster_model_id": "gemma4:e2b",
             "route_aliases": ["gemma4:e2b"],
         },
@@ -735,7 +740,7 @@ def test_install_model_on_cluster_node_uses_local_runtime_client_for_local_host(
     fake_runtime_client.prepare_runtime_model.assert_called_once()
     remote = next(iter(load_model_remotes()["remotes"].values()))
     assert remote["managed_by"] == "mirror-neuron-cluster"
-    assert remote["base_url"] == "http://192.168.6.28:12434/engines/v1"
+    assert remote["base_url"] == "http://192.168.6.28:4000/v1"
 
 
 def test_model_proxy_registers_provider_config_without_start(tmp_path, mocker):
@@ -1008,13 +1013,13 @@ def test_model_install_node_uses_prepare_runtime_model_not_ssh(mocker):
     prepare_payload = [payload for kind, payload in calls if kind == "prepare"][0]
     assert prepare_payload["model"] == "docker.io/ai/gemma4:E2B"
     assert prepare_payload["source"] == "mn-cli"
-    assert synced[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://192.168.4.173:12434/engines/v1"
-    assert synced[0]["runtime_endpoints"]["gemma4:e2b"]["source"] == "remote-dmr"
+    assert synced[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://192.168.4.173:4000/v1"
+    assert synced[0]["runtime_endpoints"]["gemma4:e2b"]["source"] == "remote_litellm_gateway"
     assert load_model_ownership()["models"] == {}
     remotes = load_model_remotes()["remotes"]
     remote = next(iter(remotes.values()))
     assert remote["managed_by"] == "mirror-neuron-cluster"
-    assert remote["base_url"] == "http://192.168.4.173:12434/engines/v1"
+    assert remote["base_url"] == "http://192.168.4.173:4000/v1"
     assert remote["node"] == "spark"
 
 
@@ -1085,7 +1090,11 @@ def test_model_install_node_syncs_only_the_calling_nodes_gateway(mocker):
 
     assert result.exit_code == 0
     assert calls[0][1] == "192.168.4.173:55052"
-    assert local_syncs[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://192.168.4.173:12434/engines/v1"
+    assert local_syncs[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://192.168.4.173:4000/v1"
+    assert (
+        local_syncs[0]["runtime_endpoints"]["gemma4:e2b"]["source"]
+        == "remote_litellm_gateway"
+    )
     assert node_syncs == []
 
 

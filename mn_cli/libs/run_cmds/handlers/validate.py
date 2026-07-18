@@ -262,10 +262,17 @@ def _validate_manifest_hardware_or_exit(
     force: bool = False,
     output_format: str = "table",
     allow_local_fallback: bool = False,
+    resource_report: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     result = run_hardware_requirements_validation(
         manifest,
-        resource_report=lambda: _runtime_resource_report(allow_local_fallback=allow_local_fallback),
+        resource_report=(
+            (lambda: resource_report)
+            if isinstance(resource_report, dict)
+            else lambda: _runtime_resource_report(
+                allow_local_fallback=allow_local_fallback
+            )
+        ),
         force=force,
     )
     if result.get("ok"):

@@ -68,6 +68,40 @@ those contracts.
 - Unit tests use fakes and temporary paths; normal tests do not mutate the real
   `~/.mn`, start services, or access the network.
 
+## Runtime-Model Launch Contract
+
+`mn blueprint run` resolves the complete effective model set before performing
+model preparation. One hardware-fitness decision is reused for workflow
+placement and node-local preparation. A capable 128 GB cluster node therefore
+wins over a smaller submitter for a medium model, while a local-only node uses
+the declared portable fallback.
+
+The selected node's cluster-reachable LiteLLM endpoint is the submitter
+gateway's upstream. The selected-node gateway owns the direct route to its
+node-local DMR. Worker configuration receives only a local LiteLLM endpoint and
+logical aliases, never a remote node's DMR URL as the worker-facing API base.
+Already-installed and newly-installed models follow the same routing
+projection.
+
+`default` is a logical LiteLLM model group. When a medium route is available it
+aliases to Nemotron and has Gemma as its fallback; without a medium route it
+aliases to Gemma. `run_cluster_model_monitor` remains the single dynamic route
+lifecycle: complete joined-node inventories add routes, complete membership
+after departure removes routes, and incomplete snapshots do not destructively
+replace the last known route set.
+
+Owner-gateway model names are resolved from each merged SDK catalog entry:
+`route_aliases` takes precedence over the canonical entry ID. The normal SDK
+catalog precedence applies, so `$MN_HOME/models/catalog.json` and
+`MN_MODEL_CATALOG_PATH` can replace route aliases and fallback metadata without
+changing CLI code.
+
+The orchestration boundary is injectable through `RuntimeModelDependencies`.
+Fast tests must provide a catalog, resource report, system summary,
+`BlueprintModelOps`, and LiteLLM gateway effects and execute the real planning
+and run-handler code. Live Core, Docker, DMR, SSH, and network access are not
+permitted in this unit gate.
+
 ## Configuration
 
 `mn_cli.config` loads configuration with real environment variables taking
