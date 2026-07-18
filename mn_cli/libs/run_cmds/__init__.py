@@ -13,6 +13,7 @@ from importlib import import_module
 
 _MODULE_NAMES = (
     "common",
+    "runtime_dependencies",
     "outputs",
     "model_cluster",
     "model_config",

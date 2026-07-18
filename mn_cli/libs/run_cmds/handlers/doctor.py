@@ -182,6 +182,7 @@ def doctor_bundle(
                     run_id=env_overrides.get("MN_RUN_ID"),
                     submission_id=_doctor_submission_id(blueprint_id, manifest_dict),
                     cluster_client=client,
+                    env={**os.environ, **env_overrides},
                 )
                 prepared_submission_id = str(prepared.metadata.get("submission_id") or "")
                 prepared_manifest = json.loads(prepared.manifest_json)
@@ -199,6 +200,7 @@ def doctor_bundle(
                 run_id=env_overrides.get("MN_RUN_ID"),
                 submission_id=_doctor_submission_id(blueprint_id, manifest_dict),
                 cluster_client=client,
+                env={**os.environ, **env_overrides},
             )
             prepared_submission_id = str(prepared.metadata.get("submission_id") or "")
 

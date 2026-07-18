@@ -814,6 +814,9 @@ def _cluster_node_endpoints(*, quiet: bool = False) -> list[dict[str, Any]]:
 
 
 def _cluster_runtime_status_endpoints(*, quiet: bool = False) -> list[dict[str, Any]]:
+    live_endpoints = _cluster_node_endpoints(quiet=quiet)
+    if not live_endpoints:
+        return []
     try:
         payload = json.loads(client.get_runtime_statuses())
     except Exception as exc:
@@ -830,21 +833,35 @@ def _cluster_runtime_status_endpoints(*, quiet: bool = False) -> list[dict[str, 
         and str(event.get("domain") or "").strip().lower() == "models"
         and str(event.get("id") or "").strip()
     ]
-    endpoints: list[dict[str, Any]] = []
+    snapshots: dict[str, dict[str, Any]] = {}
     for node in nodes or []:
         if not isinstance(node, dict):
             continue
         node_name = str(node.get("name") or node.get("node") or "").strip()
-        host = str(node.get("grpc_host") or node.get("address") or "").strip()
-        if not host and "@" in node_name:
-            host = node_name.split("@", 1)[1].strip()
+        if not node_name:
+            continue
+        snapshots[node_name] = node
+
+    endpoints: list[dict[str, Any]] = []
+    for live_endpoint in live_endpoints:
+        node_name = str(live_endpoint.get("node_name") or "").strip()
+        host = str(live_endpoint.get("host") or "").strip()
         if not node_name or not host:
             continue
+        live_node = (
+            live_endpoint.get("node")
+            if isinstance(live_endpoint.get("node"), dict)
+            else {}
+        )
+        snapshot = snapshots.get(node_name, {})
+        node = {**snapshot, **live_node}
+        if isinstance(snapshot.get("runtime_status"), dict):
+            node["runtime_status"] = snapshot["runtime_status"]
         endpoint = {
             "host": host,
             "node": node,
             "node_name": node_name,
-            "self": bool(node.get("self") is True or node.get("self?") is True),
+            "self": bool(live_endpoint.get("self") is True),
             "self_authoritative": True,
         }
         if endpoint["self"] and event_ids:

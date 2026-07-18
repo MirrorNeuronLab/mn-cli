@@ -179,12 +179,12 @@ def test_cluster_model_reconcile_reads_redis_snapshots_and_syncs_only_local_gate
                 "self": True,
                 "status_event_ids": ["1-0"],
             },
-            {
-                "node": spark,
-                "node_name": spark["name"],
-                "host": spark["grpc_host"],
-                "self": False,
-            },
+                {
+                    "node": spark,
+                    "node_name": spark["name"],
+                    "host": spark["grpc_host"],
+                    "self": False,
+                },
         ],
     )
     mocker.patch(
@@ -244,6 +244,72 @@ def test_cluster_model_reconcile_reads_redis_snapshots_and_syncs_only_local_gate
     }
     assert local_result["gateway_ack"]["status_event_ack"]["acked_count"] == 1
     event_ack.assert_called_once_with(["1-0"])
+
+
+def test_cluster_model_reconcile_prunes_departed_runtime_status_snapshots(mocker):
+    local = _cluster_node("mirror_neuron@local", "10.0.0.1", self_node=True)
+    departed = _cluster_node("mirror_neuron@departed", "10.0.0.9")
+    departed["runtime_status"] = {
+        "models": {
+            "revision": "departed-v1",
+            "status": {
+                "models": [
+                    {
+                        "id": "nemotron3",
+                        "provider": "docker_model_runner",
+                        "model": "docker.io/ai/nemotron3:latest",
+                        "installed": True,
+                    }
+                ]
+            },
+        }
+    }
+    persisted = []
+
+    mocker.patch(
+        "mn_cli.libs.model_cmds.client.get_system_summary",
+        return_value=_cluster_summary(local),
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds.client.get_runtime_statuses",
+        return_value=json.dumps({"nodes": [local, departed], "events": []}),
+    )
+    mocker.patch("mn_cli.libs.model_cmds._installed_model_names", return_value=set())
+    mocker.patch(
+        "mn_cli.libs.model_cmds.client.publish_runtime_status",
+        side_effect=lambda payload: json.dumps(
+            {
+                "domain": "models",
+                "revision": payload["revision"],
+                "status": "accepted",
+            }
+        ),
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds.reconcile_cluster_model_remotes",
+        side_effect=lambda endpoints, **kwargs: persisted.append((endpoints, kwargs))
+        or {"remotes": {}},
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds.sync_litellm_gateway",
+        return_value={"status": "running"},
+    )
+
+    result = model_cmds.reconcile_cluster_model_routes(restart=False)
+
+    assert result["status"] == "ok"
+    assert result["models"] == 0
+    assert [item["node"] for item in result["nodes"]] == ["mirror_neuron@local"]
+    assert persisted == [
+        (
+            {},
+            {
+                "local_installed_models": set(),
+                "local_node": "mirror_neuron@local",
+                "replace": True,
+            },
+        )
+    ]
 
 
 def test_cluster_model_reconcile_requires_matching_publish_ack(mocker):
@@ -547,18 +613,32 @@ def test_cluster_node_is_local_uses_local_host_alias(monkeypatch):
     assert model_cmds._cluster_node_is_local(node_endpoint) is True
 
 
-def test_cluster_runtime_status_endpoints_do_not_use_system_summary(mocker):
+def test_cluster_runtime_status_endpoints_use_live_membership_and_ignore_departed_snapshots(
+    mocker,
+):
+    mocker.patch(
+        "mn_cli.libs.model_cmds.client.get_system_summary",
+        return_value=_cluster_summary(
+            _cluster_node("mirror_neuron@local", "10.0.0.1", self_node=True),
+        ),
+    )
     mocker.patch(
         "mn_cli.libs.model_cmds.client.get_runtime_statuses",
         return_value=json.dumps(
             {
                 "nodes": [
                     {
-                        "name": "mirror_neuron@spark",
-                        "grpc_host": "192.168.4.173",
+                        "name": "mirror_neuron@local",
+                        "grpc_host": "stale-local-address",
                         "self": True,
-                        "runtime_status": {},
-                    }
+                        "runtime_status": {"models": {"revision": "local-v1"}},
+                    },
+                    {
+                        "name": "mirror_neuron@departed",
+                        "grpc_host": "10.0.0.9",
+                        "self": False,
+                        "runtime_status": {"models": {"revision": "departed-v1"}},
+                    },
                 ],
                 "events": [
                     {"id": "1-0", "domain": "models"},
@@ -567,27 +647,27 @@ def test_cluster_runtime_status_endpoints_do_not_use_system_summary(mocker):
             }
         ),
     )
-    system_summary = mocker.patch(
-        "mn_cli.libs.model_cmds.client.get_system_summary",
-        side_effect=AssertionError("runtime status sync must not probe BEAM peers"),
-    )
-
     assert model_cmds._cluster_runtime_status_endpoints() == [
         {
-            "host": "192.168.4.173",
+            "host": "10.0.0.1",
             "node": {
-                "name": "mirror_neuron@spark",
-                "grpc_host": "192.168.4.173",
+                "name": "mirror_neuron@local",
+                "grpc_host": "10.0.0.1",
+                "grpc_port": 55051,
                 "self": True,
-                "runtime_status": {},
+                "runtime_status": {"models": {"revision": "local-v1"}},
+                "native_sdk_grpc": {
+                    "target": "10.0.0.1:55052",
+                    "host": "10.0.0.1",
+                    "port": 55052,
+                },
             },
-            "node_name": "mirror_neuron@spark",
+            "node_name": "mirror_neuron@local",
             "self": True,
             "self_authoritative": True,
             "status_event_ids": ["1-0"],
         }
     ]
-    system_summary.assert_not_called()
 
 
 def test_cluster_node_is_not_local_for_remote_host(monkeypatch):

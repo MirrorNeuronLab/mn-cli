@@ -16,6 +16,7 @@ The root command registers these operator-facing families:
 - `blueprint`: catalog, validation, installation, execution, and outputs;
 - `job`: submission, inspection, control, backup/restore, monitor, and result;
 - `node`: cluster membership, exposure, drain, reconcile, and maintenance;
+- `operation`: durable group-operation status and reattachment;
 - `runtime`: start, stop, status, health, doctor, sidecars, and updates;
 - `resource`, `service`, and `model`: local and cluster capability management;
 - `deployment`: versioned deployment operations; and
@@ -51,6 +52,10 @@ those contracts.
   when available. Internal diagnostics appear only in debug/verbose mode.
 - Interactive monitors must preserve keyboard accessibility and clearly show
   selection without relying on reverse-video backgrounds.
+- Durable group operations render item completion in arrival order. Ctrl+C
+  detaches while leaving Core work active and prints the operation ID. A
+  `cancellation_pending` item is accepted success with queued remote cleanup;
+  explicit item failures retain a nonzero final exit code.
 
 ## Safety
 

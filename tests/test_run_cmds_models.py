@@ -1429,6 +1429,135 @@ def test_runtime_model_preflight_includes_config_and_rag_models(mocker, tmp_path
     assert any("jina-embeddings-v5-text-small-retrieval" in label for label in labels)
 
 
+def _write_adaptive_source_model_config(bundle_dir: Path) -> dict:
+    manifest = {
+        "apiVersion": "mn.workflow.source/v2",
+        "kind": "WorkflowSource",
+        "config": {"manifest_defaults": ["llm", "knowledge_rag"]},
+        "llm": {
+            "enabled": True,
+            "model": "default",
+            "default_config": "primary",
+            "configs": {
+                "primary": {
+                    "provider": "docker_model_runner",
+                    "backend": "llama.cpp",
+                }
+            },
+        },
+        "knowledge_rag": {
+            "enabled": True,
+            "required": True,
+            "embedding_provider": "docker_model_runner",
+            "embedding_model": "rag-embedding",
+        },
+    }
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps(
+            {
+                "llm": {"configs": {"primary": {"max_tokens": 1800}}},
+                "knowledge_rag": {"backend": "milvus_lite"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return manifest
+
+
+def test_runtime_model_plan_reads_source_manifest_defaults(tmp_path):
+    bundle_dir = tmp_path / "source-assistant"
+    manifest = _write_adaptive_source_model_config(bundle_dir)
+
+    plan = run_cmds._build_runtime_model_prepare_plan(bundle_dir, manifest)
+
+    assert plan["base_config"]["llm"]["enabled"] is True
+    assert plan["base_config"]["llm"]["model"] == "default"
+    assert plan["base_config"]["knowledge_rag"]["enabled"] is True
+    assert {
+        (requirement["path"], requirement["model"])
+        for requirement in plan["requirements"]
+    } == {
+        ("llm.configs.primary", "medium"),
+        ("knowledge_rag.embedding_model", "rag-embedding"),
+    }
+
+
+@pytest.mark.parametrize(
+    ("include_spark", "expected_node", "expected_chat_model"),
+    [
+        (False, "mirror_neuron@mac", "docker.io/ai/gemma4:E2B"),
+        (True, "mirror_neuron@spark", "docker.io/ai/nemotron3:latest"),
+    ],
+)
+def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_through_litellm(
+    tmp_path,
+    fake_runtime_model_cluster_factory,
+    include_spark,
+    expected_node,
+    expected_chat_model,
+):
+    bundle_dir = tmp_path / "source-assistant"
+    manifest = _write_adaptive_source_model_config(bundle_dir)
+    cluster = fake_runtime_model_cluster_factory(include_spark=include_spark)
+    dependencies = cluster.dependencies()
+
+    plan = run_cmds._build_runtime_model_prepare_plan(
+        bundle_dir,
+        manifest,
+        dependencies=dependencies,
+    )
+    placement = run_cmds._preflight_and_apply_runtime_model_placement(
+        manifest,
+        runtime_model_requirements=plan["placement_models"],
+        resource_report=dependencies.resource_report(),
+        system_summary=dependencies.system_summary(),
+    )
+    env_overrides = {"MN_SELECTED_RUNTIME_NODE": placement["selected_node"]}
+    if placement.get("model_fallbacks"):
+        env_overrides["MN_SELECTED_RUNTIME_MODEL_FALLBACKS_JSON"] = json.dumps(
+            placement["model_fallbacks"]
+        )
+
+    summary = run_cmds._prepare_runtime_models_for_run_or_exit(
+        bundle_dir,
+        manifest,
+        env_overrides=env_overrides,
+        runtime_model_plan=plan,
+        quiet=True,
+        dependencies=dependencies,
+    )
+
+    assert placement["selected_node"] == expected_node
+    assert {item["node"] for item in cluster.prepare_calls} == {expected_node}
+    assert {item["runtime_model"] for item in cluster.prepare_calls} == {
+        expected_chat_model,
+        "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M",
+    }
+    assert {item["endpoint"]["node"] for item in summary["models"]} == {
+        expected_node
+    }
+    assert len(cluster.gateway_syncs) == 1
+    assert {
+        endpoint["node"]
+        for endpoint in cluster.gateway_syncs[0]["runtime_endpoints"].values()
+    } == {expected_node}
+    if include_spark:
+        assert {
+            endpoint["api_base"]
+            for endpoint in cluster.gateway_syncs[0]["runtime_endpoints"].values()
+        } == {"http://10.0.0.2:12434/engines/v1"}
+    worker_endpoints = json.loads(env_overrides["MN_MODEL_ENDPOINTS_JSON"])
+    assert worker_endpoints
+    assert {
+        endpoint["api_base"] for endpoint in worker_endpoints.values()
+    } == {"http://mn-litellm-proxy:4000/v1"}
+    assert env_overrides["MN_LLM_MODEL"] == "default"
+
+
 def test_runtime_model_preflight_rejects_ineligible_node_before_prepare(mocker):
     manifest = {"runtime": {"placement": {"mode": "single_node"}}, "nodes": []}
     requirements = [

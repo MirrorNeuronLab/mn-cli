@@ -149,6 +149,7 @@ def run_bundle(
     auto_schedule: bool = False,
     schedule: Optional[str] = None,
     debug: bool = False,
+    runtime_model_dependencies: RuntimeModelDependencies | None = None,
 ):
     """Run a bundle after applying optional runtime metadata and environment."""
     pre_launch_process: subprocess.Popen[Any] | None = None
@@ -189,6 +190,7 @@ def run_bundle(
             bundle_dir,
             manifest_dict,
             config_overrides=config_overrides,
+            dependencies=runtime_model_dependencies,
         )
         _validate_manifest_hardware_or_exit(
             manifest_dict,
@@ -198,6 +200,18 @@ def run_bundle(
         placement = _preflight_and_apply_runtime_model_placement(
             manifest_dict,
             runtime_model_requirements=runtime_model_plan["placement_models"],
+            resource_report=(
+                runtime_model_dependencies.resource_report()
+                if runtime_model_dependencies is not None
+                and runtime_model_dependencies.resource_report is not None
+                else None
+            ),
+            system_summary=(
+                runtime_model_dependencies.system_summary()
+                if runtime_model_dependencies is not None
+                and runtime_model_dependencies.system_summary is not None
+                else None
+            ),
             env={**os.environ, **env_overrides},
         )
         if placement:
@@ -260,6 +274,7 @@ def run_bundle(
                 config_overrides=config_overrides,
                 force=force,
                 runtime_model_plan=runtime_model_plan,
+                dependencies=runtime_model_dependencies,
             )
             _merge_runtime_model_config_overrides(
                 config_overrides, model_install_summary
@@ -293,6 +308,7 @@ def run_bundle(
                 config_overrides=config_overrides,
                 force=force,
                 runtime_model_plan=runtime_model_plan,
+                dependencies=runtime_model_dependencies,
             )
             _merge_runtime_model_config_overrides(
                 config_overrides, model_install_summary
@@ -369,6 +385,7 @@ def run_bundle(
             bundle_dir=bundle_dir,
             run_id=blueprint_run_id,
             cluster_client=client,
+            env={**os.environ, **env_overrides},
         )
         manifest = prepared_submission.manifest_json
         payloads = prepared_submission.payloads

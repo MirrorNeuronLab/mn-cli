@@ -840,7 +840,7 @@ def test_run_error_submitting(mocker, tmp_path):
 
 
 def test_run_command_debug_prints_preparation_diagnostic(mocker, tmp_path):
-    mocker.patch(
+    prepare = mocker.patch(
         "mn_cli.libs.run_cmds.prepare_job_submission",
         side_effect=RuntimeError(
             "DockerWorker startup_folder_watcher has no eligible node: "
@@ -860,6 +860,7 @@ def test_run_command_debug_prints_preparation_diagnostic(mocker, tmp_path):
     assert result.exit_code == 1
     assert "Diagnostic:" in result.stdout
     assert "status_ineligible (offline)" in result.stdout
+    assert prepare.call_args.kwargs["env"]["MN_DEBUG"] == "1"
 
 
 def test_run_reports_remote_docker_worker_preparation(mocker, tmp_path):

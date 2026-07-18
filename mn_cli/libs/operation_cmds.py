@@ -153,6 +153,9 @@ def _print_completion(action: str, operation: dict[str, Any]) -> None:
 def _record_event(items: dict[str, dict[str, Any]], event: dict[str, Any]) -> None:
     item_id = event.get("item_id")
     if isinstance(item_id, str) and item_id:
+        # Reinsert updates so the rich "recent results" rows follow event
+        # arrival order even when the same item first emitted `started`.
+        items.pop(item_id, None)
         items[item_id] = event
 
 
@@ -184,12 +187,44 @@ def _print_plain_event(
 
 def _operation_table(operation: dict[str, Any], items: dict[str, dict[str, Any]]) -> Table:
     counters = operation.get("counters") if isinstance(operation.get("counters"), dict) else {}
+    completed_items = [
+        event
+        for event in items.values()
+        if str(event.get("status") or "") not in {"", "running"}
+    ]
+    succeeded = sum(
+        1
+        for event in completed_items
+        if str(event.get("status") or "") in _SUCCESS_ITEM_STATUSES
+    )
+    deferred = sum(
+        1
+        for event in completed_items
+        if str(event.get("status") or "") == "cancellation_pending"
+    )
+    failed = sum(
+        1
+        for event in completed_items
+        if str(event.get("status") or "") == "failed"
+    )
+    finished = len(completed_items)
+    total = _int(counters.get("total")) or _int(operation.get("target_count"))
+
+    # The operation snapshot is deliberately immutable while the stream is
+    # active. Derive the live counts from replayable item events so the rich
+    # display reflects out-of-order completions immediately.
+    if not completed_items:
+        finished = _int(counters.get("finished"))
+        succeeded = _int(counters.get("succeeded"))
+        deferred = _int(counters.get("deferred"))
+        failed = _int(counters.get("failed"))
+
     table = Table(title=f"Operation {_operation_id(operation)}", expand=False)
     table.add_column("Progress", no_wrap=True)
     table.add_column("Result", overflow="fold")
     table.add_row(
-        f"{_int(counters.get('finished'))}/{_int(counters.get('total'))}",
-        f"succeeded {_int(counters.get('succeeded'))}, deferred {_int(counters.get('deferred'))}, failed {_int(counters.get('failed'))}",
+        f"{finished}/{total}",
+        f"succeeded {succeeded}, deferred {deferred}, failed {failed}",
     )
     for item_id, event in list(items.items())[-5:]:
         table.add_row(item_id, str(event.get("status") or event.get("type") or "updated"))
@@ -217,4 +252,6 @@ def _int(value: Any) -> int:
 
 
 def _plain_output() -> bool:
-    return os.getenv("MN_CLI_OUTPUT", "").lower() == "plain" or bool(os.getenv("NO_COLOR"))
+    # NO_COLOR keeps rich layouts without ANSI color; only the explicit plain
+    # mode is a line-oriented contract for scripts.
+    return os.getenv("MN_CLI_OUTPUT", "").lower() == "plain"

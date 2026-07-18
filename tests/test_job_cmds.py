@@ -8,6 +8,7 @@ from rich.console import Console
 import typer
 
 import mn_cli.libs.job_cmds as job_cmds
+import mn_cli.libs.operation_cmds as operation_cmds
 
 
 class StubRpcError(grpc.RpcError):
@@ -24,37 +25,52 @@ class StubRpcError(grpc.RpcError):
 
 def _capture_console(monkeypatch):
     output = StringIO()
-    monkeypatch.setattr(job_cmds, "console", Console(file=output, force_terminal=False, width=160))
+    test_console = Console(file=output, force_terminal=False, width=160)
+    monkeypatch.setattr(job_cmds, "console", test_console)
+    monkeypatch.setattr(operation_cmds, "console", test_console)
     return output
+
+
+def _operation_client(final_operation, events=(), **methods):
+    return SimpleNamespace(
+        start_operation=lambda _kind, _options: json.dumps(
+            {"operation_id": "op-test", "target_count": final_operation.get("counters", {}).get("total", 0)}
+        ),
+        stream_operation_events=lambda _operation_id, **_kwargs: iter(events),
+        get_operation=lambda _operation_id: json.dumps(final_operation),
+        **methods,
+    )
 
 
 def test_clear_runs_without_local_admin_token_preflight(monkeypatch):
     output = _capture_console(monkeypatch)
-    client = SimpleNamespace(admin_token="", clear_jobs=lambda: 1)
+    client = _operation_client(
+        {"operation_id": "op-test", "status": "completed", "counters": {"total": 1, "finished": 1}},
+        admin_token="",
+    )
     monkeypatch.setattr(job_cmds, "client", client)
     monkeypatch.setattr(job_cmds, "config", SimpleNamespace(grpc_admin_token=""))
 
-    job_cmds.clear()
+    job_cmds.clear(yes=True)
 
     rendered = output.getvalue()
     assert "Job clear successful" in rendered
-    assert "Jobs cleared:" in rendered
-    assert "1 non-running" in rendered
+    assert "Operation ID:" in rendered
 
 
 def test_clear_reports_admin_token_mismatch(monkeypatch):
     output = _capture_console(monkeypatch)
 
-    def clear_jobs():
+    def start_operation(_kind, _options):
         raise StubRpcError(
             grpc.StatusCode.PERMISSION_DENIED,
-            "ClearJobs requires MN_GRPC_ADMIN_TOKEN",
+            "StartOperation requires MN_GRPC_ADMIN_TOKEN",
         )
 
-    monkeypatch.setattr(job_cmds, "client", SimpleNamespace(admin_token="local-admin-token", clear_jobs=clear_jobs))
+    monkeypatch.setattr(job_cmds, "client", SimpleNamespace(admin_token="local-admin-token", start_operation=start_operation))
     monkeypatch.setattr(job_cmds, "config", SimpleNamespace(grpc_admin_token="local-admin-token"))
 
-    job_cmds.clear()
+    job_cmds.clear(yes=True)
 
     rendered = output.getvalue()
     assert "ClearJobs admin authorization failed" in rendered
@@ -66,16 +82,16 @@ def test_clear_reports_admin_token_mismatch(monkeypatch):
 def test_clear_reports_missing_local_admin_token(monkeypatch):
     output = _capture_console(monkeypatch)
 
-    def clear_jobs():
+    def start_operation(_kind, _options):
         raise StubRpcError(
             grpc.StatusCode.PERMISSION_DENIED,
-            "ClearJobs requires MN_GRPC_ADMIN_TOKEN",
+            "StartOperation requires MN_GRPC_ADMIN_TOKEN",
         )
 
-    monkeypatch.setattr(job_cmds, "client", SimpleNamespace(admin_token="", clear_jobs=clear_jobs))
+    monkeypatch.setattr(job_cmds, "client", SimpleNamespace(admin_token="", start_operation=start_operation))
     monkeypatch.setattr(job_cmds, "config", SimpleNamespace(grpc_admin_token=""))
 
-    job_cmds.clear()
+    job_cmds.clear(yes=True)
 
     rendered = output.getvalue()
     assert "ClearJobs admin authorization failed" in rendered
@@ -104,18 +120,17 @@ def test_cancel_all_cancels_every_active_job_without_prompt(monkeypatch):
     monkeypatch.setattr(
         job_cmds,
         "client",
-        SimpleNamespace(
+        _operation_client(
+            {
+                "operation_id": "op-test",
+                "status": "completed",
+                "counters": {"total": 5, "finished": 5, "succeeded": 5, "failed": 0, "deferred": 0},
+            },
+            [
+                json.dumps({"type": "item_completed", "item_id": job["job_id"], "status": "cancelled"})
+                for job in jobs[:-1]
+            ],
             list_jobs=list_jobs,
-            cancel_all_jobs=lambda: json.dumps(
-                {
-                    "cancelled_count": 5,
-                    "failed_count": 0,
-                    "results": [
-                        {"job_id": job["job_id"], "status": "cancelled"}
-                        for job in jobs[:-1]
-                    ],
-                }
-            ),
         ),
     )
     monkeypatch.setattr(job_cmds, "_cleanup_cancelled_job_web_ui", cleaned_up.append)
@@ -132,7 +147,7 @@ def test_cancel_all_cancels_every_active_job_without_prompt(monkeypatch):
     assert cleaned_up == active_job_ids
     rendered = output.getvalue()
     assert "Job cancel-all successful" in rendered
-    assert "Jobs cancelled:" in rendered
+    assert "Completed" in rendered
     assert "5" in rendered
 
 
@@ -192,19 +207,18 @@ def test_cancel_all_reports_every_failure(monkeypatch):
     monkeypatch.setattr(
         job_cmds,
         "client",
-        SimpleNamespace(
+        _operation_client(
+            {
+                "operation_id": "op-test",
+                "status": "completed_with_failures",
+                "counters": {"total": 3, "finished": 3, "succeeded": 2, "failed": 1, "deferred": 0},
+            },
+            [
+                json.dumps({"type": "item_completed", "item_id": "job-1", "status": "cancelled"}),
+                json.dumps({"type": "item_completed", "item_id": "job-2", "status": "failed", "error": "remote node unavailable"}),
+                json.dumps({"type": "item_completed", "item_id": "job-3", "status": "cancelled"}),
+            ],
             list_jobs=lambda **_kwargs: json.dumps({"data": jobs}),
-            cancel_all_jobs=lambda: json.dumps(
-                {
-                    "cancelled_count": 2,
-                    "failed_count": 1,
-                    "results": [
-                        {"job_id": "job-1", "status": "cancelled"},
-                        {"job_id": "job-2", "status": "failed", "error": "remote node unavailable"},
-                        {"job_id": "job-3", "status": "cancelled"},
-                    ],
-                }
-            ),
         ),
     )
     monkeypatch.setattr(job_cmds, "_cleanup_cancelled_job_web_ui", cleaned_up.append)
@@ -216,30 +230,64 @@ def test_cancel_all_reports_every_failure(monkeypatch):
     assert cleaned_up == ["job-1", "job-3"]
     rendered = output.getvalue()
     assert "Job cancel-all completed with failures" in rendered
-    assert "Cancelled 2 of 3 active jobs" in rendered
-    assert "job-2: remote node unavailable" in rendered
+    assert "Operation ID: op-test" in rendered
 
 
-def test_cancel_all_fails_when_runtime_omits_a_requested_job(monkeypatch):
+def test_cancel_all_accepts_a_deferred_cluster_cancellation(monkeypatch):
     output = _capture_console(monkeypatch)
     monkeypatch.setattr(
         job_cmds,
         "client",
-        SimpleNamespace(
+        _operation_client(
+            {
+                "operation_id": "op-test",
+                "status": "completed",
+                "counters": {"total": 1, "finished": 1, "succeeded": 0, "failed": 0, "deferred": 1},
+            },
+            [
+                json.dumps(
+                    {"type": "item_deferred", "item_id": "job-1", "status": "cancellation_pending"}
+                )
+            ],
+            list_jobs=lambda **_kwargs: json.dumps({"data": [{"job_id": "job-1", "status": "running"}]}),
+        ),
+    )
+
+    job_cmds.cancel_all(yes=True)
+
+    assert "queued cleanup continues" in output.getvalue()
+
+
+def test_cancel_all_plain_output_reports_deferred_progress_in_arrival_order(monkeypatch):
+    output = _capture_console(monkeypatch)
+    monkeypatch.setenv("MN_CLI_OUTPUT", "plain")
+    monkeypatch.setattr(
+        job_cmds,
+        "client",
+        _operation_client(
+            {
+                "operation_id": "op-test",
+                "status": "completed",
+                "counters": {"total": 2, "finished": 2, "succeeded": 1, "failed": 0, "deferred": 1},
+            },
+            [
+                json.dumps({"type": "item_started", "item_id": "job-b", "status": "running"}),
+                json.dumps({"type": "item_completed", "item_id": "job-b", "status": "cancelled"}),
+                json.dumps({"type": "item_deferred", "item_id": "job-a", "status": "cancellation_pending"}),
+            ],
             list_jobs=lambda **_kwargs: json.dumps(
-                {"data": [{"job_id": "job-1", "status": "running"}]}
-            ),
-            cancel_all_jobs=lambda: json.dumps(
-                {"cancelled_count": 0, "failed_count": 0, "results": []}
+                {"data": [{"job_id": "job-a", "status": "running"}, {"job_id": "job-b", "status": "running"}]}
             ),
         ),
     )
 
-    with pytest.raises(typer.Exit) as exc_info:
-        job_cmds.cancel_all(yes=True)
+    job_cmds.cancel_all(yes=True)
 
-    assert exc_info.value.exit_code == 1
-    assert "runtime returned no cancellation result" in output.getvalue()
+    rendered = output.getvalue()
+    assert "→ job-b: started" in rendered
+    assert "✓ job-b: cancelled" in rendered
+    assert "→ job-a: cancellation accepted; cleanup queued on owner node" in rendered
+    assert rendered.index("job-b: cancelled") < rendered.index("job-a: cancellation accepted")
 
 
 def test_node_list_strips_restart_history_and_reasons(monkeypatch):

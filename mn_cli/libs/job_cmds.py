@@ -135,6 +135,8 @@ def clear(
             console.print("Retry after: mn runtime start; mn job clear")
             return
         handle_cli_error(e, console, 'clear')
+    except typer.Exit:
+        raise
     except Exception as e:
         handle_cli_error(e, console, 'clear')
 
@@ -478,6 +480,8 @@ def reconcile_node(
             {"node_name": node_name, "reason": reason, "dry_run": dry_run},
             action="Node reconcile",
         )
+    except typer.Exit:
+        raise
     except Exception as e:
         handle_cli_error(e, console, 'reconcile-node')
 
@@ -509,6 +513,8 @@ def drain_node(
             action="Node drain",
             stop_on_deferred=not wait and not dry_run,
         )
+    except typer.Exit:
+        raise
     except Exception as e:
         handle_cli_error(e, console, 'drain-node')
 

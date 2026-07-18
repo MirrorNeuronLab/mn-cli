@@ -34,6 +34,25 @@ mn blueprint run --folder ./vc_assistant \
 Repeat `--set` for multiple values. Values use JSON types when possible and
 otherwise remain strings.
 
+## Durable bulk operations
+
+`mn job cancel-all`, `mn job clear`, `mn node reconcile`, and `mn node drain`
+start a durable Core operation and render item updates in completion order.
+`MN_CLI_OUTPUT=plain` emits stable `→`, `✓`, and `! Warning:` progress lines;
+the rich terminal shows live counters and recent results.
+
+If the owner of a cancelled job is offline, `cancellation_pending` means the
+request was accepted and cleanup is queued for that node's rejoin. It is not a
+command failure. Ctrl+C detaches without aborting the operation; reattach with:
+
+```bash
+mn operation status op-…
+mn operation watch op-…
+```
+
+`mn job clear` is destructive and requires confirmation unless `--yes` is
+provided.
+
 ## Configuration
 
 Configuration is loaded by `mn_cli.config`. `.env` files provide defaults, and

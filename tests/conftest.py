@@ -1,6 +1,8 @@
 import pytest
 from unittest.mock import Mock, patch
 
+from runtime_model_fakes import FakeRuntimeModelCluster
+
 
 class PatchProxy:
     def __init__(self, owner):
@@ -37,6 +39,13 @@ def mocker():
         yield helper
     finally:
         helper.stopall()
+
+
+@pytest.fixture
+def fake_runtime_model_cluster_factory():
+    """Build a deterministic local-only or Mac-plus-Spark model cluster."""
+
+    return FakeRuntimeModelCluster
 
 
 @pytest.fixture(autouse=True)

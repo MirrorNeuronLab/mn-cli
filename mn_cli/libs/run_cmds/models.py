@@ -1,6 +1,7 @@
 from .common import *
 from .model_cluster import *
 from .model_config import *
+from .runtime_dependencies import *
 
 
 def _build_runtime_model_prepare_plan(
@@ -8,11 +9,22 @@ def _build_runtime_model_prepare_plan(
     manifest: dict[str, Any],
     *,
     config_overrides: Optional[dict[str, Any]] = None,
+    dependencies: RuntimeModelDependencies | None = None,
 ) -> dict[str, Any]:
-    base_config = (
-        load_blueprint_config(bundle_dir, config_overrides=config_overrides) or {}
+    config_loader = (
+        dependencies.load_blueprint_config
+        if dependencies is not None and dependencies.load_blueprint_config is not None
+        else load_blueprint_config
     )
-    catalog = load_model_catalog()
+    catalog_loader = (
+        dependencies.load_model_catalog
+        if dependencies is not None and dependencies.load_model_catalog is not None
+        else load_model_catalog
+    )
+    base_config = (
+        config_loader(bundle_dir, config_overrides=config_overrides) or {}
+    )
+    catalog = catalog_loader()
     config = _config_with_auto_runtime_model_profile(
         base_config,
         catalog=catalog,
@@ -75,16 +87,40 @@ def _prepare_runtime_models_for_run_or_exit(
     force: bool = False,
     quiet: bool = False,
     runtime_model_plan: Optional[dict[str, Any]] = None,
+    dependencies: RuntimeModelDependencies | None = None,
 ) -> dict[str, Any]:
     plan = runtime_model_plan or _build_runtime_model_prepare_plan(
         bundle_dir,
         manifest,
         config_overrides=config_overrides,
+        dependencies=dependencies,
     )
     base_config = plan["base_config"]
     catalog = plan["catalog"]
     config = plan["config"]
     validation_manifest = plan["validation_manifest"]
+    model_ops = dependencies.model_ops if dependencies is not None else None
+    if model_ops is None:
+        model_ops = BlueprintModelOps(
+            load_model_catalog=lambda: catalog,
+            required_blueprint_models=required_blueprint_models,
+            load_model_ownership=load_model_ownership,
+            resolve_model_entry=resolve_model_entry,
+            docker_model_name=docker_model_name,
+            cluster_provided_model=cluster_provided_model,
+            record_model_owner=record_model_owner,
+            model_installed=model_installed,
+            install_model_entry=install_model_entry,
+            resolve_model_endpoint=_resolve_runtime_model_endpoint,
+            notify_model_install_start=None
+            if quiet
+            else _print_runtime_model_install_start,
+            install_model_with_progress=None
+            if quiet
+            else _install_runtime_model_with_progress,
+            resolve_cluster_model=_resolve_runtime_cluster_model,
+            install_cluster_model=_install_runtime_cluster_model,
+        )
     with _runtime_model_placement_scope(env_overrides):
         summary = blueprint_model_dependency_summary(
             blueprint_id=_runtime_model_blueprint_id(bundle_dir, manifest, config),
@@ -94,33 +130,16 @@ def _prepare_runtime_models_for_run_or_exit(
             config=config,
             install_source=str(bundle_dir),
             force=force,
-            ops=BlueprintModelOps(
-                load_model_catalog=lambda: catalog,
-                required_blueprint_models=required_blueprint_models,
-                load_model_ownership=load_model_ownership,
-                resolve_model_entry=resolve_model_entry,
-                docker_model_name=docker_model_name,
-                cluster_provided_model=cluster_provided_model,
-                record_model_owner=record_model_owner,
-                model_installed=model_installed,
-                install_model_entry=install_model_entry,
-                resolve_model_endpoint=_resolve_runtime_model_endpoint,
-                notify_model_install_start=None
-                if quiet
-                else _print_runtime_model_install_start,
-                install_model_with_progress=None
-                if quiet
-                else _install_runtime_model_with_progress,
-                resolve_cluster_model=_resolve_runtime_cluster_model,
-                install_cluster_model=_install_runtime_cluster_model,
-            ),
+            ops=model_ops,
         )
     if summary["errors"]:
         if not quiet:
             _print_runtime_model_install_summary(summary)
         raise typer.Exit(1)
     endpoints = _sync_litellm_gateway_for_runtime_models(
-        summary, env_overrides=env_overrides
+        summary,
+        env_overrides=env_overrides,
+        dependencies=dependencies.gateway if dependencies is not None else None,
     )
     if endpoints and env_overrides is not None:
         env_overrides.update(ModelEndpointMap(endpoints).to_env_overrides())
@@ -160,26 +179,56 @@ def _sync_litellm_gateway_for_runtime_models(
     summary: dict[str, Any],
     *,
     env_overrides: Optional[dict[str, str]] = None,
+    dependencies: RuntimeModelGatewayDependencies | None = None,
 ) -> dict[str, dict[str, Any]]:
     endpoints = (
         summary.get("endpoints") if isinstance(summary.get("endpoints"), dict) else {}
     )
     upstream_endpoints = dict(endpoints)
-    upstream_endpoints.update(_local_runtime_model_endpoints(summary))
+    upstream_endpoints.update(
+        _local_runtime_model_endpoints(summary, dependencies=dependencies)
+    )
     if not upstream_endpoints:
         return {}
-    reconcile_cluster_model_remotes(
+    reconcile_remotes = (
+        dependencies.reconcile_cluster_model_remotes
+        if dependencies is not None
+        and dependencies.reconcile_cluster_model_remotes is not None
+        else reconcile_cluster_model_remotes
+    )
+    installed_names = (
+        dependencies.installed_model_names
+        if dependencies is not None and dependencies.installed_model_names is not None
+        else installed_model_names
+    )
+    local_node_name = (
+        dependencies.local_runtime_node_name
+        if dependencies is not None
+        and dependencies.local_runtime_node_name is not None
+        else _local_runtime_node_name
+    )
+    gateway_sync = (
+        dependencies.sync_litellm_gateway
+        if dependencies is not None and dependencies.sync_litellm_gateway is not None
+        else sync_litellm_gateway
+    )
+    endpoint_mapper = (
+        dependencies.gateway_endpoint_map
+        if dependencies is not None and dependencies.gateway_endpoint_map is not None
+        else gateway_endpoint_map
+    )
+    reconcile_remotes(
         upstream_endpoints,
-        local_installed_models=installed_model_names(),
-        local_node=_local_runtime_node_name(),
+        local_installed_models=installed_names(),
+        local_node=local_node_name(),
         replace=False,
     )
     restart = _runtime_litellm_gateway_restart_enabled()
-    gateway = sync_litellm_gateway(
+    gateway = gateway_sync(
         runtime_endpoints=upstream_endpoints,
         restart=restart,
     )
-    gateway_endpoints = gateway_endpoint_map(upstream_endpoints)
+    gateway_endpoints = endpoint_mapper(upstream_endpoints)
     summary["gateway"] = gateway
     summary["endpoints"] = gateway_endpoints
     return gateway_endpoints
@@ -194,6 +243,8 @@ def _runtime_litellm_gateway_restart_enabled() -> bool:
 
 def _local_runtime_model_endpoints(
     summary: dict[str, Any],
+    *,
+    dependencies: RuntimeModelGatewayDependencies | None = None,
 ) -> dict[str, dict[str, Any]]:
     endpoints: dict[str, dict[str, Any]] = {}
     prepared_statuses = {"installed", "already_installed"}
@@ -211,8 +262,19 @@ def _local_runtime_model_endpoints(
         if prepared_endpoint and str(prepared_endpoint.get("source") or "") != "local-dmr":
             continue
         model_ref = str(item.get("id") or item.get("model") or "").strip()
+        entry_resolver = (
+            dependencies.resolve_model_entry
+            if dependencies is not None and dependencies.resolve_model_entry is not None
+            else resolve_model_entry
+        )
+        endpoint_builder = (
+            dependencies.docker_model_runner_endpoint
+            if dependencies is not None
+            and dependencies.docker_model_runner_endpoint is not None
+            else docker_model_runner_endpoint
+        )
         try:
-            entry = resolve_model_entry(model_ref)
+            entry = entry_resolver(model_ref)
         except Exception:
             entry = {
                 "id": model_ref,
@@ -220,7 +282,7 @@ def _local_runtime_model_endpoints(
                 "model": str(item.get("model") or model_ref),
                 "api_model": str(item.get("model") or model_ref),
             }
-        endpoint = docker_model_runner_endpoint(entry, source="local-dmr")
+        endpoint = endpoint_builder(entry, source="local-dmr")
         for key in {
             model_ref,
             str(item.get("model") or "").strip(),
