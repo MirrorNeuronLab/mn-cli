@@ -70,6 +70,15 @@ precedence over `.env` defaults selected by `MN_ENV`. Runtime connection comes
 from explicit configuration or the installed runtime endpoint metadata. New
 public keys require schema/config code, `.env.example`, README, and test updates.
 
+Release updates resolve a versioned package plan from the newest stable
+`mn-deploy/install_support/v*` snapshot, not from component-repository source
+branches or package-manager `latest` aliases. The plan pins the Core release
+tag, Python package versions, and Web UI version. Python updates use the
+configured GAR Python index (with a configurable extra index for dependencies);
+the Web UI receives its pinned npm version through the installed Compose
+environment. `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`, `MN_PIP_INDEX_URL`, and
+`MN_PIP_EXTRA_INDEX_URL` are the supported update-source overrides.
+
 ## Compatibility
 
 Breaking changes include removing or renaming commands/options, changing option

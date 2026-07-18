@@ -87,6 +87,22 @@ environment variables or uncommitted `.env` files instead.
 - [Environment Variables](../mn-docs/env_variables.md)
 - [Monitor Guide](../mn-docs/monitor.md)
 
+## Release Updates
+
+`mn runtime update` and the periodic interactive update check use the newest
+stable `install_support/v*` snapshot in `MirrorNeuronLab/mn-deploy` as their
+release plan. The snapshot pins the Core release tag, the SDK/CLI/API Python
+package versions, and the Web UI npm version. The updater installs the exact
+Python package versions from the public GAR `agent-skills` index and configures
+the exact Web UI npm version for Docker Compose; it does not follow a source
+branch, package-manager `latest` tag, or the Core repository's latest-release
+endpoint.
+
+The Core remains a versioned GitHub Release binary because it is not a Python
+or npm package. Its release asset URL is constructed from the same support
+snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
+`MN_PIP_INDEX_URL`, or `MN_PIP_EXTRA_INDEX_URL` before running the command.
+
 ## Notes
 
 - A running MirrorNeuron core is required for live runtime commands.

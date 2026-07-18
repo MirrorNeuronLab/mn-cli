@@ -1,26 +1,37 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import posixpath
+import re
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
+import tomllib
 import urllib.request
 from importlib import metadata
 from pathlib import Path
 from pathlib import PurePosixPath
-from typing import Optional
+from typing import Any, Optional, TypedDict
+from urllib.parse import quote
 
 import typer
 from rich.console import Console
 
 from mn_cli.libs.ui import print_confirmed, print_info, print_success_confirmation
 from mn_cli.runtime_state import read_json_object
-from mn_cli.server_cmds import DIR, WEB_UI_DIRS, _start_server
+from mn_cli.server_cmds import (
+    DIR,
+    RUNTIME_COMPOSE_ENV,
+    RUNTIME_COMPOSE_FILE,
+    WEB_UI_DIRS,
+    _start_server,
+    _write_env_file_values,
+)
 
 console = Console()
 
@@ -28,14 +39,40 @@ console = Console()
 CHECK_FILE = DIR / ".update-check.json"
 INSTALL_METADATA_FILE = DIR / "install_metadata.json"
 CHECK_INTERVAL_SECONDS = int(os.getenv("MN_UPDATE_CHECK_INTERVAL_SECONDS", "86400"))
-PYPI_PACKAGES = [
+PYTHON_PACKAGES = [
     "mirrorneuron-python-sdk",
     "mirrorneuron-cli",
     "mirrorneuron-api",
 ]
 NPM_PACKAGE = "mirrorneuron-web-ui"
 CORE_REPO = os.getenv("MN_CORE_REPO", "MirrorNeuronLab/MirrorNeuron")
+DEPLOY_REPO = os.getenv("MN_DEPLOY_REPO", "MirrorNeuronLab/mn-deploy")
+DEPLOY_REF = os.getenv("MN_DEPLOY_REF", "main")
+DEPLOY_SUPPORT_DIRECTORY = "install_support"
+GAR_PYTHON_INDEX_URL = os.getenv(
+    "MN_PIP_INDEX_URL",
+    os.getenv(
+        "MN_PYTHON_INDEX_URL",
+        "https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/",
+    ),
+)
+PYTHON_EXTRA_INDEX_URL = os.getenv(
+    "MN_PIP_EXTRA_INDEX_URL",
+    os.getenv("MN_PYTHON_EXTRA_INDEX_URL", "https://pypi.org/simple"),
+)
 CORE_INSTALL_PRESERVE_NAMES = frozenset({".pids", ".logs", ".update-check.json"})
+STABLE_RELEASE_TAG = re.compile(r"^v(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)$")
+WEB_UI_VERSION_PATTERN = re.compile(
+    r"MN_WEB_UI_PACKAGE_VERSION:\s*\$\{MN_WEB_UI_PACKAGE_VERSION:-(?P<version>[^}]+)\}"
+)
+
+
+class ReleasePlan(TypedDict):
+    release_tag: str
+    python_versions: dict[str, str]
+    web_ui_version: str
+
+
 CORE_DOCKERFILE = """FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \\
@@ -177,24 +214,26 @@ def update(
 
 
 def get_available_updates() -> list[dict[str, str]]:
-    updates = []
+    release_plan = _release_plan()
+    updates: list[dict[str, str]] = []
 
-    for package_name in PYPI_PACKAGES:
+    for package_name in PYTHON_PACKAGES:
         current = _installed_python_version(package_name)
-        latest = _pypi_latest_version(package_name)
+        latest = release_plan["python_versions"][package_name]
         if current != latest:
             updates.append(
                 {
                     "component": package_name,
                     "current": current or "not installed",
                     "latest": latest,
-                    "kind": "pypi",
+                    "kind": "python",
+                    "release_tag": release_plan["release_tag"],
                 }
             )
 
     if _web_ui_installed():
         current = _installed_npm_version()
-        latest = _npm_latest_version(NPM_PACKAGE)
+        latest = release_plan["web_ui_version"]
         if current != latest:
             updates.append(
                 {
@@ -202,11 +241,12 @@ def get_available_updates() -> list[dict[str, str]]:
                     "current": current or "not installed",
                     "latest": latest,
                     "kind": "npm",
+                    "release_tag": release_plan["release_tag"],
                 }
             )
 
     current_core = _installed_core_tag()
-    latest_core = _github_latest_release()["tag_name"]
+    latest_core = release_plan["release_tag"]
     if current_core != latest_core:
         updates.append(
             {
@@ -214,6 +254,7 @@ def get_available_updates() -> list[dict[str, str]]:
                 "current": current_core or "unknown",
                 "latest": latest_core,
                 "kind": "core",
+                "release_tag": release_plan["release_tag"],
             }
         )
 
@@ -231,14 +272,17 @@ def perform_update(available: list[dict[str, str]] | None = None) -> None:
 
     stop()
 
-    if any(item["kind"] == "pypi" for item in available):
-        _update_python_packages()
+    python_updates = [item for item in available if item["kind"] == "python"]
+    if python_updates:
+        _update_python_packages(python_updates)
 
-    if any(item["kind"] == "npm" for item in available):
-        _update_web_ui()
+    npm_update = next((item for item in available if item["kind"] == "npm"), None)
+    if npm_update is not None:
+        _update_web_ui(npm_update["latest"])
 
-    if any(item["kind"] == "core" for item in available):
-        _update_core()
+    core_update = next((item for item in available if item["kind"] == "core"), None)
+    if core_update is not None:
+        _update_core(core_update["latest"])
 
     _record_check()
     print_success_confirmation(
@@ -272,6 +316,7 @@ def _record_check() -> None:
     CHECK_FILE.parent.mkdir(parents=True, exist_ok=True)
     CHECK_FILE.write_text(json.dumps({"checked_at": time.time()}))
 
+
 def _local_source_install() -> bool:
     data = read_json_object(INSTALL_METADATA_FILE)
     if data.get("install_type") == "local_source":
@@ -280,7 +325,7 @@ def _local_source_install() -> bool:
     return (DIR / "core-source").exists() or (DIR / "cli-source").exists()
 
 
-def _json_url(url: str) -> dict:
+def _json_url(url: str) -> Any:
     request = urllib.request.Request(
         url,
         headers={
@@ -292,6 +337,87 @@ def _json_url(url: str) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
+def _github_contents_url(path: str, *, ref: str) -> str:
+    repository = quote(DEPLOY_REPO, safe="/")
+    asset_path = quote(path.strip("/"), safe="/")
+    return f"https://api.github.com/repos/{repository}/contents/{asset_path}?ref={quote(ref, safe='')}"
+
+
+def _github_contents(path: str, *, ref: str) -> Any:
+    return _json_url(_github_contents_url(path, ref=ref))
+
+
+def _github_contents_text(path: str, *, ref: str) -> str:
+    content = _github_contents(path, ref=ref)
+    if not isinstance(content, dict) or content.get("type") != "file":
+        raise RuntimeError(f"Expected a file at {path} in {DEPLOY_REPO}@{ref}.")
+    if content.get("encoding") != "base64" or not isinstance(content.get("content"), str):
+        raise RuntimeError(f"GitHub did not return base64 file content for {path}.")
+    try:
+        raw = base64.b64decode(content["content"].replace("\n", ""), validate=True)
+        return raw.decode("utf-8")
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise RuntimeError(f"GitHub returned invalid content for {path}.") from exc
+
+
+def _release_tag_sort_key(tag: str) -> tuple[int, int, int]:
+    match = STABLE_RELEASE_TAG.fullmatch(tag)
+    if match is None:
+        raise ValueError(f"Invalid stable release tag: {tag}")
+    return tuple(int(match.group(part)) for part in ("major", "minor", "patch"))
+
+
+def _latest_release_support_tag() -> str:
+    entries = _github_contents(DEPLOY_SUPPORT_DIRECTORY, ref=DEPLOY_REF)
+    if not isinstance(entries, list):
+        raise RuntimeError(f"Expected a directory listing for {DEPLOY_SUPPORT_DIRECTORY}.")
+
+    tags = [
+        entry.get("name")
+        for entry in entries
+        if isinstance(entry, dict)
+        and entry.get("type") == "dir"
+        and isinstance(entry.get("name"), str)
+        and STABLE_RELEASE_TAG.fullmatch(entry["name"])
+    ]
+    if not tags:
+        raise RuntimeError(f"No stable release snapshots were found in {DEPLOY_SUPPORT_DIRECTORY}.")
+    return max(tags, key=_release_tag_sort_key)
+
+
+def _release_plan() -> ReleasePlan:
+    release_tag = _latest_release_support_tag()
+    index_path = f"{DEPLOY_SUPPORT_DIRECTORY}/{release_tag}/package-index/python-packages.toml"
+    compose_path = f"{DEPLOY_SUPPORT_DIRECTORY}/{release_tag}/docker-compose.yml"
+    try:
+        package_index = tomllib.loads(_github_contents_text(index_path, ref=release_tag))
+    except tomllib.TOMLDecodeError as exc:
+        raise RuntimeError(f"Release package index is invalid: {index_path}.") from exc
+
+    python_versions = {
+        package.get("name"): str(package.get("version", "")).lstrip("vV")
+        for package in package_index.get("packages", [])
+        if isinstance(package, dict)
+        and isinstance(package.get("name"), str)
+        and str(package.get("version", "")).strip()
+    }
+    missing_packages = [name for name in PYTHON_PACKAGES if not python_versions.get(name)]
+    if missing_packages:
+        joined = ", ".join(missing_packages)
+        raise RuntimeError(f"Release package index is missing required packages: {joined}.")
+
+    compose = _github_contents_text(compose_path, ref=release_tag)
+    web_ui_match = WEB_UI_VERSION_PATTERN.search(compose)
+    if web_ui_match is None:
+        raise RuntimeError(f"Release Compose template is missing the Web UI package version: {compose_path}.")
+
+    return {
+        "release_tag": release_tag,
+        "python_versions": {name: python_versions[name] for name in PYTHON_PACKAGES},
+        "web_ui_version": web_ui_match.group("version").strip().lstrip("vV"),
+    }
+
+
 def _installed_python_version(package_name: str) -> str | None:
     try:
         return metadata.version(package_name)
@@ -299,15 +425,45 @@ def _installed_python_version(package_name: str) -> str | None:
         return None
 
 
-def _pypi_latest_version(package_name: str) -> str:
-    return _json_url(f"https://pypi.org/pypi/{package_name}/json")["info"]["version"]
-
-
 def _web_ui_installed() -> bool:
-    return any((path / "package.json").exists() for path in WEB_UI_DIRS)
+    return _web_ui_compose_enabled() or any((path / "package.json").exists() for path in WEB_UI_DIRS)
+
+
+def _web_ui_compose_enabled() -> bool:
+    if not RUNTIME_COMPOSE_FILE.is_file():
+        return False
+    try:
+        compose = RUNTIME_COMPOSE_FILE.read_text(encoding="utf-8")
+        environment = _read_env_file(RUNTIME_COMPOSE_ENV)
+    except OSError:
+        return False
+    if re.search(r"^  web-ui:\s*$", compose, flags=re.MULTILINE) is None:
+        return False
+    profiles = {
+        profile.strip()
+        for profile in environment.get("COMPOSE_PROFILES", "").split(",")
+        if profile.strip()
+    }
+    return "web-ui" in profiles
+
+
+def _read_env_file(path: Path) -> dict[str, str]:
+    environment: dict[str, str] = {}
+    if not path.is_file():
+        return environment
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        environment[key.strip()] = value.strip()
+    return environment
 
 
 def _installed_npm_version() -> str | None:
+    if _web_ui_compose_enabled():
+        return _read_env_file(RUNTIME_COMPOSE_ENV).get("MN_WEB_UI_PACKAGE_VERSION")
+
     for web_ui_dir in WEB_UI_DIRS:
         if not (web_ui_dir / "package.json").exists():
             continue
@@ -326,14 +482,6 @@ def _installed_npm_version() -> str | None:
         if version:
             return version
     return None
-
-
-def _npm_latest_version(package_name: str) -> str:
-    return _json_url(f"https://registry.npmjs.org/{package_name}/latest")["version"]
-
-
-def _github_latest_release() -> dict:
-    return _json_url(f"https://api.github.com/repos/{CORE_REPO}/releases/latest")
 
 
 def _installed_core_tag() -> str | None:
@@ -356,8 +504,9 @@ def _docker_platform() -> str:
     raise RuntimeError(f"Unsupported Docker architecture {arch!r}.")
 
 
-def _update_python_packages() -> None:
-    print_info(console, "Updating Python packages from PyPI…")
+def _update_python_packages(updates: list[dict[str, str]]) -> None:
+    requirements = [f"{item['component']}=={item['latest']}" for item in updates]
+    print_info(console, "Updating Python packages from the release-pinned GAR index…")
     subprocess.run(
         [
             sys.executable,
@@ -365,14 +514,23 @@ def _update_python_packages() -> None:
             "pip",
             "install",
             "--upgrade",
-            *PYPI_PACKAGES,
+            "--index-url",
+            GAR_PYTHON_INDEX_URL,
+            "--extra-index-url",
+            PYTHON_EXTRA_INDEX_URL,
+            *requirements,
         ],
         check=True,
     )
 
 
-def _update_web_ui() -> None:
-    print_info(console, "Updating Web UI from npm…")
+def _update_web_ui(version: str) -> None:
+    if _web_ui_compose_enabled():
+        print_info(console, "Updating Web UI package version in the runtime Compose configuration…")
+        _write_env_file_values(RUNTIME_COMPOSE_ENV, {"MN_WEB_UI_PACKAGE_VERSION": version})
+        return
+
+    print_info(console, "Updating Web UI from the release-pinned npm package…")
     for web_ui_dir in WEB_UI_DIRS:
         if (web_ui_dir / "package.json").exists():
             subprocess.run(
@@ -381,20 +539,18 @@ def _update_web_ui() -> None:
                     "--prefix",
                     str(web_ui_dir),
                     "install",
-                    f"{NPM_PACKAGE}@latest",
+                    f"{NPM_PACKAGE}@{version}",
                 ],
                 check=True,
             )
             return
 
 
-def _core_asset_url(release: dict, platform: str) -> str:
-    suffix = f"-{platform}-otp-release.tar.gz"
-    for asset in release.get("assets", []):
-        name = asset.get("name", "")
-        if name.endswith(suffix):
-            return asset["browser_download_url"]
-    raise RuntimeError(f"Could not find core release asset ending with {suffix}.")
+def _core_asset_url(release_tag: str, platform: str) -> str:
+    return (
+        f"https://github.com/{CORE_REPO}/releases/download/{release_tag}/"
+        f"MirrorNeuron-{release_tag}-{platform}-otp-release.tar.gz"
+    )
 
 
 def _download(url: str, target: Path) -> None:
@@ -460,12 +616,10 @@ def _clear_core_install_dir(install_dir: Path) -> None:
     install_dir.mkdir(parents=True, exist_ok=True)
 
 
-def _update_core() -> None:
-    print_info(console, "Updating MirrorNeuron core from GitHub Release…")
-    release = _github_latest_release()
-    tag = release["tag_name"]
+def _update_core(tag: str) -> None:
+    print_info(console, f"Updating MirrorNeuron core from release {tag}…")
     platform = _docker_platform()
-    asset_url = _core_asset_url(release, platform)
+    asset_url = _core_asset_url(tag, platform)
 
     with tempfile.TemporaryDirectory(prefix="mirrorneuron-core-update-") as temp_dir:
         root = Path(temp_dir)
@@ -498,15 +652,16 @@ def _update_core() -> None:
 
 def _write_install_metadata(tag: str, platform: str, asset_url: str) -> None:
     DIR.mkdir(parents=True, exist_ok=True)
+    data = read_json_object(INSTALL_METADATA_FILE)
+    data.update(
+        {
+            "core_release_tag": tag,
+            "core_platform": platform,
+            "core_asset_url": asset_url,
+            "updated_at": time.time(),
+        }
+    )
     INSTALL_METADATA_FILE.write_text(
-        json.dumps(
-            {
-                "core_release_tag": tag,
-                "core_platform": platform,
-                "core_asset_url": asset_url,
-                "updated_at": time.time(),
-            },
-            indent=2,
-        )
+        json.dumps(data, indent=2)
         + "\n"
     )
