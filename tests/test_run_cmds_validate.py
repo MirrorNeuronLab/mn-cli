@@ -89,7 +89,7 @@ def test_validate_success(tmp_path):
     manifest_file.write_text(json.dumps(manifest_data))
     
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.stdout
     assert "Job bundle validation confirmed." in result.stdout
     assert "valid" in result.stdout
     assert "Bundle:" in result.stdout
@@ -113,6 +113,69 @@ def test_validate_accepts_workflow_manifest_without_legacy_nodes(tmp_path):
 
     assert result.exit_code == 0
     assert "4" in result.stdout
+
+def test_validate_accepts_source_manifest_after_expansion(tmp_path):
+    bundle_dir = tmp_path / "source_workflow_bundle"
+    bundle_dir.mkdir()
+    manifest = {
+        "apiVersion": "mn.workflow.source/v2",
+        "kind": "WorkflowSource",
+        "identity": {"id": "source_flow", "name": "Source Flow"},
+        "defaults": {"worker": {"with": {"image": "source-flow:test"}}},
+        "workflow": {
+            "steps": [
+                {
+                    "id": "prepare",
+                    "needs": [],
+                    "run": {"handler": "source_flow.steps.prepare"},
+                },
+                {
+                    "id": "publish",
+                    "needs": ["prepare"],
+                    "run": {"handler": "source_flow.steps.publish"},
+                },
+            ]
+        },
+    }
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
+
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
+
+    assert result.exit_code == 0, result.stdout
+    assert "Job bundle validation confirmed." in result.stdout
+    assert "source_flow_v1" in result.stdout
+
+def test_validate_records_first_use_models_as_deferred(mocker, tmp_path):
+    bundle_dir = tmp_path / "lazy_model_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(json.dumps(_workflow_manifest_fixture()))
+    deferred = {
+        "ok": True,
+        "deferred": True,
+        "models": [
+            {
+                "id": "default",
+                "model": "default",
+                "runtime_model": "docker.io/ai/nemotron3:latest",
+                "status": "deferred_runtime_install",
+            }
+        ],
+    }
+    defer_models = mocker.patch(
+        "mn_cli.libs.run_cmds._defer_runtime_models_for_run_or_exit",
+        return_value=deferred,
+    )
+    validate_models = mocker.patch(
+        "mn_cli.libs.run_cmds._validate_manifest_models_or_exit",
+        return_value={"ok": True, "results": []},
+    )
+
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
+
+    assert result.exit_code == 0
+    defer_models.assert_called_once()
+    assert defer_models.call_args.kwargs["quiet"] is True
+    assert validate_models.call_args.kwargs["model_install_summary"] is deferred
 
 def test_validate_rejects_workflow_manifest_cycles(tmp_path):
     bundle_dir = tmp_path / "workflow_cycle"

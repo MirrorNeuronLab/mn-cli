@@ -2422,7 +2422,7 @@ def blueprint_export(
             raise typer.Exit(1)
         write_static_run_report = _load_web_ui_api()
         handle = write_static_run_report(record, run_dir)
-        console.print(handle.url, markup=False)
+        console.print(handle["url"], markup=False)
     else:
         console.print("[red]Unsupported export format. Use 'json', 'markdown', or 'html'.[/red]")
         raise typer.Exit(1)

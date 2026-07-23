@@ -112,7 +112,9 @@ def clear(
             print_confirmed(console, "Job clear", status="aborted")
             return
 
-        result = start_and_watch("clear_jobs", {}, action="Job clear")
+        result = start_and_watch(
+            "clear_jobs", {}, action="Job clear", runtime_client=client
+        )
         logger.info("Finished clear operation %s", result.get("operation_id"))
     except grpc.RpcError as e:
         if e.code() == grpc.StatusCode.PERMISSION_DENIED and "MN_GRPC_ADMIN_TOKEN" in str(e.details()):
@@ -207,6 +209,7 @@ def cancel_all(
             {},
             action="Job cancel-all",
             on_accepted_item=lambda event: _cleanup_cancelled_job_web_ui(str(event.get("item_id") or "")),
+            runtime_client=client,
         )
         logger.info("Finished cancel-all operation %s", result.get("operation_id"))
     except typer.Exit:
@@ -479,6 +482,7 @@ def reconcile_node(
             "reconcile_node",
             {"node_name": node_name, "reason": reason, "dry_run": dry_run},
             action="Node reconcile",
+            runtime_client=client,
         )
     except typer.Exit:
         raise
@@ -512,6 +516,7 @@ def drain_node(
             },
             action="Node drain",
             stop_on_deferred=not wait and not dry_run,
+            runtime_client=client,
         )
     except typer.Exit:
         raise

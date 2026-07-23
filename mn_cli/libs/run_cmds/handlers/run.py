@@ -6,6 +6,10 @@ from ..openshell import *
 from ..outputs import *
 from ..run_state import *
 from ..web_ui import *
+from ..web_ui import (
+    _console_web_ui_url,
+    _start_background_event_relay_if_needed,
+)
 from .validate import *
 from .doctor import _doctor_prepare_hostlocal_python_envs
 
@@ -377,7 +381,6 @@ def run_bundle(
             env_overrides=env_overrides,
             submission_metadata=submission_metadata,
             config_overrides=config_overrides,
-            enable_runtime_web_ui=web_ui,
         )
         host_python_report = _doctor_prepare_hostlocal_python_envs(
             bundle_dir,
@@ -400,7 +403,7 @@ def run_bundle(
             _mark_manifest_force(manifest_dict)
         _prepare_openshell_custom_images(bundle_dir, manifest_dict)
 
-        payloads = _stage_bundle_payloads(bundle_dir, manifest_dict, web_ui=web_ui)
+        payloads = _stage_bundle_payloads(bundle_dir, manifest_dict)
 
         schedule_attrs = _run_schedule_attrs(
             auto_schedule=auto_schedule, schedule=schedule
@@ -514,13 +517,6 @@ def run_bundle(
                 env_overrides,
                 monitor_manifest=manifest_dict,
             )
-            if web_ui:
-                _write_local_web_ui_handle(
-                    bundle_dir,
-                    blueprint_run_id,
-                    env_overrides=env_overrides,
-                    config_overrides=config_overrides,
-                )
         web_ui_url = (
             _console_web_ui_url(manifest_dict, blueprint_run_dir) if web_ui else None
         )
@@ -554,6 +550,7 @@ def run_bundle(
                     blueprint_run_dir,
                     "submitted",
                     config_overrides=config_overrides,
+                    submission_metadata=prepared_submission.metadata,
                 )
             console.print(
                 generate_detached_panel(
@@ -589,6 +586,7 @@ def run_bundle(
                 blueprint_run_dir,
                 final_status,
                 config_overrides=config_overrides,
+                submission_metadata=prepared_submission.metadata,
             )
             if final_status in FINAL_STATUSES:
                 cleanup_blueprint_host_hooks(
@@ -633,6 +631,7 @@ def run_bundle(
                     submitted_run_dir,
                     status,
                     config_overrides=submitted_config_overrides,
+                    submission_metadata=prepared_submission.metadata,
                 )
             console.print(
                 generate_detached_panel(

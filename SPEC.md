@@ -92,6 +92,9 @@ new state to be indefinitely dual-written.
 models without installing or routing them. RAG and OCR model specifications are
 not launch declarations; their skills pass them to the SDK on first use, so
 each consumer may choose the best compatible cluster node independently.
+`mn blueprint validate` applies that same first-use policy without side effects:
+it accepts a compatible deferred model while still rejecting unknown models or
+models with no feasible hardware/fallback path.
 
 The selected node's cluster-reachable LiteLLM endpoint is the submitter
 gateway's upstream. The selected-node gateway owns the direct route to its

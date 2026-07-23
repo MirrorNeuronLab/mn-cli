@@ -199,6 +199,8 @@ snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
 - The default gRPC target comes from `MN_GRPC_TARGET`, then local deployment
   settings, then `localhost:55051`.
 - Use `mn blueprint validate` before `mn blueprint run --folder` when checking a local bundle.
+- Validation honors first-use runtime-model installation, so a compatible
+  declared model need not already be installed.
 - `mn blueprint run` validates model declarations but does not install models.
   Workers select, install, and route each managed model on its first actual use.
 - Docker workers receive a worker-reachable model-control target and use the

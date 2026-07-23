@@ -11,6 +11,5 @@ from mn_sdk.submission_preparation import (  # noqa: F401
     _local_skill_dependency_source_records,
     _local_skill_requirements_text,
     _requirements_text,
-    _runtime_web_ui_submission_context,
     _safe_dependency_source_name,
 )

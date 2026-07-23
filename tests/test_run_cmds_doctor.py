@@ -230,7 +230,7 @@ def test_doctor_prepares_hostlocal_python_environment_inside_docker_core(tmp_pat
     bundle_dir = tmp_path / "bundle"
     requirements = bundle_dir / "payloads" / "worker" / "requirements.txt"
     requirements.parent.mkdir(parents=True)
-    requirements.write_text("gradio==5.0.0\n", encoding="utf-8")
+    requirements.write_text("fastapi==0.115.0\n", encoding="utf-8")
     host_root = tmp_path / "host-shared"
     runtime_root = Path("/runtime/shared")
     monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", str(host_root))
@@ -286,7 +286,7 @@ def test_doctor_prepares_hostlocal_python_environment_inside_docker_core(tmp_pat
         "requests==2.32.0",
     ]
     assert (env_dir / ".ready").is_file()
-    assert (env_dir / ".mn-requirements.txt").read_text(encoding="utf-8") == "gradio==5.0.0\n"
+    assert (env_dir / ".mn-requirements.txt").read_text(encoding="utf-8") == "fastapi==0.115.0\n"
 
 
 def test_doctor_skill_report_reads_declared_dependencies(tmp_path):

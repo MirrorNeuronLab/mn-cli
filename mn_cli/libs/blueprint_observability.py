@@ -18,7 +18,6 @@ from mn_sdk.blueprint_support.observability import (
     read_run_stream_records,
     record_human_response,
 )
-from mn_sdk.blueprint_support.web_ui import write_static_run_report
 
 from mn_cli.shared import console
 
@@ -40,6 +39,8 @@ def load_observability_tools() -> dict[str, Callable[..., Any]]:
 
 
 def load_web_ui_api() -> Callable[..., Any]:
+    from mn_web_ui_skill import write_static_run_report
+
     return write_static_run_report
 
 

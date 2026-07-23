@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import logging
-
 import pytest
 
 from mn_cli.config import CliConfig, ConfigError, load_config
@@ -109,14 +107,12 @@ def test_typed_parsing_supports_bool_list_url_and_path(tmp_path):
     assert config.get("MN_RUNS_ROOT") == tmp_path / "home" / "runs"
 
 
-def test_secret_values_are_redacted_from_config_diagnostics(tmp_path, caplog):
+def test_secret_values_are_redacted_from_config_diagnostics(tmp_path):
     config = load_config(env={"MN_LLM_API_KEY": "super-secret-value"}, root=tmp_path)
+    diagnostics = config.redacted_values()
 
-    with caplog.at_level(logging.INFO):
-        logging.getLogger("mn-cli.test").info("config=%s", config.redacted_values())
-
-    assert "super-secret-value" not in caplog.text
-    assert "<redacted>" in caplog.text
+    assert diagnostics["MN_LLM_API_KEY"] == "<redacted>"
+    assert "super-secret-value" not in repr(diagnostics)
 
 
 def test_cli_config_uses_same_loader_for_dotenv_defaults(tmp_path):

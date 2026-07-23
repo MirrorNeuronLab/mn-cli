@@ -144,7 +144,6 @@ def doctor_bundle(
             env_overrides=env_overrides,
             submission_metadata=submission_metadata,
             config_overrides=config_overrides,
-            enable_runtime_web_ui=False,
         )
         if not check_only:
             _prepare_openshell_custom_images(bundle_dir, manifest_dict)
@@ -154,7 +153,7 @@ def doctor_bundle(
             timeout=timeout,
             check_only=check_only,
         )
-        payloads = _stage_bundle_payloads(bundle_dir, manifest_dict, web_ui=False)
+        payloads = _stage_bundle_payloads(bundle_dir, manifest_dict)
 
         context_report = _doctor_component("context_memory", "skipped", "Blueprint does not require context memory.")
         if blueprint_requires_context_engine(manifest_dict, load_blueprint_config(bundle_dir, config_overrides=config_overrides) or {}):
@@ -501,22 +500,6 @@ def _doctor_prepare_hostlocal_python_envs(
     for node in manifest_nodes(manifest):
         config = node.get("config") if isinstance(node.get("config"), dict) else {}
         if config.get("runner_module") != "MirrorNeuron.Runner.HostLocal":
-            continue
-        # Legacy service manifests run the SDK-injected dashboard through the
-        # runtime's HostLocal service path.  Its Gradio package is managed by
-        # that runtime; preparing it in the CLI would make every run depend on
-        # a host-side package download.  Workflow manifests retain the normal
-        # explicit environment preparation path.
-        if (
-            str(node.get("node_id") or node.get("id") or "").strip() == "web_ui_dashboard"
-            and str(node.get("role") or "").strip() == "runtime_web_ui_service"
-            and not (
-                manifest.get("apiVersion") == "mn.workflow/v1"
-                or manifest.get("kind") == "Workflow"
-                or isinstance(manifest.get("workflow"), dict)
-            )
-        ):
-            skipped += 1
             continue
         python_env = config.get("python_environment") if isinstance(config.get("python_environment"), dict) else {}
         packages = [

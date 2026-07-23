@@ -121,8 +121,16 @@ def validate(
             bundle_dir, manifest, output_format=output_format
         )
 
+        model_install_summary = _defer_runtime_models_for_run_or_exit(
+            bundle_dir,
+            manifest,
+            quiet=True,
+        )
         model_result = _validate_manifest_models_or_exit(
-            bundle_dir, manifest, output_format=output_format
+            bundle_dir,
+            manifest,
+            model_install_summary=model_install_summary,
+            output_format=output_format,
         )
 
         validation_result = _validate_manifest_inputs_or_exit(

@@ -33,8 +33,10 @@ def start_and_watch(
     action: str,
     stop_on_deferred: bool = False,
     on_accepted_item: Callable[[dict[str, Any]], None] | None = None,
+    runtime_client: Any | None = None,
 ) -> dict[str, Any]:
-    operation = _json_object(client.start_operation(kind, options))
+    selected_client = runtime_client or client
+    operation = _json_object(selected_client.start_operation(kind, options))
     operation_id = _operation_id(operation)
     print_info(console, f"{action} started (operation {operation_id}).")
 
@@ -44,6 +46,7 @@ def start_and_watch(
             action=action,
             stop_on_deferred=stop_on_deferred,
             on_accepted_item=on_accepted_item,
+            runtime_client=selected_client,
         )
     except KeyboardInterrupt:
         print_info(console, f"Detached from operation {operation_id}; it continues in the cluster.")
@@ -80,13 +83,15 @@ def _watch(
     action: str,
     stop_on_deferred: bool = False,
     on_accepted_item: Callable[[dict[str, Any]], None] | None = None,
+    runtime_client: Any | None = None,
 ) -> dict[str, Any]:
+    selected_client = runtime_client or client
     operation_id = _operation_id(operation)
     sequence = 0
     items: dict[str, dict[str, Any]] = {}
 
     if _plain_output():
-        for event_json in client.stream_operation_events(
+        for event_json in selected_client.stream_operation_events(
             operation_id,
             after_sequence=sequence,
             follow=True,
@@ -101,7 +106,7 @@ def _watch(
                 break
     else:
         with Live(_operation_table(operation, items), console=console, refresh_per_second=8) as live:
-            for event_json in client.stream_operation_events(
+            for event_json in selected_client.stream_operation_events(
                 operation_id,
                 after_sequence=sequence,
                 follow=True,
@@ -117,7 +122,7 @@ def _watch(
                 if stop_on_deferred and event.get("type") == "operation_deferred":
                     break
 
-    final_operation = _json_object(client.get_operation(operation_id))
+    final_operation = _json_object(selected_client.get_operation(operation_id))
     _print_completion(action, final_operation)
     return final_operation
 

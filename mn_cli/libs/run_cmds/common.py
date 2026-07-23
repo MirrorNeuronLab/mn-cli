@@ -58,7 +58,6 @@ from mn_sdk.submission_preparation import (
     load_blueprint_config,
     manifest_nodes,
     prepare_manifest_for_submission,
-    runtime_web_ui_support_payloads_for_manifest,
     run_mode_label as _run_mode_label,
     stage_blueprint_support_payloads_for_manifest,
     stage_skill_dependency_payloads_for_manifest,
@@ -324,15 +323,11 @@ def _configure_bundle_if_required(
 def _stage_bundle_payloads(
     bundle_dir: Path,
     manifest_dict: dict[str, Any],
-    *,
-    web_ui: bool,
 ) -> dict[str, bytes]:
     payloads = load_bundle_payloads(bundle_dir)
     stage_upload_path_payloads_for_manifest(
         manifest_dict, payloads, bundle_dir=bundle_dir
     )
-    if web_ui:
-        payloads.update(runtime_web_ui_support_payloads_for_manifest(manifest_dict))
     stage_blueprint_support_payloads_for_manifest(
         manifest_dict, payloads, bundle_dir=bundle_dir
     )

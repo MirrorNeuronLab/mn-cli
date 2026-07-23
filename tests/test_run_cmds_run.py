@@ -35,36 +35,6 @@ def isolated_mn_home(tmp_path, monkeypatch):
     )
 
 
-@pytest.fixture(autouse=True)
-def stable_job_runtime_contract_adapter(mocker):
-    """Keep legacy mock assertions while exercising the v2 create/start shape."""
-    created_bundles = {}
-
-    def create_stable_job(manifest_json, payloads, **_kwargs):
-        manifest = json.loads(manifest_json)
-        force = bool((manifest.get("metadata", {}).get("mn_validation") or {}).get("force"))
-        job_id = run_cmds.client.submit_job(manifest_json, payloads, force=force)
-        created_bundles[str(job_id)] = (manifest_json, payloads)
-        return json.dumps({"job_id": str(job_id)})
-
-    def start_run(job_id, *, run_id, inputs):
-        assert isinstance(inputs, dict)
-        return json.dumps({"job_id": job_id, "run_id": run_id or f"{job_id}-run"})
-
-    def create_job_schedule(job_id, *, schedule, source):
-        manifest_json, payloads = created_bundles[job_id]
-        return run_cmds.client.create_schedule(
-            manifest_json,
-            payloads,
-            schedule=schedule,
-            source=source,
-        )
-
-    mocker.patch("mn_cli.libs.run_cmds.client.create_stable_job", side_effect=create_stable_job)
-    mocker.patch("mn_cli.libs.run_cmds.client.start_run", side_effect=start_run)
-    mocker.patch("mn_cli.libs.run_cmds.client.create_job_schedule", side_effect=create_job_schedule)
-
-
 def test_runtime_model_events_report_model_and_node_immediately():
     event = {
         "type": "runtime_model_install_started",
@@ -435,69 +405,6 @@ def test_run_submits_python_environment_requirements_payload(mocker, tmp_path, m
     payloads = mock_submit.call_args.args[1]
     assert payloads["worker/requirements.txt"] == b"opencv-python-headless>=4.10,<5\n"
 
-def test_run_prepares_sdk_injected_web_ui_python_environment(mocker, tmp_path, monkeypatch):
-    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
-    mocker.patch("mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="web-ui-env-run")
-    mock_submit = mocker.patch("mn_cli.libs.run_cmds.client.submit_job", return_value="job-123")
-    mocker.patch(
-        "mn_cli.libs.run_cmds.client.stream_events",
-        return_value=[json.dumps({"type": "job_completed"})],
-    )
-    env_dir = tmp_path / "prepared-web-ui-python"
-    prepare_env = mocker.patch(
-        "mn_cli.libs.run_cmds._doctor_prepare_python_env",
-        return_value=env_dir,
-    )
-
-    bundle_dir = tmp_path / "web_ui_bundle"
-    bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(
-        json.dumps(
-            {
-                "apiVersion": "mn.workflow/v1",
-                "kind": "Workflow",
-                "manifest_version": "1.0",
-                "type": "service",
-                "graph_id": "web-ui-env",
-                "workflow": {"workflow_id": "web-ui-env"},
-                "agents": {
-                    "entrypoints": ["worker"],
-                    "nodes": [
-                        {
-                            "node_id": "worker",
-                            "agent_type": "router",
-                            "config": {},
-                        }
-                    ],
-                    "edges": [],
-                },
-            }
-        )
-    )
-    config_dir = bundle_dir / "config"
-    config_dir.mkdir()
-    (config_dir / "default.json").write_text(
-        json.dumps(
-            {
-                "identity": {"blueprint_id": "web-ui-env", "name": "Web UI Env"},
-                "web_ui": {"enabled": True, "output": {"adapter": "gradio"}},
-            }
-        )
-    )
-
-    result = runner.invoke(
-        app,
-        ["blueprint", "run", "--folder", str(bundle_dir), "--web-ui"],
-    )
-
-    assert result.exit_code == 0
-    submitted_manifest = json.loads(mock_submit.call_args.args[0])
-    web_ui = next(
-        node for node in submitted_manifest["flow"]["nodes"] if node["node_id"] == "web_ui_dashboard"
-    )
-    assert web_ui["config"]["python_environment"]["path"] == str(env_dir)
-    assert prepare_env.call_args.kwargs["node_id"] == "web_ui_dashboard"
-
 def test_run_injects_blueprint_config_with_cli_set_over_overwrite(mocker, tmp_path):
     mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
@@ -616,13 +523,9 @@ def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_pat
     assert env["MN_RUNS_ROOT"].endswith("/outputs/runs")
     assert injected_config["identity"]["run_id"] == "bp-1-auto-run"
     assert injected_config["outputs"]["run_root"] == env["MN_RUNS_ROOT"]
-    web_ui = json.loads((tmp_path / "runs" / "bp-1-auto-run" / "web_ui.json").read_text())
-    assert web_ui["adapter"] == "static_html"
-    assert web_ui["title"] == "Blueprint One"
-    assert web_ui["url"].startswith("file://")
-    assert "index.html" in web_ui["url"]
-    assert web_ui["metadata"]["registered_by"] == "mn_cli"
-    assert web_ui["metadata"]["launch_adapter"] == "blueprint_static_html"
+    assert not (
+        tmp_path / "runs" / "bp-1-auto-run" / "web_ui.json"
+    ).exists()
     assert not (tmp_path / "runs" / "bp-1-auto-run" / "ui.json").exists()
     config = manifest["nodes"][0]["config"]
     assert config["upload_path"] == "."
