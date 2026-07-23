@@ -31,6 +31,16 @@ _MONITOR_JOB_FIELDS = {
     "workflow_state",
     "workflow_state_ref",
 }
+_MONITOR_RUN_ID_FIELDS = (
+    "job_id",
+    "id",
+    "run_id",
+    "runId",
+    "blueprint_run_id",
+    "blueprintRunId",
+    "execution_id",
+    "executionId",
+)
 _MONITOR_MANIFEST_CACHE: dict[str, tuple[int, int, dict[str, Any]]] = {}
 _MONITOR_EVENTS_CACHE: dict[str, tuple[int, int, list[dict[str, Any]]]] = {}
 
@@ -181,21 +191,7 @@ def _read_monitor_json_object(path: Path) -> dict[str, Any] | None:
 def _local_run_store_entries(
     data: dict[str, Any], job: dict[str, Any], summary: dict[str, Any]
 ) -> list[tuple[Path, dict[str, Any]]]:
-    run_ids: list[str] = []
-    for mapping in (job, summary, data):
-        if not isinstance(mapping, dict):
-            continue
-        for key in ("run_id", "runId", "blueprint_run_id", "blueprintRunId"):
-            value = str(mapping.get(key) or "").strip()
-            if value and value not in run_ids:
-                run_ids.append(value)
-    job_ids = {
-        str(mapping.get(key) or "").strip()
-        for mapping in (job, summary, data)
-        if isinstance(mapping, dict)
-        for key in ("job_id", "id")
-        if str(mapping.get(key) or "").strip()
-    }
+    identifiers = _monitor_run_identifiers(job, summary, data)
 
     try:
         root = Path(default_runs_root()).expanduser()
@@ -205,25 +201,41 @@ def _local_run_store_entries(
         return []
 
     entries: list[tuple[Path, dict[str, Any]]] = []
-    for run_id in run_ids:
-        candidate = root / run_id
+    for identifier in identifiers:
+        if Path(identifier).name != identifier or identifier in {".", ".."}:
+            continue
+        candidate = root / identifier
         if candidate.is_dir():
             entries.append(
                 (candidate, _read_monitor_json_object(candidate / "job.json") or {})
             )
 
-    # A CLI-created run has a small job mapping even when the GetJob response
-    # does not carry run_id.  Resolve that mapping without scanning artifacts.
+    # Stable-job launches persist separate stable job, execution run, and
+    # blueprint-run identities. Reattachment may start with any one of them,
+    # so match every identity in the small job mapping.
+    identifier_set = set(identifiers)
     for mapping_path in root.glob("*/job.json"):
         mapping = _read_monitor_json_object(mapping_path)
         if not mapping:
             continue
-        mapped_job_id = str(mapping.get("job_id") or mapping.get("id") or "").strip()
-        if mapped_job_id in job_ids and all(
+        mapped_identifiers = set(_monitor_run_identifiers(mapping))
+        if identifier_set.intersection(mapped_identifiers) and all(
             mapping_path.parent != run_dir for run_dir, _mapping in entries
         ):
             entries.append((mapping_path.parent, mapping))
     return entries
+
+
+def _monitor_run_identifiers(*mappings: dict[str, Any]) -> list[str]:
+    identifiers: list[str] = []
+    for mapping in mappings:
+        if not isinstance(mapping, dict):
+            continue
+        for key in _MONITOR_RUN_ID_FIELDS:
+            value = str(mapping.get(key) or "").strip()
+            if value and value not in identifiers:
+                identifiers.append(value)
+    return identifiers
 
 
 def _read_monitor_manifest(path: Path) -> dict[str, Any] | None:

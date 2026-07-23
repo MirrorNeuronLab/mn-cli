@@ -470,6 +470,87 @@ def test_monitor_projects_existing_run_from_blueprint_source_without_get_job(
     get_job.assert_not_called()
 
 
+def test_monitor_reattaches_by_execution_run_id_when_stable_job_id_differs(
+    mocker, tmp_path
+):
+    runs_root = tmp_path / "runs"
+    run_dir = runs_root / "vc-run"
+    run_dir.mkdir(parents=True)
+    manifest = {
+        "apiVersion": "mn.workflow/v1",
+        "kind": "Workflow",
+        "workflow": {
+            "workflow_id": "vc-workflow",
+            "steps": [
+                {
+                    "id": "audit",
+                    "label": "Audit",
+                    "run": "audit",
+                }
+            ],
+        },
+        "runtime": {
+            "bindings": {
+                "audit": {
+                    "worker": {
+                        "id": "audit__score_consistency_auditor",
+                        "role": "Score Consistency Auditor",
+                    }
+                }
+            }
+        },
+    }
+    (run_dir / "job.json").write_text(
+        json.dumps(
+            {
+                "job_id": "stable-vc-job",
+                "run_id": "vc-run",
+                "blueprint_run_id": "vc-run",
+            }
+        )
+    )
+    (run_dir / "manifest.json").write_text(json.dumps(manifest))
+    (run_dir / "events.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "workflow_step_attempt_started",
+                "payload": {
+                    "step_id": "audit",
+                    "worker": "audit__score_consistency_auditor",
+                },
+            }
+        )
+        + "\n"
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor.default_runs_root",
+        return_value=runs_root,
+    )
+    get_job = mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor.client.get_job",
+        side_effect=AssertionError("saved source contract should avoid GetJob"),
+    )
+
+    progress = _public_progress_from_api_snapshot(
+        "vc-run",
+        {
+            "job_id": "vc-run",
+            "status": "running",
+            "steps": [
+                {"id": "audit__start"},
+                {"id": "audit__score_consistency_auditor"},
+                {"id": "audit__end"},
+            ],
+        },
+    )
+
+    assert [step["id"] for step in progress["steps"]] == ["audit"]
+    assert [agent["id"] for agent in progress["current_step"]["agents"]] == [
+        "audit__score_consistency_auditor"
+    ]
+    get_job.assert_not_called()
+
+
 def test_monitor_stream_timeout_covers_transient_deadlines(monkeypatch):
     monkeypatch.delenv("MN_JOB_MONITOR_API_STREAM_TIMEOUT", raising=False)
 
