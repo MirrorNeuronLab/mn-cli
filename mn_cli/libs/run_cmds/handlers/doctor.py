@@ -800,7 +800,12 @@ def _doctor_local_source_digest(source: Path) -> str:
 
 
 def _doctor_workspace_local_source(package: str) -> Path | None:
-    workspace_value = str(os.getenv("MN_WORKSPACE_ROOT") or "").strip()
+    runtime_config = RuntimeConfig.from_env()
+    workspace_value = str(
+        os.getenv("MN_WORKSPACE_ROOT")
+        or runtime_config.runtime_env.get("MN_WORKSPACE_ROOT")
+        or ""
+    ).strip()
     candidate = Path(package).expanduser()
     if not workspace_value or not candidate.is_absolute() or not candidate.is_dir():
         return None

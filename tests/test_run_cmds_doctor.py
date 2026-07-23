@@ -303,7 +303,12 @@ def test_doctor_stages_local_hostlocal_packages_outside_read_only_source(
     source.joinpath("skill.py").write_text("VALUE = 1\n", encoding="utf-8")
     host_root = tmp_path / "host-shared"
     runtime_root = Path("/runtime/shared")
-    monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path / "workspace"))
+    mn_home = Path(os.environ["MN_HOME"])
+    mn_home.mkdir(parents=True)
+    mn_home.joinpath("docker-compose.env").write_text(
+        f"MN_WORKSPACE_ROOT={tmp_path / 'workspace'}\n",
+        encoding="utf-8",
+    )
     monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", str(host_root))
     monkeypatch.setenv("MN_RUNTIME_SHARED_STORAGE_ROOT", str(runtime_root))
     mocker.patch(
