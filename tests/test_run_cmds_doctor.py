@@ -289,6 +289,124 @@ def test_doctor_prepares_hostlocal_python_environment_inside_docker_core(tmp_pat
     assert (env_dir / ".mn-requirements.txt").read_text(encoding="utf-8") == "fastapi==0.115.0\n"
 
 
+def test_doctor_stages_local_hostlocal_packages_outside_read_only_source(
+    tmp_path,
+    monkeypatch,
+    mocker,
+):
+    source = tmp_path / "workspace" / "local-skill"
+    source.mkdir(parents=True)
+    source.joinpath("pyproject.toml").write_text(
+        "[project]\nname='local-skill'\nversion='1.0.0'\n",
+        encoding="utf-8",
+    )
+    source.joinpath("skill.py").write_text("VALUE = 1\n", encoding="utf-8")
+    host_root = tmp_path / "host-shared"
+    runtime_root = Path("/runtime/shared")
+    monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path / "workspace"))
+    monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", str(host_root))
+    monkeypatch.setenv("MN_RUNTIME_SHARED_STORAGE_ROOT", str(runtime_root))
+    mocker.patch(
+        "mn_cli.libs.run_cmds._doctor_running_core_container",
+        return_value="mirror-neuron-core",
+    )
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        if args[-1] == "--version":
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout="Python 3.11.2\n",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    mocker.patch("mn_cli.libs.run_cmds.subprocess.run", side_effect=fake_run)
+
+    env_dir = run_cmds._doctor_prepare_python_env_from_content(
+        blueprint_id="local-source",
+        node_id="worker",
+        packages=[str(source)],
+        requirements_content="",
+        timeout=1,
+    )
+
+    staged = (
+        host_root
+        / "blueprint-python-sources"
+        / env_dir.name
+        / "0-local-skill"
+    )
+    runtime_staged = (
+        runtime_root
+        / "blueprint-python-sources"
+        / env_dir.name
+        / "0-local-skill"
+    )
+    assert staged.joinpath("skill.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+    assert str(runtime_staged) in calls[-1][0]
+    assert str(source) not in calls[-1][0]
+    assert not any(source.glob("*.egg-info"))
+
+
+def test_doctor_removes_partial_core_owned_python_environment_in_core(
+    tmp_path,
+    monkeypatch,
+    mocker,
+):
+    host_root = tmp_path / "host-shared"
+    runtime_root = Path("/runtime/shared")
+    monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", str(host_root))
+    monkeypatch.setenv("MN_RUNTIME_SHARED_STORAGE_ROOT", str(runtime_root))
+    mocker.patch(
+        "mn_cli.libs.run_cmds._doctor_running_core_container",
+        return_value="mirror-neuron-core",
+    )
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        if args[-1] == "--version":
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout="Python 3.11.2\n",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    mocker.patch("mn_cli.libs.run_cmds.subprocess.run", side_effect=fake_run)
+    first = run_cmds._doctor_prepare_python_env_from_content(
+        blueprint_id="partial-cache",
+        node_id="worker",
+        packages=["requests==2.32.0"],
+        requirements_content="",
+        timeout=1,
+    )
+    first.joinpath(".ready").unlink()
+
+    run_cmds._doctor_prepare_python_env_from_content(
+        blueprint_id="partial-cache",
+        node_id="worker",
+        packages=["requests==2.32.0"],
+        requirements_content="",
+        timeout=1,
+    )
+
+    runtime_env = runtime_root / "blueprint-python-envs" / first.name
+    assert [
+        "docker",
+        "exec",
+        "mirror-neuron-core",
+        "rm",
+        "-rf",
+        "--",
+        str(runtime_env),
+    ] in calls
+
+
 def test_doctor_skill_report_reads_declared_dependencies(tmp_path):
     bundle_dir = tmp_path / "bundle"
     config_dir = bundle_dir / "config"

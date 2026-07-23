@@ -630,6 +630,12 @@ def _doctor_prepare_python_env_from_content(
     )
     if version.returncode != 0:
         raise RuntimeError((version.stdout + version.stderr).strip() or "python --version failed")
+    local_sources_by_argument = {
+        package: source
+        for package in packages
+        if (source := _doctor_workspace_local_source(package)) is not None
+    }
+    local_sources = list(dict.fromkeys(local_sources_by_argument.values()))
     digest = hashlib.sha256(
         json.dumps(
             {
@@ -638,6 +644,13 @@ def _doctor_prepare_python_env_from_content(
                 "runtime": f"docker:{core_container}" if core_container else "native",
                 "requirements": requirements_content,
                 "packages": packages,
+                "local_sources": [
+                    {
+                        "path": str(source),
+                        "digest": _doctor_local_source_digest(source),
+                    }
+                    for source in local_sources
+                ],
             },
             sort_keys=True,
         ).encode("utf-8")
@@ -661,8 +674,54 @@ def _doctor_prepare_python_env_from_content(
         return env_dir
 
     if env_dir.exists():
-        shutil.rmtree(env_dir)
+        _doctor_remove_shared_cache_path(
+            env_dir,
+            core_container=core_container,
+            timeout=timeout,
+        )
     env_dir.mkdir(parents=True, exist_ok=True)
+    install_packages = list(packages)
+    if local_sources:
+        sources_dir = env_root.parent / "blueprint-python-sources" / digest
+        if sources_dir.exists():
+            _doctor_remove_shared_cache_path(
+                sources_dir,
+                core_container=core_container,
+                timeout=timeout,
+            )
+        sources_dir.mkdir(parents=True, exist_ok=True)
+        staged_sources: dict[str, Path] = {}
+        for index, source in enumerate(local_sources):
+            staged = sources_dir / f"{index}-{source.name}"
+            shutil.copytree(
+                source,
+                staged,
+                symlinks=True,
+                ignore=shutil.ignore_patterns(
+                    ".git",
+                    ".hg",
+                    ".mypy_cache",
+                    ".pytest_cache",
+                    ".ruff_cache",
+                    ".tox",
+                    ".venv",
+                    "__pycache__",
+                    "build",
+                    "dist",
+                    "*.egg-info",
+                    "*.pyc",
+                    "*.pyo",
+                ),
+            )
+            staged_sources[str(source)] = (
+                _doctor_runtime_python_env_path(staged) if core_container else staged
+            )
+        install_packages = [
+            str(staged_sources[str(local_sources_by_argument[package])])
+            if package in local_sources_by_argument
+            else package
+            for package in packages
+        ]
     install_requirement_file: Path | None = None
     if requirements_content:
         staged_requirements = env_dir / ".mn-requirements.txt"
@@ -685,7 +744,7 @@ def _doctor_prepare_python_env_from_content(
     pip_args = [str(python_executable), "-m", "pip", "install"]
     if install_requirement_file is not None:
         pip_args.extend(["-r", str(install_requirement_file)])
-    pip_args.extend(packages)
+    pip_args.extend(install_packages)
     install_args = (
         [
             "docker",
@@ -711,6 +770,72 @@ def _doctor_prepare_python_env_from_content(
         raise RuntimeError(_truncate_doctor_detail((install.stdout + install.stderr).strip() or "pip install failed"))
     ready.write_text(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + "\n", encoding="utf-8")
     return env_dir
+
+
+def _doctor_local_source_digest(source: Path) -> str:
+    digest = hashlib.sha256()
+    excluded_dirs = {
+        ".git",
+        ".hg",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".tox",
+        ".venv",
+        "__pycache__",
+        "build",
+        "dist",
+    }
+    for path in sorted(source.rglob("*")):
+        relative = path.relative_to(source)
+        if any(part in excluded_dirs or part.endswith(".egg-info") for part in relative.parts):
+            continue
+        if path.is_symlink() or not path.is_file() or path.suffix in {".pyc", ".pyo"}:
+            continue
+        digest.update(relative.as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _doctor_workspace_local_source(package: str) -> Path | None:
+    workspace_value = str(os.getenv("MN_WORKSPACE_ROOT") or "").strip()
+    candidate = Path(package).expanduser()
+    if not workspace_value or not candidate.is_absolute() or not candidate.is_dir():
+        return None
+    workspace = Path(workspace_value).expanduser().resolve()
+    source = candidate.resolve()
+    try:
+        source.relative_to(workspace)
+    except ValueError:
+        return None
+    if not source.joinpath("pyproject.toml").is_file():
+        return None
+    return source
+
+
+def _doctor_remove_shared_cache_path(
+    path: Path,
+    *,
+    core_container: str,
+    timeout: float,
+) -> None:
+    if not core_container:
+        shutil.rmtree(path)
+        return
+    runtime_path = _doctor_runtime_python_env_path(path)
+    remove = subprocess.run(
+        ["docker", "exec", core_container, "rm", "-rf", "--", str(runtime_path)],
+        capture_output=True,
+        text=True,
+        timeout=max(timeout, 1.0),
+    )
+    if remove.returncode != 0:
+        raise RuntimeError(
+            (remove.stdout + remove.stderr).strip()
+            or f"could not remove partial Python environment cache {runtime_path}"
+        )
 
 
 def _doctor_running_core_container(timeout: float) -> str:
