@@ -15,6 +15,7 @@ The root command registers these operator-facing families:
 
 - `blueprint`: catalog, validation, installation, execution, and outputs;
 - `job`: submission, inspection, control, backup/restore, monitor, and result;
+- `run`: v2 inspection and control of one stable-job execution;
 - `node`: cluster membership, exposure, drain, reconcile, and maintenance;
 - `operation`: durable group-operation status and reattachment;
 - `runtime`: start, stop, status, health, doctor, sidecars, and updates;
@@ -67,6 +68,23 @@ those contracts.
   be printed or logged.
 - Unit tests use fakes and temporary paths; normal tests do not mutate the real
   `~/.mn`, start services, or access the network.
+- Stable-job archive retains shared data. Job-data reset, terminal-run delete,
+  and permanent job delete require confirmation. Run cleanup must never be
+  presented as deleting stable job data.
+
+## Stable Job/Run Contract
+
+`mn job create/definitions/inspect/archive/reset-data/delete/start/runs` adapt
+the v2 stable-job service. `mn run status/pause/resume/cancel/delete` always
+accepts `run_id`. A stable `job_id` owns configuration, schedules, and job data;
+every intentional start gets a distinct run identity, while attempts retain
+their run. CLI output must label and persist both fields without treating them
+as aliases.
+
+`mn blueprint run` creates a stable job and first run by default, or starts a
+new run of the `--job-id` definition. Existing v1 `mn job` execution-control
+commands remain compatible with historical execution IDs and must not cause
+new state to be indefinitely dual-written.
 
 ## Runtime-Model Launch Contract
 

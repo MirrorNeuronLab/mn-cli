@@ -12,7 +12,7 @@ bootstrap_environment()
 
 from mn_cli import update_cmds
 from mn_cli.banner import format_banner
-from mn_cli.libs import backup_cmds, deployment_cmds, job_cmds, model_cmds, operation_cmds, resource_cmds, run_cmds, schedule_cmds, service_cmds, sys_cmds
+from mn_cli.libs import backup_cmds, deployment_cmds, job_cmds, model_cmds, operation_cmds, resource_cmds, run_cmds, schedule_cmds, service_cmds, stable_job_cmds, sys_cmds
 from mn_cli.libs.blueprint_cmds import blueprint_app
 from mn_cli.error_handler import handle_cli_error, set_debug
 from mn_cli.runtime_mode import local_runtime_mode
@@ -159,6 +159,14 @@ job_app.command(name="unfinished")(job_cmds.unfinished)
 job_app.command(name="monitor")(run_cmds.monitor)
 job_app.command(name="result")(run_cmds.result)
 job_app.command(name="dead-letters")(job_cmds.dead_letters)
+job_app.command(name="create")(stable_job_cmds.create)
+job_app.command(name="definitions")(stable_job_cmds.definitions)
+job_app.command(name="inspect")(stable_job_cmds.inspect)
+job_app.command(name="archive")(stable_job_cmds.archive)
+job_app.command(name="reset-data")(stable_job_cmds.reset_data)
+job_app.command(name="delete")(stable_job_cmds.delete)
+job_app.command(name="start")(stable_job_cmds.start)
+job_app.command(name="runs")(stable_job_cmds.runs)
 
 # Node commands
 node_app.command(name="list")(job_cmds.nodes)
@@ -193,6 +201,7 @@ deployment_cmds.deployment_app.command(name="deploy")(deployment_cmds.deploy)
 # Sub-apps
 app.add_typer(blueprint_app, name="blueprint")
 app.add_typer(job_app, name="job")
+app.add_typer(stable_job_cmds.run_app, name="run")
 app.add_typer(node_app, name="node")
 app.add_typer(operation_app, name="operation")
 app.add_typer(runtime_app, name="runtime")

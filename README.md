@@ -69,6 +69,42 @@ mn blueprint run --folder ./vc_assistant \
 Repeat `--set` for multiple values. Values use JSON types when possible and
 otherwise remain strings.
 
+## Stable jobs and execution runs
+
+Create a reusable job once, then start independent runs that share its declared
+job data:
+
+```bash
+mn job create ./vc_assistant --job-id vc-diligence
+mn job inspect vc-diligence
+mn job start vc-diligence --inputs run-input.json
+mn job runs vc-diligence
+
+mn run status <run-id>
+mn run pause <run-id>
+mn run resume <run-id>
+mn run cancel <run-id>
+```
+
+`job_id` is the stable configuration and data owner. `run_id` is one
+execution and the identity used for control, logs, output, retention, and run
+deletion. Starting the same job again creates another run; retrying a run does
+not. Use `mn blueprint run --job-id <job-id>` to run an existing definition.
+Without that option, blueprint run creates an ephemeral stable job and starts
+its first run.
+
+Lifecycle commands are deliberately separate:
+
+```bash
+mn job archive vc-diligence            # retains shared data
+mn job reset-data vc-diligence         # confirms; clears/reseeds and advances generation
+mn run delete <terminal-run-id>         # confirms; never deletes shared data
+mn job delete vc-diligence              # confirms; permanently deletes definition and data
+```
+
+The legacy `mn job status/pause/resume/cancel <old-job-id>` commands remain
+execution-oriented v1 compatibility commands. Prefer `mn run ...` for v2.
+
 ## Durable bulk operations
 
 `mn job cancel-all`, `mn job clear`, `mn node reconcile`, and `mn node drain`

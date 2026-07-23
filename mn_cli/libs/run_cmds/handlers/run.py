@@ -192,6 +192,7 @@ def run_bundle(
     schedule: Optional[str] = None,
     debug: bool = False,
     runtime_model_dependencies: RuntimeModelDependencies | None = None,
+    job_id: str | None = None,
 ):
     """Run a bundle after applying optional runtime metadata and environment."""
     pre_launch_process: subprocess.Popen[Any] | None = None
@@ -406,12 +407,29 @@ def run_bundle(
         )
         if schedule_attrs is not None:
             submitted_manifest = manifest_dict
-            _create_schedule_for_bundle(
-                bundle_dir,
-                manifest_dict,
-                payloads,
-                schedule_attrs,
+            stable_job_id = job_id
+            if not stable_job_id:
+                created = json.loads(
+                    client.create_stable_job(
+                        json.dumps(manifest_dict),
+                        payloads,
+                        resolved_configuration=config_overrides,
+                    )
+                )
+                stable_job_id = str(created["job_id"])
+            elif config_overrides:
+                client.update_stable_job(
+                    stable_job_id,
+                    {"resolved_configuration": config_overrides},
+                )
+            result = json.loads(
+                client.create_job_schedule(
+                    stable_job_id,
+                    schedule=schedule_attrs,
+                    source={"cli": "blueprint run --schedule"},
+                )
             )
+            console.print_json(data=result)
             return
 
         _ensure_context_engine_for_run_if_needed(
@@ -461,14 +479,37 @@ def run_bundle(
             "Submit runtime job",
             "handing the prepared bundle to MirrorNeuron core.",
         )
-        job_id = client.submit_job(manifest, payloads, force=force)
-        submitted_job_id = job_id
-        log_writer = JobLogWriter(job_id, run_dir=blueprint_run_dir)
+        stable_job_id = job_id
+        if not stable_job_id:
+            created = json.loads(
+                client.create_stable_job(
+                    manifest,
+                    payloads,
+                    resolved_configuration=config_overrides,
+                )
+            )
+            stable_job_id = str(created["job_id"])
+        elif config_overrides:
+            client.update_stable_job(
+                stable_job_id,
+                {"resolved_configuration": config_overrides},
+            )
+        started = json.loads(
+            client.start_run(
+                stable_job_id,
+                run_id=str(blueprint_run_id or ""),
+                inputs=config_overrides,
+            )
+        )
+        execution_id = str(started["run_id"])
+        submitted_job_id = execution_id
+        log_writer = JobLogWriter(execution_id, run_dir=blueprint_run_dir)
         submitted_log_writer = log_writer
         if blueprint_run_id:
             _write_blueprint_job_mapping(
                 blueprint_run_id,
-                job_id,
+                stable_job_id,
+                execution_id,
                 submission_metadata,
                 env_overrides,
                 monitor_manifest=manifest_dict,
@@ -493,7 +534,7 @@ def run_bundle(
         console.print(
             generate_run_submitted_panel(
                 bundle_name=bundle_dir.name,
-                job_id=job_id,
+                job_id=execution_id,
                 payload_count=len(payloads),
                 log_dir=log_writer.log_dir,
                 follow_seconds=resolved_follow_seconds,
@@ -509,14 +550,14 @@ def run_bundle(
                 _start_background_event_relay_if_needed(
                     bundle_dir,
                     submitted_manifest or manifest_dict,
-                    job_id,
+                    execution_id,
                     blueprint_run_dir,
                     "submitted",
                     config_overrides=config_overrides,
                 )
             console.print(
                 generate_detached_panel(
-                    job_id,
+                    execution_id,
                     log_writer.log_dir,
                     "submitted",
                     log_writer.event_count,
@@ -526,7 +567,7 @@ def run_bundle(
             return
 
         final_status = _stream_and_format_events(
-            job_id,
+            execution_id,
             log_writer,
             resolved_follow_seconds,
             web_ui_url=web_ui_url,
@@ -544,7 +585,7 @@ def run_bundle(
             _start_background_event_relay_if_needed(
                 bundle_dir,
                 submitted_manifest or manifest_dict,
-                job_id,
+                execution_id,
                 blueprint_run_dir,
                 final_status,
                 config_overrides=config_overrides,

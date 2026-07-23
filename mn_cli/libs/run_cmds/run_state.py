@@ -36,6 +36,7 @@ def _ensure_local_run_store_identity(
 def _write_blueprint_job_mapping(
     blueprint_run_id: str,
     job_id: str,
+    run_id: str,
     metadata: dict[str, Any],
     env_overrides: dict[str, str],
     *,
@@ -45,8 +46,9 @@ def _write_blueprint_job_mapping(
     try:
         run_dir.mkdir(parents=True, exist_ok=True)
         payload = {
-            "run_id": blueprint_run_id,
+            "run_id": run_id,
             "job_id": job_id,
+            "blueprint_run_id": blueprint_run_id,
             "blueprint_id": metadata.get("blueprint_id"),
             "blueprint_revision": metadata.get("blueprint_revision"),
             "blueprint_source": metadata.get("blueprint_source"),
@@ -68,7 +70,7 @@ def _write_blueprint_job_mapping(
     except OSError:
         logger.exception(
             "Failed to write blueprint job mapping for run_id=%s job_id=%s",
-            blueprint_run_id,
+            run_id,
             job_id,
         )
 

@@ -175,6 +175,7 @@ def _run_resolved_blueprint(
     fake_skills: bool = False,
     benchmark: bool = False,
     debug: bool = False,
+    job_id: Optional[str] = None,
 ) -> None:
     shared_run_id = run_id or _make_blueprint_run_id(blueprint_id)
     _print_blueprint_run_phase(1, 3, "Prepare blueprint bundle")
@@ -239,6 +240,7 @@ def _run_resolved_blueprint(
         auto_schedule=auto_schedule,
         schedule=schedule,
         debug=debug,
+        job_id=job_id,
     )
 
 
@@ -624,6 +626,7 @@ def run_catalog_blueprint(
     fake_skills: bool = False,
     benchmark: bool = False,
     debug: bool = False,
+    job_id: Optional[str] = None,
 ) -> None:
     """Run a catalog blueprint by name through the shared blueprint runner."""
     _reject_local_blueprint_path(blueprint_name)
@@ -681,6 +684,7 @@ def run_catalog_blueprint(
         fake_skills=fake_skills,
         benchmark=benchmark,
         debug=debug,
+        job_id=job_id,
     )
 
 
@@ -699,6 +703,7 @@ def run_local_blueprint_folder(
     fake_skills: bool = False,
     benchmark: bool = False,
     debug: bool = False,
+    job_id: Optional[str] = None,
 ) -> None:
     """Run a local Python source blueprint folder through the shared blueprint runner."""
     blueprint_dir = Path(folder).expanduser()
@@ -734,6 +739,7 @@ def run_local_blueprint_folder(
         fake_skills=fake_skills,
         benchmark=benchmark,
         debug=debug,
+        job_id=job_id,
     )
 
 
@@ -752,6 +758,7 @@ def _run_local_folder(
     fake_skills: bool = False,
     benchmark: bool = False,
     debug: bool = False,
+    job_id: Optional[str] = None,
 ) -> None:
     bundle_dir = Path(folder).expanduser()
     manifest = _load_manifest_for_local_route(bundle_dir)
@@ -770,6 +777,7 @@ def _run_local_folder(
             fake_skills=fake_skills,
             benchmark=benchmark,
             debug=debug,
+            job_id=job_id,
         )
         return
 
@@ -809,6 +817,7 @@ def _run_local_folder(
         auto_schedule=auto_schedule,
         schedule=schedule,
         debug=debug,
+        job_id=job_id,
     )
 
 
@@ -1189,6 +1198,13 @@ def blueprint_run(
         Optional[str],
         typer.Option("--run-id", help="Use a specific shared blueprint run ID."),
     ] = None,
+    job_id: Annotated[
+        Optional[str],
+        typer.Option(
+            "--job-id",
+            help="Run an existing stable job instead of creating a new job.",
+        ),
+    ] = None,
     blueprint_repo: Annotated[
         Optional[str],
         typer.Option(
@@ -1324,6 +1340,7 @@ def blueprint_run(
             fake_skills=fake_skills,
             benchmark=benchmark,
             debug=debug,
+            job_id=job_id,
         )
         return
 
@@ -1357,6 +1374,7 @@ def blueprint_run(
         fake_skills=fake_skills,
         benchmark=benchmark,
         debug=debug,
+        job_id=job_id,
     )
 
 

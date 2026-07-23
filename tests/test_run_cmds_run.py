@@ -35,6 +35,36 @@ def isolated_mn_home(tmp_path, monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def stable_job_runtime_contract_adapter(mocker):
+    """Keep legacy mock assertions while exercising the v2 create/start shape."""
+    created_bundles = {}
+
+    def create_stable_job(manifest_json, payloads, **_kwargs):
+        manifest = json.loads(manifest_json)
+        force = bool((manifest.get("metadata", {}).get("mn_validation") or {}).get("force"))
+        job_id = run_cmds.client.submit_job(manifest_json, payloads, force=force)
+        created_bundles[str(job_id)] = (manifest_json, payloads)
+        return json.dumps({"job_id": str(job_id)})
+
+    def start_run(job_id, *, run_id, inputs):
+        assert isinstance(inputs, dict)
+        return json.dumps({"job_id": job_id, "run_id": run_id or f"{job_id}-run"})
+
+    def create_job_schedule(job_id, *, schedule, source):
+        manifest_json, payloads = created_bundles[job_id]
+        return run_cmds.client.create_schedule(
+            manifest_json,
+            payloads,
+            schedule=schedule,
+            source=source,
+        )
+
+    mocker.patch("mn_cli.libs.run_cmds.client.create_stable_job", side_effect=create_stable_job)
+    mocker.patch("mn_cli.libs.run_cmds.client.start_run", side_effect=start_run)
+    mocker.patch("mn_cli.libs.run_cmds.client.create_job_schedule", side_effect=create_job_schedule)
+
+
 def test_runtime_model_events_report_model_and_node_immediately():
     event = {
         "type": "runtime_model_install_started",
@@ -81,6 +111,7 @@ def test_run_success(mocker, tmp_path, monkeypatch):
     assert "Status: Completed" in result.stdout
     mapping = json.loads((tmp_path / "runs" / "run-bundle-auto" / "job.json").read_text())
     assert mapping["job_id"] == "job-123"
+    assert mapping["run_id"] == "run-bundle-auto"
     monitor_manifest = json.loads(
         (tmp_path / "runs" / "run-bundle-auto" / "manifest.json").read_text()
     )
@@ -89,7 +120,7 @@ def test_run_success(mocker, tmp_path, monkeypatch):
     submitted_payloads = mock_submit.call_args.args[1]
     assert submitted_payloads["test.txt"] == b"hello"
     assert submitted_payloads["nested/input.json"] == b"{}"
-    mock_stream.assert_called_once_with("job-123", follow=True, timeout=None, heartbeat_interval_ms=5000)
+    mock_stream.assert_called_once_with("run-bundle-auto", follow=True, timeout=None, heartbeat_interval_ms=5000)
 
 def test_run_stream_error_falls_back_to_status_polling(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
@@ -125,7 +156,7 @@ def test_run_stream_error_falls_back_to_status_polling(mocker, tmp_path, monkeyp
     assert "Job submitted" in result.stdout
     assert "Completed" in result.stdout
     assert "Monitor" in result.stdout
-    mock_get.assert_called_once_with("job-stream-fallback")
+    mock_get.assert_called_once_with("run-stream-fallback")
 
 def test_run_records_lazy_runtime_models_before_model_validation(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
@@ -261,9 +292,8 @@ def test_run_auto_schedule_creates_resource_wait_schedule(mocker, tmp_path, monk
     result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--auto-schedule"])
 
     assert result.exit_code == 0
-    assert "Schedule create successful." in result.stdout
     assert "schedule-123" in result.stdout
-    mock_submit.assert_not_called()
+    mock_submit.assert_called_once()
     mock_create_schedule.assert_called_once()
     assert mock_create_schedule.call_args.kwargs["schedule"]["kind"] == "resource_wait"
 
@@ -577,6 +607,7 @@ def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_pat
     assert "bp-1-auto-run" in result.stdout
     mapping = json.loads((tmp_path / "runs" / "bp-1-auto-run" / "job.json").read_text())
     assert mapping["job_id"] == "job-auto"
+    assert mapping["run_id"] == "bp-1-auto-run"
     manifest = json.loads(mock_submit.call_args.args[0])
     env = manifest["nodes"][0]["config"]["environment"]
     injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
@@ -816,6 +847,7 @@ def test_run_records_blueprint_run_id_mapping(mocker, tmp_path, monkeypatch):
 
     mapping = json.loads((tmp_path / "runs" / "bp-run" / "job.json").read_text())
     assert mapping["job_id"] == "job-abc"
+    assert mapping["run_id"] == "bp-run"
     assert mapping["blueprint_revision"] == "rev-1"
     assert mapping["blueprint_source"] == "/catalog/blueprints"
     monitor_manifest = json.loads(
