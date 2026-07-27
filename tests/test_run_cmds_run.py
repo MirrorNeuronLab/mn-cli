@@ -92,6 +92,59 @@ def test_run_success(mocker, tmp_path, monkeypatch):
     assert submitted_payloads["nested/input.json"] == b"{}"
     mock_stream.assert_called_once_with("run-bundle-auto", follow=True, timeout=None, heartbeat_interval_ms=5000)
 
+
+def test_run_web_ui_host_and_port_override_blueprint_config(
+    mocker, tmp_path
+):
+    run_local = mocker.patch(
+        "mn_cli.libs.blueprint_cmds._run_local_folder"
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "blueprint",
+            "run",
+            "--folder",
+            str(tmp_path / "blueprint"),
+            "--web-ui",
+            "--set",
+            "web_ui.service.port=60000",
+            "--web-ui-host",
+            "0.0.0.0",
+            "--web-ui-port",
+            "61017",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert run_local.call_args.kwargs["web_ui"] is True
+    assert run_local.call_args.kwargs["config_overrides"] == {
+        "web_ui": {
+            "service": {
+                "host": "0.0.0.0",
+                "port": 61017,
+            }
+        }
+    }
+
+
+def test_run_rejects_invalid_web_ui_port(tmp_path):
+    result = runner.invoke(
+        app,
+        [
+            "blueprint",
+            "run",
+            "--folder",
+            str(tmp_path / "blueprint"),
+            "--web-ui-port",
+            "70000",
+        ],
+    )
+
+    assert result.exit_code == 2
+
+
 def test_run_stream_error_falls_back_to_status_polling(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch("mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="run-stream-fallback")

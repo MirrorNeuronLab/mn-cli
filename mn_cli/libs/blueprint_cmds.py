@@ -1267,6 +1267,22 @@ def blueprint_run(
             help="Start or register the blueprint Web UI for this run.",
         ),
     ] = False,
+    web_ui_host: Annotated[
+        Optional[str],
+        typer.Option(
+            "--web-ui-host",
+            help="Override the blueprint Web UI listener host for this run.",
+        ),
+    ] = None,
+    web_ui_port: Annotated[
+        Optional[int],
+        typer.Option(
+            "--web-ui-port",
+            min=1,
+            max=65535,
+            help="Override the blueprint Web UI listener port for this run.",
+        ),
+    ] = None,
     auto_schedule: Annotated[
         bool,
         typer.Option(
@@ -1324,6 +1340,21 @@ def blueprint_run(
     except ValueError as exc:
         print_error(console, str(exc))
         raise typer.Exit(2)
+
+    web_ui_service_overrides: dict[str, Any] = {}
+    if web_ui_host is not None:
+        normalized_web_ui_host = web_ui_host.strip()
+        if not normalized_web_ui_host:
+            print_error(console, "--web-ui-host must not be empty.")
+            raise typer.Exit(2)
+        web_ui_service_overrides["host"] = normalized_web_ui_host
+    if web_ui_port is not None:
+        web_ui_service_overrides["port"] = web_ui_port
+    if web_ui_service_overrides:
+        config_overrides = _deep_merge(
+            config_overrides,
+            {"web_ui": {"service": web_ui_service_overrides}},
+        )
 
     if folder:
         _run_local_folder(

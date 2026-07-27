@@ -27,6 +27,11 @@ The root command registers these operator-facing families:
 commands and options. Public command names, option meanings, exit codes, and
 machine-readable output are compatibility-sensitive.
 
+`mn blueprint run --web-ui-host HOST --web-ui-port PORT` projects per-run
+listener overrides into `web_ui.service.host` and `web_ui.service.port`.
+Blueprint manifest/config bindings remain responsible for mapping those
+settings into the executable service declaration.
+
 ## Behavior Boundary
 
 The CLI owns:

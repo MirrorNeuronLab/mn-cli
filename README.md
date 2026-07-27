@@ -69,6 +69,20 @@ mn blueprint run --folder ./vc_assistant \
 Repeat `--set` for multiple values. Values use JSON types when possible and
 otherwise remain strings.
 
+For a blueprint-owned web service, override the listener without editing its
+checked-in config:
+
+```bash
+mn blueprint run --folder ./cctv_operator --web-ui \
+  --web-ui-host 0.0.0.0 \
+  --web-ui-port 61017
+```
+
+`--web-ui-host` and `--web-ui-port` set `web_ui.service.host` and
+`web_ui.service.port` for that run. A wildcard host exposes the service to
+reachable peers; the blueprint is responsible for its authentication and
+network-safety contract.
+
 ## Stable jobs and execution runs
 
 Create a reusable job once, then start independent runs that share its declared
