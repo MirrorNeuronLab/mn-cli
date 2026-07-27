@@ -65,6 +65,10 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_BLUEPRINT_SOURCE", raising=False)
     monkeypatch.delenv("MN_BLUEPRINT_REPO", raising=False)
     monkeypatch.delenv("MN_BLUEPRINT_LOCAL", raising=False)
+    # Runtime-start unit tests must never launch a detached host sidecar. The
+    # source module is importable in this checkout, so make the explicit
+    # production override authoritative for the duration of each test.
+    monkeypatch.setenv("MN_NATIVE_SDK_GRPC_SOURCE", "0")
     monkeypatch.delenv("MN_DOCKER_NETWORK_MODE", raising=False)
     monkeypatch.delenv("MN_DOCKER_NETWORK_NAME", raising=False)
     monkeypatch.delenv("MN_REDIS_IMAGE", raising=False)

@@ -224,6 +224,9 @@ DEFAULT_EPMD_PORT = "54369"
 DEFAULT_DIST_PORT = "54370"
 DEFAULT_WEB_UI_PORT = "55173"
 DEFAULT_WEB_UI_RESTART_DELAY_SECONDS = "2"
+DEFAULT_WATCHDOG_MAX_RESTART_DELAY_SECONDS = "30"
+DEFAULT_WATCHDOG_MAX_CONSECUTIVE_FAILURES = "5"
+DEFAULT_WATCHDOG_MIN_UPTIME_SECONDS = "10"
 DEFAULT_OPENSHELL_GATEWAY_PORT = "58080"
 DEFAULT_ARTIFACT_PORT = "55660"
 DEFAULT_BLUEPRINT_WEB_UI_BIND_HOST = "0.0.0.0"
@@ -4747,23 +4750,69 @@ command = config["command"]
 cwd = config["cwd"]
 pid_file = Path(config["pid_file"])
 log_file = Path(config["log_file"])
-restart_delay = float(config.get("restart_delay", 2))
+service_name = str(config.get("service_name") or "service")
+
+def nonnegative_float(value, default):
+    try:
+        return max(float(value), 0.0)
+    except (TypeError, ValueError):
+        return float(default)
+
+def positive_int(value, default):
+    try:
+        return max(int(value), 1)
+    except (TypeError, ValueError):
+        return int(default)
+
+restart_delay = nonnegative_float(config.get("restart_delay"), 2)
+max_restart_delay = max(
+    nonnegative_float(config.get("max_restart_delay"), 30),
+    restart_delay,
+)
+max_consecutive_failures = positive_int(
+    config.get("max_consecutive_failures"),
+    5,
+)
+min_uptime_seconds = nonnegative_float(
+    config.get("min_uptime_seconds"),
+    10,
+)
 stopping = False
 child = None
+consecutive_failures = 0
 
 def log(message):
     timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    with log_file.open("a", encoding="utf-8") as handle:
-        handle.write(f"[watchdog {timestamp}] {message}\n")
+    try:
+        with log_file.open("a", encoding="utf-8") as handle:
+            handle.write(f"[watchdog {timestamp}] {message}\n")
+    except OSError:
+        pass
+
+def signal_child(signum):
+    if child is None or child.poll() is not None:
+        return
+    try:
+        if hasattr(os, "killpg"):
+            os.killpg(child.pid, signum)
+        else:
+            child.send_signal(signum)
+    except OSError:
+        pass
+
+def remove_owned_pid_file():
+    if child is None:
+        return
+    try:
+        if pid_file.read_text(encoding="utf-8").strip() == str(child.pid):
+            pid_file.unlink()
+    except OSError:
+        pass
 
 def request_stop(_signum, _frame):
     global stopping
     stopping = True
-    if child is not None and child.poll() is None:
-        try:
-            child.terminate()
-        except OSError:
-            pass
+    signal_child(signal.SIGTERM)
 
 signal.signal(signal.SIGTERM, request_stop)
 signal.signal(signal.SIGINT, request_stop)
@@ -4773,6 +4822,9 @@ log_file.parent.mkdir(parents=True, exist_ok=True)
 
 try:
     while not stopping:
+        if not pid_file.parent.is_dir():
+            break
+        started_at = time.monotonic()
         with log_file.open("a", encoding="utf-8", buffering=1) as output:
             child = subprocess.Popen(
                 command,
@@ -4784,35 +4836,53 @@ try:
                 start_new_session=True,
             )
             pid_file.write_text(str(child.pid), encoding="utf-8")
-            log(f"started web ui child pid={child.pid}")
+            log(f"started {service_name} child pid={child.pid}")
             while not stopping:
                 exit_code = child.poll()
                 if exit_code is not None:
+                    break
+                if not pid_file.parent.is_dir():
+                    stopping = True
+                    signal_child(signal.SIGTERM)
                     break
                 time.sleep(1)
 
         if stopping:
             break
 
-        log(f"web ui child exited code={exit_code}; restarting in {restart_delay:g}s")
-        time.sleep(restart_delay)
+        uptime = time.monotonic() - started_at
+        if uptime >= min_uptime_seconds:
+            consecutive_failures = 0
+        else:
+            consecutive_failures += 1
+        if consecutive_failures >= max_consecutive_failures:
+            log(
+                f"{service_name} child exited code={exit_code} after "
+                f"{uptime:.2f}s {consecutive_failures} consecutive times; "
+                "watchdog circuit breaker is stopping"
+            )
+            break
+
+        delay = min(
+            max_restart_delay,
+            restart_delay * (2 ** max(consecutive_failures - 1, 0)),
+        )
+        log(
+            f"{service_name} child exited code={exit_code}; "
+            f"restarting in {delay:g}s"
+        )
+        time.sleep(delay)
 finally:
     if child is not None and child.poll() is None:
+        signal_child(signal.SIGTERM)
         try:
-            child.terminate()
             child.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            try:
-                child.kill()
-            except OSError:
-                pass
+            signal_child(signal.SIGKILL)
         except OSError:
             pass
-    try:
-        pid_file.unlink()
-    except OSError:
-        pass
-    log("watchdog stopped")
+    remove_owned_pid_file()
+    log(f"{service_name} watchdog stopped")
 """
 
 def _api_command() -> Optional[list[str]]:
@@ -4825,7 +4895,10 @@ def _native_sdk_grpc_command() -> Optional[list[str]]:
     native_bin = VENV_DIR / "bin" / "mn-native-sdk-grpc"
     if native_bin.exists():
         return [str(native_bin)]
-    if os.getenv("MN_NATIVE_SDK_GRPC_SOURCE", "").strip().lower() in {"1", "true", "yes", "on"}:
+    source_mode = os.getenv("MN_NATIVE_SDK_GRPC_SOURCE", "").strip().lower()
+    if source_mode in {"0", "false", "no", "off"}:
+        return None
+    if source_mode in {"1", "true", "yes", "on"}:
         return [sys.executable, "-m", "mn_sdk.native_runtime_service"]
     try:
         import importlib.util
@@ -4848,7 +4921,20 @@ def _start_native_sdk_grpc_watchdog(env: dict[str, str]) -> subprocess.Popen:
         "cwd": str(_sidecar_workdir()),
         "pid_file": str(NATIVE_SDK_GRPC_PID_FILE),
         "log_file": str(NATIVE_SDK_GRPC_LOG),
+        "service_name": "Native SDK gRPC",
         "restart_delay": env.get("MN_NATIVE_SDK_GRPC_RESTART_DELAY_SECONDS", DEFAULT_WEB_UI_RESTART_DELAY_SECONDS),
+        "max_restart_delay": env.get(
+            "MN_NATIVE_SDK_GRPC_MAX_RESTART_DELAY_SECONDS",
+            DEFAULT_WATCHDOG_MAX_RESTART_DELAY_SECONDS,
+        ),
+        "max_consecutive_failures": env.get(
+            "MN_NATIVE_SDK_GRPC_MAX_CONSECUTIVE_FAILURES",
+            DEFAULT_WATCHDOG_MAX_CONSECUTIVE_FAILURES,
+        ),
+        "min_uptime_seconds": env.get(
+            "MN_NATIVE_SDK_GRPC_MIN_UPTIME_SECONDS",
+            DEFAULT_WATCHDOG_MIN_UPTIME_SECONDS,
+        ),
     }
     with open(NATIVE_SDK_GRPC_WATCHDOG_LOG, "w") as out:
         return subprocess.Popen(
@@ -4995,7 +5081,20 @@ def _start_api_watchdog(env: dict[str, str]) -> subprocess.Popen:
         "cwd": str(_sidecar_workdir()),
         "pid_file": str(API_PID_FILE),
         "log_file": str(API_LOG),
+        "service_name": "REST API",
         "restart_delay": env.get("MN_API_RESTART_DELAY_SECONDS", DEFAULT_WEB_UI_RESTART_DELAY_SECONDS),
+        "max_restart_delay": env.get(
+            "MN_API_MAX_RESTART_DELAY_SECONDS",
+            DEFAULT_WATCHDOG_MAX_RESTART_DELAY_SECONDS,
+        ),
+        "max_consecutive_failures": env.get(
+            "MN_API_MAX_CONSECUTIVE_FAILURES",
+            DEFAULT_WATCHDOG_MAX_CONSECUTIVE_FAILURES,
+        ),
+        "min_uptime_seconds": env.get(
+            "MN_API_MIN_UPTIME_SECONDS",
+            DEFAULT_WATCHDOG_MIN_UPTIME_SECONDS,
+        ),
     }
     with open(API_WATCHDOG_LOG, "w") as out:
         return subprocess.Popen(
@@ -5095,7 +5194,20 @@ def _start_web_ui_watchdog(web_ui_dir: Path, env: dict[str, str], web_ui_host: s
         "cwd": str(web_ui_dir),
         "pid_file": str(WEB_UI_PID_FILE),
         "log_file": str(WEB_UI_LOG),
+        "service_name": "Web UI",
         "restart_delay": env.get("MN_WEB_UI_RESTART_DELAY_SECONDS", DEFAULT_WEB_UI_RESTART_DELAY_SECONDS),
+        "max_restart_delay": env.get(
+            "MN_WEB_UI_MAX_RESTART_DELAY_SECONDS",
+            DEFAULT_WATCHDOG_MAX_RESTART_DELAY_SECONDS,
+        ),
+        "max_consecutive_failures": env.get(
+            "MN_WEB_UI_MAX_CONSECUTIVE_FAILURES",
+            DEFAULT_WATCHDOG_MAX_CONSECUTIVE_FAILURES,
+        ),
+        "min_uptime_seconds": env.get(
+            "MN_WEB_UI_MIN_UPTIME_SECONDS",
+            DEFAULT_WATCHDOG_MIN_UPTIME_SECONDS,
+        ),
     }
     with open(WEB_UI_WATCHDOG_LOG, "w") as out:
         return subprocess.Popen(

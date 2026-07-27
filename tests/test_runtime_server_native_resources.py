@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -213,6 +215,51 @@ def test_native_sdk_grpc_command_falls_back_to_importable_source_module(monkeypa
 
     assert command is not None
     assert command[-2:] == ["-m", "mn_sdk.native_runtime_service"]
+
+
+def test_native_sdk_grpc_command_respects_explicit_source_disable(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "VENV_DIR", tmp_path / "venv")
+    monkeypatch.setenv("MN_NATIVE_SDK_GRPC_SOURCE", "0")
+
+    assert server._native_sdk_grpc_command() is None
+
+
+def test_watchdog_stops_after_repeated_fast_child_failures(tmp_path):
+    pid_file = tmp_path / "pids" / "service.pid"
+    log_file = tmp_path / "logs" / "service.log"
+    pid_file.parent.mkdir(parents=True)
+    log_file.parent.mkdir(parents=True)
+    config = {
+        "command": [sys.executable, "-c", "raise SystemExit(17)"],
+        "cwd": str(tmp_path),
+        "pid_file": str(pid_file),
+        "log_file": str(log_file),
+        "service_name": "test service",
+        "restart_delay": 0.01,
+        "max_restart_delay": 0.02,
+        "max_consecutive_failures": 3,
+        "min_uptime_seconds": 30,
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            server._web_ui_watchdog_script(),
+            json.dumps(config),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+
+    assert result.returncode == 0
+    assert not pid_file.exists()
+    log = log_file.read_text(encoding="utf-8")
+    assert log.count("started test service child") == 3
+    assert "watchdog circuit breaker is stopping" in log
+    assert "test service watchdog stopped" in log
 
 
 def test_worker_compose_foundation_services_start_gateway_only(monkeypatch, tmp_path):
