@@ -4,6 +4,20 @@
 inspecting runtime state, managing jobs, exporting artifacts, and starting local
 services installed by `mn-deploy`.
 
+## Air-gapped jobs
+
+Blueprints may bundle source packages or wheels under `payloads/skills` and
+`payloads/agents`, and Docker Model Runner sources under `payloads/models`.
+Large model files are streamed into the local blob store.
+
+For a paused job, `mn job backup <id> --air-gapped --output <folder>` writes an
+`mn.backup.v2` capsule containing the runtime snapshot, payload blobs, Python
+wheelhouse, and required DockerWorker images. `mn job restore` hydrates those
+assets without package-index access. An extracted capsule can also be run by
+passing its `bundle` directory to `mn blueprint run --folder`. Every runtime
+model must have a physical `payloads/models` source; export fails instead of
+silently depending on a catalog download.
+
 ## Quick Start
 
 Install locally and run tests:

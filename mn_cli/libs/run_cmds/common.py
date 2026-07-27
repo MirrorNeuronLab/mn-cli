@@ -37,7 +37,6 @@ from mn_cli.libs.ui import (
     print_success_confirmation,
     print_warning,
 )
-from mn_cli.libs.bundles import load_bundle_payloads
 from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress
 from mn_cli.libs.progress_stream import (
     ProgressSnapshotStream,
@@ -50,7 +49,15 @@ from mn_cli.libs.run_logs import (
     materialize_sent_email_copy as _materialize_sent_email_copy,
     write_result_stream_event as _write_result_stream_event,
 )
-from mn_cli.libs.artifacts import promote_large_payloads_to_blob_refs
+from mn_cli.libs.artifacts import (
+    promote_large_payloads_to_blob_refs,
+    stage_bundle_payload_assets,
+)
+from mn_cli.libs.airgap import (
+    hydrate_extracted_airgap,
+    hydrate_payload_models,
+    offline_environment,
+)
 from mn_sdk.submission_preparation import (
     add_mn_llm_aliases as _add_mn_llm_aliases,
     blueprint_runtime_environment as _blueprint_runtime_environment,
@@ -324,7 +331,7 @@ def _stage_bundle_payloads(
     bundle_dir: Path,
     manifest_dict: dict[str, Any],
 ) -> dict[str, bytes]:
-    payloads = load_bundle_payloads(bundle_dir)
+    payloads = stage_bundle_payload_assets(manifest_dict, bundle_dir)
     stage_upload_path_payloads_for_manifest(
         manifest_dict, payloads, bundle_dir=bundle_dir
     )

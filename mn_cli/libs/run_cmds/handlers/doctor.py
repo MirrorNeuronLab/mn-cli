@@ -595,6 +595,10 @@ def _doctor_prepare_python_env(
         packages=packages,
         requirements_content=requirements_content,
         timeout=timeout,
+        local_source_roots=[
+            bundle_dir / "payloads" / "skills",
+            bundle_dir / "payloads" / "agents",
+        ],
     )
 
 
@@ -618,6 +622,7 @@ def _doctor_prepare_python_env_from_content(
     packages: list[str],
     requirements_content: str,
     timeout: float,
+    local_source_roots: list[Path] | None = None,
 ) -> Path:
 
     core_container = _doctor_running_core_container(timeout)
@@ -633,7 +638,13 @@ def _doctor_prepare_python_env_from_content(
     local_sources_by_argument = {
         package: source
         for package in packages
-        if (source := _doctor_workspace_local_source(package)) is not None
+        if (
+            source := _doctor_workspace_local_source(
+                package,
+                extra_roots=local_source_roots,
+            )
+        )
+        is not None
     }
     local_sources = list(dict.fromkeys(local_sources_by_argument.values()))
     digest = hashlib.sha256(
@@ -693,26 +704,29 @@ def _doctor_prepare_python_env_from_content(
         staged_sources: dict[str, Path] = {}
         for index, source in enumerate(local_sources):
             staged = sources_dir / f"{index}-{source.name}"
-            shutil.copytree(
-                source,
-                staged,
-                symlinks=True,
-                ignore=shutil.ignore_patterns(
-                    ".git",
-                    ".hg",
-                    ".mypy_cache",
-                    ".pytest_cache",
-                    ".ruff_cache",
-                    ".tox",
-                    ".venv",
-                    "__pycache__",
-                    "build",
-                    "dist",
-                    "*.egg-info",
-                    "*.pyc",
-                    "*.pyo",
-                ),
-            )
+            if source.is_file():
+                shutil.copy2(source, staged)
+            else:
+                shutil.copytree(
+                    source,
+                    staged,
+                    symlinks=True,
+                    ignore=shutil.ignore_patterns(
+                        ".git",
+                        ".hg",
+                        ".mypy_cache",
+                        ".pytest_cache",
+                        ".ruff_cache",
+                        ".tox",
+                        ".venv",
+                        "__pycache__",
+                        "build",
+                        "dist",
+                        "*.egg-info",
+                        "*.pyc",
+                        "*.pyo",
+                    ),
+                )
             staged_sources[str(source)] = (
                 _doctor_runtime_python_env_path(staged) if core_container else staged
             )
@@ -773,6 +787,8 @@ def _doctor_prepare_python_env_from_content(
 
 
 def _doctor_local_source_digest(source: Path) -> str:
+    if source.is_file():
+        return hashlib.sha256(source.read_bytes()).hexdigest()
     digest = hashlib.sha256()
     excluded_dirs = {
         ".git",
@@ -799,15 +815,28 @@ def _doctor_local_source_digest(source: Path) -> str:
     return digest.hexdigest()
 
 
-def _doctor_workspace_local_source(package: str) -> Path | None:
+def _doctor_workspace_local_source(
+    package: str,
+    *,
+    extra_roots: list[Path] | None = None,
+) -> Path | None:
     runtime_config = RuntimeConfig.from_env()
     candidate = Path(package).expanduser()
-    if not candidate.is_absolute() or not candidate.is_dir():
+    if not candidate.is_absolute() or not candidate.exists():
         return None
     source = candidate.resolve()
-    trusted_roots = _doctor_local_source_roots(runtime_config)
+    trusted_roots = [
+        *_doctor_local_source_roots(runtime_config),
+        *(
+            root.expanduser().resolve()
+            for root in (extra_roots or [])
+            if root.exists()
+        ),
+    ]
     if not any(_doctor_path_is_within(source, root) for root in trusted_roots):
         return None
+    if source.is_file():
+        return source if source.suffix == ".whl" else None
     if not source.joinpath("pyproject.toml").is_file():
         return None
     return source

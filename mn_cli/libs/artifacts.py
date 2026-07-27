@@ -3,16 +3,76 @@ from __future__ import annotations
 import hashlib
 import mimetypes
 import os
+import shutil
 import socket
 from pathlib import Path
 from typing import Any
 
 from mn_sdk.runtime_config import resolve_mn_home
+from mn_sdk.payload_assets import stage_payload_assets
 
 from mn_cli.runtime_state import read_env_file
 
 DEFAULT_INLINE_PAYLOAD_MAX_BYTES = 1_048_576
 DEFAULT_ARTIFACT_PORT = "55660"
+STREAM_COPY_CHUNK_BYTES = 1024 * 1024
+
+
+def stage_bundle_payload_assets(
+    manifest: dict[str, Any],
+    bundle_dir: Path,
+    *,
+    runtime_env: dict[str, str] | None = None,
+) -> dict[str, bytes]:
+    threshold = _inline_payload_max_bytes()
+    env = _runtime_env_file_values()
+    env.update(os.environ)
+    env.update(runtime_env or {})
+    root = _host_blob_store_root(env)
+    return stage_payload_assets(
+        manifest,
+        bundle_dir,
+        blob_root=root,
+        inline_max_bytes=threshold,
+        location_factory=lambda sha256: _blob_location(sha256, env),
+    )
+
+
+def blob_store_path(
+    sha256: str, *, runtime_env: dict[str, str] | None = None
+) -> Path:
+    value = str(sha256 or "").strip().lower()
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+        raise ValueError("blob sha256 must contain exactly 64 hexadecimal characters")
+    env = _runtime_env_file_values()
+    env.update(os.environ)
+    env.update(runtime_env or {})
+    return _host_blob_store_root(env) / value[:2] / value
+
+
+def install_blob_file(
+    source: Path,
+    sha256: str,
+    *,
+    runtime_env: dict[str, str] | None = None,
+) -> Path:
+    target = blob_store_path(sha256, runtime_env=runtime_env)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256()
+    tmp = target.with_name(f"{target.name}.tmp-{os.getpid()}")
+    try:
+        with source.open("rb") as read_handle, tmp.open("wb") as write_handle:
+            for chunk in iter(
+                lambda: read_handle.read(STREAM_COPY_CHUNK_BYTES), b""
+            ):
+                digest.update(chunk)
+                write_handle.write(chunk)
+        if digest.hexdigest() != sha256.lower():
+            raise ValueError(f"blob checksum mismatch for {source}")
+        os.replace(tmp, target)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return target
 
 
 def promote_large_payloads_to_blob_refs(
@@ -81,6 +141,47 @@ def _store_payload_blob(
     return blob_ref
 
 
+def _store_payload_file(
+    root: Path,
+    rel_path: str,
+    source: Path,
+    env: dict[str, str],
+) -> dict[str, Any]:
+    digest = hashlib.sha256()
+    size_bytes = 0
+    with source.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(STREAM_COPY_CHUNK_BYTES), b""):
+            digest.update(chunk)
+            size_bytes += len(chunk)
+    sha256 = digest.hexdigest()
+    target = root / sha256[:2] / sha256
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists():
+        tmp = target.with_name(f"{target.name}.tmp-{os.getpid()}")
+        try:
+            with source.open("rb") as read_handle, tmp.open("wb") as write_handle:
+                shutil.copyfileobj(
+                    read_handle, write_handle, length=STREAM_COPY_CHUNK_BYTES
+                )
+            os.replace(tmp, target)
+        finally:
+            tmp.unlink(missing_ok=True)
+    media_type, _encoding = mimetypes.guess_type(rel_path)
+    blob_ref: dict[str, Any] = {
+        "type": "blob_ref",
+        "sha256": sha256,
+        "size_bytes": size_bytes,
+        "media_type": media_type or "application/octet-stream",
+        "logical_name": Path(rel_path).name,
+        "scope": "job",
+        "payload_path": rel_path.replace("\\", "/"),
+    }
+    location = _blob_location(sha256, env)
+    if location:
+        blob_ref["locations"] = [location]
+    return blob_ref
+
+
 def _blob_location(sha256: str, env: dict[str, str]) -> dict[str, str] | None:
     base_url = str(env.get("MN_ARTIFACT_ADVERTISE_URL") or os.getenv("MN_ARTIFACT_ADVERTISE_URL") or "").strip()
     if not base_url:
@@ -112,7 +213,7 @@ def _host_blob_store_root(env: dict[str, str]) -> Path:
     )
     if configured:
         return Path(configured).expanduser()
-    return resolve_mn_home() / "blobs"
+    return resolve_mn_home(env) / "blobs"
 
 
 def _runtime_env_file_values() -> dict[str, str]:

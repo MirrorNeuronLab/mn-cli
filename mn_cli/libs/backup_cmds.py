@@ -3,7 +3,11 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
+import subprocess
+import sys
+import tempfile
 import time
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -12,13 +16,22 @@ from typing import Any
 import typer
 
 from mn_sdk.runtime_config import default_runs_root
+from mn_sdk.skill_dependencies import GAR_PIP_INDEX_URL, PYPI_PIP_INDEX_URL
 
 from mn_cli.error_handler import handle_cli_error
+from mn_cli.libs.airgap import (
+    AIRGAP_MARKER_SCHEMA_VERSION,
+    AirGapError,
+    compatibility_profile,
+    hydrate_payload_models,
+    validate_compatibility,
+)
+from mn_cli.libs.artifacts import blob_store_path, install_blob_file
 from mn_cli.libs.blueprint_observability import make_blueprint_run_id
 from mn_cli.libs.ui import print_error, print_success_confirmation, print_warning
 from mn_cli.shared import client, console, logger
 
-SCHEMA_VERSION = "mn.backup.v1"
+SCHEMA_VERSION = "mn.backup.v2"
 CHECKSUMS_ENTRY = "checksums.json"
 REQUIRED_ENTRIES = {
     "mn-backup.json",
@@ -44,6 +57,11 @@ def backup(
         help="Folder where the backup zip should be written.",
         file_okay=False,
         dir_okay=True,
+    ),
+    air_gapped: bool = typer.Option(
+        False,
+        "--air-gapped",
+        help="Include every local package, image, model, and blob required to restore without internet.",
     ),
 ) -> None:
     """Export a paused blueprint job into a restorable zip archive."""
@@ -71,7 +89,22 @@ def backup(
         backup_payload = json.loads(backup_json)
         _merge_cli_source_metadata(backup_payload, target)
 
-        archive_path = _write_backup_archive(backup_payload, bundle_files, output, target)
+        with tempfile.TemporaryDirectory(prefix="mn-airgap-export-") as temp_dir:
+            extra_files: dict[str, Path] = {}
+            if air_gapped:
+                extra_files = _prepare_airgap_export(
+                    backup_payload,
+                    bundle_files,
+                    Path(temp_dir),
+                )
+            archive_path = _write_backup_archive(
+                backup_payload,
+                bundle_files,
+                output,
+                target,
+                extra_files=extra_files,
+                air_gapped=air_gapped,
+            )
         print_success_confirmation(
             console,
             "Job backup",
@@ -322,6 +355,9 @@ def _write_backup_archive(
     bundle_files: dict[str, bytes],
     output_folder: Path,
     target: dict[str, Any],
+    *,
+    extra_files: dict[str, Path] | None = None,
+    air_gapped: bool = False,
 ) -> Path:
     if backup_payload.get("schema_version") != SCHEMA_VERSION:
         raise BackupRestoreError(
@@ -331,7 +367,9 @@ def _write_backup_archive(
         raise BackupRestoreError("Runtime backup did not include bundle/manifest.json.")
 
     output_folder.mkdir(parents=True, exist_ok=True)
-    archive_path = output_folder / _backup_filename(backup_payload, target)
+    archive_path = output_folder / _backup_filename(
+        backup_payload, target, air_gapped=air_gapped
+    )
     archive_metadata = _archive_metadata(backup_payload)
     entries: dict[str, bytes] = {
         "mn-backup.json": _json_bytes(archive_metadata),
@@ -353,6 +391,7 @@ def _write_backup_archive(
         if knowledge_dir.is_dir():
             _add_directory_entries(entries, knowledge_dir, "knowledge")
 
+    file_entries = dict(extra_files or {})
     checksums = {
         "algorithm": "sha256",
         "entries": {
@@ -360,13 +399,22 @@ def _write_backup_archive(
             for name, contents in sorted(entries.items())
         },
     }
+    for name, path in sorted(file_entries.items()):
+        checksums["entries"][name] = _file_sha256(path)
     entries[CHECKSUMS_ENTRY] = _json_bytes(checksums)
 
-    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        if not any(name.startswith("bundle/payloads/") for name in entries):
-            zf.writestr("bundle/payloads/", b"")
-        for name, contents in sorted(entries.items()):
-            zf.writestr(name, contents)
+    partial = archive_path.with_suffix(f"{archive_path.suffix}.partial")
+    try:
+        with zipfile.ZipFile(partial, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            if not any(name.startswith("bundle/payloads/") for name in entries):
+                zf.writestr("bundle/payloads/", b"")
+            for name, contents in sorted(entries.items()):
+                zf.writestr(name, contents)
+            for name, path in sorted(file_entries.items()):
+                zf.write(path, arcname=name)
+        partial.replace(archive_path)
+    finally:
+        partial.unlink(missing_ok=True)
 
     return archive_path
 
@@ -392,6 +440,7 @@ def _read_backup_archive(
                 f"Unsupported backup schema {metadata.get('schema_version')!r}."
             )
 
+        wheelhouse = _hydrate_airgap_archive(zf, metadata, archive_path)
         runtime = {
             "job": json.loads(zf.read("runtime/job.json")),
             "agents": json.loads(zf.read("runtime/agents.json")),
@@ -405,6 +454,11 @@ def _read_backup_archive(
         knowledge_files = _read_prefixed_files(zf, "knowledge/")
         if "manifest.json" not in bundle_files:
             raise BackupRestoreError("Backup zip is missing bundle/manifest.json.")
+        if metadata.get("air_gap", {}).get("enabled") is True:
+            _prepare_restored_airgap_bundle(
+                bundle_files,
+                wheelhouse=wheelhouse,
+            )
         return backup_payload, bundle_files, run_store_files, knowledge_files
 
 
@@ -420,11 +474,17 @@ def _archive_metadata(backup_payload: dict[str, Any]) -> dict[str, Any]:
     return metadata
 
 
-def _backup_filename(backup_payload: dict[str, Any], target: dict[str, Any]) -> str:
+def _backup_filename(
+    backup_payload: dict[str, Any],
+    target: dict[str, Any],
+    *,
+    air_gapped: bool = False,
+) -> str:
     source = backup_payload.get("source") or {}
     label = source.get("blueprint_id") or target.get("run_id") or target.get("job_id") or "mn"
     timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    return f"{_slug(label)}-{_slug(target['job_id'])}-{timestamp}.mnbackup.zip"
+    suffix = "mn-airgap-backup.zip" if air_gapped else "mnbackup.zip"
+    return f"{_slug(label)}-{_slug(target['job_id'])}-{timestamp}.{suffix}"
 
 
 def _slug(value: Any) -> str:
@@ -513,7 +573,7 @@ def _verify_checksums(zf: zipfile.ZipFile) -> None:
         )
 
     for name, expected in sorted(entries.items()):
-        actual = hashlib.sha256(zf.read(name)).hexdigest()
+        actual = _zip_member_sha256(zf, name)
         if actual != expected:
             raise BackupRestoreError(f"Checksum mismatch for {name}.")
 
@@ -528,6 +588,631 @@ def _read_prefixed_files(zf: zipfile.ZipFile, prefix: str) -> dict[str, bytes]:
             continue
         files[_safe_archive_relative_path(relative_path)] = zf.read(name)
     return files
+
+
+def _prepare_airgap_export(
+    backup_payload: dict[str, Any],
+    bundle_files: dict[str, bytes],
+    temp_root: Path,
+) -> dict[str, Path]:
+    try:
+        manifest = json.loads(bundle_files["manifest.json"])
+    except (KeyError, json.JSONDecodeError) as exc:
+        raise BackupRestoreError(
+            "Runtime backup manifest is required for air-gapped export."
+        ) from exc
+    if not isinstance(manifest, dict):
+        raise BackupRestoreError("Runtime backup manifest must be a JSON object.")
+    _audit_airgap_network_dependencies(manifest)
+    _audit_airgap_model_dependencies(manifest)
+
+    assets: list[dict[str, Any]] = []
+    files: dict[str, Path] = {}
+    refs = _manifest_blob_refs(manifest)
+    model_paths = _payload_model_paths(manifest)
+    for ref in refs:
+        sha256 = str(ref.get("sha256") or "").strip().lower()
+        payload_path = str(ref.get("payload_path") or "").strip()
+        try:
+            source = blob_store_path(sha256)
+        except ValueError as exc:
+            raise BackupRestoreError(
+                f"Invalid blob reference for {payload_path or '<unknown>'}."
+            ) from exc
+        if not source.is_file():
+            raise BackupRestoreError(
+                f"Required air-gap blob {sha256} for {payload_path} is not available locally."
+            )
+        actual = _file_sha256(source)
+        if actual != sha256:
+            raise BackupRestoreError(
+                f"Required air-gap blob {sha256} failed checksum validation."
+            )
+        archive_path = f"airgap/blobs/{sha256}"
+        files[archive_path] = source
+        assets.append(
+            {
+                "kind": "blob",
+                "purpose": "model" if _is_model_payload(payload_path, model_paths) else "payload",
+                "archive_path": archive_path,
+                "payload_path": payload_path,
+                "sha256": sha256,
+                "size_bytes": source.stat().st_size,
+            }
+        )
+
+    bundle_root = temp_root / "bundle"
+    _write_bundle_map(bundle_root, bundle_files)
+    wheelhouse = temp_root / "wheelhouse"
+    wheelhouse.mkdir(parents=True, exist_ok=True)
+    _build_airgap_wheelhouse(manifest, bundle_root, wheelhouse)
+    for wheel in sorted(wheelhouse.glob("*.whl")):
+        sha256 = _file_sha256(wheel)
+        archive_path = f"airgap/python/wheelhouse/{wheel.name}"
+        files[archive_path] = wheel
+        assets.append(
+            {
+                "kind": "python_wheel",
+                "archive_path": archive_path,
+                "sha256": sha256,
+                "size_bytes": wheel.stat().st_size,
+            }
+        )
+
+    image_root = temp_root / "images"
+    image_root.mkdir(parents=True, exist_ok=True)
+    for image in _required_docker_images(manifest):
+        inspect = subprocess.run(
+            ["docker", "image", "inspect", image],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if inspect.returncode != 0:
+            raise BackupRestoreError(
+                f"Required Docker image {image} is not available locally."
+            )
+        image_path = image_root / f"{_slug(image)}.tar"
+        saved = subprocess.run(
+            ["docker", "image", "save", "--output", str(image_path), image],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if saved.returncode != 0:
+            detail = (saved.stderr or saved.stdout or "docker image save failed").strip()
+            raise BackupRestoreError(
+                f"Could not export Docker image {image}: {detail}"
+            )
+        archive_path = f"airgap/images/{image_path.name}"
+        files[archive_path] = image_path
+        assets.append(
+            {
+                "kind": "docker_image",
+                "image": image,
+                "archive_path": archive_path,
+                "sha256": _file_sha256(image_path),
+                "size_bytes": image_path.stat().st_size,
+            }
+        )
+
+    backup_payload["air_gap"] = {
+        "enabled": True,
+        "network": "forbidden",
+        "compatibility": compatibility_profile(),
+        "assets": assets,
+    }
+    bundle_files[".mn-airgap.json"] = _json_bytes(
+        {
+            "schema_version": AIRGAP_MARKER_SCHEMA_VERSION,
+            "capsule_manifest": "../mn-backup.json",
+        }
+    )
+    return files
+
+
+def _build_airgap_wheelhouse(
+    manifest: dict[str, Any],
+    bundle_root: Path,
+    wheelhouse: Path,
+) -> None:
+    dependencies = []
+    for field in ("skill_dependencies", "agent_dependencies"):
+        value = manifest.get(field)
+        if isinstance(value, list):
+            dependencies.extend(item for item in value if isinstance(item, dict))
+    for dependency in dependencies:
+        name = str(dependency.get("name") or "").strip()
+        version = str(dependency.get("version") or "").strip().removeprefix("v")
+        source = str(dependency.get("source") or "").strip()
+        if not name or not version:
+            raise BackupRestoreError("Air-gap Python dependencies require name and version.")
+        if source == "payload":
+            relative = _safe_archive_relative_path(
+                str(dependency.get("path") or "")
+            )
+            package = bundle_root / "payloads" / Path(*PurePosixPath(relative).parts)
+            if str(dependency.get("format") or "source") == "wheel":
+                if not package.is_file():
+                    raise BackupRestoreError(
+                        f"Payload wheel is missing: payloads/{relative}"
+                    )
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "pip",
+                        "download",
+                        "--dest",
+                        str(wheelhouse),
+                        "--index-url",
+                        GAR_PIP_INDEX_URL,
+                        "--extra-index-url",
+                        PYPI_PIP_INDEX_URL,
+                        str(package),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            else:
+                if not (package / "pyproject.toml").is_file():
+                    raise BackupRestoreError(
+                        f"Payload source package is missing pyproject.toml: payloads/{relative}"
+                    )
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "pip",
+                        "wheel",
+                        "--no-build-isolation",
+                        "--wheel-dir",
+                        str(wheelhouse),
+                        "--index-url",
+                        GAR_PIP_INDEX_URL,
+                        "--extra-index-url",
+                        PYPI_PIP_INDEX_URL,
+                        str(package),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+        elif source == "gar":
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "download",
+                    "--only-binary=:all:",
+                    "--dest",
+                    str(wheelhouse),
+                    "--index-url",
+                    GAR_PIP_INDEX_URL,
+                    "--extra-index-url",
+                    PYPI_PIP_INDEX_URL,
+                    f"{name}=={version}",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        else:
+            raise BackupRestoreError(
+                f"Unsupported Python dependency source {source!r} for {name}."
+            )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "wheel materialization failed").strip()
+            raise BackupRestoreError(
+                f"Could not materialize {name}=={version} for air-gapped use: {detail}"
+            )
+    _build_hostlocal_requirement_wheels(
+        manifest,
+        bundle_root=bundle_root,
+        wheelhouse=wheelhouse,
+        declared_names={
+            str(item.get("name") or "")
+            for item in dependencies
+            if item.get("name")
+        },
+    )
+
+
+def _build_hostlocal_requirement_wheels(
+    manifest: dict[str, Any],
+    *,
+    bundle_root: Path,
+    wheelhouse: Path,
+    declared_names: set[str],
+) -> None:
+    from mn_sdk.skill_dependencies import normalize_package_name
+    from mn_sdk.submission_preparation import manifest_nodes
+
+    normalized_declared = {
+        normalize_package_name(name) for name in declared_names if name
+    }
+    requirements_files: set[Path] = set()
+    packages: list[str] = []
+    for node in manifest_nodes(manifest):
+        config = node.get("config") if isinstance(node.get("config"), dict) else {}
+        if config.get("runner_module") != "MirrorNeuron.Runner.HostLocal":
+            continue
+        python_environment = (
+            config.get("python_environment")
+            if isinstance(config.get("python_environment"), dict)
+            else {}
+        )
+        requirements = str(python_environment.get("requirements") or "").strip()
+        if requirements:
+            relative = _safe_archive_relative_path(requirements)
+            path = bundle_root / "payloads" / Path(*PurePosixPath(relative).parts)
+            if not path.is_file():
+                raise BackupRestoreError(
+                    f"HostLocal requirements file is missing: payloads/{relative}"
+                )
+            requirements_files.add(path)
+        for item in python_environment.get("packages") or []:
+            package = str(item or "").strip()
+            if not package or package.startswith("-"):
+                continue
+            candidate = Path(package).expanduser()
+            if candidate.is_absolute() or package.startswith(("file:", "git+")):
+                continue
+            name = re.split(r"[\s<>=!~\[;@]", package, maxsplit=1)[0]
+            if normalize_package_name(name) in normalized_declared:
+                continue
+            if package not in packages:
+                packages.append(package)
+
+    for requirements in sorted(requirements_files):
+        _run_airgap_pip_wheel(
+            [
+                "-r",
+                str(requirements),
+            ],
+            wheelhouse=wheelhouse,
+            label=f"payloads/{requirements.relative_to(bundle_root / 'payloads')}",
+        )
+    if packages:
+        _run_airgap_pip_wheel(
+            packages,
+            wheelhouse=wheelhouse,
+            label="HostLocal python_environment.packages",
+        )
+
+
+def _run_airgap_pip_wheel(
+    requirements: list[str],
+    *,
+    wheelhouse: Path,
+    label: str,
+) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "wheel",
+            "--wheel-dir",
+            str(wheelhouse),
+            "--index-url",
+            GAR_PIP_INDEX_URL,
+            "--extra-index-url",
+            PYPI_PIP_INDEX_URL,
+            *requirements,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (
+            result.stderr or result.stdout or "wheel materialization failed"
+        ).strip()
+        raise BackupRestoreError(
+            f"Could not materialize {label} for air-gapped use: {detail}"
+        )
+
+
+def _hydrate_airgap_archive(
+    zf: zipfile.ZipFile,
+    metadata: dict[str, Any],
+    archive_path: Path,
+) -> Path | None:
+    air_gap = metadata.get("air_gap")
+    if not isinstance(air_gap, dict) or air_gap.get("enabled") is not True:
+        return None
+    try:
+        validate_compatibility(air_gap.get("compatibility") or {})
+    except AirGapError as exc:
+        raise BackupRestoreError(str(exc)) from exc
+    capsule_id = hashlib.sha256(
+        f"{archive_path.resolve()}:{archive_path.stat().st_size}".encode("utf-8")
+    ).hexdigest()
+    airgap_root = default_runs_root().parent / "airgap" / capsule_id
+    wheelhouse = airgap_root / "python" / "wheelhouse"
+    wheelhouse.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="mn-airgap-hydrate-") as temp_dir:
+        temp_root = Path(temp_dir)
+        for asset in air_gap.get("assets") or []:
+            if not isinstance(asset, dict):
+                raise BackupRestoreError("Air-gap asset inventory entries must be objects.")
+            member = _safe_archive_relative_path(str(asset.get("archive_path") or ""))
+            if member not in zf.namelist():
+                raise BackupRestoreError(f"Air-gap asset is missing from archive: {member}")
+            expected = str(asset.get("sha256") or "").strip().lower()
+            if _zip_member_sha256(zf, member) != expected:
+                raise BackupRestoreError(f"Checksum mismatch for {member}.")
+            kind = str(asset.get("kind") or "")
+            if kind == "python_wheel":
+                target = wheelhouse / Path(member).name
+                _extract_member(zf, member, target)
+            elif kind == "blob":
+                temporary = temp_root / expected
+                _extract_member(zf, member, temporary)
+                try:
+                    install_blob_file(temporary, expected)
+                except ValueError as exc:
+                    raise BackupRestoreError(str(exc)) from exc
+            elif kind == "docker_image":
+                temporary = temp_root / Path(member).name
+                _extract_member(zf, member, temporary)
+                loaded = subprocess.run(
+                    ["docker", "image", "load", "--input", str(temporary)],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if loaded.returncode != 0:
+                    detail = (
+                        loaded.stderr or loaded.stdout or "docker image load failed"
+                    ).strip()
+                    raise BackupRestoreError(
+                        f"Could not load air-gap Docker image: {detail}"
+                    )
+            else:
+                raise BackupRestoreError(f"Unsupported air-gap asset kind {kind!r}.")
+    return wheelhouse
+
+
+def _prepare_restored_airgap_bundle(
+    bundle_files: dict[str, bytes],
+    *,
+    wheelhouse: Path | None,
+) -> None:
+    with tempfile.TemporaryDirectory(prefix="mn-airgap-bundle-") as temp_dir:
+        bundle_root = Path(temp_dir) / "bundle"
+        _write_bundle_map(bundle_root, bundle_files)
+        manifest = json.loads(bundle_files["manifest.json"])
+        if not isinstance(manifest, dict):
+            raise BackupRestoreError("Air-gap bundle manifest must be a JSON object.")
+        metadata = manifest.setdefault("metadata", {})
+        metadata["mn_airgap"] = {
+            "wheelhouse": str(wheelhouse) if wheelhouse is not None else "",
+            "network": "forbidden",
+        }
+        if wheelhouse is not None:
+            _patch_hostlocal_wheelhouse(manifest, wheelhouse)
+        try:
+            hydrate_payload_models(bundle_root, manifest)
+        except AirGapError as exc:
+            raise BackupRestoreError(str(exc)) from exc
+        if wheelhouse is not None:
+            from mn_cli.libs.run_cmds.handlers.doctor import (
+                _doctor_prepare_hostlocal_python_envs,
+            )
+
+            report = _doctor_prepare_hostlocal_python_envs(
+                bundle_root,
+                manifest,
+                timeout=float(
+                    os.getenv("MN_BLUEPRINT_PYTHON_ENV_TIMEOUT_SECONDS", "30")
+                ),
+                check_only=False,
+            )
+            if report.get("status") == "critical":
+                raise BackupRestoreError(
+                    "Could not prepare offline HostLocal Python environment: "
+                    + str(report.get("detail") or report.get("failures") or "unknown failure")
+                )
+        bundle_files["manifest.json"] = _json_bytes(manifest)
+
+
+def _patch_hostlocal_wheelhouse(manifest: dict[str, Any], wheelhouse: Path) -> None:
+    from mn_sdk.skill_dependencies import (
+        normalize_package_name,
+        requirement_package_name,
+    )
+
+    dependencies = []
+    for field in ("skill_dependencies", "agent_dependencies"):
+        value = manifest.get(field)
+        if isinstance(value, list):
+            dependencies.extend(item for item in value if isinstance(item, dict))
+    requirements = [
+        f"{item['name']}=={str(item['version']).removeprefix('v')}"
+        for item in dependencies
+        if item.get("name") and item.get("version")
+    ]
+    dependency_names = {
+        normalize_package_name(str(item.get("name") or ""))
+        for item in dependencies
+        if item.get("name")
+    }
+    from mn_sdk.submission_preparation import manifest_nodes
+
+    for node in manifest_nodes(manifest):
+        config = node.get("config") if isinstance(node.get("config"), dict) else {}
+        if config.get("runner_module") != "MirrorNeuron.Runner.HostLocal":
+            continue
+        python_environment = (
+            config.get("python_environment")
+            if isinstance(config.get("python_environment"), dict)
+            else {}
+        )
+        existing = [
+            str(item).strip()
+            for item in python_environment.get("packages") or []
+            if str(item).strip()
+        ]
+        preserved: list[str] = []
+        skip_option_value = False
+        for item in existing:
+            if skip_option_value:
+                skip_option_value = False
+                continue
+            if item in {"--find-links", "--index-url", "--extra-index-url"}:
+                skip_option_value = True
+                continue
+            if item.startswith("-"):
+                continue
+            candidate = Path(item).expanduser()
+            if candidate.is_absolute() or item.startswith(("file:", "git+")):
+                continue
+            package_name = requirement_package_name(item)
+            if package_name and package_name in dependency_names:
+                continue
+            if item not in preserved:
+                preserved.append(item)
+        python_environment["packages"] = [
+            "--no-index",
+            "--find-links",
+            str(wheelhouse),
+            *requirements,
+            *preserved,
+        ]
+        config["python_environment"] = python_environment
+
+
+def _required_docker_images(manifest: dict[str, Any]) -> list[str]:
+    from mn_sdk.submission_preparation import manifest_nodes
+
+    images: list[str] = []
+    for node in manifest_nodes(manifest):
+        config = node.get("config") if isinstance(node.get("config"), dict) else {}
+        if config.get("runner_module") != "MirrorNeuron.Runner.DockerWorker":
+            continue
+        image = str(config.get("image") or "").strip()
+        if image and image not in images:
+            images.append(image)
+    return images
+
+
+def _audit_airgap_network_dependencies(manifest: dict[str, Any]) -> None:
+    allowed = {
+        "docker",
+        "docker-model-runner",
+        "docker_model_runner",
+        "redis",
+        "mirrorneuron",
+    }
+    services = manifest.get("required_services")
+    if not isinstance(services, list):
+        return
+    blockers = []
+    for service in services:
+        if not isinstance(service, dict):
+            continue
+        name = str(service.get("name") or service.get("service") or "").strip()
+        url = str(service.get("url") or service.get("endpoint") or "").strip()
+        if name.lower() not in allowed and (
+            url.startswith("http://") or url.startswith("https://")
+        ) and not any(
+            token in url for token in ("127.0.0.1", "localhost", "host.docker.internal")
+        ):
+            blockers.append(name or url)
+    if blockers:
+        raise BackupRestoreError(
+            "Air-gapped export cannot materialize declared network services: "
+            + ", ".join(sorted(blockers))
+        )
+
+
+def _audit_airgap_model_dependencies(manifest: dict[str, Any]) -> None:
+    runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
+    models = runtime.get("models") if isinstance(runtime.get("models"), dict) else {}
+    missing_payloads: list[str] = []
+    for model_id, declaration in models.items():
+        if not isinstance(declaration, dict):
+            continue
+        source = (
+            declaration.get("source")
+            if isinstance(declaration.get("source"), dict)
+            else {}
+        )
+        if source.get("type") == "payload":
+            continue
+        model_name = str(
+            declaration.get("runtime_model")
+            or declaration.get("model")
+            or model_id
+        ).strip()
+        missing_payloads.append(f"{model_id} ({model_name})")
+    if missing_payloads:
+        raise BackupRestoreError(
+            "Air-gapped export requires every runtime model to have a physical "
+            "payload source under payloads/models. Missing payload sources: "
+            + ", ".join(sorted(missing_payloads))
+        )
+
+
+def _manifest_blob_refs(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    artifacts = metadata.get("mn_artifacts") if isinstance(metadata.get("mn_artifacts"), dict) else {}
+    refs = artifacts.get("blob_refs") if isinstance(artifacts.get("blob_refs"), list) else []
+    return [item for item in refs if isinstance(item, dict)]
+
+
+def _payload_model_paths(manifest: dict[str, Any]) -> set[str]:
+    runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
+    models = runtime.get("models") if isinstance(runtime.get("models"), dict) else {}
+    paths: set[str] = set()
+    for model in models.values():
+        source = model.get("source") if isinstance(model, dict) and isinstance(model.get("source"), dict) else {}
+        if source.get("type") == "payload" and source.get("path"):
+            paths.add(str(source["path"]).strip("/"))
+    return paths
+
+
+def _is_model_payload(payload_path: str, model_paths: set[str]) -> bool:
+    return any(
+        payload_path == model_path or payload_path.startswith(model_path.rstrip("/") + "/")
+        for model_path in model_paths
+    )
+
+
+def _write_bundle_map(root: Path, bundle_files: dict[str, bytes]) -> None:
+    (root / "payloads").mkdir(parents=True, exist_ok=True)
+    for relative, contents in bundle_files.items():
+        safe = _safe_archive_relative_path(relative)
+        target = root / Path(*PurePosixPath(safe).parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(contents)
+
+
+def _extract_member(zf: zipfile.ZipFile, member: str, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with zf.open(member) as source, target.open("wb") as destination:
+        while chunk := source.read(1024 * 1024):
+            destination.write(chunk)
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _zip_member_sha256(zf: zipfile.ZipFile, name: str) -> str:
+    digest = hashlib.sha256()
+    with zf.open(name) as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _restore_local_run_store(

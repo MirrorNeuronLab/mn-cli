@@ -387,6 +387,29 @@ def test_doctor_resolves_hostlocal_sources_from_persisted_skills_root(
     assert run_cmds._doctor_workspace_local_source(str(unrelated_source)) is None
 
 
+def test_doctor_resolves_bundle_payload_source_and_wheel_from_explicit_roots(
+    tmp_path,
+):
+    bundle_root = tmp_path / "bundle" / "payloads" / "skills"
+    source = bundle_root / "local-skill"
+    source.mkdir(parents=True)
+    source.joinpath("pyproject.toml").write_text(
+        "[project]\nname='local-skill'\nversion='1.0.0'\n",
+        encoding="utf-8",
+    )
+    wheel = bundle_root / "local-skill-1.0.0-py3-none-any.whl"
+    wheel.write_bytes(b"wheel fixture")
+
+    assert run_cmds._doctor_workspace_local_source(
+        str(source),
+        extra_roots=[bundle_root],
+    ) == source
+    assert run_cmds._doctor_workspace_local_source(
+        str(wheel),
+        extra_roots=[bundle_root],
+    ) == wheel
+
+
 def test_doctor_removes_partial_core_owned_python_environment_in_core(
     tmp_path,
     monkeypatch,

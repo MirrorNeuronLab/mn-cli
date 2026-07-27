@@ -42,6 +42,8 @@ The CLI owns:
 - local process, Docker, Redis, sidecar, and cluster service orchestration; and
 - pre-submission preparation of job-scoped OpenShell sandboxes and their
   concrete runtime configuration; and
+- streaming blueprint payloads into content-addressed storage, preparing local
+  payload models, and building/restoring `mn.backup.v2` air-gap capsules; and
 - conversion of SDK/runtime failures into actionable terminal errors.
 
 The CLI delegates reusable manifest conversion, submission preparation, model
@@ -78,6 +80,10 @@ those contracts.
 - Stable-job archive retains shared data. Job-data reset, terminal-run delete,
   and permanent job delete require confirmation. Run cleanup must never be
   presented as deleting stable job data.
+- Air-gapped backup fails closed when a dependency, blob, model source, or
+  required image cannot be materialized. Restore verifies checksums and the
+  recorded operating system, architecture, Python implementation, and ABI
+  before mutation.
 
 ## Stable Job/Run Contract
 

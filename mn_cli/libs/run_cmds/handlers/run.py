@@ -221,6 +221,13 @@ def run_bundle(
             manifest_file,
             manifest_dict,
         )
+        airgap = hydrate_extracted_airgap(bundle_dir, manifest_dict)
+        if airgap.get("air_gapped"):
+            env_overrides.update(
+                offline_environment(airgap.get("wheelhouse") or None)
+            )
+        else:
+            hydrate_payload_models(bundle_dir, manifest_dict)
 
         _ensure_local_run_store_identity(
             bundle_dir,
