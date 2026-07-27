@@ -356,6 +356,37 @@ def test_doctor_stages_local_hostlocal_packages_outside_read_only_source(
     assert not any(source.glob("*.egg-info"))
 
 
+def test_doctor_resolves_hostlocal_sources_from_persisted_skills_root(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    skills_root = workspace / "mn-skills"
+    skill_source = skills_root / "web-ui-skill"
+    sdk_source = workspace / "mn-python-sdk"
+    unrelated_source = tmp_path / "unrelated"
+    for source in (skill_source, sdk_source, unrelated_source):
+        source.mkdir(parents=True)
+        source.joinpath("pyproject.toml").write_text(
+            "[project]\nname='local-package'\nversion='1.0.0'\n",
+            encoding="utf-8",
+        )
+
+    mn_home = Path(os.environ["MN_HOME"])
+    mn_home.mkdir(parents=True)
+    mn_home.joinpath("docker-compose.env").write_text(
+        f"MN_SKILLS_ROOT={skills_root}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("MN_WORKSPACE_ROOT", raising=False)
+    monkeypatch.delenv("MN_SKILLS_ROOT", raising=False)
+    monkeypatch.delenv("MN_AGENTS_ROOT", raising=False)
+
+    assert run_cmds._doctor_workspace_local_source(str(skill_source)) == skill_source
+    assert run_cmds._doctor_workspace_local_source(str(sdk_source)) == sdk_source
+    assert run_cmds._doctor_workspace_local_source(str(unrelated_source)) is None
+
+
 def test_doctor_removes_partial_core_owned_python_environment_in_core(
     tmp_path,
     monkeypatch,

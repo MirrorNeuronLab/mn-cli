@@ -801,23 +801,55 @@ def _doctor_local_source_digest(source: Path) -> str:
 
 def _doctor_workspace_local_source(package: str) -> Path | None:
     runtime_config = RuntimeConfig.from_env()
-    workspace_value = str(
-        os.getenv("MN_WORKSPACE_ROOT")
-        or runtime_config.runtime_env.get("MN_WORKSPACE_ROOT")
-        or ""
-    ).strip()
     candidate = Path(package).expanduser()
-    if not workspace_value or not candidate.is_absolute() or not candidate.is_dir():
+    if not candidate.is_absolute() or not candidate.is_dir():
         return None
-    workspace = Path(workspace_value).expanduser().resolve()
     source = candidate.resolve()
-    try:
-        source.relative_to(workspace)
-    except ValueError:
+    trusted_roots = _doctor_local_source_roots(runtime_config)
+    if not any(_doctor_path_is_within(source, root) for root in trusted_roots):
         return None
     if not source.joinpath("pyproject.toml").is_file():
         return None
     return source
+
+
+def _doctor_local_source_roots(runtime_config: RuntimeConfig) -> list[Path]:
+    def configured(name: str) -> str:
+        return str(
+            os.getenv(name)
+            or runtime_config.runtime_env.get(name)
+            or ""
+        ).strip()
+
+    roots: list[Path] = []
+    workspace_value = configured("MN_WORKSPACE_ROOT")
+    if workspace_value:
+        roots.append(Path(workspace_value).expanduser().resolve())
+
+    dependency_roots: list[Path] = []
+    for name in ("MN_SKILLS_ROOT", "MN_AGENTS_ROOT"):
+        value = configured(name)
+        if value:
+            dependency_roots.append(Path(value).expanduser().resolve())
+    roots.extend(dependency_roots)
+
+    # Development installs often persist only MN_SKILLS_ROOT. Its parent is the
+    # workspace containing sibling mn-python-sdk and mn-agents checkouts.
+    for dependency_root in dependency_roots:
+        if (
+            dependency_root.name in {"mn-skills", "mn-agents"}
+            and dependency_root.parent != Path(dependency_root.anchor)
+        ):
+            roots.append(dependency_root.parent)
+    return list(dict.fromkeys(roots))
+
+
+def _doctor_path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
 
 
 def _doctor_remove_shared_cache_path(
