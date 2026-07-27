@@ -40,6 +40,8 @@ The CLI owns:
 - interactive confirmations and human-readable rendering;
 - plain/machine-readable terminal behavior;
 - local process, Docker, Redis, sidecar, and cluster service orchestration; and
+- pre-submission preparation of job-scoped OpenShell sandboxes and their
+  concrete runtime configuration; and
 - conversion of SDK/runtime failures into actionable terminal errors.
 
 The CLI delegates reusable manifest conversion, submission preparation, model

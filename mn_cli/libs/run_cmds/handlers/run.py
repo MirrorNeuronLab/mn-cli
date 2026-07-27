@@ -401,7 +401,11 @@ def run_bundle(
             )
         if force:
             _mark_manifest_force(manifest_dict)
-        _prepare_openshell_custom_images(bundle_dir, manifest_dict)
+        _prepare_openshell_custom_images(
+            bundle_dir,
+            manifest_dict,
+            shared_sandbox_job_id=str(job_id or blueprint_run_id or "") or None,
+        )
 
         payloads = _stage_bundle_payloads(bundle_dir, manifest_dict)
 

@@ -6,6 +6,7 @@ from mn_sdk.submission_preparation import (
     _requirements_text,
     _safe_dependency_source_name,
 )
+from mn_cli.runtime_state import mn_home, read_env_file
 
 OPENSHELL_RUNNER_MODULES = {
     "MirrorNeuron.Runner.OpenShell",
@@ -13,7 +14,10 @@ OPENSHELL_RUNNER_MODULES = {
 }
 
 def _prepare_openshell_custom_images(
-    bundle_dir: Path, manifest_dict: dict[str, Any]
+    bundle_dir: Path,
+    manifest_dict: dict[str, Any],
+    *,
+    shared_sandbox_job_id: str | None = None,
 ) -> None:
     nodes = manifest_nodes(manifest_dict)
     flow = manifest_dict.get("flow") if isinstance(manifest_dict.get("flow"), dict) else {}
@@ -41,22 +45,39 @@ def _prepare_openshell_custom_images(
         else:
             source_path = _openshell_local_from_path(bundle_dir, config.get("from"))
 
-        if source_path is None:
-            continue
+        if source_path is not None:
+            build_source = _openshell_skill_dependency_context(source_path, manifest_dict)
+            try:
+                config["from"] = _build_openshell_from_image(
+                    build_source, node.get("node_id") or "openshell"
+                )
+            finally:
+                if build_source != source_path:
+                    shutil.rmtree(build_source, ignore_errors=True)
 
-        build_source = _openshell_skill_dependency_context(source_path, manifest_dict)
-        try:
-            config["from"] = _build_openshell_from_image(
-                build_source, node.get("node_id") or "openshell"
+        if shared_sandbox_job_id and config.get("reuse_shared_sandbox") is True:
+            _prepare_openshell_shared_sandbox(
+                bundle_dir,
+                config,
+                job_id=shared_sandbox_job_id,
+                node_id=node.get("node_id") or "openshell",
             )
-        finally:
-            if build_source != source_path:
-                shutil.rmtree(build_source, ignore_errors=True)
 
 def _openshell_gateway_endpoint() -> str:
     configured_endpoint = os.getenv("OPENSHELL_GATEWAY_ENDPOINT")
     if configured_endpoint:
         return configured_endpoint
+
+    configured_gateway = os.getenv("OPENSHELL_GATEWAY", "").strip()
+    if configured_gateway:
+        metadata = _openshell_gateway_metadata(configured_gateway)
+        endpoint = metadata.get("gateway_endpoint")
+        if isinstance(endpoint, str) and endpoint.strip():
+            return endpoint.strip()
+
+    runtime_endpoint = _openshell_runtime_gateway_endpoint()
+    if runtime_endpoint:
+        return runtime_endpoint
 
     gateway_name = _openshell_gateway_name()
     if gateway_name:
@@ -72,12 +93,26 @@ def _openshell_env() -> dict[str, str]:
     if env.get("OPENSHELL_GATEWAY_ENDPOINT"):
         return env
 
+    if env.get("OPENSHELL_GATEWAY", "").strip():
+        return env
+
+    runtime_endpoint = _openshell_runtime_gateway_endpoint()
+    if runtime_endpoint:
+        env["OPENSHELL_GATEWAY_ENDPOINT"] = runtime_endpoint
+        env.pop("OPENSHELL_GATEWAY", None)
+        return env
+
     gateway_name = _openshell_gateway_name(env=env)
     if gateway_name:
         env.setdefault("OPENSHELL_GATEWAY", gateway_name)
     else:
         env.setdefault("OPENSHELL_GATEWAY_ENDPOINT", _openshell_gateway_endpoint())
     return env
+
+def _openshell_runtime_gateway_endpoint() -> str:
+    runtime_env = read_env_file(mn_home() / "docker-compose.env")
+    endpoint = runtime_env.get("OPENSHELL_GATEWAY_ENDPOINT", "").strip()
+    return endpoint
 
 def _openshell_config_dir() -> Path:
     return Path(
@@ -139,6 +174,100 @@ def _openshell_local_from_path(bundle_dir: Path, source: Any) -> Path | None:
         if candidate.is_file() and candidate.name == "Dockerfile":
             return candidate
     return None
+
+def _prepare_openshell_shared_sandbox(
+    bundle_dir: Path,
+    config: dict[str, Any],
+    *,
+    job_id: str,
+    node_id: Any,
+) -> None:
+    sandbox_name = _openshell_shared_sandbox_name(job_id)
+    env = _openshell_env()
+    existing = subprocess.run(
+        ["openshell", "sandbox", "get", sandbox_name],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if existing.returncode != 0:
+        command = [
+            "openshell",
+            "sandbox",
+            "create",
+            "--name",
+            sandbox_name,
+        ]
+        if config.get("gpu") is True:
+            command.append("--gpu")
+        for option, value in (
+            ("--from", config.get("from")),
+            ("--remote", config.get("remote")),
+            ("--ssh-key", config.get("ssh_key")),
+        ):
+            if isinstance(value, str) and value.strip():
+                command.extend([option, value.strip()])
+        policy = _openshell_policy_path(bundle_dir, config.get("policy"))
+        if policy is not None:
+            command.extend(["--policy", str(policy)])
+        for provider in config.get("providers") or []:
+            if isinstance(provider, str) and provider.strip():
+                command.extend(["--provider", provider.strip()])
+        if config.get("no_auto_providers", True) is True:
+            command.append("--no-auto-providers")
+        command.extend(
+            [
+                "--no-tty",
+                "--",
+                "bash",
+                "-lc",
+                "mkdir -p /sandbox/job && true",
+            ]
+        )
+        created = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        if created.returncode != 0:
+            detail = (created.stderr or created.stdout).strip()
+            console.print(
+                f"[red]Failed to prepare shared OpenShell sandbox for {node_id}.[/red]"
+            )
+            if detail:
+                console.print(detail)
+            raise typer.Exit(1)
+
+    config["sandbox_name"] = sandbox_name
+    config["ssh_host"] = f"openshell-{sandbox_name}"
+
+def _openshell_shared_sandbox_name(job_id: str) -> str:
+    raw_job_id = str(job_id).strip() or "job"
+    base = re.sub(
+        r"[^a-z0-9-]",
+        "-",
+        f"mirror-neuron-job-{raw_job_id}".lower(),
+    ).strip("-")
+    digest = hashlib.sha256(raw_job_id.encode("utf-8")).hexdigest()[:10]
+    suffix = f"-{digest}"
+    return f"{base[: max(63 - len(suffix), 1)].rstrip('-')}{suffix}"
+
+def _openshell_policy_path(bundle_dir: Path, source: Any) -> Path | None:
+    if not isinstance(source, str) or not source.strip():
+        return None
+    raw = Path(source.strip()).expanduser()
+    candidates = (
+        [raw]
+        if raw.is_absolute()
+        else [bundle_dir / "payloads" / raw, bundle_dir / raw]
+    )
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved.is_file():
+            return resolved
+    console.print(f"[red]OpenShell policy file was not found: {source}[/red]")
+    raise typer.Exit(1)
 
 def _openshell_skill_dependency_context(source_path: Path, manifest: dict[str, Any]) -> Path:
     requirements_text = gar_requirements_text(manifest)

@@ -53,6 +53,57 @@ def test_openshell_env_prefers_active_gateway_metadata(tmp_path, monkeypatch):
     assert "OPENSHELL_GATEWAY_ENDPOINT" not in env
     assert run_cmds._openshell_gateway_endpoint() == "https://127.0.0.1:8080"
 
+def test_openshell_env_prefers_managed_runtime_over_auto_selected_gateway(
+    tmp_path, monkeypatch
+):
+    mn_home = tmp_path / "mn-home"
+    mn_home.mkdir()
+    (mn_home / "docker-compose.env").write_text(
+        "OPENSHELL_GATEWAY_ENDPOINT=http://127.0.0.1:58080\n",
+        encoding="utf-8",
+    )
+    config_dir = tmp_path / "openshell-config"
+    gateway_dir = config_dir / "gateways" / "openshell"
+    gateway_dir.mkdir(parents=True)
+    (config_dir / "active_gateway").write_text("openshell\n", encoding="utf-8")
+    (gateway_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "name": "openshell",
+                "gateway_endpoint": "https://127.0.0.1:17670",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MN_HOME", str(mn_home))
+    monkeypatch.setenv("OPENSHELL_CONFIG_DIR", str(config_dir))
+    monkeypatch.delenv("OPENSHELL_GATEWAY", raising=False)
+    monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
+
+    env = run_cmds._openshell_env()
+
+    assert env["OPENSHELL_GATEWAY_ENDPOINT"] == "http://127.0.0.1:58080"
+    assert "OPENSHELL_GATEWAY" not in env
+    assert run_cmds._openshell_gateway_endpoint() == "http://127.0.0.1:58080"
+
+def test_openshell_env_respects_explicit_gateway_over_managed_runtime(
+    tmp_path, monkeypatch
+):
+    mn_home = tmp_path / "mn-home"
+    mn_home.mkdir()
+    (mn_home / "docker-compose.env").write_text(
+        "OPENSHELL_GATEWAY_ENDPOINT=http://127.0.0.1:58080\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MN_HOME", str(mn_home))
+    monkeypatch.setenv("OPENSHELL_GATEWAY", "remote-team-gateway")
+    monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
+
+    env = run_cmds._openshell_env()
+
+    assert env["OPENSHELL_GATEWAY"] == "remote-team-gateway"
+    assert "OPENSHELL_GATEWAY_ENDPOINT" not in env
+
 def test_run_prebuilds_custom_openshell_image_from_payload_directory(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     monkeypatch.setenv("OPENSHELL_CONFIG_DIR", str(tmp_path / "openshell-config"))
@@ -145,6 +196,63 @@ def test_run_prebuilds_legacy_openshell_from_directory(mocker, tmp_path, monkeyp
     assert result.exit_code == 0
     manifest = json.loads(mock_submit.call_args.args[0])
     assert manifest["nodes"][0]["config"]["from"] == "openshell/sandbox-from:456"
+
+def test_prepare_openshell_shared_sandbox_injects_prepared_runtime_config(
+    mocker, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("OPENSHELL_CONFIG_DIR", str(tmp_path / "openshell-config"))
+    monkeypatch.delenv("OPENSHELL_GATEWAY", raising=False)
+    monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
+    policy = tmp_path / "run_bundle" / "payloads" / "openshell-policy.yaml"
+    policy.parent.mkdir(parents=True)
+    policy.write_text("network:\\n  outbound: deny\\n", encoding="utf-8")
+    config = {
+        "runner_module": "MirrorNeuron.Runner.OpenShell",
+        "from": "openshell/sandbox-from:prepared",
+        "policy": "openshell-policy.yaml",
+        "reuse_shared_sandbox": True,
+    }
+    manifest = {"nodes": [{"node_id": "autonomous", "config": config}]}
+    mock_run = mocker.patch(
+        "mn_cli.libs.run_cmds.subprocess.run",
+        side_effect=[
+            subprocess.CompletedProcess(["openshell"], 1, "", "not found"),
+            subprocess.CompletedProcess(["openshell"], 0, "created", ""),
+        ],
+    )
+
+    run_cmds._prepare_openshell_custom_images(
+        tmp_path / "run_bundle",
+        manifest,
+        shared_sandbox_job_id="research-job",
+    )
+
+    sandbox_name = config["sandbox_name"]
+    assert sandbox_name.startswith("mirror-neuron-job-research-job-")
+    assert len(sandbox_name) <= 63
+    assert config["ssh_host"] == f"openshell-{sandbox_name}"
+    assert mock_run.call_args_list[0].args[0] == [
+        "openshell",
+        "sandbox",
+        "get",
+        sandbox_name,
+    ]
+    create_command = mock_run.call_args_list[1].args[0]
+    assert create_command[:5] == [
+        "openshell",
+        "sandbox",
+        "create",
+        "--name",
+        sandbox_name,
+    ]
+    assert create_command[create_command.index("--from") + 1] == (
+        "openshell/sandbox-from:prepared"
+    )
+    assert create_command[create_command.index("--policy") + 1] == str(policy)
+    assert "--no-auto-providers" in create_command
+    assert mock_run.call_args_list[1].kwargs["env"][
+        "OPENSHELL_GATEWAY_ENDPOINT"
+    ] == "http://127.0.0.1:58080"
 
 def test_openshell_skill_dependency_context_injects_pinned_gar_install(tmp_path):
     sandbox_dir = tmp_path / "openshell_sandbox"

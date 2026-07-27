@@ -220,6 +220,9 @@ snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
 - Docker workers receive a worker-reachable model-control target and use the
   SDK to select the best cluster node independently for LLM and for model
   specifications supplied at runtime by RAG and OCR skills.
+- OpenShell workers that reuse a job-scoped sandbox are prepared before
+  submission; the submitted node receives the concrete sandbox name and SSH
+  host instead of asking Core to create host resources.
 - `default` is a LiteLLM model group, not a concrete model: it prefers
   `nemotron3` and falls back to `gemma4:e2b` when no healthy node can run
   Nemotron. The existing cluster model monitor
