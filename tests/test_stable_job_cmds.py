@@ -26,7 +26,9 @@ def test_delete_cleans_every_historical_run_and_definition_resources(monkeypatch
         ),
     )
     monkeypatch.setattr(
-        stable_job_cmds, "_cleanup_cleared_job_resources", cleaned.append
+        stable_job_cmds,
+        "cleanup_cleared_job_resources",
+        lambda job_id, **_kwargs: cleaned.append(job_id),
     )
     monkeypatch.setattr(
         stable_job_cmds.console,

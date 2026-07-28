@@ -17,10 +17,18 @@ from mn_cli.libs.blueprint_resources import (
     default_generated_bundles_dir,
 )
 
+_RESOURCE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
 
 def cleanup_cancelled_job_resources(
     job_id: str, *, runtime_client: Any, log: Any
 ) -> None:
+    original_job_id = job_id
+    job_id = _validated_resource_id(job_id)
+    if job_id is None:
+        log.warning("Refusing local cleanup for invalid job ID: %r", original_job_id)
+        return
+
     summary = {"process_removed": [], "process_skipped": [], "errors": []}
     run_id = blueprint_run_id_for_job(job_id, runtime_client=runtime_client)
     if run_id:
@@ -41,7 +49,13 @@ def cleanup_cancelled_job_resources(
 def cleanup_cleared_job_resources(
     job_id: str, *, runtime_client: Any, log: Any
 ) -> None:
-    if not job_id:
+    original_job_id = job_id
+    job_id = _validated_resource_id(job_id)
+    if job_id is None:
+        if original_job_id:
+            log.warning(
+                "Refusing local cleanup for invalid job ID: %r", original_job_id
+            )
         return
 
     run_id = blueprint_run_id_for_job(job_id, runtime_client=runtime_client)
@@ -74,6 +88,10 @@ def cleanup_cleared_job_resources(
 
 
 def blueprint_run_id_for_job(job_id: str, *, runtime_client: Any) -> str | None:
+    job_id = _validated_resource_id(job_id)
+    if job_id is None:
+        return None
+
     run_id = blueprint_run_id_from_run_store(job_id)
     if run_id:
         return run_id
@@ -83,27 +101,31 @@ def blueprint_run_id_for_job(job_id: str, *, runtime_client: Any) -> str | None:
         try:
             snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
             run_id = snapshot.get("run_id")
-            if isinstance(run_id, str) and run_id:
-                return run_id
+            if validated_run_id := _validated_resource_id(run_id):
+                return validated_run_id
         except (OSError, json.JSONDecodeError):
             pass
 
     try:
         job = json.loads(runtime_client.get_job(job_id))
-    except Exception:
+    except Exception:  # noqa: BLE001 - transport implementations expose different errors
         return None
 
-    metadata = (((job.get("job") or {}).get("manifest") or {}).get("metadata") or {})
+    metadata = ((job.get("job") or {}).get("manifest") or {}).get("metadata") or {}
     mn_cli_metadata = metadata.get("mn_cli") if isinstance(metadata, dict) else {}
     run_id = (
         mn_cli_metadata.get("blueprint_run_id")
         if isinstance(mn_cli_metadata, dict)
         else None
     )
-    return run_id if isinstance(run_id, str) and run_id else None
+    return _validated_resource_id(run_id)
 
 
 def blueprint_run_id_from_run_store(job_id: str) -> str | None:
+    job_id = _validated_resource_id(job_id)
+    if job_id is None:
+        return None
+
     runs_root = default_runs_root()
     if not runs_root.is_dir():
         return None
@@ -116,7 +138,7 @@ def blueprint_run_id_from_run_store(job_id: str) -> str | None:
 
         if payload.get("job_id") == job_id:
             run_id = payload.get("run_id") or job_file.parent.name
-            return run_id if isinstance(run_id, str) and run_id else None
+            return _validated_resource_id(run_id)
 
     return None
 
@@ -224,7 +246,10 @@ def cleanup_prepared_openshell_sandbox(
 
 
 def openshell_sandbox_name(job_id: str) -> str:
-    raw_job_id = str(job_id).strip() or "job"
+    raw_job_id = _validated_resource_id(job_id)
+    if raw_job_id is None:
+        raise ValueError(f"invalid job ID: {job_id!r}")
+
     base = re.sub(
         r"[^a-z0-9-]",
         "-",
@@ -233,3 +258,11 @@ def openshell_sandbox_name(job_id: str) -> str:
     digest = hashlib.sha256(raw_job_id.encode("utf-8")).hexdigest()[:10]
     suffix = f"-{digest}"
     return f"{base[: max(63 - len(suffix), 1)]}{suffix}"
+
+
+def _validated_resource_id(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+
+    resource_id = value.strip()
+    return resource_id if _RESOURCE_ID_PATTERN.fullmatch(resource_id) else None

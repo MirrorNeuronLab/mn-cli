@@ -9,6 +9,7 @@ from rich.console import Console
 import typer
 
 import mn_cli.libs.job_cmds as job_cmds
+import mn_cli.libs.job_cleanup as job_cleanup
 import mn_cli.libs.operation_cmds as operation_cmds
 
 
@@ -102,13 +103,23 @@ def test_clear_resource_cleanup_deletes_prepared_openshell_sandbox(monkeypatch):
         calls.append(command)
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-    monkeypatch.setattr(job_cmds.subprocess, "run", run)
-    monkeypatch.setattr(job_cmds, "cleanup_docker_worker_services", lambda **_kwargs: None)
-    monkeypatch.setattr(job_cmds, "_blueprint_run_id_for_job", lambda _job_id: None)
+    monkeypatch.setattr(job_cleanup.subprocess, "run", run)
+    monkeypatch.setattr(
+        job_cleanup, "cleanup_docker_worker_services", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(
+        job_cleanup,
+        "blueprint_run_id_for_job",
+        lambda _job_id, **_kwargs: None,
+    )
 
-    job_cmds._cleanup_cleared_job_resources("run-1")
+    job_cleanup.cleanup_cleared_job_resources(
+        "run-1",
+        runtime_client=SimpleNamespace(),
+        log=SimpleNamespace(warning=lambda *_args, **_kwargs: None),
+    )
 
-    sandbox_name = job_cmds._openshell_sandbox_name("run-1")
+    sandbox_name = job_cleanup.openshell_sandbox_name("run-1")
     assert calls[0][-3:] == ["sandbox", "get", sandbox_name]
     assert calls[1][-3:] == ["sandbox", "delete", sandbox_name]
     assert calls[2][0:3] == ["docker", "ps", "-a"]
@@ -124,26 +135,61 @@ def test_clear_resource_cleanup_removes_run_and_generated_bundle_files(
     run_dir.mkdir(parents=True)
     generated_dir.mkdir(parents=True)
 
-    monkeypatch.setattr(job_cmds, "default_runs_root", lambda: runs_root)
+    monkeypatch.setattr(job_cleanup, "default_runs_root", lambda: runs_root)
     monkeypatch.setattr(
-        job_cmds, "default_generated_bundles_dir", lambda: generated_root
+        job_cleanup, "default_generated_bundles_dir", lambda: generated_root
     )
     monkeypatch.setattr(
-        job_cmds,
-        "_blueprint_run_id_for_job",
-        lambda _job_id: "blueprint-run-1",
+        job_cleanup,
+        "blueprint_run_id_for_job",
+        lambda _job_id, **_kwargs: "blueprint-run-1",
     )
     monkeypatch.setattr(
-        job_cmds, "_cleanup_cancelled_job_web_ui", lambda _job_id: None
+        job_cleanup,
+        "cleanup_cancelled_job_resources",
+        lambda _job_id, **_kwargs: None,
     )
     monkeypatch.setattr(
-        job_cmds, "cleanup_docker_worker_services", lambda **_kwargs: None
+        job_cleanup, "cleanup_docker_worker_services", lambda **_kwargs: None
     )
 
-    job_cmds._cleanup_cleared_job_resources("run-1")
+    job_cleanup.cleanup_cleared_job_resources(
+        "run-1",
+        runtime_client=SimpleNamespace(),
+        log=SimpleNamespace(warning=lambda *_args, **_kwargs: None),
+    )
 
     assert not run_dir.exists()
     assert not generated_dir.exists()
+
+
+def test_clear_resource_cleanup_rejects_unsafe_job_id(monkeypatch):
+    warnings = []
+    monkeypatch.setattr(
+        job_cleanup.shutil,
+        "rmtree",
+        lambda *_args, **_kwargs: pytest.fail("unsafe path must not be removed"),
+    )
+    monkeypatch.setattr(
+        job_cleanup.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("unsafe resource must not be queried"),
+    )
+    monkeypatch.setattr(
+        job_cleanup,
+        "cleanup_docker_worker_services",
+        lambda **_kwargs: pytest.fail("unsafe resource must not be queried"),
+    )
+
+    job_cleanup.cleanup_cleared_job_resources(
+        "../../escape",
+        runtime_client=SimpleNamespace(),
+        log=SimpleNamespace(
+            warning=lambda message, *args, **_kwargs: warnings.append(message % args)
+        ),
+    )
+
+    assert warnings == ["Refusing local cleanup for invalid job ID: '../../escape'"]
 
 
 def test_clear_reports_admin_token_mismatch(monkeypatch):

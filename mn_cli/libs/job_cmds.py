@@ -1,5 +1,4 @@
 import json
-import subprocess
 import grpc
 from pathlib import Path
 from typing import Annotated
@@ -12,8 +11,6 @@ from mn_cli.libs.job_cleanup import (
     blueprint_run_id_from_run_store,
     cleanup_cancelled_job_resources,
     cleanup_cleared_job_resources,
-    cleanup_local_openshell_sandboxes as _cleanup_local_openshell_sandboxes,
-    openshell_sandbox_name as _openshell_sandbox_name,
 )
 from mn_cli.libs.blueprint_observability import load_observability_tools
 from mn_cli.libs.operation_cmds import start_and_watch
