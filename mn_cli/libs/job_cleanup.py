@@ -20,22 +20,31 @@ from mn_cli.libs.blueprint_resources import (
 _RESOURCE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
+class JobResourceCleanupError(RuntimeError):
+    """Raised when a cleared job still has adapter-owned local resources."""
+
+
 def cleanup_cancelled_job_resources(
     job_id: str, *, runtime_client: Any, log: Any
-) -> None:
+) -> dict[str, list[str]]:
+    summary: dict[str, list[str]] = {
+        "process_removed": [],
+        "process_skipped": [],
+        "errors": [],
+    }
     original_job_id = job_id
     job_id = _validated_resource_id(job_id)
     if job_id is None:
         log.warning(
             "Refusing local cleanup for invalid job ID: %r", original_job_id
         )
-        return
+        summary["errors"].append(f"invalid job ID: {original_job_id!r}")
+        return summary
 
-    summary = {"process_removed": [], "process_skipped": [], "errors": []}
     run_id = blueprint_run_id_for_job(job_id, runtime_client=runtime_client)
     if run_id:
         run_dir = default_runs_root() / run_id
-        if run_dir.is_dir():
+        if run_dir.is_dir() and not run_dir.is_symlink():
             cleanup_blueprint_host_hooks(
                 run_dir, dry_run=False, summary=summary, reason="job_cancelled"
             )
@@ -46,6 +55,7 @@ def cleanup_cancelled_job_resources(
     cleanup_local_openshell_sandboxes(job_id, summary)
     for error in summary["errors"]:
         log.warning("Failed to cleanup local resources for job %s: %s", job_id, error)
+    return summary
 
 
 def cleanup_cleared_job_resources(
@@ -58,13 +68,22 @@ def cleanup_cleared_job_resources(
             log.warning(
                 "Refusing local cleanup for invalid job ID: %r", original_job_id
             )
-        return
+        raise JobResourceCleanupError(f"invalid job ID: {original_job_id!r}")
 
     run_id = blueprint_run_id_for_job(job_id, runtime_client=runtime_client)
-    cleanup_cancelled_job_resources(job_id, runtime_client=runtime_client, log=log)
+    cancelled_summary = (
+        cleanup_cancelled_job_resources(
+            job_id, runtime_client=runtime_client, log=log
+        )
+        or {}
+    )
+    errors = list(cancelled_summary.get("errors") or [])
     try:
-        cleanup_docker_worker_services(job_id=job_id)
-    except Exception:
+        docker_result = cleanup_docker_worker_services(job_id=job_id)
+        if isinstance(docker_result, dict):
+            errors.extend(str(error) for error in docker_result.get("errors") or [])
+    except Exception as error:
+        errors.append(f"DockerWorker cleanup failed: {error}")
         log.warning(
             "Failed to cleanup DockerWorker resources for cleared job %s",
             job_id,
@@ -82,11 +101,20 @@ def cleanup_cleared_job_resources(
 
     for path in paths:
         try:
-            shutil.rmtree(path)
+            if path.is_symlink():
+                path.unlink()
+            else:
+                shutil.rmtree(path)
         except FileNotFoundError:
             pass
-        except OSError:
+        except OSError as error:
+            errors.append(f"failed to remove {path}: {error}")
             log.warning("Failed to remove cleared job path %s", path, exc_info=True)
+
+    if errors:
+        raise JobResourceCleanupError(
+            f"local cleanup incomplete for {job_id}: {'; '.join(errors)}"
+        )
 
 
 def blueprint_run_id_for_job(job_id: str, *, runtime_client: Any) -> str | None:

@@ -8,7 +8,7 @@ import typer
 
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.bundles import read_bundle
-from mn_cli.libs.job_cleanup import cleanup_cleared_job_resources
+from mn_cli.libs.job_cleanup import JobResourceCleanupError, cleanup_cleared_job_resources
 from mn_cli.libs.ui import print_success_confirmation
 from mn_cli.shared import client, console, logger
 
@@ -102,10 +102,23 @@ def delete(
         return
     try:
         run_ids = _stable_job_run_ids(job_id)
+        cleanup_errors = []
+        for resource_id in [*run_ids, job_id]:
+            try:
+                cleanup_cleared_job_resources(
+                    resource_id, runtime_client=client, log=logger
+                )
+            except JobResourceCleanupError as error:
+                cleanup_errors.append(str(error))
+        if cleanup_errors:
+            raise JobResourceCleanupError("; ".join(cleanup_errors))
+
         result = json.loads(client.delete_stable_job(job_id, confirmed=True))
-        for run_id in run_ids:
-            cleanup_cleared_job_resources(run_id, runtime_client=client, log=logger)
-        cleanup_cleared_job_resources(job_id, runtime_client=client, log=logger)
+        cleanup_errors = [
+            str(error) for error in result.get("resource_cleanup_errors") or []
+        ]
+        if cleanup_errors:
+            raise JobResourceCleanupError("; ".join(cleanup_errors))
         console.print_json(data=result)
     except Exception as exc:
         handle_cli_error(exc, console, "job delete")

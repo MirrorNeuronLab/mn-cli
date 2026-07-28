@@ -34,13 +34,17 @@ def _capture_console(monkeypatch):
 
 
 def _operation_client(final_operation, events=(), **methods):
+    client_methods = {
+        "list_jobs": lambda **_kwargs: json.dumps({"data": []}),
+        **methods,
+    }
     return SimpleNamespace(
         start_operation=lambda _kind, _options: json.dumps(
             {"operation_id": "op-test", "target_count": final_operation.get("counters", {}).get("total", 0)}
         ),
         stream_operation_events=lambda _operation_id, **_kwargs: iter(events),
         get_operation=lambda _operation_id: json.dumps(final_operation),
-        **methods,
+        **client_methods,
     )
 
 
@@ -94,6 +98,94 @@ def test_clear_cleans_local_resources_for_each_cleared_job(monkeypatch):
     job_cmds.clear(yes=True)
 
     assert cleaned_up == ["run-1"]
+
+
+def test_clear_attempts_every_local_cleanup_before_reporting_failure(monkeypatch):
+    _capture_console(monkeypatch)
+    cleaned_up = []
+    handled_errors = []
+
+    def cleanup(job_id):
+        cleaned_up.append(job_id)
+        if job_id == "run-1":
+            raise job_cleanup.JobResourceCleanupError("sandbox is busy")
+
+    monkeypatch.setattr(job_cmds, "_cleanup_cleared_job_resources", cleanup)
+    monkeypatch.setattr(
+        job_cmds,
+        "handle_cli_error",
+        lambda error, _console, action: handled_errors.append((str(error), action)),
+    )
+    monkeypatch.setattr(
+        job_cmds,
+        "client",
+        _operation_client(
+            {
+                "operation_id": "op-test",
+                "status": "completed",
+                "counters": {
+                    "total": 2,
+                    "finished": 2,
+                    "succeeded": 2,
+                    "failed": 0,
+                    "deferred": 0,
+                },
+            },
+            [
+                json.dumps(
+                    {
+                        "type": "item_completed",
+                        "item_id": run_id,
+                        "status": "cleared",
+                    }
+                )
+                for run_id in ("run-1", "run-2")
+            ],
+        ),
+    )
+
+    job_cmds.clear(yes=True)
+
+    assert cleaned_up == ["run-1", "run-2"]
+    assert handled_errors == [("sandbox is busy", "clear")]
+
+
+def test_clear_does_not_delete_records_when_precleanup_fails(monkeypatch):
+    cleaned_up = []
+    handled_errors = []
+
+    def cleanup(job_id):
+        cleaned_up.append(job_id)
+        raise job_cleanup.JobResourceCleanupError("checkpoint is busy")
+
+    monkeypatch.setattr(job_cmds, "_cleanup_cleared_job_resources", cleanup)
+    monkeypatch.setattr(
+        job_cmds,
+        "handle_cli_error",
+        lambda error, _console, action: handled_errors.append((str(error), action)),
+    )
+    monkeypatch.setattr(
+        job_cmds,
+        "client",
+        SimpleNamespace(
+            list_jobs=lambda **_kwargs: json.dumps(
+                {
+                    "data": [
+                        {"job_id": "run-1", "status": "completed"},
+                        {"job_id": "run-active", "status": "running"},
+                    ]
+                }
+            ),
+            start_operation=lambda *_args, **_kwargs: pytest.fail(
+                "Core deletion must not start after local cleanup fails"
+            ),
+        ),
+    )
+
+    job_cmds.clear(yes=True)
+
+    assert cleaned_up == ["run-1"]
+    assert handled_errors == [("checkpoint is busy", "clear")]
 
 
 def test_clear_resource_cleanup_deletes_prepared_openshell_sandbox(monkeypatch):
@@ -181,15 +273,55 @@ def test_clear_resource_cleanup_rejects_unsafe_job_id(monkeypatch):
         lambda **_kwargs: pytest.fail("unsafe resource must not be queried"),
     )
 
-    job_cleanup.cleanup_cleared_job_resources(
-        "../../escape",
-        runtime_client=SimpleNamespace(),
-        log=SimpleNamespace(
-            warning=lambda message, *args, **_kwargs: warnings.append(message % args)
-        ),
-    )
+    with pytest.raises(job_cleanup.JobResourceCleanupError, match="invalid job ID"):
+        job_cleanup.cleanup_cleared_job_resources(
+            "../../escape",
+            runtime_client=SimpleNamespace(),
+            log=SimpleNamespace(
+                warning=lambda message, *args, **_kwargs: warnings.append(
+                    message % args
+                )
+            ),
+        )
 
     assert warnings == ["Refusing local cleanup for invalid job ID: '../../escape'"]
+
+
+def test_clear_resource_cleanup_fails_when_local_resources_remain(monkeypatch):
+    docker_cleanup = []
+    removed_paths = []
+    monkeypatch.setattr(
+        job_cleanup,
+        "blueprint_run_id_for_job",
+        lambda _job_id, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        job_cleanup,
+        "cleanup_cancelled_job_resources",
+        lambda _job_id, **_kwargs: {"errors": ["OpenShell sandbox is busy"]},
+    )
+    monkeypatch.setattr(
+        job_cleanup,
+        "cleanup_docker_worker_services",
+        lambda **kwargs: docker_cleanup.append(kwargs) or {"errors": []},
+    )
+    monkeypatch.setattr(
+        job_cleanup.shutil,
+        "rmtree",
+        lambda path: removed_paths.append(path),
+    )
+
+    with pytest.raises(
+        job_cleanup.JobResourceCleanupError, match="OpenShell sandbox is busy"
+    ):
+        job_cleanup.cleanup_cleared_job_resources(
+            "run-1",
+            runtime_client=SimpleNamespace(),
+            log=SimpleNamespace(warning=lambda *_args, **_kwargs: None),
+        )
+
+    assert docker_cleanup == [{"job_id": "run-1"}]
+    assert removed_paths == [job_cleanup.Path("/tmp/mn_run-1")]
 
 
 def test_openshell_cleanup_name_matches_long_prepared_sandbox_name():
@@ -213,7 +345,15 @@ def test_clear_reports_admin_token_mismatch(monkeypatch):
             "StartOperation requires MN_GRPC_ADMIN_TOKEN",
         )
 
-    monkeypatch.setattr(job_cmds, "client", SimpleNamespace(admin_token="local-admin-token", start_operation=start_operation))
+    monkeypatch.setattr(
+        job_cmds,
+        "client",
+        SimpleNamespace(
+            admin_token="local-admin-token",
+            list_jobs=lambda **_kwargs: json.dumps({"data": []}),
+            start_operation=start_operation,
+        ),
+    )
     monkeypatch.setattr(job_cmds, "config", SimpleNamespace(grpc_admin_token="local-admin-token"))
 
     job_cmds.clear(yes=True)
@@ -234,7 +374,15 @@ def test_clear_reports_missing_local_admin_token(monkeypatch):
             "StartOperation requires MN_GRPC_ADMIN_TOKEN",
         )
 
-    monkeypatch.setattr(job_cmds, "client", SimpleNamespace(admin_token="", start_operation=start_operation))
+    monkeypatch.setattr(
+        job_cmds,
+        "client",
+        SimpleNamespace(
+            admin_token="",
+            list_jobs=lambda **_kwargs: json.dumps({"data": []}),
+            start_operation=start_operation,
+        ),
+    )
     monkeypatch.setattr(job_cmds, "config", SimpleNamespace(grpc_admin_token=""))
 
     job_cmds.clear(yes=True)

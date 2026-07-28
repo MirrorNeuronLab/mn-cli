@@ -7,6 +7,7 @@ from rich.table import Table
 from mn_cli.shared import console, client, config, logger
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.job_cleanup import (
+    JobResourceCleanupError,
     blueprint_run_id_for_job,
     blueprint_run_id_from_run_store,
     cleanup_cancelled_job_resources,
@@ -115,6 +116,18 @@ def clear(
     yes: bool = typer.Option(False, "--yes", "-y", help="Clear terminal jobs without prompting."),
 ):
     """Remove terminal jobs and all runtime resources they own."""
+    cleanup_errors: list[str] = []
+
+    def cleanup_item(event: dict) -> None:
+        job_id = str(event.get("item_id") or "")
+        try:
+            _cleanup_cleared_job_resources(job_id)
+        except JobResourceCleanupError as error:
+            cleanup_errors.append(str(error))
+            event["status"] = "failed"
+            event["error"] = f"local runtime cleanup incomplete: {error}"
+            logger.error("Local cleanup failed for cleared job %s: %s", job_id, error)
+
     try:
         if not yes and not typer.confirm(
             "Clear all terminal jobs and their runtime resources?", default=False
@@ -122,16 +135,17 @@ def clear(
             print_confirmed(console, "Job clear", status="aborted")
             return
 
+        _cleanup_job_ids_or_raise(_terminal_job_ids())
         result = start_and_watch(
             "clear_jobs",
             {},
             action="Job clear",
-            on_accepted_item=lambda event: _cleanup_cleared_job_resources(
-                str(event.get("item_id") or "")
-            ),
+            on_accepted_item=cleanup_item,
             runtime_client=client,
         )
         logger.info("Finished clear operation %s", result.get("operation_id"))
+        if cleanup_errors:
+            raise JobResourceCleanupError("; ".join(cleanup_errors))
     except grpc.RpcError as e:
         if e.code() == grpc.StatusCode.PERMISSION_DENIED and "MN_GRPC_ADMIN_TOKEN" in str(e.details()):
             print_error(console, "ClearJobs admin authorization failed.")
@@ -240,6 +254,34 @@ def _cleanup_cancelled_job_web_ui(job_id: str) -> None:
 
 def _cleanup_cleared_job_resources(job_id: str) -> None:
     cleanup_cleared_job_resources(job_id, runtime_client=client, log=logger)
+
+
+def _cleanup_job_ids_or_raise(job_ids: list[str]) -> None:
+    errors = []
+    for job_id in job_ids:
+        try:
+            _cleanup_cleared_job_resources(job_id)
+        except JobResourceCleanupError as error:
+            errors.append(str(error))
+    if errors:
+        raise JobResourceCleanupError("; ".join(errors))
+
+
+def _terminal_job_ids() -> list[str]:
+    result = json.loads(
+        client.list_jobs(limit=_ALL_JOBS_LIMIT, include_terminal=True)
+    )
+    jobs = result.get("data") if isinstance(result, dict) else None
+    if not isinstance(jobs, list):
+        raise ValueError("runtime returned an invalid job list")
+    return [
+        job_id
+        for job in jobs
+        if isinstance(job, dict)
+        and job.get("status") in {"completed", "failed", "cancelled"}
+        and isinstance((job_id := job.get("job_id")), str)
+        and job_id
+    ]
 
 
 def _blueprint_run_id_for_job(job_id: str) -> str | None:

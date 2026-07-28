@@ -172,6 +172,9 @@ def _print_plain_event(
     if event_type == "stream_heartbeat":
         return
 
+    if on_accepted_item and _accepted_item_status(event.get("status")):
+        on_accepted_item(event)
+
     item_id = str(event.get("item_id") or "operation")
     status = str(event.get("status") or "")
 
@@ -180,13 +183,9 @@ def _print_plain_event(
     elif status == "failed":
         print_warning(console, f"{item_id}: {event.get('error') or 'operation item failed'}")
     elif status == "cancellation_pending":
-        if on_accepted_item:
-            on_accepted_item(event)
         print_info(console, f"{item_id}: cancellation accepted; cleanup queued on owner node")
     elif event_type in {"item_completed", "item_deferred"}:
         prefix = "✓" if status in _SUCCESS_ITEM_STATUSES else "→"
-        if on_accepted_item and _accepted_item_status(status):
-            on_accepted_item(event)
         console.print(f"{prefix} {item_id}: {status or 'completed'}")
 
 
