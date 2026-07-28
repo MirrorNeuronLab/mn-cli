@@ -116,7 +116,9 @@ def clear(
 ):
     """Remove terminal jobs and all runtime resources they own."""
     try:
-        if not yes and not typer.confirm("Clear all terminal job records?", default=False):
+        if not yes and not typer.confirm(
+            "Clear all terminal jobs and their runtime resources?", default=False
+        ):
             print_confirmed(console, "Job clear", status="aborted")
             return
 
