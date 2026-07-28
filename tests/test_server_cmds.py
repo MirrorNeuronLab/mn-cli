@@ -2707,6 +2707,49 @@ def test_compose_native_settings_persists_runtime_blueprint_env(mocker, tmp_path
     assert "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE=prepublished" in compose_env_text
 
 
+def test_compose_native_settings_migrates_openshell_loopback_endpoint_to_bind_host(
+    mocker, monkeypatch, tmp_path
+):
+    monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
+    compose_env = tmp_path / "docker-compose.env"
+    compose_env.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "OPENSHELL_GATEWAY_BIND_HOST=172.19.0.1\n"
+        "OPENSHELL_GATEWAY_PORT=58080\n"
+        "OPENSHELL_GATEWAY_ENDPOINT=http://127.0.0.1:58080\n"
+    )
+    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+
+    env = server_cmds._ensure_compose_native_port_settings(
+        {
+            "OPENSHELL_GATEWAY_BIND_HOST": "172.19.0.1",
+            "OPENSHELL_GATEWAY_PORT": "58080",
+            "OPENSHELL_GATEWAY_ENDPOINT": "http://127.0.0.1:58080",
+        }
+    )
+
+    assert env["OPENSHELL_GATEWAY_ENDPOINT"] == "http://172.19.0.1:58080"
+    assert "OPENSHELL_GATEWAY_ENDPOINT=http://172.19.0.1:58080" in compose_env.read_text()
+
+
+def test_compose_native_settings_preserves_explicit_openshell_endpoint(
+    mocker, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("OPENSHELL_GATEWAY_ENDPOINT", "https://gateway.example:8443")
+    compose_env = tmp_path / "docker-compose.env"
+    compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
+    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+
+    env = server_cmds._ensure_compose_native_port_settings(
+        {
+            "OPENSHELL_GATEWAY_BIND_HOST": "172.19.0.1",
+            "OPENSHELL_GATEWAY_ENDPOINT": "http://127.0.0.1:58080",
+        }
+    )
+
+    assert env["OPENSHELL_GATEWAY_ENDPOINT"] == "https://gateway.example:8443"
+
+
 def test_compose_cluster_override_publishes_blueprint_web_ui_range(mocker, tmp_path):
     override = tmp_path / "docker-compose.cluster.yml"
     mocker.patch("mn_cli.server_cmds._runtime_compose_cluster_override_file", return_value=override)

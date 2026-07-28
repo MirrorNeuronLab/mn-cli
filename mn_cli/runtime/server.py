@@ -4194,16 +4194,35 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
         DEFAULT_OPENSHELL_GATEWAY_PORT,
     )
     openshell_bind_host = adjusted.get("OPENSHELL_GATEWAY_BIND_HOST") or "127.0.0.1"
+    openshell_default_endpoint = (
+        f"http://{_native_endpoint_host(openshell_bind_host)}:{openshell_port}"
+    )
     openshell_endpoint = _env_or_default(
         adjusted,
         "OPENSHELL_GATEWAY_ENDPOINT",
-        f"http://{_native_endpoint_host(openshell_bind_host)}:{openshell_port}",
+        openshell_default_endpoint,
         f"http://127.0.0.1:{LEGACY_OPENSHELL_GATEWAY_PORT}",
     )
-    if not os.getenv("OPENSHELL_GATEWAY_ENDPOINT", "").strip() and openshell_endpoint == (
-        f"https://127.0.0.1:{LEGACY_OPENSHELL_GATEWAY_PORT}"
-    ):
-        openshell_endpoint = f"http://{_native_endpoint_host(openshell_bind_host)}:{openshell_port}"
+    explicit_openshell_endpoint = os.getenv("OPENSHELL_GATEWAY_ENDPOINT", "").strip()
+    if not explicit_openshell_endpoint:
+        try:
+            persisted_openshell_host = urlparse(openshell_endpoint).hostname
+        except ValueError:
+            persisted_openshell_host = None
+        published_openshell_host = _native_endpoint_host(openshell_bind_host)
+        if (
+            persisted_openshell_host in {"127.0.0.1", "localhost", "::1"}
+            and published_openshell_host
+            not in {"127.0.0.1", "localhost", "::1"}
+        ):
+            # Linux Docker publishes OpenShell on the runtime bridge gateway so
+            # sandbox containers and the host can share one listener. Migrate
+            # installer-generated loopback endpoints to that published host.
+            openshell_endpoint = openshell_default_endpoint
+        elif openshell_endpoint == (
+            f"https://127.0.0.1:{LEGACY_OPENSHELL_GATEWAY_PORT}"
+        ):
+            openshell_endpoint = openshell_default_endpoint
     grpc_target = adjusted.get("MN_GRPC_TARGET") or f"localhost:{grpc_port}"
     if not os.getenv("MN_GRPC_TARGET", "").strip() and grpc_target == f"localhost:{LEGACY_GRPC_PORT}":
         grpc_target = f"localhost:{grpc_port}"
