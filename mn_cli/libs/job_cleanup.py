@@ -26,7 +26,9 @@ def cleanup_cancelled_job_resources(
     original_job_id = job_id
     job_id = _validated_resource_id(job_id)
     if job_id is None:
-        log.warning("Refusing local cleanup for invalid job ID: %r", original_job_id)
+        log.warning(
+            "Refusing local cleanup for invalid job ID: %r", original_job_id
+        )
         return
 
     summary = {"process_removed": [], "process_skipped": [], "errors": []}
@@ -257,12 +259,11 @@ def openshell_sandbox_name(job_id: str) -> str:
     ).strip("-")
     digest = hashlib.sha256(raw_job_id.encode("utf-8")).hexdigest()[:10]
     suffix = f"-{digest}"
-    return f"{base[: max(63 - len(suffix), 1)]}{suffix}"
+    return f"{base[: max(63 - len(suffix), 1)].rstrip('-')}{suffix}"
 
 
 def _validated_resource_id(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
 
-    resource_id = value.strip()
-    return resource_id if _RESOURCE_ID_PATTERN.fullmatch(resource_id) else None
+    return value if _RESOURCE_ID_PATTERN.fullmatch(value) else None

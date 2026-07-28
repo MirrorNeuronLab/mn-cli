@@ -192,6 +192,18 @@ def test_clear_resource_cleanup_rejects_unsafe_job_id(monkeypatch):
     assert warnings == ["Refusing local cleanup for invalid job ID: '../../escape'"]
 
 
+def test_openshell_cleanup_name_matches_long_prepared_sandbox_name():
+    job_id = f"{'a' * 33}-{'b' * 80}"
+
+    sandbox_name = job_cleanup.openshell_sandbox_name(job_id)
+
+    assert sandbox_name == (
+        "mirror-neuron-job-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "-820154137a"
+    )
+    assert len(sandbox_name) <= 63
+
+
 def test_clear_reports_admin_token_mismatch(monkeypatch):
     output = _capture_console(monkeypatch)
 
