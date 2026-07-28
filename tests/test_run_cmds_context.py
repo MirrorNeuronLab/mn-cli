@@ -91,6 +91,10 @@ def test_context_engine_prepares_on_selected_workflow_node(mocker, tmp_path):
     manifest = {"runtime": {"memory": {"enabled": True}}}
     endpoint = {"node": {"name": "mirror_neuron@spark"}}
     runtime_client = object()
+    mocker.patch(
+        "mn_cli.libs.run_cmds.context._local_runtime_node_name",
+        return_value="mirror_neuron@local",
+    )
     mocker.patch("mn_cli.libs.run_cmds.context._cluster_node_endpoint", return_value=endpoint)
     mocker.patch("mn_cli.libs.run_cmds.context._runtime_model_prepare_client", return_value=runtime_client)
     prepare = mocker.patch(
@@ -121,6 +125,47 @@ def test_context_engine_prepares_on_selected_workflow_node(mocker, tmp_path):
         "source": "mn-cli-workflow-placement",
     }
     local_ensure.assert_not_called()
+
+
+def test_context_engine_uses_compose_ensure_for_selected_local_node(
+    mocker,
+    tmp_path,
+):
+    bundle_dir = tmp_path / "local_context_bundle"
+    bundle_dir.mkdir()
+    config_dir = bundle_dir / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps({"memory_layer": {"enabled": True}}),
+        encoding="utf-8",
+    )
+    manifest = {"runtime": {"memory": {"enabled": True}}}
+    mocker.patch(
+        "mn_cli.libs.run_cmds.context._local_runtime_node_name",
+        return_value="mirror_neuron@local",
+    )
+    local_ensure = mocker.patch(
+        "mn_cli.libs.run_cmds.context.ensure_context_engine_runtime",
+        return_value={
+            "status": "started",
+            "service": "membrane-context-engine",
+            "model": "hf.co/context",
+        },
+    )
+    remote_prepare = mocker.patch(
+        "mn_cli.libs.run_cmds.context._prepare_runtime_model_with_retry"
+    )
+
+    summary = run_cmds._ensure_context_engine_for_run_if_needed(
+        bundle_dir,
+        manifest,
+        env_overrides={"MN_SELECTED_RUNTIME_NODE": "mirror_neuron@local"},
+    )
+
+    assert summary["status"] == "started"
+    local_ensure.assert_called_once_with(force=False)
+    remote_prepare.assert_not_called()
+
 
 def test_runtime_ensure_context_engine_explains_first_launch(mocker):
     mock_ensure = mocker.patch(

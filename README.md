@@ -72,6 +72,10 @@ including builds performed through a remote node's native SDK service.
 Live Spark checks are a separate, opt-in boundary smoke after this injected
 gate passes; they are not the development loop for placement policy.
 
+CPU-only HostLocal workflows stay on the submitting runtime node by default.
+Detached runs keep their output relay alive until terminal state unless
+`MN_RUN_EVENT_RELAY_MAX_SECONDS` is explicitly set.
+
 Override blueprint config for one run without changing `config/overwrite.json`:
 
 ```bash

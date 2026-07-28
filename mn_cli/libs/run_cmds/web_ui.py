@@ -194,7 +194,7 @@ def _background_event_relay_poll_seconds() -> float:
 
 
 def _background_event_relay_max_seconds(
-    config: dict[str, Any],
+    _config: dict[str, Any],
 ) -> float | None:
     raw = os.getenv("MN_RUN_EVENT_RELAY_MAX_SECONDS")
     if raw is not None:
@@ -204,8 +204,4 @@ def _background_event_relay_max_seconds(
             return max(float(raw), 0.0)
         except ValueError:
             return None
-    budgets = config.get("budgets") if isinstance(config.get("budgets"), dict) else {}
-    try:
-        return max(float(budgets.get("max_stream_duration_seconds", 3600)), 0.0)
-    except (TypeError, ValueError):
-        return 3600.0
+    return None

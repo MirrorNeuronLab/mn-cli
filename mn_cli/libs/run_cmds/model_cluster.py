@@ -328,7 +328,12 @@ def _resolve_and_apply_workflow_placement(
 
     _, selected_node, capacity = sorted(
         candidates,
-        key=lambda item: (-item[0][0], -item[0][1], item[0][2]),
+        key=lambda item: (
+            -item[0][0],
+            -item[0][1],
+            -item[0][2],
+            item[0][3],
+        ),
     )[0]
     _apply_workflow_node_constraint(manifest, selected_node)
     placement = {
@@ -371,11 +376,17 @@ def _workflow_placement_candidates(
     requirements: dict[str, Any],
     explicit_node: str,
 ) -> tuple[
-    list[tuple[tuple[float, float, str], str, dict[str, Any]]],
+    list[tuple[tuple[float, float, float, str], str, dict[str, Any]]],
     dict[str, list[str]],
 ]:
-    candidates: list[tuple[tuple[float, float, str], str, dict[str, Any]]] = []
+    candidates: list[
+        tuple[tuple[float, float, float, str], str, dict[str, Any]]
+    ] = []
     rejections: dict[str, list[str]] = {}
+    accelerator_required = (
+        requirements["min_gpu_count"] > 0
+        or requirements["min_gpu_memory_mb"] > 0
+    )
     for name in names:
         resource = resource_nodes.get(name) or system_nodes.get(name) or {}
         system = system_nodes.get(name) or resource
@@ -390,10 +401,26 @@ def _workflow_placement_candidates(
             rejections[name] = reasons
             continue
         capacity = _workflow_node_capacity(resource, system)
-        # Higher free GPU-memory headroom wins; after that prefer lower load,
-        # then the node name for deterministic placement.
-        headroom = capacity["gpu_memory_free_mb"] - requirements["min_gpu_memory_mb"]
-        score = (headroom, -_workflow_node_load(resource, system), name)
+        # Higher free GPU-memory headroom wins for accelerator workloads, then
+        # lower load and the node name. CPU-only workflows prefer the submitter
+        # so HostLocal execution does not cross a cluster boundary merely
+        # because another node happens to report a larger GPU.
+        headroom = (
+            capacity["gpu_memory_free_mb"] - requirements["min_gpu_memory_mb"]
+            if accelerator_required
+            else 0.0
+        )
+        local_preference = (
+            1.0
+            if not accelerator_required and _workflow_node_is_local(system)
+            else 0.0
+        )
+        score = (
+            headroom,
+            local_preference,
+            -_workflow_node_load(resource, system),
+            name,
+        )
         candidates.append((score, name, capacity))
     return candidates, rejections
 
@@ -509,7 +536,7 @@ def _preflight_and_apply_runtime_model_placement(
     if not runtime_model_requirements:
         if _workflow_placement_mode(
             manifest, env=env
-        ) is None and not _workflow_uses_docker_worker(manifest):
+        ) is None and not _workflow_requires_single_node(manifest):
             return None
         return _resolve_and_apply_workflow_placement(
             manifest,
@@ -787,9 +814,14 @@ def _workflow_node_requirements(
     )
     gpu = top_level.get("gpu") if isinstance(top_level.get("gpu"), dict) else {}
     if gpu:
+        requested_count = (
+            gpu.get("min_count")
+            if "min_count" in gpu
+            else gpu.get("count", 1)
+        )
         requirements["min_gpu_count"] = max(
             requirements["min_gpu_count"],
-            _workflow_number(gpu.get("min_count") or gpu.get("count") or 1),
+            _workflow_number(requested_count),
         )
         requirements["min_gpu_memory_mb"] = max(
             requirements["min_gpu_memory_mb"],

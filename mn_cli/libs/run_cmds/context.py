@@ -1,5 +1,10 @@
 from .common import *
-from .model_cluster import _cluster_node_endpoint, _prepare_runtime_model_with_retry, _runtime_model_prepare_client
+from .model_cluster import (
+    _cluster_node_endpoint,
+    _local_runtime_node_name,
+    _prepare_runtime_model_with_retry,
+    _runtime_model_prepare_client,
+)
 
 def _ensure_context_engine_for_run_if_needed(
     bundle_dir: Path,
@@ -34,7 +39,8 @@ def _ensure_context_engine_for_run_if_needed(
             total=None,
         )
         selected_node = str(effective_env.get("MN_SELECTED_RUNTIME_NODE") or "").strip()
-        if selected_node:
+        local_node = _local_runtime_node_name()
+        if selected_node and selected_node != local_node:
             node_endpoint = _cluster_node_endpoint(selected_node)
             runtime_client = _runtime_model_prepare_client(selected_node, node_endpoint)
             summary = _prepare_runtime_model_with_retry(

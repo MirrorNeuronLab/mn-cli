@@ -116,6 +116,19 @@ logical aliases, never a remote node's DMR URL as the worker-facing API base.
 Already-installed and newly-installed models follow the same routing
 projection.
 
+Workflows that use node-local runners are pinned to one feasible runtime node
+before submission. Accelerator requirements select by available accelerator
+headroom; CPU-only HostLocal workflows prefer the submitting node to avoid an
+unnecessary cluster boundary.
+
+Context-memory preparation uses the local Compose lifecycle when placement
+selects the submitting node; only genuinely remote selected nodes use the
+native runtime preparation boundary.
+
+Detached output relays remain active until the run becomes terminal unless
+`MN_RUN_EVENT_RELAY_MAX_SECONDS` explicitly supplies an operator limit. A
+blueprint's stream-duration budget does not truncate output materialization.
+
 The blueprint run adapter must not prepare models. A logical `default`
 declaration remains blueprint-owned intent; the runtime SDK chooses Nemotron on
 a healthy 48 GB-or-above accelerator node or Gemma when no compatible Nemotron

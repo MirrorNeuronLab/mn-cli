@@ -46,6 +46,23 @@ def isolated_mn_home(tmp_path, monkeypatch):
     )
 
 
+def test_background_event_relay_is_unbounded_unless_explicitly_configured(
+    monkeypatch,
+):
+    from mn_cli.libs.run_cmds import web_ui
+
+    monkeypatch.delenv("MN_RUN_EVENT_RELAY_MAX_SECONDS", raising=False)
+    assert (
+        web_ui._background_event_relay_max_seconds(
+            {"budgets": {"max_stream_duration_seconds": 10}}
+        )
+        is None
+    )
+
+    monkeypatch.setenv("MN_RUN_EVENT_RELAY_MAX_SECONDS", "45")
+    assert web_ui._background_event_relay_max_seconds({}) == 45.0
+
+
 def test_run_injects_user_home_output_environment(mocker, tmp_path, monkeypatch):
     home_dir = tmp_path / "home"
     output_home = tmp_path / "outputs-home"
@@ -496,4 +513,9 @@ def test_detached_batch_run_starts_output_event_relay_for_shared_storage(
     storage_path = Path(relay["shared_storage_path"])
     storage = json.loads(storage_path.read_text())
     assert storage["output_copy_executor"] == "master_host"
-    assert storage["output_copy"][0]["target_path"] == str(target_path)
+    assert {
+        item["target_path"] for item in storage["output_copy"]
+    } == {
+        str(tmp_path / "runs" / "batch-output-run"),
+        str(target_path),
+    }

@@ -423,6 +423,21 @@ def test_run_submits_python_environment_requirements_payload(mocker, tmp_path, m
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="python-env-run")
     mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.get_system_summary",
+        return_value=json.dumps(
+            {
+                "nodes": [
+                    {
+                        "name": "local@runtime",
+                        "self?": True,
+                        "status": "healthy",
+                        "scheduling_eligible": True,
+                    }
+                ]
+            }
+        ),
+    )
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_completed"})
     ])
@@ -512,6 +527,21 @@ def test_run_injects_blueprint_config_with_cli_set_over_overwrite(mocker, tmp_pa
 def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-auto")
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.get_system_summary",
+        return_value=json.dumps(
+            {
+                "nodes": [
+                    {
+                        "name": "local@runtime",
+                        "self?": True,
+                        "status": "healthy",
+                        "scheduling_eligible": True,
+                    }
+                ]
+            }
+        ),
+    )
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_completed"})
     ])

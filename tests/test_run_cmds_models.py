@@ -203,6 +203,33 @@ def test_single_node_placement_selects_spark_and_pins_all_agents():
         } in node["constraints"]
 
 
+def test_hostlocal_preflight_without_models_pins_cpu_workflow_to_local_node():
+    manifest = {
+        "requirements": {"gpu": {"min_count": 0}},
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {"runner_module": "MirrorNeuron.Runner.HostLocal"},
+                "resources": {"cpu_cores": 0.1, "memory_mb": 64},
+            }
+        ]
+    }
+    resources = _mac_and_spark_resources()
+    system = _matching_system_summary(resources)
+    system["nodes"][0]["self"] = True
+
+    placement = run_cmds._preflight_and_apply_runtime_model_placement(
+        manifest,
+        resource_report=resources,
+        system_summary=system,
+    )
+
+    assert placement["selected_node"] == "mirror_neuron@mac"
+    assert manifest["nodes"][0]["policies"]["scheduler"]["preferred_node"] == (
+        "mirror_neuron@mac"
+    )
+
+
 def test_single_node_placement_scores_gpu_headroom_then_load():
     manifest = _cctv_placement_manifest()
     resources = _mac_and_spark_resources(spark_memory_mb=72000)
