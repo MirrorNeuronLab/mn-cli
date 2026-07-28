@@ -104,6 +104,15 @@ def test_openshell_env_respects_explicit_gateway_over_managed_runtime(
     assert env["OPENSHELL_GATEWAY"] == "remote-team-gateway"
     assert "OPENSHELL_GATEWAY_ENDPOINT" not in env
 
+def test_openshell_executable_prefers_user_local_install(tmp_path, monkeypatch):
+    executable = tmp_path / ".local" / "bin" / "openshell"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o755)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert run_cmds._openshell_executable() == str(executable)
+
 def test_run_prebuilds_custom_openshell_image_from_payload_directory(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     monkeypatch.setenv("OPENSHELL_CONFIG_DIR", str(tmp_path / "openshell-config"))

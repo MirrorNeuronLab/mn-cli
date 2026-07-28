@@ -13,6 +13,12 @@ OPENSHELL_RUNNER_MODULES = {
     "MirrorNeuron.Sandbox.OpenShell",
 }
 
+def _openshell_executable() -> str:
+    user_executable = Path.home() / ".local" / "bin" / "openshell"
+    if user_executable.is_file() and os.access(user_executable, os.X_OK):
+        return str(user_executable)
+    return "openshell"
+
 def _prepare_openshell_custom_images(
     bundle_dir: Path,
     manifest_dict: dict[str, Any],
@@ -184,15 +190,16 @@ def _prepare_openshell_shared_sandbox(
 ) -> None:
     sandbox_name = _openshell_shared_sandbox_name(job_id)
     env = _openshell_env()
+    openshell_executable = _openshell_executable()
     existing = subprocess.run(
-        ["openshell", "sandbox", "get", sandbox_name],
+        [openshell_executable, "sandbox", "get", sandbox_name],
         capture_output=True,
         text=True,
         env=env,
     )
     if existing.returncode != 0:
         command = [
-            "openshell",
+            openshell_executable,
             "sandbox",
             "create",
             "--name",
@@ -329,7 +336,7 @@ def _build_openshell_from_image(source_path: Path, node_id: Any) -> str:
 
     result = subprocess.run(
         [
-            "openshell",
+            _openshell_executable(),
             "sandbox",
             "create",
             "--from",
