@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
+import typer
 from logging.handlers import RotatingFileHandler
 from typer.testing import CliRunner
 from rich.console import Console
@@ -602,7 +603,10 @@ def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_pat
     env = manifest["nodes"][0]["config"]["environment"]
     injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
     assert env["MN_RUN_ID"] == "bp-1-auto-run"
-    assert env["MN_RUNS_ROOT"].startswith(str(tmp_path / "shared" / "submissions" / "bp-1-auto-run-"))
+    assert env["MN_RUNS_ROOT"].startswith(
+        str(tmp_path / "shared" / "submissions" / "job_bg-")
+    )
+    assert "-def-" in env["MN_RUNS_ROOT"]
     assert env["MN_RUNS_ROOT"].endswith("/outputs/runs")
     assert injected_config["identity"]["run_id"] == "bp-1-auto-run"
     assert injected_config["outputs"]["run_root"] == env["MN_RUNS_ROOT"]
@@ -846,7 +850,10 @@ def test_run_records_blueprint_run_id_mapping(mocker, tmp_path, monkeypatch):
     env = manifest["nodes"][0]["config"]["environment"]
     injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
     assert env["MN_RUN_ID"] == "bp-run"
-    assert env["MN_RUNS_ROOT"].startswith(str(tmp_path / "shared" / "submissions" / "bp-run-"))
+    assert env["MN_RUNS_ROOT"].startswith(
+        str(tmp_path / "shared" / "submissions" / "job_rb-")
+    )
+    assert "-def-" in env["MN_RUNS_ROOT"]
     assert env["MN_RUNS_ROOT"].endswith("/outputs/runs")
     assert injected_config["identity"]["run_id"] == "bp-run"
     assert injected_config["outputs"]["run_root"] == env["MN_RUNS_ROOT"]
@@ -942,7 +949,7 @@ def test_run_error_submitting(mocker, tmp_path):
             metadata={"submission_id": "submission-that-failed"},
         ),
     )
-    cleanup = mocker.patch("mn_cli.libs.run_cmds.cleanup_docker_worker_services")
+    cleanup = mocker.patch("mn_cli.libs.run_cmds.cleanup_job_definition_resources")
     
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
@@ -953,7 +960,88 @@ def test_run_error_submitting(mocker, tmp_path):
     
     assert result.exit_code == 1
     assert "MN_EXECUTION_FAILED" in result.stdout
-    cleanup.assert_called_once_with(submission_id="submission-that-failed")
+    cleanup.assert_called_once_with('{"nodes": []}')
+
+
+def test_run_existing_job_replaces_prepared_bundle_before_starting(mocker, tmp_path):
+    update = mocker.patch(
+        "mn_cli.libs.run_cmds.client.update_stable_job",
+        return_value=json.dumps({"job_id": "job-existing"}),
+    )
+    start = mocker.patch(
+        "mn_cli.libs.run_cmds.client.start_run",
+        return_value=json.dumps(
+            {"job_id": "job-existing", "run_id": "existing-rerun"}
+        ),
+    )
+    create = mocker.patch("mn_cli.libs.run_cmds.client.create_stable_job")
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.stream_events",
+        return_value=[json.dumps({"type": "job_completed"})],
+    )
+
+    bundle_dir = tmp_path / "run_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps({"graph_id": "existing-graph", "nodes": []})
+    )
+    payload_dir = bundle_dir / "payloads"
+    payload_dir.mkdir()
+    (payload_dir / "input.txt").write_text("fresh")
+
+    run_cmds.run_bundle(
+        str(bundle_dir),
+        force=True,
+        job_id="job-existing",
+        env_overrides={"MN_RUN_ID": "existing-rerun"},
+        submission_metadata={"blueprint_run_id": "existing-rerun"},
+    )
+
+    create.assert_not_called()
+    update.assert_called_once()
+    assert update.call_args.args[:2] == ("job-existing", {})
+    assert json.loads(update.call_args.kwargs["manifest_json"])["graph_id"] == (
+        "existing-graph"
+    )
+    assert update.call_args.kwargs["payloads"]["input.txt"] == b"fresh"
+    start.assert_called_once_with(
+        "job-existing", run_id="existing-rerun", inputs={}
+    )
+
+
+def test_run_existing_job_cleans_fresh_definition_when_update_fails(
+    mocker, tmp_path
+):
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.update_stable_job",
+        side_effect=RuntimeError("atomic update rejected"),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.prepare_job_submission",
+        return_value=SimpleNamespace(
+            manifest_json='{"nodes": [], "metadata": {"definition": "fresh"}}',
+            payloads={},
+            metadata={"submission_id": "job-existing-def-fresh"},
+        ),
+    )
+    cleanup = mocker.patch(
+        "mn_cli.libs.run_cmds.cleanup_job_definition_resources"
+    )
+
+    bundle_dir = tmp_path / "run_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text('{"nodes": []}')
+
+    with pytest.raises(typer.Exit):
+        run_cmds.run_bundle(
+            str(bundle_dir),
+            force=True,
+            job_id="job-existing",
+        )
+
+    cleanup.assert_called_once_with(
+        '{"nodes": [], "metadata": {"definition": "fresh"}}'
+    )
 
 
 def test_run_command_debug_prints_preparation_diagnostic(mocker, tmp_path):

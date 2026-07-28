@@ -209,6 +209,7 @@ def run_bundle(
     submitted_web_ui_url: str | None = None
     submitted_config_overrides: dict[str, Any] | None = None
     prepared_submission: Any | None = None
+    definition_committed = False
     try:
         env_overrides = dict(env_overrides or {})
         config_overrides = dict(config_overrides or {})
@@ -220,6 +221,17 @@ def run_bundle(
             bundle_dir,
             manifest_file,
             manifest_dict,
+        )
+        stable_job_id = job_id or generate_stable_job_id(
+            str(
+                manifest_dict.get("graph_id")
+                or manifest_dict.get("id")
+                or submission_metadata.get("blueprint_id")
+                or bundle_dir.name
+            )
+        )
+        definition_submission_id = generate_job_definition_submission_id(
+            stable_job_id
         )
         airgap = hydrate_extracted_airgap(bundle_dir, manifest_dict)
         if airgap.get("air_gapped"):
@@ -419,32 +431,6 @@ def run_bundle(
         schedule_attrs = _run_schedule_attrs(
             auto_schedule=auto_schedule, schedule=schedule
         )
-        if schedule_attrs is not None:
-            submitted_manifest = manifest_dict
-            stable_job_id = job_id
-            if not stable_job_id:
-                created = json.loads(
-                    client.create_stable_job(
-                        json.dumps(manifest_dict),
-                        payloads,
-                        resolved_configuration=config_overrides,
-                    )
-                )
-                stable_job_id = str(created["job_id"])
-            elif config_overrides:
-                client.update_stable_job(
-                    stable_job_id,
-                    {"resolved_configuration": config_overrides},
-                )
-            result = json.loads(
-                client.create_job_schedule(
-                    stable_job_id,
-                    schedule=schedule_attrs,
-                    source={"cli": "blueprint run --schedule"},
-                )
-            )
-            console.print_json(data=result)
-            return
 
         _ensure_context_engine_for_run_if_needed(
             bundle_dir,
@@ -469,6 +455,8 @@ def run_bundle(
             payloads,
             bundle_dir=bundle_dir,
             run_id=blueprint_run_id,
+            job_id=stable_job_id,
+            submission_id=definition_submission_id,
             cluster_client=client,
             env={**os.environ, **env_overrides},
         )
@@ -493,21 +481,37 @@ def run_bundle(
             "Submit runtime job",
             "handing the prepared bundle to MirrorNeuron core.",
         )
-        stable_job_id = job_id
-        if not stable_job_id:
+        if not job_id:
             created = json.loads(
                 client.create_stable_job(
                     manifest,
                     payloads,
+                    job_id=stable_job_id,
                     resolved_configuration=config_overrides,
                 )
             )
             stable_job_id = str(created["job_id"])
-        elif config_overrides:
+            definition_committed = True
+        else:
             client.update_stable_job(
                 stable_job_id,
-                {"resolved_configuration": config_overrides},
+                {"resolved_configuration": config_overrides}
+                if config_overrides
+                else {},
+                manifest_json=manifest,
+                payloads=payloads,
             )
+            definition_committed = True
+        if schedule_attrs is not None:
+            result = json.loads(
+                client.create_job_schedule(
+                    stable_job_id,
+                    schedule=schedule_attrs,
+                    source={"cli": "blueprint run --schedule"},
+                )
+            )
+            console.print_json(data=result)
+            return
         started = json.loads(
             client.start_run(
                 stable_job_id,
@@ -661,13 +665,19 @@ def run_bundle(
         )
         raise typer.Exit(130)
     except Exception as e:
-        if prepared_submission is not None and submitted_job_id is None:
+        if (
+            prepared_submission is not None
+            and submitted_job_id is None
+            and not definition_committed
+        ):
             submission_id = str(
                 prepared_submission.metadata.get("submission_id") or ""
             ).strip()
             if submission_id:
                 try:
-                    cleanup_docker_worker_services(submission_id=submission_id)
+                    cleanup_job_definition_resources(
+                        prepared_submission.manifest_json
+                    )
                 except Exception:
                     logger.exception(
                         "Failed to clean DockerWorker services after submission failure",

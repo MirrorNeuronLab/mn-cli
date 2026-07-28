@@ -262,6 +262,55 @@ def test_runtime_doctor_detects_stale_litellm_gateway_config(mocker):
     assert "stale config" in gateway["detail"]
 
 
+def test_runtime_doctor_rejects_divergent_or_read_only_coordination_stores(
+    mocker,
+):
+    status = _status_report(overall="passing")
+    status["nodes"]["items"] = [
+        {
+            "name": "mirror_neuron@10.0.4.23",
+            "coordination_store": {
+                "identity": "store-a",
+                "writable_primary": True,
+                "healthy": True,
+            },
+        },
+        {
+            "name": "mirror_neuron@10.0.4.26",
+            "coordination_store": {
+                "identity": "store-b",
+                "writable_primary": False,
+                "healthy": False,
+            },
+        },
+    ]
+    mocker.patch(
+        "mn_cli.libs.runtime_health.collect_runtime_status",
+        return_value=status,
+    )
+    mocker.patch(
+        "mn_cli.libs.runtime_health._runtime_compose_model_override_component",
+        return_value={"name": "runtime_compose_model_override", "status": "passing"},
+    )
+    mocker.patch(
+        "mn_cli.libs.runtime_health._docker_model_runner_component",
+        return_value={"name": "docker_model_runner", "status": "passing"},
+    )
+    mocker.patch(
+        "mn_cli.libs.runtime_health._litellm_gateway_component",
+        return_value={"name": "litellm_gateway", "status": "passing"},
+    )
+
+    report = runtime_health.collect_runtime_doctor(timeout=1)
+
+    component = report["foundation"]["coordination_store"]
+    assert report["overall"] == "critical"
+    assert component["status"] == "critical"
+    assert "coordination_store_mismatch" in component["detail"]
+    assert "read-only" in component["detail"]
+    assert "divergent Redis datasets" in component["detail"]
+
+
 def test_runtime_doctor_detects_legacy_compose_model_override(mocker, tmp_path):
     compose_file = tmp_path / ".mn" / "docker-compose.yml"
     compose_file.parent.mkdir(parents=True)

@@ -98,6 +98,11 @@ CONFIG_FIELDS: dict[str, ConfigField] = {
     "MN_HOST_SHARED_STORAGE_ROOT": ConfigField("MN_HOST_SHARED_STORAGE_ROOT", kind="path"),
     "MN_RUNTIME_SHARED_STORAGE_ROOT": ConfigField("MN_RUNTIME_SHARED_STORAGE_ROOT", kind="path"),
     "MN_CONTAINER_SHARED_STORAGE_ROOT": ConfigField("MN_CONTAINER_SHARED_STORAGE_ROOT", kind="path"),
+    "MN_SYNCTHING_RESCAN_INTERVAL_SECONDS": ConfigField(
+        "MN_SYNCTHING_RESCAN_INTERVAL_SECONDS",
+        kind="int",
+        default=3600,
+    ),
     "MN_HOST_ARTIFACTS_DIR": ConfigField("MN_HOST_ARTIFACTS_DIR", kind="path"),
     "MN_HOST_BLOB_STORE_DIR": ConfigField("MN_HOST_BLOB_STORE_DIR", kind="path"),
     "MN_BLOB_STORE_ROOT": ConfigField("MN_BLOB_STORE_ROOT", kind="path"),

@@ -60,6 +60,15 @@ def stabilize_cluster_join_tests(request, monkeypatch):
             "_confirm_joined_node",
             lambda _client, _remote_node, _token, status, **_kwargs: status,
         )
+        if request.node.name not in {
+            "test_join_network_rejects_divergent_coordination_store_before_membership",
+            "test_join_network_accepts_shared_coordination_store_without_reconfiguring_redis",
+        }:
+            monkeypatch.setattr(
+                runtime_server,
+                "_require_shared_coordination_store",
+                lambda _client, _handshake, _remote_node: None,
+            )
 
 
 @pytest.fixture(autouse=True)

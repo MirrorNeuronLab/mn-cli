@@ -95,9 +95,13 @@ their run. CLI output must label and persist both fields without treating them
 as aliases.
 
 `mn blueprint run` creates a stable job and first run by default, or starts a
-new run of the `--job-id` definition. Existing v1 `mn job` execution-control
-commands remain compatible with historical execution IDs and must not cause
-new state to be indefinitely dual-written.
+new run of the `--job-id` definition. For an explicit existing job, the command
+first prepares and atomically installs the current executable bundle while
+preserving job data, schedules, and prior run history. `mn job start` and
+scheduled dispatch remain source independent and reuse the stored bundle.
+Existing v1 `mn job` execution-control commands remain compatible with
+historical execution IDs and must not cause new state to be indefinitely
+dual-written.
 
 ## Runtime-Model Launch Contract
 
@@ -120,6 +124,11 @@ Workflows that use node-local runners are pinned to one feasible runtime node
 before submission. Accelerator requirements select by available accelerator
 headroom; CPU-only HostLocal workflows prefer the submitting node to avoid an
 unnecessary cluster boundary.
+The hard `node.name` constraint is reapplied after topology lowering so
+generated controls cannot split from executors. Runtime health and join
+diagnostics expose the coordination-store identity and writable-primary state;
+nodes using divergent Redis datasets or a read-only replica are rejected
+before membership or launch.
 
 Context-memory preparation uses the local Compose lifecycle when placement
 selects the submitting node; only genuinely remote selected nodes use the

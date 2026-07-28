@@ -124,6 +124,11 @@ deletion. Starting the same job again creates another run; retrying a run does
 not. Use `mn blueprint run --job-id <job-id>` to run an existing definition.
 Without that option, blueprint run creates an ephemeral stable job and starts
 its first run.
+With `--job-id`, the CLI prepares the currently installed blueprint revision
+and atomically replaces the inactive job's executable bundle before starting
+the run. Job data, schedules, and earlier run history are preserved. In
+contrast, `mn job start` and scheduled dispatches are source independent and
+reuse the stored definition-scoped submission and Docker services.
 
 Lifecycle commands are deliberately separate:
 
@@ -238,6 +243,9 @@ snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
 - Docker workers receive a worker-reachable model-control target and use the
   SDK to select the best cluster node independently for LLM and for model
   specifications supplied at runtime by RAG and OCR skills.
+- Node-local workflows are hard-pinned as a whole after topology lowering.
+  Runtime health rejects nodes whose coordination-store identity differs from
+  the submitting Core or whose Redis endpoint is read-only.
 - OpenShell workers that reuse a job-scoped sandbox are prepared before
   submission; the submitted node receives the concrete sandbox name and SSH
   host instead of asking Core to create host resources.

@@ -548,7 +548,10 @@ def _doctor_prepare_hostlocal_python_envs(
                     requirements_path=requirements_path,
                     timeout=timeout,
                 )
-                runtime_env_dir = _doctor_runtime_python_env_path(env_dir)
+                runtime_env_dir = _doctor_runtime_python_env_path(
+                    env_dir,
+                    core_container=_doctor_running_core_container(timeout),
+                )
             python_env["path"] = str(runtime_env_dir)
             config["python_environment"] = python_env
             prepared.append(
@@ -572,7 +575,18 @@ def _doctor_prepare_hostlocal_python_envs(
             skipped=skipped,
         )
     if prepared:
-        return _doctor_component("host_local_python", "passing", f"Prepared {len(prepared)} Python environment(s).", prepared=prepared)
+        cache_warning = _doctor_shared_python_env_cache_warning()
+        return _doctor_component(
+            "host_local_python",
+            "warning" if cache_warning else "passing",
+            (
+                f"Prepared {len(prepared)} Python environment(s). {cache_warning}"
+                if cache_warning
+                else f"Prepared {len(prepared)} Python environment(s)."
+            ),
+            prepared=prepared,
+            cache_warning=cache_warning or None,
+        )
     return _doctor_component("host_local_python", "skipped", "No HostLocal Python environments declared.", skipped=skipped)
 
 def _doctor_prepare_python_env(
@@ -667,18 +681,17 @@ def _doctor_prepare_python_env_from_content(
         ).encode("utf-8")
     ).hexdigest()
     runtime_config = RuntimeConfig.from_env()
-    env_root = Path(
-        os.getenv(
-            "MN_BLUEPRINT_PYTHON_ENVS_DIR",
-            str(Path(runtime_config.shared_storage_root) / "blueprint-python-envs"),
-        )
-    ).expanduser()
+    env_root = _doctor_configured_python_envs_dir(runtime_config)
     env_dir = env_root / digest
-    runtime_env_dir = _doctor_runtime_python_env_path(env_dir)
-    if core_container and not _doctor_path_is_in_host_shared_storage(env_dir):
+    runtime_env_dir = (
+        _doctor_runtime_python_env_path(env_dir, core_container=core_container)
+        if core_container
+        else env_dir
+    )
+    if core_container and not _doctor_path_is_in_core_mount(env_dir):
         raise RuntimeError(
             f"{node_id}: Docker Core HostLocal Python environments must be under "
-            f"{RuntimeConfig.from_env().shared_storage_root}"
+            f"{runtime_config.mn_home} or {runtime_config.shared_storage_root}"
         )
     ready = env_dir / ".ready"
     if ready.is_file() and (env_dir / "bin" / "python").is_file():
@@ -728,7 +741,9 @@ def _doctor_prepare_python_env_from_content(
                     ),
                 )
             staged_sources[str(source)] = (
-                _doctor_runtime_python_env_path(staged) if core_container else staged
+                _doctor_runtime_python_env_path(staged, core_container=core_container)
+                if core_container
+                else staged
             )
         install_packages = [
             str(staged_sources[str(local_sources_by_argument[package])])
@@ -890,7 +905,7 @@ def _doctor_remove_shared_cache_path(
     if not core_container:
         shutil.rmtree(path)
         return
-    runtime_path = _doctor_runtime_python_env_path(path)
+    runtime_path = _doctor_runtime_python_env_path(path, core_container=core_container)
     remove = subprocess.run(
         ["docker", "exec", core_container, "rm", "-rf", "--", str(runtime_path)],
         capture_output=True,
@@ -908,23 +923,67 @@ def _doctor_running_core_container(timeout: float) -> str:
     return running_core_container(timeout_seconds=max(timeout, 1.0)) or ""
 
 
-def _doctor_path_is_in_host_shared_storage(env_dir: Path) -> bool:
-    host_root = Path(RuntimeConfig.from_env().shared_storage_root).expanduser().resolve()
-    try:
-        env_dir.expanduser().resolve().relative_to(host_root)
-    except ValueError:
-        return False
-    return True
-
-
-def _doctor_runtime_python_env_path(env_dir: Path) -> Path:
+def _doctor_path_is_in_core_mount(env_dir: Path) -> bool:
     runtime_config = RuntimeConfig.from_env()
-    host_root = Path(runtime_config.shared_storage_root).expanduser().resolve()
+    resolved = env_dir.expanduser().resolve()
+    return any(
+        _doctor_path_is_within(resolved, Path(root).expanduser().resolve())
+        for root in (runtime_config.mn_home, runtime_config.shared_storage_root)
+    )
+
+
+def _doctor_shared_python_env_cache_warning() -> str:
+    runtime_config = RuntimeConfig.from_env()
+    configured = str(
+        os.getenv("MN_BLUEPRINT_PYTHON_ENVS_DIR")
+        or runtime_config.runtime_env.get("MN_BLUEPRINT_PYTHON_ENVS_DIR")
+        or ""
+    ).strip()
+    if not configured:
+        return ""
+    configured_path = Path(configured).expanduser().resolve()
+    shared_root = Path(runtime_config.shared_storage_root).expanduser().resolve()
+    if not _doctor_path_is_within(configured_path, shared_root):
+        return ""
+    return (
+        "MN_BLUEPRINT_PYTHON_ENVS_DIR is inside synchronized storage; move it "
+        f"under {runtime_config.mn_home / 'cache'} to avoid indexing derived environments."
+    )
+
+
+def _doctor_configured_python_envs_dir(runtime_config: RuntimeConfig) -> Path:
+    configured = str(
+        os.getenv("MN_BLUEPRINT_PYTHON_ENVS_DIR")
+        or runtime_config.runtime_env.get("MN_BLUEPRINT_PYTHON_ENVS_DIR")
+        or runtime_config.mn_home / "cache" / "blueprint-python-envs"
+    ).strip()
+    return Path(configured).expanduser()
+
+
+def _doctor_runtime_python_env_path(
+    env_dir: Path,
+    *,
+    core_container: str = "",
+) -> Path:
+    runtime_config = RuntimeConfig.from_env()
+    resolved = env_dir.expanduser().resolve()
+    host_shared_root = Path(runtime_config.shared_storage_root).expanduser().resolve()
     try:
-        relative = env_dir.expanduser().resolve().relative_to(host_root)
+        relative = resolved.relative_to(host_shared_root)
     except ValueError:
-        return env_dir
-    return Path(runtime_config.runtime_shared_storage_root) / relative
+        pass
+    else:
+        return Path(runtime_config.runtime_shared_storage_root) / relative
+
+    if core_container:
+        host_mn_home = runtime_config.mn_home.expanduser().resolve()
+        try:
+            relative = resolved.relative_to(host_mn_home)
+        except ValueError:
+            pass
+        else:
+            return Path("/root/.mn") / relative
+    return env_dir
 
 def _doctor_skill_report(
     bundle_dir: Path,

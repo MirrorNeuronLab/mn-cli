@@ -104,6 +104,7 @@ def collect_runtime_status(timeout: float = 3.0, *, core_client: Any | None = No
 def collect_runtime_doctor(timeout: float = 3.0, *, core_client: Any | None = None) -> dict[str, Any]:
     status_report = collect_runtime_status(timeout, core_client=core_client)
     foundation = [
+        _coordination_store_component(status_report),
         _runtime_compose_model_override_component(),
         _docker_model_runner_component(timeout),
         _litellm_gateway_component(timeout),
@@ -241,6 +242,7 @@ def print_doctor_report(report: dict[str, Any]) -> None:
         ("core_grpc", "Core gRPC"),
         ("api", "REST API"),
         ("web_ui", "Web UI"),
+        ("coordination_store", "Coordination store"),
         ("runtime_compose_model_override", "Compose model override"),
         ("docker_model_runner", "Docker Model Runner"),
         ("litellm_gateway", "LiteLLM gateway"),
@@ -260,6 +262,53 @@ def print_doctor_report(report: dict[str, Any]) -> None:
             )
         )
     console.print(Group(*sections))
+
+
+def _coordination_store_component(status_report: dict[str, Any]) -> dict[str, Any]:
+    nodes = status_report.get("nodes")
+    items = nodes.get("items") if isinstance(nodes, dict) else None
+    items = [item for item in items or [] if isinstance(item, dict)]
+    if not items:
+        return {
+            "name": "coordination_store",
+            "status": "warning",
+            "detail": "Runtime nodes did not advertise coordination-store diagnostics.",
+            "identities": [],
+            "rejected_nodes": [],
+        }
+
+    rejected: list[str] = []
+    identities: set[str] = set()
+    for node in items:
+        name = str(node.get("name") or node.get("node") or "unknown")
+        store = node.get("coordination_store")
+        if not isinstance(store, dict):
+            rejected.append(f"{name}: missing identity")
+            continue
+        identity = str(store.get("identity") or "").strip()
+        if identity:
+            identities.add(identity)
+        if not identity:
+            rejected.append(f"{name}: missing identity")
+        elif store.get("writable_primary") is not True:
+            rejected.append(f"{name}: Redis endpoint is read-only")
+        elif store.get("healthy") is not True:
+            rejected.append(f"{name}: coordination store is unhealthy")
+
+    if len(identities) > 1:
+        rejected.append("runtime nodes advertise divergent Redis datasets")
+    passing = not rejected and len(identities) == 1
+    return {
+        "name": "coordination_store",
+        "status": "passing" if passing else "critical",
+        "detail": (
+            f"{len(items)} node(s) share one writable Redis primary."
+            if passing
+            else "coordination_store_mismatch: " + "; ".join(rejected)
+        ),
+        "identities": sorted(identities),
+        "rejected_nodes": rejected,
+    }
 
 
 def overall_status(components: list[dict[str, Any]]) -> str:

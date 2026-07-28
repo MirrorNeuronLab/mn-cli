@@ -1,3 +1,4 @@
+import copy
 import os
 import json
 import hashlib
@@ -15,7 +16,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -253,11 +254,17 @@ REDIS_DYNAMIC_PORT_END = 56478
 DEFAULT_REDIS_SENTINEL_PORT = 26379
 DEFAULT_SYNCTHING_GUI_PORT = 58384
 DEFAULT_SYNCTHING_SYNC_PORT = 22000
+DEFAULT_SYNCTHING_RESCAN_INTERVAL_SECONDS = 3600
 SYNCTHING_CONTAINER_GUI_PORT = 8384
 SYNCTHING_CONTAINER_SYNC_PORT = 22000
 SYNCTHING_FOLDER_ID = "mirror-neuron-shared"
 SYNCTHING_FOLDER_LABEL = "MirrorNeuron shared storage"
 SYNCTHING_FOLDER_PATH = "/var/syncthing/MirrorNeuronShared"
+SYNCTHING_MANAGED_IGNORE_PATTERNS = (
+    "/blueprint-python-envs",
+    "/blueprint-python-sources",
+    "/checkpoints",
+)
 SYNCTHING_COMPOSE_SERVICE = "syncthing"
 NETWORK_TOKEN_FILE = DIR / "network.token"
 NETWORK_REDIS_ENV_FILE = DIR / "network-redis.env"
@@ -985,6 +992,7 @@ SYNCTHING_ENV_KEYS = (
     "MN_SYNCTHING_SYNC_PORT",
     "MN_SYNCTHING_FOLDER_ID",
     "MN_SYNCTHING_FOLDER_PATH",
+    "MN_SYNCTHING_RESCAN_INTERVAL_SECONDS",
 )
 
 def _syncthing_enabled(env: dict[str, str]) -> bool:
@@ -1027,6 +1035,16 @@ def _syncthing_folder_id(env: dict[str, str]) -> str:
 
 def _syncthing_folder_path(env: dict[str, str]) -> str:
     return str(env.get("MN_SYNCTHING_FOLDER_PATH") or os.getenv("MN_SYNCTHING_FOLDER_PATH") or SYNCTHING_FOLDER_PATH).strip()
+
+def _syncthing_rescan_interval_seconds(value: object = None) -> int:
+    raw = value
+    if raw is None or str(raw).strip() == "":
+        raw = os.getenv("MN_SYNCTHING_RESCAN_INTERVAL_SECONDS")
+    try:
+        interval = int(str(raw).strip()) if raw is not None and str(raw).strip() else DEFAULT_SYNCTHING_RESCAN_INTERVAL_SECONDS
+    except ValueError:
+        return DEFAULT_SYNCTHING_RESCAN_INTERVAL_SECONDS
+    return interval if interval > 0 else DEFAULT_SYNCTHING_RESCAN_INTERVAL_SECONDS
 
 def _runtime_compose_syncthing_override_file() -> Path:
     return RUNTIME_COMPOSE_FILE.parent / RUNTIME_SYNCTHING_OVERRIDE_FILE
@@ -1157,6 +1175,36 @@ def _syncthing_status(host: str, port: int, api_key: str) -> dict[str, Any]:
     status = _syncthing_request(host, port, api_key, "GET", "/rest/system/status")
     return status if isinstance(status, dict) else {}
 
+def _ensure_syncthing_ignores(info: dict[str, Any]) -> bool:
+    host = str(info["api_host"])
+    port = int(info["gui_port"])
+    api_key = str(info["api_key"])
+    folder_id = str(info["folder_id"])
+    path = f"/rest/db/ignores?{urlencode({'folder': folder_id})}"
+    current = _syncthing_request(host, port, api_key, "GET", path)
+    if not isinstance(current, dict):
+        return False
+    current_patterns = current.get("ignore")
+    if not isinstance(current_patterns, list):
+        current_patterns = []
+    operator_patterns = [
+        pattern
+        for pattern in current_patterns
+        if isinstance(pattern, str) and pattern not in SYNCTHING_MANAGED_IGNORE_PATTERNS
+    ]
+    merged = [*SYNCTHING_MANAGED_IGNORE_PATTERNS, *operator_patterns]
+    if current_patterns == merged:
+        return False
+    _syncthing_request(
+        host,
+        port,
+        api_key,
+        "POST",
+        path,
+        {"ignore": merged},
+    )
+    return True
+
 def _ensure_syncthing_folder(info: dict[str, Any], peers: tuple[dict[str, Any], ...] = ()) -> None:
     if not info.get("enabled"):
         return
@@ -1166,10 +1214,14 @@ def _ensure_syncthing_folder(info: dict[str, Any], peers: tuple[dict[str, Any], 
     folder_id = str(info["folder_id"])
     folder_path = str(info["folder_path"])
     device_id = str(info["device_id"])
+    rescan_interval = _syncthing_rescan_interval_seconds(
+        info.get("rescan_interval_seconds")
+    )
 
     config = _syncthing_request(host, port, api_key, "GET", "/rest/config")
     if not isinstance(config, dict):
         return
+    original_config = copy.deepcopy(config)
 
     devices = config.setdefault("devices", [])
     folders = config.setdefault("folders", [])
@@ -1187,7 +1239,12 @@ def _ensure_syncthing_folder(info: dict[str, Any], peers: tuple[dict[str, Any], 
             existing["addresses"] = addresses
 
     folder = next((item for item in folders if item.get("id") == folder_id), None)
-    folder_devices = [{"deviceID": device_id}, *peer_devices]
+    folder_devices = []
+    for item in [{"deviceID": device_id}, *peer_devices]:
+        if item["deviceID"] and not any(
+            existing["deviceID"] == item["deviceID"] for existing in folder_devices
+        ):
+            folder_devices.append(item)
     if folder is None:
         folders.append(
             {
@@ -1195,27 +1252,34 @@ def _ensure_syncthing_folder(info: dict[str, Any], peers: tuple[dict[str, Any], 
                 "label": SYNCTHING_FOLDER_LABEL,
                 "path": folder_path,
                 "type": "sendreceive",
-                "rescanIntervalS": 15,
+                "rescanIntervalS": rescan_interval,
+                "fsWatcherEnabled": True,
+                "fsWatcherDelayS": 10,
                 "devices": folder_devices,
             }
         )
     else:
         folder["path"] = folder_path
         folder["type"] = "sendreceive"
+        folder["rescanIntervalS"] = rescan_interval
+        folder["fsWatcherEnabled"] = True
+        folder["fsWatcherDelayS"] = 10
         existing_ids = {str(item.get("deviceID") or "") for item in folder.get("devices", [])}
         for item in folder_devices:
             if item["deviceID"] not in existing_ids:
                 folder.setdefault("devices", []).append(item)
 
-    _syncthing_request(host, port, api_key, "PUT", "/rest/config", config)
-    try:
-        _syncthing_request(host, port, api_key, "POST", "/rest/system/restart", timeout=2.0)
-    except Exception:
-        pass
-    try:
-        _wait_for_syncthing_api(host, port, api_key, timeout_seconds=15.0)
-    except Exception:
-        pass
+    if config != original_config:
+        _syncthing_request(host, port, api_key, "PUT", "/rest/config", config)
+        try:
+            _syncthing_request(host, port, api_key, "POST", "/rest/system/restart", timeout=2.0)
+        except Exception:
+            pass
+        try:
+            _wait_for_syncthing_api(host, port, api_key, timeout_seconds=15.0)
+        except Exception:
+            pass
+    _ensure_syncthing_ignores(info)
 
 def _ensure_syncthing_for_runtime(env: dict[str, str], *, advertised_host: str) -> dict[str, str]:
     if not _syncthing_enabled(env):
@@ -1247,6 +1311,9 @@ def _ensure_syncthing_for_runtime(env: dict[str, str], *, advertised_host: str) 
     image = _syncthing_image(env)
     folder_id = _syncthing_folder_id(env)
     folder_path = _syncthing_folder_path(env)
+    rescan_interval = _syncthing_rescan_interval_seconds(
+        env.get("MN_SYNCTHING_RESCAN_INTERVAL_SECONDS")
+    )
     updates = {
         "MN_SYNCTHING_ENABLED": "auto",
         "MN_SYNCTHING_IMAGE": image,
@@ -1257,6 +1324,7 @@ def _ensure_syncthing_for_runtime(env: dict[str, str], *, advertised_host: str) 
         "MN_SYNCTHING_SYNC_PORT": str(sync_port),
         "MN_SYNCTHING_FOLDER_ID": folder_id,
         "MN_SYNCTHING_FOLDER_PATH": folder_path,
+        "MN_SYNCTHING_RESCAN_INTERVAL_SECONDS": str(rescan_interval),
     }
 
     if _ensure_compose_syncthing_service_definition():
@@ -1339,6 +1407,9 @@ def _syncthing_node_info(env: dict[str, str], advertised_host: str) -> dict[str,
         "sync_port": _parse_configured_port(env.get("MN_SYNCTHING_SYNC_PORT")) or DEFAULT_SYNCTHING_SYNC_PORT,
         "folder_id": _syncthing_folder_id(env),
         "folder_path": _syncthing_folder_path(env),
+        "rescan_interval_seconds": _syncthing_rescan_interval_seconds(
+            env.get("MN_SYNCTHING_RESCAN_INTERVAL_SECONDS")
+        ),
     }
 
 def _syncthing_info_from_handshake(handshake: Optional[dict]) -> dict[str, Any]:
@@ -2861,6 +2932,7 @@ def _join_network(
     remote_node = handshake.get("node_name") or _network_node_name(seed_host)
     redis_host, redis_port, redis_url = _validate_remote_redis_details(handshake, seed_host, token)
     from mn_cli.shared import client as local_client
+    _require_shared_coordination_store(local_client, handshake, remote_node)
 
     print_info(console, f"Adding MirrorNeuron network node {remote_node} from {target}…")
     if _docker_network_uses_internal_identity(requested_mode):
@@ -2887,10 +2959,6 @@ def _join_network(
     if runtime_compose_available():
         _persist_compose_cluster_node(remote_node)
     details: list[tuple[str, str]] = [("Node", remote_node)]
-    if runtime_compose_available() or os.getenv("MN_REDIS_URL", "").strip():
-        replication = _configure_worker_redis_replica(seed_host, handshake, token)
-        if replication:
-            details.append(("Replication", replication))
     model_reconcile = _reconcile_cluster_models_after_membership_change()
     if model_reconcile and model_reconcile.get("nodes"):
         details.append(
@@ -2911,6 +2979,76 @@ def _join_network(
         next_steps=("mn node list", "mn resource list", "mn model list"),
     )
     return handshake
+
+
+def _require_shared_coordination_store(
+    local_client: Any,
+    handshake: dict[str, Any],
+    remote_node: str,
+) -> None:
+    try:
+        summary = json.loads(local_client.get_system_summary())
+    except Exception as exc:
+        from mn_sdk.errors import AppError
+
+        raise AppError(
+            "MN_EXECUTION_FAILED",
+            "Could not verify the local coordination store before joining the node.",
+            internal_message=str(exc),
+            hint="Run mn doctor runtime and retry after the local Core is healthy.",
+            exit_code=1,
+            http_status=500,
+            cause=exc,
+        ) from exc
+
+    local_nodes = [
+        node
+        for node in (summary.get("nodes") or [])
+        if isinstance(node, dict)
+        and (node.get("self") is True or node.get("self?") is True)
+    ]
+    if not local_nodes and len(summary.get("nodes") or []) == 1:
+        local_nodes = list(summary["nodes"])
+    local_store = next(
+        (
+            node.get("coordination_store")
+            for node in local_nodes
+            if isinstance(node, dict)
+            and isinstance(node.get("coordination_store"), dict)
+            and node["coordination_store"].get("healthy") is True
+        ),
+        None,
+    )
+    node_info = handshake.get("node_info")
+    remote_store = (
+        node_info.get("coordination_store")
+        if isinstance(node_info, dict)
+        and isinstance(node_info.get("coordination_store"), dict)
+        else None
+    )
+    local_identity = str((local_store or {}).get("identity") or "").strip()
+    remote_identity = str((remote_store or {}).get("identity") or "").strip()
+    remote_writable = (remote_store or {}).get("writable_primary") is True
+    if (
+        local_identity
+        and remote_identity == local_identity
+        and remote_writable
+    ):
+        return
+
+    from mn_sdk.errors import AppError
+
+    raise AppError(
+        "MN_EXECUTION_FAILED",
+        f"Node {remote_node} is using a different or read-only coordination store.",
+        internal_message="coordination_store_mismatch",
+        hint=(
+            "Restart the joining Core with the primary node's MN_REDIS_URL, "
+            "or the same Sentinel configuration, before adding it to the cluster."
+        ),
+        exit_code=1,
+        http_status=409,
+    )
 
 
 def _reconcile_cluster_models_after_membership_change() -> dict[str, Any] | None:
@@ -3920,6 +4058,25 @@ def _cluster_endpoint_host(env: dict[str, str], host: str) -> str:
             return advertised
     return _native_endpoint_host(normalized)
 
+def _runtime_container_cache_path(
+    path_text: str,
+    *,
+    host_home_dir: str,
+    host_shared_storage_root: str,
+    runtime_shared_storage_root: str,
+) -> str:
+    path = Path(path_text).expanduser().resolve()
+    for host_root, runtime_root in (
+        (host_shared_storage_root, runtime_shared_storage_root),
+        (host_home_dir, "/root/.mn"),
+    ):
+        try:
+            relative = path.relative_to(Path(host_root).expanduser().resolve())
+        except ValueError:
+            continue
+        return str(Path(runtime_root) / relative)
+    return path_text
+
 def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
     runtime_env = str(env.get("MN_ENV") or os.getenv("MN_ENV") or "dev").strip().lower()
     blueprint_source = str(env.get("MN_BLUEPRINT_SOURCE") or os.getenv("MN_BLUEPRINT_SOURCE") or "github").strip().lower()
@@ -3974,6 +4131,17 @@ def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
         or os.getenv("MN_BUNDLE_CACHE_DIR")
         or f"{runtime_shared_storage_root.rstrip('/')}/bundle_cache"
     ).strip()
+    host_python_envs_dir = str(
+        env.get("MN_BLUEPRINT_PYTHON_ENVS_DIR")
+        or os.getenv("MN_BLUEPRINT_PYTHON_ENVS_DIR")
+        or Path(host_home_dir).expanduser() / "cache" / "blueprint-python-envs"
+    ).strip()
+    container_python_envs_dir = _runtime_container_cache_path(
+        host_python_envs_dir,
+        host_home_dir=host_home_dir,
+        host_shared_storage_root=host_shared_storage_root,
+        runtime_shared_storage_root=runtime_shared_storage_root,
+    )
     updates: dict[str, str] = {
         "MN_ENV": runtime_env,
         "MN_BLUEPRINT_SOURCE": blueprint_source,
@@ -3990,6 +4158,8 @@ def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
         "MN_CONTAINER_SHARED_STORAGE_ROOT": runtime_shared_storage_root,
         "MN_BUNDLE_CACHE_DIR": runtime_bundle_cache_dir,
         "MN_BLOB_STORE_ROOT": container_blob_store_root,
+        "MN_BLUEPRINT_PYTHON_ENVS_DIR": host_python_envs_dir,
+        "MN_CONTAINER_BLUEPRINT_PYTHON_ENVS_DIR": container_python_envs_dir,
         "MN_BLUEPRINT_WEB_UI_BIND_HOST": str(
             env.get("MN_BLUEPRINT_WEB_UI_BIND_HOST") or DEFAULT_BLUEPRINT_WEB_UI_BIND_HOST
         ).strip(),
@@ -4596,6 +4766,82 @@ def _configure_worker_redis_replica(
         f"Worker Redis {worker_redis_host}:{worker_redis_port} is replicating from {primary_host}:{primary_port}.",
     )
     return f"{worker_redis_host}:{worker_redis_port} -> {primary_host}:{primary_port}"
+
+
+def _configure_local_compose_redis_replica(env: dict[str, str]) -> str | None:
+    redis_url = str(env.get("MN_REDIS_URL") or "").strip()
+    parsed = urlparse(redis_url) if redis_url else None
+    primary_host = str(parsed.hostname if parsed else "").strip()
+    primary_port = _parse_configured_port(parsed.port if parsed else None)
+    primary_password = _redis_password_from_url(redis_url)
+    local_password = str(env.get("MN_REDIS_PASSWORD") or "").strip()
+    local_port = (
+        _parse_configured_port(env.get("MN_REDIS_PORT"))
+        or _published_container_port(COMPOSE_REDIS_CONTAINER, REDIS_CONTAINER_PORT)
+        or REDIS_DYNAMIC_PORT_START
+    )
+
+    if not primary_host or primary_port is None or not primary_password or not local_password:
+        from mn_sdk.errors import AppError
+
+        raise AppError(
+            "MN_EXECUTION_FAILED",
+            "Could not configure this joined node's Redis replica.",
+            internal_message="incomplete primary or local Redis connection details",
+            hint="Check MN_REDIS_URL, MN_REDIS_PASSWORD, and MN_REDIS_PORT, then restart the joined node.",
+            exit_code=1,
+            http_status=500,
+        )
+
+    if primary_host in {"localhost", "127.0.0.1"} and int(primary_port) == int(local_port):
+        return None
+
+    try:
+        _redis_command(
+            "127.0.0.1",
+            local_port,
+            local_password,
+            "CONFIG",
+            "SET",
+            "masterauth",
+            primary_password,
+        )
+        _redis_command(
+            "127.0.0.1",
+            local_port,
+            local_password,
+            "CONFIG",
+            "SET",
+            "replica-read-only",
+            "yes",
+        )
+        _redis_command(
+            "127.0.0.1",
+            local_port,
+            local_password,
+            "REPLICAOF",
+            primary_host,
+            str(primary_port),
+        )
+    except Exception as exc:
+        from mn_sdk.errors import AppError
+
+        raise AppError(
+            "MN_EXECUTION_FAILED",
+            "Could not configure this joined node's Redis replica.",
+            internal_message=str(exc),
+            hint="Check that the local Redis port and the primary Redis endpoint are reachable, then retry.",
+            exit_code=1,
+            http_status=500,
+            cause=exc,
+        ) from exc
+
+    print_info(
+        console,
+        f"Local Redis 127.0.0.1:{local_port} is read-only HA storage for {primary_host}:{primary_port}.",
+    )
+    return f"127.0.0.1:{local_port} -> {primary_host}:{primary_port}"
+
 
 def runtime_compose_cmd(*args: str) -> list[str]:
     cmd = [
@@ -6052,6 +6298,8 @@ def _start_server(
             if not ip and not reconnecting_joined_node:
                 _force_compose_redis_primary()
                 _start_compose_sentinel(advertised_host, env)
+            elif join_handshake or reconnecting_joined_node:
+                _configure_local_compose_redis_replica(env)
             print_info(console, "Docker runtime is running (Compose project: mirror-neuron).")
         except (FileNotFoundError, subprocess.CalledProcessError):
             print_error(console, "Failed to start MirrorNeuron Docker Compose runtime.")

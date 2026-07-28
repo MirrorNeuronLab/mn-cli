@@ -1,6 +1,9 @@
 from .common import *
 from contextlib import contextmanager
 from contextvars import ContextVar
+from mn_sdk.workflow_placement import (
+    resolve_and_apply_workflow_placement as sdk_resolve_and_apply_workflow_placement,
+)
 
 
 _WORKFLOW_PLACEMENT_NODE: ContextVar[str] = ContextVar(
@@ -216,25 +219,6 @@ def _resolve_and_apply_workflow_placement(
     system_summary: Optional[dict[str, Any]] = None,
     env: Optional[dict[str, str]] = None,
 ) -> dict[str, Any] | None:
-    """Select one node that can satisfy the complete native workflow.
-
-    Placement is intentionally resolved before model, context, HostLocal, or
-    DockerWorker preparation.  A workflow that uses node-local resources must
-    not have its lightweight nodes left on the submitter while a GPU worker is
-    sent to another machine: that produces unreachable gateways, context
-    services, and container networks.
-    """
-
-    mode = _workflow_placement_mode(manifest, env=env)
-    if mode == "distributed":
-        return None
-    if (
-        mode is None
-        and not _workflow_requires_single_node(manifest)
-        and not runtime_model_requirements
-    ):
-        return None
-
     resources = (
         resource_report
         if isinstance(resource_report, dict)
@@ -248,124 +232,15 @@ def _resolve_and_apply_workflow_placement(
                 f"could not inspect runtime nodes for workflow placement: {exc}"
             ) from exc
         system_summary = decoded if isinstance(decoded, dict) else {}
-
-    resource_nodes = _workflow_nodes_by_name(resources)
-    system_nodes = _workflow_nodes_by_name(system_summary)
-    names = sorted(set(resource_nodes) | set(system_nodes))
-    if not names:
-        raise RuntimeError(
-            "No runtime nodes were reported while resolving single-node workflow placement."
-        )
-
-    explicit = _workflow_explicit_node_placements(manifest)
-    distinct_explicit = sorted(set(explicit.values()))
-    if len(distinct_explicit) > 1:
-        details = ", ".join(
-            f"{node_id}={node_name}" for node_id, node_name in sorted(explicit.items())
-        )
-        raise RuntimeError(
-            "single_node workflow placement conflicts with explicit per-agent placements: "
-            + details
-        )
-
-    requested_requirements = _workflow_node_requirements(
+    return sdk_resolve_and_apply_workflow_placement(
         manifest,
         runtime_model_requirements=runtime_model_requirements,
+        resource_report=resources,
+        system_summary=system_summary,
+        env=env,
+        model_entry_resolver=resolve_model_entry,
+        constraint_source="mn-cli-workflow-placement",
     )
-    requirements = requested_requirements
-    candidates, rejections = _workflow_placement_candidates(
-        names,
-        resource_nodes=resource_nodes,
-        system_nodes=system_nodes,
-        requirements=requirements,
-        explicit_node=distinct_explicit[0] if distinct_explicit else "",
-    )
-    model_fallbacks: list[dict[str, Any]] = []
-    if not candidates and runtime_model_requirements:
-        fallback_model_requirements, model_fallbacks = (
-            _workflow_model_fallback_requirements(runtime_model_requirements)
-        )
-        if model_fallbacks:
-            requirements = _workflow_node_requirements(
-                manifest,
-                runtime_model_requirements=fallback_model_requirements,
-            )
-            candidates, fallback_rejections = _workflow_placement_candidates(
-                names,
-                resource_nodes=resource_nodes,
-                system_nodes=system_nodes,
-                requirements=requirements,
-                explicit_node=distinct_explicit[0] if distinct_explicit else "",
-            )
-            if candidates:
-                rejections = fallback_rejections
-            else:
-                rejections = {
-                    name: list(
-                        dict.fromkeys(
-                            rejections.get(name, [])
-                            + [
-                                "fallback placement: " + reason
-                                for reason in fallback_rejections.get(name, [])
-                            ]
-                        )
-                    )
-                    for name in sorted(set(rejections) | set(fallback_rejections))
-                }
-
-    if not candidates:
-        diagnostics = (
-            "; ".join(
-                f"{name}: {', '.join(reasons)}"
-                for name, reasons in sorted(rejections.items())
-            )
-            or "no eligible runtime nodes"
-        )
-        raise RuntimeError(
-            "No single runtime node can run this workflow. Per-node rejection reasons: "
-            + diagnostics
-        )
-
-    _, selected_node, capacity = sorted(
-        candidates,
-        key=lambda item: (
-            -item[0][0],
-            -item[0][1],
-            -item[0][2],
-            item[0][3],
-        ),
-    )[0]
-    _apply_workflow_node_constraint(manifest, selected_node)
-    placement = {
-        "mode": "single_node",
-        "selected_node": selected_node,
-        "selection": "best_fit_accelerator_headroom",
-        "capacity": capacity,
-        "requirements": requirements,
-        "rejections": rejections,
-    }
-    if model_fallbacks:
-        placement["requested_requirements"] = requested_requirements
-        placement["model_fallbacks"] = model_fallbacks
-    metadata = manifest.setdefault("metadata", {})
-    if not isinstance(metadata, dict):
-        metadata = {}
-        manifest["metadata"] = metadata
-    metadata["mn_workflow_placement"] = placement
-    runtime = (
-        manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
-    )
-    if runtime:
-        runtime_placement = (
-            runtime.get("placement")
-            if isinstance(runtime.get("placement"), dict)
-            else {}
-        )
-        runtime_placement["mode"] = "single_node"
-        runtime_placement["selected_node"] = selected_node
-        runtime["placement"] = runtime_placement
-        manifest["runtime"] = runtime
-    return placement
 
 
 def _workflow_placement_candidates(

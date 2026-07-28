@@ -28,6 +28,7 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_RUNTIME_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_CONTAINER_SHARED_STORAGE_ROOT", raising=False)
+    monkeypatch.delenv("MN_BLUEPRINT_PYTHON_ENVS_DIR", raising=False)
     monkeypatch.setattr(
         run_cmds,
         "sync_litellm_gateway",
@@ -258,7 +259,9 @@ def test_doctor_prepares_hostlocal_python_environment_inside_docker_core(tmp_pat
         timeout=1,
     )
 
-    runtime_env_dir = runtime_root / "blueprint-python-envs" / env_dir.name
+    host_env_root = Path(os.environ["MN_HOME"]) / "cache" / "blueprint-python-envs"
+    runtime_env_dir = Path("/root/.mn/cache/blueprint-python-envs") / env_dir.name
+    assert env_dir.parent == host_env_root
     assert calls[0][0] == ["docker", "exec", "mirror-neuron-core", "python3", "--version"]
     assert calls[1][0] == [
         "docker",
@@ -338,15 +341,9 @@ def test_doctor_stages_local_hostlocal_packages_outside_read_only_source(
         timeout=1,
     )
 
-    staged = (
-        host_root
-        / "blueprint-python-sources"
-        / env_dir.name
-        / "0-local-skill"
-    )
+    staged = mn_home / "cache" / "blueprint-python-sources" / env_dir.name / "0-local-skill"
     runtime_staged = (
-        runtime_root
-        / "blueprint-python-sources"
+        Path("/root/.mn/cache/blueprint-python-sources")
         / env_dir.name
         / "0-local-skill"
     )
@@ -454,7 +451,7 @@ def test_doctor_removes_partial_core_owned_python_environment_in_core(
         timeout=1,
     )
 
-    runtime_env = runtime_root / "blueprint-python-envs" / first.name
+    runtime_env = Path("/root/.mn/cache/blueprint-python-envs") / first.name
     assert [
         "docker",
         "exec",
@@ -464,6 +461,61 @@ def test_doctor_removes_partial_core_owned_python_environment_in_core(
         "--",
         str(runtime_env),
     ] in calls
+
+
+def test_doctor_warns_when_explicit_python_cache_is_synchronized(
+    tmp_path,
+    monkeypatch,
+    mocker,
+):
+    shared_root = tmp_path / "shared"
+    configured = shared_root / "blueprint-python-envs"
+    monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", str(shared_root))
+    monkeypatch.setenv("MN_BLUEPRINT_PYTHON_ENVS_DIR", str(configured))
+    env_dir = configured / "digest"
+    mocker.patch("mn_cli.libs.run_cmds._doctor_prepare_python_env", return_value=env_dir)
+    mocker.patch("mn_cli.libs.run_cmds._doctor_running_core_container", return_value="")
+    manifest = {
+        "nodes": [
+            {
+                "node_id": "native",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.HostLocal",
+                    "python_environment": {"packages": ["requests"]},
+                },
+            }
+        ]
+    }
+
+    report = run_cmds._doctor_prepare_hostlocal_python_envs(
+        tmp_path,
+        manifest,
+        timeout=1,
+        check_only=False,
+    )
+
+    assert report["status"] == "warning"
+    assert "inside synchronized storage" in report["cache_warning"]
+
+
+def test_doctor_warns_when_persisted_python_cache_is_synchronized(
+    tmp_path,
+    monkeypatch,
+):
+    mn_home = Path(os.environ["MN_HOME"])
+    shared_root = tmp_path / "shared"
+    configured = shared_root / "blueprint-python-envs"
+    mn_home.mkdir(parents=True)
+    mn_home.joinpath("docker-compose.env").write_text(
+        f"MN_HOST_SHARED_STORAGE_ROOT={shared_root}\n"
+        f"MN_BLUEPRINT_PYTHON_ENVS_DIR={configured}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("MN_BLUEPRINT_PYTHON_ENVS_DIR", raising=False)
+
+    warning = run_cmds._doctor_shared_python_env_cache_warning()
+
+    assert "inside synchronized storage" in warning
 
 
 def test_doctor_skill_report_reads_declared_dependencies(tmp_path):

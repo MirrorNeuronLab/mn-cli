@@ -77,6 +77,7 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_SYNCTHING_API_KEY", raising=False)
     monkeypatch.delenv("MN_SYNCTHING_GUI_PORT", raising=False)
     monkeypatch.delenv("MN_SYNCTHING_SYNC_PORT", raising=False)
+    monkeypatch.delenv("MN_SYNCTHING_RESCAN_INTERVAL_SECONDS", raising=False)
     monkeypatch.delenv("DOCKER_HOST_SOCKET", raising=False)
     monkeypatch.delenv("MN_NETWORK_JOIN_TOKEN", raising=False)
     state_dir = tmp_path / ".mn"
@@ -488,6 +489,7 @@ def test_ensure_syncthing_for_runtime_starts_sidecar_without_sudo(mocker, tmp_pa
     compose_env = server_cmds._read_env_file(server_cmds.RUNTIME_COMPOSE_ENV)
     assert compose_env["MN_SYNCTHING_DEVICE_ID"] == "LOCALDEVICE"
     assert compose_env["MN_SYNCTHING_ADVERTISE_HOST"] == "192.168.6.28"
+    assert compose_env["MN_SYNCTHING_RESCAN_INTERVAL_SECONDS"] == "3600"
 
 
 def test_connect_syncthing_peers_configures_both_nodes(mocker):
@@ -496,13 +498,24 @@ def test_connect_syncthing_peers_configures_both_nodes(mocker):
         ("192.168.4.173", 58384): {"devices": [], "folders": []},
     }
     puts = []
+    ignores = {
+        ("127.0.0.1", 58384): [],
+        ("192.168.4.173", 58384): [],
+    }
+    ignore_posts = []
 
     def fake_request(host, port, api_key, method, path, body=None, **_kwargs):
         if method == "GET" and path == "/rest/config":
             return configs[(host, port)]
+        if method == "GET" and path.startswith("/rest/db/ignores?"):
+            return {"ignore": ignores[(host, port)], "expanded": []}
         if method == "PUT" and path == "/rest/config":
             puts.append((host, port, api_key, body))
             return None
+        if method == "POST" and path.startswith("/rest/db/ignores?"):
+            ignore_posts.append((host, port, api_key, body))
+            ignores[(host, port)] = list(body["ignore"])
+            return body
         if method == "POST" and path == "/rest/system/restart":
             return None
         raise AssertionError((host, port, api_key, method, path))
@@ -543,6 +556,153 @@ def test_connect_syncthing_peers_configures_both_nodes(mocker):
     assert local_config["devices"][0]["addresses"] == ["tcp://192.168.4.173:22000"]
     assert remote_config["devices"][0]["deviceID"] == "LOCALDEVICE"
     assert remote_config["devices"][0]["addresses"] == ["tcp://192.168.6.28:22000"]
+    assert local_config["folders"][0]["rescanIntervalS"] == 3600
+    assert local_config["folders"][0]["fsWatcherEnabled"] is True
+    assert local_config["folders"][0]["fsWatcherDelayS"] == 10
+    assert len(ignore_posts) == 2
+    assert all(
+        body["ignore"] == list(server_cmds.SYNCTHING_MANAGED_IGNORE_PATTERNS)
+        for _host, _port, _key, body in ignore_posts
+    )
+
+
+def test_ensure_syncthing_folder_updates_existing_settings_and_preserves_peers_and_ignores(
+    mocker,
+):
+    info = {
+        "enabled": True,
+        "device_id": "LOCALDEVICE",
+        "api_key": "local-key",
+        "api_host": "127.0.0.1",
+        "host": "192.168.6.28",
+        "gui_port": 58384,
+        "sync_port": 22000,
+        "folder_id": server_cmds.SYNCTHING_FOLDER_ID,
+        "folder_path": server_cmds.SYNCTHING_FOLDER_PATH,
+        "rescan_interval_seconds": 7200,
+    }
+    config = {
+        "devices": [
+            {
+                "deviceID": "EXISTINGPEER",
+                "name": "existing",
+                "addresses": ["dynamic"],
+            }
+        ],
+        "folders": [
+            {
+                "id": server_cmds.SYNCTHING_FOLDER_ID,
+                "path": server_cmds.SYNCTHING_FOLDER_PATH,
+                "type": "sendreceive",
+                "rescanIntervalS": 15,
+                "fsWatcherEnabled": False,
+                "fsWatcherDelayS": 1,
+                "devices": [
+                    {"deviceID": "LOCALDEVICE"},
+                    {"deviceID": "EXISTINGPEER"},
+                ],
+            }
+        ],
+    }
+    requests = []
+
+    def fake_request(host, port, api_key, method, path, body=None, **_kwargs):
+        requests.append((method, path, body))
+        if method == "GET" and path == "/rest/config":
+            return config
+        if method == "GET" and path.startswith("/rest/db/ignores?"):
+            return {"ignore": ["/operator-cache", "!/operator-keep"], "expanded": []}
+        return None
+
+    mocker.patch("mn_cli.server_cmds._syncthing_request", side_effect=fake_request)
+    mocker.patch("mn_cli.server_cmds._wait_for_syncthing_api")
+
+    server_cmds._ensure_syncthing_folder(info)
+
+    folder = config["folders"][0]
+    assert folder["rescanIntervalS"] == 7200
+    assert folder["fsWatcherEnabled"] is True
+    assert folder["fsWatcherDelayS"] == 10
+    assert folder["devices"] == [
+        {"deviceID": "LOCALDEVICE"},
+        {"deviceID": "EXISTINGPEER"},
+    ]
+    assert any(method == "PUT" and path == "/rest/config" for method, path, _body in requests)
+    ignore_body = next(
+        body
+        for method, path, body in requests
+        if method == "POST" and path.startswith("/rest/db/ignores?")
+    )
+    assert ignore_body["ignore"] == [
+        *server_cmds.SYNCTHING_MANAGED_IGNORE_PATTERNS,
+        "/operator-cache",
+        "!/operator-keep",
+    ]
+
+
+def test_ensure_syncthing_folder_is_noop_when_configuration_is_current(mocker):
+    info = {
+        "enabled": True,
+        "device_id": "LOCALDEVICE",
+        "api_key": "local-key",
+        "api_host": "127.0.0.1",
+        "host": "192.168.6.28",
+        "gui_port": 58384,
+        "sync_port": 22000,
+        "folder_id": server_cmds.SYNCTHING_FOLDER_ID,
+        "folder_path": server_cmds.SYNCTHING_FOLDER_PATH,
+        "rescan_interval_seconds": 3600,
+    }
+    config = {
+        "devices": [],
+        "folders": [
+            {
+                "id": server_cmds.SYNCTHING_FOLDER_ID,
+                "path": server_cmds.SYNCTHING_FOLDER_PATH,
+                "type": "sendreceive",
+                "rescanIntervalS": 3600,
+                "fsWatcherEnabled": True,
+                "fsWatcherDelayS": 10,
+                "devices": [{"deviceID": "LOCALDEVICE"}],
+            }
+        ],
+    }
+    requests = []
+
+    def fake_request(host, port, api_key, method, path, body=None, **_kwargs):
+        requests.append((method, path, body))
+        if method == "GET" and path == "/rest/config":
+            return config
+        if method == "GET" and path.startswith("/rest/db/ignores?"):
+            return {
+                "ignore": list(server_cmds.SYNCTHING_MANAGED_IGNORE_PATTERNS),
+                "expanded": [],
+            }
+        raise AssertionError((host, port, api_key, method, path))
+
+    mocker.patch("mn_cli.server_cmds._syncthing_request", side_effect=fake_request)
+
+    server_cmds._ensure_syncthing_folder(info)
+
+    assert [(method, path) for method, path, _body in requests] == [
+        ("GET", "/rest/config"),
+        (
+            "GET",
+            f"/rest/db/ignores?folder={server_cmds.SYNCTHING_FOLDER_ID}",
+        ),
+    ]
+
+
+@pytest.mark.parametrize("value", ["bad", "0", "-10", object()])
+def test_syncthing_rescan_interval_rejects_invalid_values(value):
+    assert (
+        server_cmds._syncthing_rescan_interval_seconds(value)
+        == server_cmds.DEFAULT_SYNCTHING_RESCAN_INTERVAL_SECONDS
+    )
+
+
+def test_syncthing_rescan_interval_accepts_custom_value():
+    assert server_cmds._syncthing_rescan_interval_seconds("7200") == 7200
 
 
 def test_deploy_compose_passes_host_shared_storage_to_core():
@@ -565,6 +725,55 @@ def test_runtime_blueprint_env_updates_ignores_legacy_host_mn_dir(tmp_path):
 
     assert updates["MN_HOST_ARTIFACTS_DIR"] == str(server_cmds.DIR / "runs")
     assert updates["MN_RUNS_ROOT"] == str(server_cmds.DIR / "runs")
+
+
+def test_runtime_blueprint_env_updates_maps_node_local_python_cache_for_docker(
+    tmp_path,
+    monkeypatch,
+):
+    host_home = tmp_path / "mn-home"
+    host_shared = host_home / "shared"
+    monkeypatch.delenv("MN_BLUEPRINT_PYTHON_ENVS_DIR", raising=False)
+
+    updates = _runtime_blueprint_env_updates(
+        {
+            "MN_HOST_HOME_DIR": str(host_home),
+            "MN_HOST_SHARED_STORAGE_ROOT": str(host_shared),
+            "MN_RUNTIME_SHARED_STORAGE_ROOT": "/runtime/shared",
+        }
+    )
+
+    assert updates["MN_BLUEPRINT_PYTHON_ENVS_DIR"] == str(
+        host_home / "cache" / "blueprint-python-envs"
+    )
+    assert (
+        updates["MN_CONTAINER_BLUEPRINT_PYTHON_ENVS_DIR"]
+        == "/root/.mn/cache/blueprint-python-envs"
+    )
+
+
+def test_runtime_blueprint_env_updates_maps_explicit_legacy_shared_python_cache(
+    tmp_path,
+):
+    host_home = tmp_path / "mn-home"
+    host_shared = host_home / "shared"
+    explicit_cache = host_shared / "blueprint-python-envs"
+
+    updates = _runtime_blueprint_env_updates(
+        {
+            "MN_HOST_HOME_DIR": str(host_home),
+            "MN_HOST_SHARED_STORAGE_ROOT": str(host_shared),
+            "MN_RUNTIME_SHARED_STORAGE_ROOT": "/runtime/shared",
+            "MN_BLUEPRINT_PYTHON_ENVS_DIR": str(explicit_cache),
+        }
+    )
+
+    assert updates["MN_BLUEPRINT_PYTHON_ENVS_DIR"] == str(explicit_cache)
+    assert (
+        updates["MN_CONTAINER_BLUEPRINT_PYTHON_ENVS_DIR"]
+        == "/runtime/shared/blueprint-python-envs"
+    )
+
 
 def test_resolve_grpc_admin_token_generates_persistent_token(tmp_path, mocker):
     token_dir = tmp_path / "state"
@@ -1890,7 +2099,9 @@ def test_add_node_rejects_redis_url_without_token_password(mocker, tmp_path):
 
     assert exc.value.exit_code == 1
 
-def test_join_network_configures_worker_redis_replica(mocker, tmp_path, capsys):
+def test_join_network_rejects_divergent_coordination_store_before_membership(
+    mocker, tmp_path
+):
     import mn_sdk
     import mn_cli.shared
 
@@ -1925,7 +2136,12 @@ def test_join_network_configures_worker_redis_replica(mocker, tmp_path, capsys):
                         "mode": "sentinel",
                         "sentinel_port": 26379,
                         "sentinel_master": "mirror-neuron",
-                    }
+                    },
+                    "coordination_store": {
+                        "identity": "worker-store",
+                        "writable_primary": True,
+                        "healthy": True,
+                    },
                 },
             }
 
@@ -1936,50 +2152,42 @@ def test_join_network_configures_worker_redis_replica(mocker, tmp_path, capsys):
         return "OK"
 
     mocker.patch.object(mn_sdk, "Client", StubClient)
-    mocker.patch.object(mn_cli.shared.client, "add_node", return_value="connected")
+    add_node = mocker.patch.object(
+        mn_cli.shared.client, "add_node", return_value="connected"
+    )
+    mocker.patch.object(
+        mn_cli.shared.client,
+        "get_system_summary",
+        return_value=json.dumps(
+            {
+                "nodes": [
+                    {
+                        "coordination_store": {
+                            "identity": "primary-store",
+                            "writable_primary": True,
+                            "healthy": True,
+                        }
+                    }
+                ]
+            }
+        ),
+    )
     mocker.patch('mn_cli.server_cmds._redis_command', side_effect=redis_command)
     mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=0)
     mocker.patch('mn_cli.server_cmds._ensure_local_cluster_runtime_for_join')
 
-    _join_network("192.168.4.20", "join-token", grpc_port=50055)
+    from mn_sdk.errors import AppError
 
-    assert (
-        "192.168.4.20",
-        56380,
-        worker_password,
-        ("CONFIG", "SET", "masterauth", primary_password),
-    ) in redis_calls
-    assert (
-        "192.168.4.20",
-        56380,
-        worker_password,
-        ("REPLICAOF", "192.168.4.99", "56379"),
-    ) in redis_calls
-    assert not any(call[3][:3] == ("CONFIG", "SET", "requirepass") for call in redis_calls)
-    assert (
-        "192.168.4.99",
-        56379,
-        primary_password,
-        ("WAIT", "1", "1000"),
-    ) in redis_calls
-    assert (
-        "192.168.4.20",
-        26379,
-        worker_password,
-        ("SENTINEL", "MONITOR", "mirror-neuron", "192.168.4.99", "56379", "1"),
-    ) in redis_calls
-    assert (
-        "192.168.4.20",
-        26379,
-        worker_password,
-        ("SENTINEL", "SET", "mirror-neuron", "auth-pass", primary_password),
-    ) in redis_calls
-    output = capsys.readouterr().out
-    assert "Node join successful." in output
-    assert "connected" in output
+    with pytest.raises(AppError, match="different or read-only"):
+        _join_network("192.168.4.20", "join-token", grpc_port=50055)
+
+    add_node.assert_not_called()
+    assert redis_calls == []
 
 
-def test_join_network_skips_replication_when_worker_advertises_primary_redis(mocker, tmp_path, capsys):
+def test_join_network_accepts_shared_coordination_store_without_reconfiguring_redis(
+    mocker, tmp_path, capsys
+):
     import mn_sdk
     import mn_cli.shared
 
@@ -2008,7 +2216,13 @@ def test_join_network_skips_replication_when_worker_advertises_primary_redis(moc
                 "redis_host": "192.168.4.99",
                 "redis_port": 56379,
                 "redis_url": f"redis://:{primary_password}@192.168.4.99:56379/0",
-                "node_info": {},
+                "node_info": {
+                    "coordination_store": {
+                        "identity": "primary-store",
+                        "writable_primary": True,
+                        "healthy": True,
+                    }
+                },
             }
 
     redis_calls = []
@@ -2019,6 +2233,23 @@ def test_join_network_skips_replication_when_worker_advertises_primary_redis(moc
 
     mocker.patch.object(mn_sdk, "Client", StubClient)
     mocker.patch.object(mn_cli.shared.client, "add_node", return_value="connected")
+    mocker.patch.object(
+        mn_cli.shared.client,
+        "get_system_summary",
+        return_value=json.dumps(
+            {
+                "nodes": [
+                    {
+                        "coordination_store": {
+                            "identity": "primary-store",
+                            "writable_primary": True,
+                            "healthy": True,
+                        }
+                    }
+                ]
+            }
+        ),
+    )
     mocker.patch('mn_cli.server_cmds._redis_command', side_effect=redis_command)
     mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=0)
     mocker.patch('mn_cli.server_cmds._ensure_local_cluster_runtime_for_join')
@@ -2027,8 +2258,49 @@ def test_join_network_skips_replication_when_worker_advertises_primary_redis(moc
 
     assert not any(call[3][0] == "REPLICAOF" for call in redis_calls)
     output = " ".join(capsys.readouterr().out.split())
-    assert "Worker Redis replication was skipped because the worker advertised the primary Redis endpoint." in output
     assert "Replication:" not in output
+    assert "Node join successful." in output
+
+
+def test_configure_local_compose_redis_as_read_only_replica(mocker):
+    redis_calls = []
+
+    def redis_command(host, port, password, *args):
+        redis_calls.append((host, port, password, args))
+        return "OK"
+
+    mocker.patch.object(server_cmds, "_redis_command", side_effect=redis_command)
+    mocker.patch.object(server_cmds, "_published_container_port", return_value=56379)
+
+    result = server_cmds._configure_local_compose_redis_replica(
+        {
+            "MN_REDIS_URL": "redis://:primary-password@10.0.4.23:56379/0",
+            "MN_REDIS_PASSWORD": "local-password",
+            "MN_REDIS_PORT": "56379",
+        }
+    )
+
+    assert result == "127.0.0.1:56379 -> 10.0.4.23:56379"
+    assert redis_calls == [
+        (
+            "127.0.0.1",
+            56379,
+            "local-password",
+            ("CONFIG", "SET", "masterauth", "primary-password"),
+        ),
+        (
+            "127.0.0.1",
+            56379,
+            "local-password",
+            ("CONFIG", "SET", "replica-read-only", "yes"),
+        ),
+        (
+            "127.0.0.1",
+            56379,
+            "local-password",
+            ("REPLICAOF", "10.0.4.23", "56379"),
+        ),
+    ]
 
 
 def test_join_network_keeps_local_shared_storage_and_connects_syncthing(mocker, tmp_path, monkeypatch):
@@ -2306,6 +2578,7 @@ def test_start_server_restarts_existing_api_when_runtime_blueprint_env_changes(m
     assert "MN_RUNS_ROOT=/tmp/otterdesk-runs" in compose_text
 
 def test_start_server_join_compose_imports_primary_grpc_tokens(mocker, tmp_path):
+    mocker.patch("mn_cli.server_cmds._configure_local_compose_redis_replica")
     compose_file = server_cmds.RUNTIME_COMPOSE_FILE
     compose_env = server_cmds.RUNTIME_COMPOSE_ENV
     compose_file.parent.mkdir(parents=True, exist_ok=True)
@@ -2956,6 +3229,7 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
     assert "mirror-neuron-core:" in (server_cmds.DIR / server_cmds.RUNTIME_CLUSTER_OVERRIDE_FILE).read_text()
 
 def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
+    mocker.patch("mn_cli.server_cmds._configure_local_compose_redis_replica")
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
     compose_file.write_text("services: {}\n")
@@ -3012,6 +3286,7 @@ def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
 
 
 def test_start_server_join_connects_syncthing_before_compose_up(mocker, tmp_path, monkeypatch):
+    mocker.patch("mn_cli.server_cmds._configure_local_compose_redis_replica")
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
     local_shared = tmp_path / "local-shared"
@@ -3111,6 +3386,7 @@ def test_start_server_join_connects_syncthing_before_compose_up(mocker, tmp_path
 
 
 def test_start_server_preserves_persisted_join_profile_on_restart(mocker, tmp_path):
+    mocker.patch("mn_cli.server_cmds._configure_local_compose_redis_replica")
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
     redis_password = "persisted-redis-password"
@@ -3169,6 +3445,7 @@ def test_start_server_preserves_persisted_join_profile_on_restart(mocker, tmp_pa
 
 
 def test_start_server_preserves_multi_node_join_profile_on_restart(mocker, tmp_path):
+    mocker.patch("mn_cli.server_cmds._configure_local_compose_redis_replica")
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
     redis_password = "persisted-redis-password"
@@ -3221,6 +3498,7 @@ def test_start_server_preserves_multi_node_join_profile_on_restart(mocker, tmp_p
 
 
 def test_start_server_refreshes_generated_node_name_for_joined_runtime_ip_change(mocker, tmp_path):
+    mocker.patch("mn_cli.server_cmds._configure_local_compose_redis_replica")
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
     redis_password = "persisted-redis-password"
@@ -3283,6 +3561,7 @@ def test_start_server_refreshes_generated_node_name_for_joined_runtime_ip_change
     ensure_redis.assert_not_called()
 
 def test_start_server_refreshes_generated_node_name_for_joined_runtime_explicit_host_change(mocker, tmp_path):
+    mocker.patch("mn_cli.server_cmds._configure_local_compose_redis_replica")
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
     redis_password = "persisted-redis-password"
