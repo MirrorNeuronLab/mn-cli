@@ -1,0 +1,235 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import shutil
+import subprocess
+from pathlib import Path
+from typing import Any
+
+from mn_sdk import cleanup_docker_worker_services
+from mn_sdk.runtime_config import default_runs_root
+
+from mn_cli.libs.blueprint_resources import (
+    cleanup_blueprint_host_hooks,
+    cleanup_web_ui_process,
+    default_generated_bundles_dir,
+)
+
+
+def cleanup_cancelled_job_resources(
+    job_id: str, *, runtime_client: Any, log: Any
+) -> None:
+    summary = {"process_removed": [], "process_skipped": [], "errors": []}
+    run_id = blueprint_run_id_for_job(job_id, runtime_client=runtime_client)
+    if run_id:
+        run_dir = default_runs_root() / run_id
+        if run_dir.is_dir():
+            cleanup_blueprint_host_hooks(
+                run_dir, dry_run=False, summary=summary, reason="job_cancelled"
+            )
+            cleanup_web_ui_process(
+                run_dir, dry_run=False, summary=summary, reason="job_cancelled"
+            )
+
+    cleanup_local_openshell_sandboxes(job_id, summary)
+    for error in summary["errors"]:
+        log.warning("Failed to cleanup local resources for job %s: %s", job_id, error)
+
+
+def cleanup_cleared_job_resources(
+    job_id: str, *, runtime_client: Any, log: Any
+) -> None:
+    if not job_id:
+        return
+
+    run_id = blueprint_run_id_for_job(job_id, runtime_client=runtime_client)
+    cleanup_cancelled_job_resources(job_id, runtime_client=runtime_client, log=log)
+    try:
+        cleanup_docker_worker_services(job_id=job_id)
+    except Exception:
+        log.warning(
+            "Failed to cleanup DockerWorker resources for cleared job %s",
+            job_id,
+            exc_info=True,
+        )
+
+    paths = [Path(f"/tmp/mn_{job_id}")]
+    if run_id:
+        paths.extend(
+            [
+                default_runs_root() / run_id,
+                default_generated_bundles_dir() / run_id,
+            ]
+        )
+
+    for path in paths:
+        try:
+            shutil.rmtree(path)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            log.warning("Failed to remove cleared job path %s", path, exc_info=True)
+
+
+def blueprint_run_id_for_job(job_id: str, *, runtime_client: Any) -> str | None:
+    run_id = blueprint_run_id_from_run_store(job_id)
+    if run_id:
+        return run_id
+
+    snapshot_path = Path(f"/tmp/mn_{job_id}") / "job_snapshot.json"
+    if snapshot_path.is_file():
+        try:
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            run_id = snapshot.get("run_id")
+            if isinstance(run_id, str) and run_id:
+                return run_id
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    try:
+        job = json.loads(runtime_client.get_job(job_id))
+    except Exception:
+        return None
+
+    metadata = (((job.get("job") or {}).get("manifest") or {}).get("metadata") or {})
+    mn_cli_metadata = metadata.get("mn_cli") if isinstance(metadata, dict) else {}
+    run_id = (
+        mn_cli_metadata.get("blueprint_run_id")
+        if isinstance(mn_cli_metadata, dict)
+        else None
+    )
+    return run_id if isinstance(run_id, str) and run_id else None
+
+
+def blueprint_run_id_from_run_store(job_id: str) -> str | None:
+    runs_root = default_runs_root()
+    if not runs_root.is_dir():
+        return None
+
+    for job_file in runs_root.glob("*/job.json"):
+        try:
+            payload = json.loads(job_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        if payload.get("job_id") == job_id:
+            run_id = payload.get("run_id") or job_file.parent.name
+            return run_id if isinstance(run_id, str) and run_id else None
+
+    return None
+
+
+def cleanup_local_openshell_sandboxes(
+    job_id: str, summary: dict[str, list[str]]
+) -> None:
+    cleanup_prepared_openshell_sandbox(job_id, summary)
+
+    try:
+        result = subprocess.run(
+            [
+                "docker",
+                "ps",
+                "-a",
+                "--filter",
+                f"name=openshell-mirror-neuron-job-{job_id}",
+                "--format",
+                "{{.Names}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        summary["errors"].append(
+            f"Failed to list OpenShell sandboxes for {job_id}: {error}"
+        )
+        return
+
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        summary["errors"].append(
+            f"Failed to list OpenShell sandboxes for {job_id}: {detail}"
+        )
+        return
+
+    for name in [line.strip() for line in result.stdout.splitlines() if line.strip()]:
+        try:
+            remove = subprocess.run(
+                ["docker", "rm", "-f", name],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            summary["errors"].append(
+                f"Failed to remove OpenShell sandbox {name}: {error}"
+            )
+            continue
+
+        if remove.returncode == 0:
+            summary["process_removed"].append(name)
+        else:
+            detail = remove.stderr.strip() or remove.stdout.strip()
+            summary["errors"].append(
+                f"Failed to remove OpenShell sandbox {name}: {detail}"
+            )
+
+
+def cleanup_prepared_openshell_sandbox(
+    job_id: str, summary: dict[str, list[str]]
+) -> None:
+    sandbox_name = openshell_sandbox_name(job_id)
+    executable = Path.home() / ".local" / "bin" / "openshell"
+    command = str(executable) if executable.is_file() else "openshell"
+
+    try:
+        existing = subprocess.run(
+            [command, "sandbox", "get", sandbox_name],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return
+
+    if existing.returncode != 0:
+        return
+
+    try:
+        removed = subprocess.run(
+            [command, "sandbox", "delete", sandbox_name],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        summary["errors"].append(
+            f"Failed to delete prepared OpenShell sandbox {sandbox_name}: {error}"
+        )
+        return
+
+    if removed.returncode == 0:
+        summary["process_removed"].append(sandbox_name)
+    else:
+        detail = removed.stderr.strip() or removed.stdout.strip()
+        summary["errors"].append(
+            f"Failed to delete prepared OpenShell sandbox {sandbox_name}: {detail}"
+        )
+
+
+def openshell_sandbox_name(job_id: str) -> str:
+    raw_job_id = str(job_id).strip() or "job"
+    base = re.sub(
+        r"[^a-z0-9-]",
+        "-",
+        f"mirror-neuron-job-{raw_job_id}".lower(),
+    ).strip("-")
+    digest = hashlib.sha256(raw_job_id.encode("utf-8")).hexdigest()[:10]
+    suffix = f"-{digest}"
+    return f"{base[: max(63 - len(suffix), 1)]}{suffix}"

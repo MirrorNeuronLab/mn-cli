@@ -79,7 +79,9 @@ those contracts.
   `~/.mn`, start services, or access the network.
 - Stable-job archive retains shared data. Job-data reset, terminal-run delete,
   and permanent job delete require confirmation. Run cleanup must never be
-  presented as deleting stable job data.
+  presented as deleting stable job data. Terminal clearing removes every
+  run-owned runtime resource before reporting success; permanent job deletion
+  also removes all historical runs and definition-owned runtime resources.
 - Air-gapped backup fails closed when a dependency, blob, model source, or
   required image cannot be materialized. Restore verifies checksums and the
   recorded operating system, architecture, Python implementation, and ABI

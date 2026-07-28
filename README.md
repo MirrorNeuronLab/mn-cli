@@ -136,7 +136,7 @@ Lifecycle commands are deliberately separate:
 mn job archive vc-diligence            # retains shared data
 mn job reset-data vc-diligence         # confirms; clears/reseeds and advances generation
 mn run delete <terminal-run-id>         # confirms; never deletes shared data
-mn job delete vc-diligence              # confirms; permanently deletes definition and data
+mn job delete vc-diligence              # confirms; deletes all runs, runtime resources, definition, and data
 ```
 
 The legacy `mn job status/pause/resume/cancel <old-job-id>` commands remain
@@ -159,7 +159,9 @@ mn operation watch op-…
 ```
 
 `mn job clear` is destructive and requires confirmation unless `--yes` is
-provided.
+provided. Each terminal job is reported as cleared only after its owned runtime
+processes, sandboxes, checkpoints, services, staged storage, artifacts, leases,
+delivery state, and local prepared resources have been removed.
 
 ## Configuration
 

@@ -115,10 +115,10 @@ def _watch(
             ):
                 event = _json_object(event_json)
                 sequence = max(sequence, _int(event.get("sequence")))
+                if on_accepted_item and _accepted_item_status(event.get("status")):
+                    on_accepted_item(event)
                 _record_event(items, event)
                 live.update(_operation_table(operation, items))
-                if on_accepted_item and event.get("status") in {"cancelled", "cancellation_pending"}:
-                    on_accepted_item(event)
                 if stop_on_deferred and event.get("type") == "operation_deferred":
                     break
 
@@ -180,14 +180,14 @@ def _print_plain_event(
     elif status == "failed":
         print_warning(console, f"{item_id}: {event.get('error') or 'operation item failed'}")
     elif status == "cancellation_pending":
-        print_info(console, f"{item_id}: cancellation accepted; cleanup queued on owner node")
         if on_accepted_item:
             on_accepted_item(event)
+        print_info(console, f"{item_id}: cancellation accepted; cleanup queued on owner node")
     elif event_type in {"item_completed", "item_deferred"}:
         prefix = "✓" if status in _SUCCESS_ITEM_STATUSES else "→"
-        console.print(f"{prefix} {item_id}: {status or 'completed'}")
-        if on_accepted_item and status == "cancelled":
+        if on_accepted_item and _accepted_item_status(status):
             on_accepted_item(event)
+        console.print(f"{prefix} {item_id}: {status or 'completed'}")
 
 
 def _operation_table(operation: dict[str, Any], items: dict[str, dict[str, Any]]) -> Table:
@@ -254,6 +254,11 @@ def _json_object(value: Any) -> dict[str, Any]:
 
 def _int(value: Any) -> int:
     return value if isinstance(value, int) else 0
+
+
+def _accepted_item_status(value: Any) -> bool:
+    status = str(value or "")
+    return status in _SUCCESS_ITEM_STATUSES or status == "cancellation_pending"
 
 
 def _plain_output() -> bool:

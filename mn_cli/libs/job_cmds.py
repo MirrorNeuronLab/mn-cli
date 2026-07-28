@@ -7,7 +7,14 @@ from typing import Annotated
 from rich.table import Table
 from mn_cli.shared import console, client, config, logger
 from mn_cli.error_handler import handle_cli_error
-from mn_cli.libs.blueprint_resources import cleanup_blueprint_host_hooks, cleanup_web_ui_process
+from mn_cli.libs.job_cleanup import (
+    blueprint_run_id_for_job,
+    blueprint_run_id_from_run_store,
+    cleanup_cancelled_job_resources,
+    cleanup_cleared_job_resources,
+    cleanup_local_openshell_sandboxes as _cleanup_local_openshell_sandboxes,
+    openshell_sandbox_name as _openshell_sandbox_name,
+)
 from mn_cli.libs.blueprint_observability import load_observability_tools
 from mn_cli.libs.operation_cmds import start_and_watch
 from mn_cli.libs.ui import print_confirmed, print_error, print_success_confirmation
@@ -15,7 +22,11 @@ from mn_cli.libs.ui import print_confirmed, print_error, print_success_confirmat
 import typer
 
 from mn_sdk.runtime_config import default_runs_root
-from mn_sdk import RuntimeService, ValidationError, parse_duration_ms as sdk_parse_duration_ms
+from mn_sdk import (
+    RuntimeService,
+    ValidationError,
+    parse_duration_ms as sdk_parse_duration_ms,
+)
 
 _ACTIVE_JOB_STATUSES = {"pending", "validated", "scheduled", "running", "paused", "cancelling"}
 _ALL_JOBS_LIMIT = 2_147_483_647
@@ -106,14 +117,20 @@ def list_jobs(running_only: bool = typer.Option(False, "--running-only", help="O
 def clear(
     yes: bool = typer.Option(False, "--yes", "-y", help="Clear terminal jobs without prompting."),
 ):
-    """Remove all job records except running ones"""
+    """Remove terminal jobs and all runtime resources they own."""
     try:
         if not yes and not typer.confirm("Clear all terminal job records?", default=False):
             print_confirmed(console, "Job clear", status="aborted")
             return
 
         result = start_and_watch(
-            "clear_jobs", {}, action="Job clear", runtime_client=client
+            "clear_jobs",
+            {},
+            action="Job clear",
+            on_accepted_item=lambda event: _cleanup_cleared_job_resources(
+                str(event.get("item_id") or "")
+            ),
+            runtime_client=client,
         )
         logger.info("Finished clear operation %s", result.get("operation_id"))
     except grpc.RpcError as e:
@@ -219,46 +236,15 @@ def cancel_all(
 
 
 def _cleanup_cancelled_job_web_ui(job_id: str) -> None:
-    run_id = _blueprint_run_id_for_job(job_id)
-    if not run_id:
-        return
+    cleanup_cancelled_job_resources(job_id, runtime_client=client, log=logger)
 
-    run_dir = default_runs_root() / run_id
-    if not run_dir.is_dir():
-        return
 
-    summary = {"process_removed": [], "process_skipped": [], "errors": []}
-    cleanup_blueprint_host_hooks(run_dir, dry_run=False, summary=summary, reason="job_cancelled")
-    cleanup_web_ui_process(run_dir, dry_run=False, summary=summary, reason="job_cancelled")
-    _cleanup_local_openshell_sandboxes(job_id, summary)
-    for error in summary["errors"]:
-        logger.warning("Failed to cleanup web UI for cancelled job %s: %s", job_id, error)
+def _cleanup_cleared_job_resources(job_id: str) -> None:
+    cleanup_cleared_job_resources(job_id, runtime_client=client, log=logger)
 
 
 def _blueprint_run_id_for_job(job_id: str) -> str | None:
-    run_id = _blueprint_run_id_from_run_store(job_id)
-    if run_id:
-        return run_id
-
-    snapshot_path = Path(f"/tmp/mn_{job_id}") / "job_snapshot.json"
-    if snapshot_path.is_file():
-        try:
-            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
-            run_id = snapshot.get("run_id")
-            if isinstance(run_id, str) and run_id:
-                return run_id
-        except (OSError, json.JSONDecodeError):
-            pass
-
-    try:
-        job = json.loads(client.get_job(job_id))
-    except Exception:
-        return None
-
-    metadata = (((job.get("job") or {}).get("manifest") or {}).get("metadata") or {})
-    mn_cli_metadata = metadata.get("mn_cli") if isinstance(metadata, dict) else {}
-    run_id = mn_cli_metadata.get("blueprint_run_id") if isinstance(mn_cli_metadata, dict) else None
-    return run_id if isinstance(run_id, str) and run_id else None
+    return blueprint_run_id_for_job(job_id, runtime_client=client)
 
 
 def _attach_resource_usage(job_id: str, job: dict[str, object]) -> None:
@@ -293,52 +279,8 @@ def _run_id_from_job_payload(value: object) -> str | None:
 
 
 def _blueprint_run_id_from_run_store(job_id: str) -> str | None:
-    runs_root = default_runs_root()
-    if not runs_root.is_dir():
-        return None
-    for job_file in runs_root.glob("*/job.json"):
-        try:
-            payload = json.loads(job_file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if payload.get("job_id") == job_id:
-            run_id = payload.get("run_id") or job_file.parent.name
-            return run_id if isinstance(run_id, str) and run_id else None
-    return None
+    return blueprint_run_id_from_run_store(job_id)
 
-
-def _cleanup_local_openshell_sandboxes(job_id: str, summary: dict[str, list[str]]) -> None:
-    try:
-        result = subprocess.run(
-            [
-                "docker",
-                "ps",
-                "-a",
-                "--filter",
-                f"name=openshell-mirror-neuron-job-{job_id}",
-                "--format",
-                "{{.Names}}",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except Exception as error:
-        summary["errors"].append(f"Failed to list OpenShell sandboxes for {job_id}: {error}")
-        return
-
-    if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip()
-        summary["errors"].append(f"Failed to list OpenShell sandboxes for {job_id}: {detail}")
-        return
-
-    for name in [line.strip() for line in result.stdout.splitlines() if line.strip()]:
-        remove = subprocess.run(["docker", "rm", "-f", name], capture_output=True, text=True, timeout=20)
-        if remove.returncode == 0:
-            summary["process_removed"].append(name)
-        else:
-            detail = remove.stderr.strip() or remove.stdout.strip()
-            summary["errors"].append(f"Failed to remove OpenShell sandbox {name}: {detail}")
 
 def pause(job_id: str):
     """Pause a running job"""

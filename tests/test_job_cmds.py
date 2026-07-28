@@ -1,5 +1,6 @@
 from io import StringIO
 import json
+import subprocess
 from types import SimpleNamespace
 
 import grpc
@@ -56,6 +57,93 @@ def test_clear_runs_without_local_admin_token_preflight(monkeypatch):
     rendered = output.getvalue()
     assert "Job clear successful" in rendered
     assert "Operation ID:" in rendered
+
+
+def test_clear_cleans_local_resources_for_each_cleared_job(monkeypatch):
+    _capture_console(monkeypatch)
+    cleaned_up = []
+    monkeypatch.setattr(job_cmds, "_cleanup_cleared_job_resources", cleaned_up.append)
+    monkeypatch.setattr(
+        job_cmds,
+        "client",
+        _operation_client(
+            {
+                "operation_id": "op-test",
+                "status": "completed",
+                "counters": {
+                    "total": 1,
+                    "finished": 1,
+                    "succeeded": 1,
+                    "failed": 0,
+                    "deferred": 0,
+                },
+            },
+            [
+                json.dumps(
+                    {
+                        "type": "item_completed",
+                        "item_id": "run-1",
+                        "status": "cleared",
+                    }
+                )
+            ],
+        ),
+    )
+
+    job_cmds.clear(yes=True)
+
+    assert cleaned_up == ["run-1"]
+
+
+def test_clear_resource_cleanup_deletes_prepared_openshell_sandbox(monkeypatch):
+    calls = []
+
+    def run(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(job_cmds.subprocess, "run", run)
+    monkeypatch.setattr(job_cmds, "cleanup_docker_worker_services", lambda **_kwargs: None)
+    monkeypatch.setattr(job_cmds, "_blueprint_run_id_for_job", lambda _job_id: None)
+
+    job_cmds._cleanup_cleared_job_resources("run-1")
+
+    sandbox_name = job_cmds._openshell_sandbox_name("run-1")
+    assert calls[0][-3:] == ["sandbox", "get", sandbox_name]
+    assert calls[1][-3:] == ["sandbox", "delete", sandbox_name]
+    assert calls[2][0:3] == ["docker", "ps", "-a"]
+
+
+def test_clear_resource_cleanup_removes_run_and_generated_bundle_files(
+    monkeypatch, tmp_path
+):
+    runs_root = tmp_path / "runs"
+    generated_root = tmp_path / "generated"
+    run_dir = runs_root / "blueprint-run-1"
+    generated_dir = generated_root / "blueprint-run-1"
+    run_dir.mkdir(parents=True)
+    generated_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(job_cmds, "default_runs_root", lambda: runs_root)
+    monkeypatch.setattr(
+        job_cmds, "default_generated_bundles_dir", lambda: generated_root
+    )
+    monkeypatch.setattr(
+        job_cmds,
+        "_blueprint_run_id_for_job",
+        lambda _job_id: "blueprint-run-1",
+    )
+    monkeypatch.setattr(
+        job_cmds, "_cleanup_cancelled_job_web_ui", lambda _job_id: None
+    )
+    monkeypatch.setattr(
+        job_cmds, "cleanup_docker_worker_services", lambda **_kwargs: None
+    )
+
+    job_cmds._cleanup_cleared_job_resources("run-1")
+
+    assert not run_dir.exists()
+    assert not generated_dir.exists()
 
 
 def test_clear_reports_admin_token_mismatch(monkeypatch):

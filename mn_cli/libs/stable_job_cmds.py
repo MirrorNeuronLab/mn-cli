@@ -8,8 +8,9 @@ import typer
 
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.bundles import read_bundle
+from mn_cli.libs.job_cleanup import cleanup_cleared_job_resources
 from mn_cli.libs.ui import print_success_confirmation
-from mn_cli.shared import client, console
+from mn_cli.shared import client, console, logger
 
 
 run_app = typer.Typer(help="Inspect and control individual stable-job runs.")
@@ -93,15 +94,19 @@ def delete(
     job_id: str = typer.Argument(help="Stable job ID."),
     yes: bool = typer.Option(False, "--yes", "-y"),
 ):
-    """Permanently delete a stable job and its data."""
+    """Permanently delete a stable job, its runs, resources, and data."""
     if not yes and not typer.confirm(
-        f"Permanently delete {job_id} and all shared job data?", default=False
+        f"Permanently delete {job_id}, all runs, runtime resources, and shared job data?",
+        default=False,
     ):
         return
     try:
-        console.print_json(
-            data=json.loads(client.delete_stable_job(job_id, confirmed=True))
-        )
+        run_ids = _stable_job_run_ids(job_id)
+        result = json.loads(client.delete_stable_job(job_id, confirmed=True))
+        for run_id in run_ids:
+            cleanup_cleared_job_resources(run_id, runtime_client=client, log=logger)
+        cleanup_cleared_job_resources(job_id, runtime_client=client, log=logger)
+        console.print_json(data=result)
     except Exception as exc:
         handle_cli_error(exc, console, "job delete")
 
@@ -187,3 +192,27 @@ def _read_json_object(path: str) -> dict:
     if not isinstance(decoded, dict):
         raise typer.BadParameter(f"{path} must contain a JSON object")
     return decoded
+
+
+def _stable_job_run_ids(job_id: str) -> list[str]:
+    try:
+        result = json.loads(client.list_runs(job_id))
+    except Exception:
+        logger.warning(
+            "Could not list historical runs before deleting stable job %s",
+            job_id,
+            exc_info=True,
+        )
+        return []
+
+    data = result.get("data") if isinstance(result, dict) else None
+    if not isinstance(data, list):
+        return []
+
+    return [
+        run_id
+        for run in data
+        if isinstance(run, dict)
+        and isinstance((run_id := run.get("run_id")), str)
+        and run_id
+    ]
