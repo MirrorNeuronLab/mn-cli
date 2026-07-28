@@ -401,6 +401,31 @@ def run_bundle(
             submission_metadata=submission_metadata,
             config_overrides=config_overrides,
         )
+        # Source manifests can acquire DockerWorker or HostLocal nodes only
+        # while templates are rendered above. Resolve placement again before
+        # either node-local runtime is prepared so generated control nodes are
+        # included in the same hard pin.
+        if placement is None:
+            placement = _preflight_and_apply_runtime_model_placement(
+                manifest_dict,
+                runtime_model_requirements=[],
+                resource_report=runtime_resource_report,
+                system_summary=runtime_system_summary,
+                env={**os.environ, **env_overrides},
+            )
+            if placement:
+                selected_node = str(placement["selected_node"])
+                env_overrides["MN_SELECTED_RUNTIME_NODE"] = selected_node
+                submission_metadata["selected_node"] = selected_node
+                submission_metadata["workflow_placement"] = {
+                    "mode": placement["mode"],
+                    "selected_node": selected_node,
+                    "selection": placement["selection"],
+                }
+                _print_launch_progress(
+                    "Resolve workflow placement",
+                    f"selected {selected_node}; all final topology nodes and node-local runtime services are pinned there.",
+                )
         host_python_report = _doctor_prepare_hostlocal_python_envs(
             bundle_dir,
             manifest_dict,
