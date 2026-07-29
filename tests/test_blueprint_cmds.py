@@ -1733,9 +1733,19 @@ def test_blueprint_export_markdown_contains_standard_artifacts(tmp_path):
     assert "## Web UI" in result.stdout
 
 
-def test_blueprint_export_html_writes_static_report(tmp_path):
+def test_blueprint_export_html_writes_static_report(monkeypatch, tmp_path):
     runs_root = tmp_path / "runs"
     run_dir = _write_run(runs_root, "run-1", action="approve_plan")
+    report_path = run_dir / "web" / "index.html"
+
+    def write_static_run_report(record, export_run_dir):
+        assert record["run"]["run_id"] == "run-1"
+        assert export_run_dir == str(run_dir)
+        report_path.parent.mkdir()
+        report_path.write_text("<html></html>")
+        return {"url": report_path.as_uri()}
+
+    monkeypatch.setattr(blueprint_cmds, "_load_web_ui_api", lambda: write_static_run_report)
 
     result = runner.invoke(
         app,
@@ -1744,7 +1754,25 @@ def test_blueprint_export_html_writes_static_report(tmp_path):
 
     assert result.exit_code == 0
     assert result.stdout.strip().startswith("file://")
-    assert (run_dir / "web" / "index.html").exists()
+    assert report_path.exists()
+
+
+def test_blueprint_export_html_reports_missing_optional_dependency(monkeypatch, tmp_path):
+    runs_root = tmp_path / "runs"
+    _write_run(runs_root, "run-1", action="approve_plan")
+    monkeypatch.setattr(
+        blueprint_cmds,
+        "_load_web_ui_api",
+        lambda: (_ for _ in ()).throw(RuntimeError("HTML blueprint export requires the optional web-ui dependency.")),
+    )
+
+    result = runner.invoke(
+        app,
+        ["blueprint", "export", "run-1", "--runs-root", str(runs_root), "--format", "html"],
+    )
+
+    assert result.exit_code == 1
+    assert "optional web-ui dependency" in result.stdout
 
 
 def test_blueprint_export_rejects_unknown_format(tmp_path):

@@ -37,6 +37,13 @@ mn node list
 mn blueprint run message_routing_trace
 ```
 
+Static HTML exports use the optional `mirrorneuron-web-ui-skill` package. With
+the MirrorNeuron GAR package index configured, install it with:
+
+```bash
+.venv/bin/python -m pip install "mirrorneuron-cli[web-ui]"
+```
+
 ## Fast runtime-model orchestration tests
 
 Model-aware blueprint launch logic is testable without Core, Docker, DMR,

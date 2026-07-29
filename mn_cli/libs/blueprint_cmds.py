@@ -2451,7 +2451,11 @@ def blueprint_export(
         if not run_dir:
             console.print("[red]Cannot write HTML export because this run has no run_dir.[/red]")
             raise typer.Exit(1)
-        write_static_run_report = _load_web_ui_api()
+        try:
+            write_static_run_report = _load_web_ui_api()
+        except RuntimeError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
         handle = write_static_run_report(record, run_dir)
         console.print(handle["url"], markup=False)
     else:

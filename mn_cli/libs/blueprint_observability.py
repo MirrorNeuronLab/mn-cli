@@ -39,7 +39,15 @@ def load_observability_tools() -> dict[str, Callable[..., Any]]:
 
 
 def load_web_ui_api() -> Callable[..., Any]:
-    from mn_web_ui_skill import write_static_run_report
+    try:
+        from mn_web_ui_skill import write_static_run_report
+    except ModuleNotFoundError as exc:
+        if exc.name != "mn_web_ui_skill":
+            raise
+        raise RuntimeError(
+            "HTML blueprint export requires the optional web-ui dependency. "
+            "Install mirrorneuron-cli[web-ui] from the configured MirrorNeuron package index."
+        ) from exc
 
     return write_static_run_report
 
