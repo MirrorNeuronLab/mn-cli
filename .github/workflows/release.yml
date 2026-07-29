@@ -135,7 +135,7 @@ jobs:
           set -euo pipefail
 
           if grep -R --include pyproject.toml -q '^\[tool\.ruff\]' .; then
-            python -m pip install ruff
+            python -m pip install 'ruff<0.16'
             python -m ruff check .
           fi
 

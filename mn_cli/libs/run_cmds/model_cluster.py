@@ -3,6 +3,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from mn_sdk.workflow_placement import (
     resolve_and_apply_workflow_placement as sdk_resolve_and_apply_workflow_placement,
+    workflow_placement_mode,
+    workflow_requires_single_node,
 )
 
 
@@ -219,6 +221,13 @@ def _resolve_and_apply_workflow_placement(
     system_summary: Optional[dict[str, Any]] = None,
     env: Optional[dict[str, str]] = None,
 ) -> dict[str, Any] | None:
+    mode = workflow_placement_mode(manifest, env=env)
+    if mode == "distributed" or (
+        mode is None
+        and not workflow_requires_single_node(manifest)
+        and not runtime_model_requirements
+    ):
+        return None
     resources = (
         resource_report
         if isinstance(resource_report, dict)

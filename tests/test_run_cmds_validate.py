@@ -114,9 +114,74 @@ def test_validate_accepts_workflow_manifest_without_legacy_nodes(tmp_path):
     assert result.exit_code == 0
     assert "4" in result.stdout
 
-def test_validate_accepts_source_manifest_after_expansion(tmp_path):
+def test_validate_accepts_source_manifest_after_expansion(monkeypatch, tmp_path):
     bundle_dir = tmp_path / "source_workflow_bundle"
     bundle_dir.mkdir()
+    agent_root = tmp_path / "mn-agents"
+    agent_dir = agent_root / "worker_python_host"
+    docker_agent_dir = agent_root / "worker_python_docker"
+    agent_dir.mkdir(parents=True)
+    docker_agent_dir.mkdir()
+    (agent_root / "index.json").write_text(
+        json.dumps(
+            {
+                "agents": [
+                        {
+                            "template_id": "mn-agents.worker.python_host",
+                            "version": 1,
+                            "path": "worker_python_host",
+                            "template_category": "data",
+                        },
+                        {
+                            "template_id": "mn-agents.worker.python_docker",
+                            "version": 1,
+                            "path": "worker_python_docker",
+                            "template_category": "data",
+                        },
+                ]
+            }
+        )
+    )
+    (docker_agent_dir / "agent.json").write_text(
+        json.dumps(
+            {
+                "template_id": "mn-agents.worker.python_docker",
+                "version": 1,
+                "package_kind": "runtime_node",
+                "defaults": {
+                    "type": "map",
+                    "agent_type": "executor",
+                    "runner_module": "MirrorNeuron.Runner.DockerWorker",
+                },
+                "stereotypes": {
+                    "blueprint_docker_worker": {
+                        "with": {
+                            "command": ["python3", "-m", "mn_sdk.step_runtime"],
+                            "docker_worker_image": "docker_worker",
+                            "upload_path": "runtime",
+                        }
+                    }
+                },
+                "inputs": {"required": []},
+            }
+        )
+    )
+    (agent_dir / "agent.json").write_text(
+        json.dumps(
+            {
+                "template_id": "mn-agents.worker.python_host",
+                "version": 1,
+                "package_kind": "runtime_node",
+                "defaults": {
+                    "type": "map",
+                    "agent_type": "executor",
+                    "runner_module": "MirrorNeuron.Runner.HostLocal",
+                },
+                "inputs": {"required": []},
+            }
+        )
+    )
+    monkeypatch.setenv("MN_AGENTS_ROOT", str(agent_root))
     manifest = {
         "apiVersion": "mn.workflow.source/v2",
         "kind": "WorkflowSource",

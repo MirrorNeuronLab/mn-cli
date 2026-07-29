@@ -337,6 +337,14 @@ def test_distributed_placement_and_legacy_alias_leave_agents_unpinned():
         assert "policies" not in manifest["nodes"][0]
 
 
+def test_placement_without_node_local_requirements_skips_runtime_inspection(mocker):
+    inspect_runtime = mocker.patch("mn_cli.libs.run_cmds.model_cluster.client.get_system_summary")
+
+    assert run_cmds._resolve_and_apply_workflow_placement({"nodes": []}) is None
+
+    inspect_runtime.assert_not_called()
+
+
 def test_selected_workflow_node_controls_model_placement_and_gateway_sync(mocker):
     with run_cmds._runtime_model_placement_scope(
         {"MN_SELECTED_RUNTIME_NODE": "mirror_neuron@spark"}
