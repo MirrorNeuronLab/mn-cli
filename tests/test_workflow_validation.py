@@ -89,6 +89,74 @@ def test_workflow_manifest_reports_nested_step_and_runtime_binding_issues():
     }.issubset(_issue_paths(issues))
 
 
+def test_dynamic_workflow_accepts_admitted_template_binding_and_replace_path_region():
+    manifest = _workflow_manifest()
+    manifest["workflow"]["mode"] = "dynamic_dag"
+    manifest["workflow"]["dynamic"] = {
+        "enabled": True,
+        "apply_at": "between_steps",
+        "templates": {
+            "followup_research": {
+                "id": "followup_research",
+                "run": "followup_research",
+                "agent_id": "followup_worker",
+            }
+        },
+        "regions": [
+            {
+                "id": "research_followups",
+                "strategy": "replace_path",
+                "controller": "start",
+                "exit": "finish",
+                "templates": ["followup_research"],
+                "mutable_edges": ["start_to_finish"],
+            }
+        ],
+    }
+    manifest["agents"]["nodes"].append({"node_id": "followup_worker"})
+    manifest["runtime"]["bindings"]["followup_research"] = {
+        "worker": {"id": "followup_worker"}
+    }
+
+    issues = workflow_validation._validate_workflow_manifest_issues(manifest)
+
+    assert issues == []
+
+
+def test_dynamic_workflow_rejects_template_collision_and_hard_limit_overflow():
+    manifest = _workflow_manifest()
+    manifest["workflow"]["mode"] = "dynamic_dag"
+    manifest["workflow"]["dynamic"] = {
+        "enabled": True,
+        "apply_at": "between_steps",
+        "limits": {"max_active_steps": 1001},
+        "templates": {
+            "start": {
+                "id": "start",
+                "run": "start_template",
+                "agent_id": "worker",
+            }
+        },
+        "regions": [
+            {
+                "id": "region",
+                "strategy": "replace_path",
+                "controller": "start",
+                "exit": "finish",
+                "templates": ["start"],
+                "mutable_edges": ["start_to_finish"],
+            }
+        ],
+    }
+
+    paths = _issue_paths(
+        workflow_validation._validate_workflow_manifest_issues(manifest)
+    )
+
+    assert "workflow.dynamic.templates.start" in paths
+    assert "workflow.dynamic.limits.max_active_steps" in paths
+
+
 def test_workflow_graph_skips_reachability_checks_when_edges_are_invalid():
     workflow = deepcopy(_workflow_manifest()["workflow"])
     workflow["steps"].append({"id": "orphan"})

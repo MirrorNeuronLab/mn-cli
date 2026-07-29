@@ -174,7 +174,8 @@
         },
         "mode": {
           "enum": [
-            "static_dag"
+            "static_dag",
+            "dynamic_dag"
           ]
         },
         "entrypoint": {
@@ -217,7 +218,121 @@
           ]
         },
         "dynamic": {
-          "type": "object"
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "apply_at": {
+              "const": "between_steps"
+            },
+            "limits": {
+              "type": "object",
+              "properties": {
+                "max_patches": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100000
+                },
+                "max_active_steps": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000
+                },
+                "max_operations_per_patch": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 256
+                },
+                "max_instance_input_bytes": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "additionalProperties": true
+            },
+            "templates": {
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": {
+                "type": "object",
+                "required": [
+                  "run"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "run": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "agent_id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "control": {
+                    "type": "object"
+                  },
+                  "implementation": {
+                    "type": "object"
+                  }
+                },
+                "additionalProperties": true
+              }
+            },
+            "regions": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "strategy",
+                  "controller",
+                  "templates"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "strategy": {
+                    "enum": [
+                      "replace_path",
+                      "checkpoint_fanout"
+                    ]
+                  },
+                  "controller": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "exit": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "templates": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "mutable_edges": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "additionalProperties": true
+              }
+            }
+          },
+          "additionalProperties": true
         },
         "state": {
           "type": "object"
@@ -250,7 +365,6 @@
         },
         "edges": {
           "type": "array",
-          "minItems": 1,
           "items": {
             "type": "object",
             "required": [

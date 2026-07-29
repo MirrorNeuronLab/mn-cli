@@ -11,6 +11,7 @@ from jsonschema.exceptions import ValidationError
 DEPRECATED_WORKFLOW_ROOT_FIELDS = ("flow", "graph_id", "nodes", "edges", "entrypoints")
 WORKFLOW_SCHEMA = "mn.workflow.problem_graph/v1"
 WORKFLOW_MODE = "static_dag"
+WORKFLOW_MODES = {"static_dag", "dynamic_dag"}
 AGENT_GRAPH_SCHEMA = "mn.agents.communication_graph/v1"
 
 
@@ -121,11 +122,17 @@ def _validate_workflow_manifest_issues(manifest: dict[str, Any]) -> list[dict[st
     step_issues, step_ids = _validate_workflow_steps(workflow)
     issues.extend(step_issues)
     issues.extend(_validate_workflow_graph_issues(workflow, step_ids))
+    dynamic_issues, template_ids = _validate_dynamic_workflow_issues(
+        workflow, step_ids
+    )
+    issues.extend(dynamic_issues)
 
     if isinstance(agents, dict):
         issues.extend(_validate_agent_graph_issues(agents))
     if isinstance(runtime, dict):
-        issues.extend(_validate_runtime_binding_issues(runtime, step_ids))
+        issues.extend(
+            _validate_runtime_binding_issues(runtime, step_ids | template_ids)
+        )
 
     return issues
 
@@ -260,7 +267,7 @@ def _validate_workflow_graph_issues(
         return [
             _workflow_validation_issue("workflow.edges", "workflow.edges must be a list")
         ]
-    if not edges:
+    if not edges and not _dynamic_checkpoint_only(workflow):
         issues.append(
             _workflow_validation_issue(
                 "workflow.edges", "workflow.edges must be a non-empty list"
@@ -292,10 +299,11 @@ def _validate_workflow_graph_settings(
         )
 
     mode = workflow.get("mode") or WORKFLOW_MODE
-    if mode != WORKFLOW_MODE:
+    if mode not in WORKFLOW_MODES:
         issues.append(
             _workflow_validation_issue(
-                "workflow.mode", f"workflow.mode must be {WORKFLOW_MODE}"
+                "workflow.mode",
+                "workflow.mode must be static_dag or dynamic_dag",
             )
         )
 
@@ -320,6 +328,282 @@ def _validate_workflow_graph_settings(
             )
         )
     return issues
+
+
+def _validate_dynamic_workflow_issues(
+    workflow: dict[str, Any], step_ids: set[str]
+) -> tuple[list[dict[str, Any]], set[str]]:
+    mode = workflow.get("mode") or WORKFLOW_MODE
+    dynamic = workflow.get("dynamic")
+    if mode == WORKFLOW_MODE:
+        if isinstance(dynamic, dict) and dynamic.get("enabled") is True:
+            return [
+                _workflow_validation_issue(
+                    "workflow.dynamic.enabled",
+                    "dynamic.enabled requires workflow.mode dynamic_dag",
+                )
+            ], set()
+        return [], set()
+    if mode != "dynamic_dag":
+        return [], set()
+    if not isinstance(dynamic, dict):
+        return [
+            _workflow_validation_issue(
+                "workflow.dynamic",
+                "dynamic_dag workflows must declare workflow.dynamic",
+            )
+        ], set()
+
+    issues: list[dict[str, Any]] = []
+    if dynamic.get("enabled") is not True:
+        issues.append(
+            _workflow_validation_issue(
+                "workflow.dynamic.enabled",
+                "dynamic_dag workflows require dynamic.enabled true",
+            )
+        )
+    if dynamic.get("apply_at") != "between_steps":
+        issues.append(
+            _workflow_validation_issue(
+                "workflow.dynamic.apply_at",
+                "dynamic.apply_at must be between_steps",
+            )
+        )
+
+    templates = dynamic.get("templates")
+    template_ids: set[str] = set()
+    if not isinstance(templates, dict) or not templates:
+        issues.append(
+            _workflow_validation_issue(
+                "workflow.dynamic.templates",
+                "dynamic.templates must be a non-empty object",
+            )
+        )
+    else:
+        for template_id, template in templates.items():
+            path = f"workflow.dynamic.templates.{template_id}"
+            if not isinstance(template_id, str) or not template_id.strip():
+                issues.append(
+                    _workflow_validation_issue(path, "dynamic template id is required")
+                )
+                continue
+            template_ids.add(template_id)
+            if template_id in step_ids:
+                issues.append(
+                    _workflow_validation_issue(
+                        path,
+                        f"dynamic template id collides with fixed step: {template_id}",
+                    )
+                )
+            if not isinstance(template, dict):
+                issues.append(
+                    _workflow_validation_issue(path, "dynamic template must be an object")
+                )
+                continue
+            run = template.get("run")
+            agent_id = template.get("agent_id")
+            if not isinstance(run, str) or not run.strip():
+                issues.append(
+                    _workflow_validation_issue(
+                        f"{path}.run", "dynamic template run is required"
+                    )
+                )
+            if agent_id is not None and (
+                not isinstance(agent_id, str) or not agent_id.strip()
+            ):
+                issues.append(
+                    _workflow_validation_issue(
+                        f"{path}.agent_id",
+                        "dynamic template agent_id must be a non-empty string when provided",
+                    )
+                )
+
+    edges = workflow.get("edges") if isinstance(workflow.get("edges"), list) else []
+    edge_ids = {
+        str(edge.get("id"))
+        for edge in edges
+        if isinstance(edge, dict) and edge.get("id")
+    }
+    edges_by_id = {
+        str(edge.get("id")): edge
+        for edge in edges
+        if isinstance(edge, dict) and edge.get("id")
+    }
+    regions = dynamic.get("regions")
+    if not isinstance(regions, list) or not regions:
+        issues.append(
+            _workflow_validation_issue(
+                "workflow.dynamic.regions",
+                "dynamic.regions must be a non-empty list",
+            )
+        )
+    else:
+        seen_regions: set[str] = set()
+        edge_owners: dict[str, str] = {}
+        for index, region in enumerate(regions):
+            path = f"workflow.dynamic.regions[{index}]"
+            if not isinstance(region, dict):
+                issues.append(
+                    _workflow_validation_issue(path, "dynamic region must be an object")
+                )
+                continue
+            region_id = region.get("id")
+            strategy = region.get("strategy")
+            controller = region.get("controller")
+            allowed = region.get("templates")
+            mutable_edges = region.get("mutable_edges") or []
+            if not isinstance(region_id, str) or not region_id.strip():
+                issues.append(
+                    _workflow_validation_issue(f"{path}.id", "dynamic region id is required")
+                )
+            elif region_id in seen_regions:
+                issues.append(
+                    _workflow_validation_issue(
+                        f"{path}.id", f"duplicate dynamic region id: {region_id}"
+                    )
+                )
+            else:
+                seen_regions.add(region_id)
+            if strategy not in {"replace_path", "checkpoint_fanout"}:
+                issues.append(
+                    _workflow_validation_issue(
+                        f"{path}.strategy",
+                        "region strategy must be replace_path or checkpoint_fanout",
+                    )
+                )
+            if controller not in step_ids:
+                issues.append(
+                    _workflow_validation_issue(
+                        f"{path}.controller",
+                        "region controller must reference a fixed workflow step",
+                    )
+                )
+            if (
+                not isinstance(allowed, list)
+                or not allowed
+                or any(template not in template_ids for template in allowed)
+            ):
+                issues.append(
+                    _workflow_validation_issue(
+                        f"{path}.templates",
+                        "region templates must reference admitted dynamic templates",
+                    )
+                )
+            if strategy == "replace_path":
+                if region.get("exit") not in step_ids:
+                    issues.append(
+                        _workflow_validation_issue(
+                            f"{path}.exit",
+                            "replace_path exit must reference a fixed workflow step",
+                        )
+                    )
+                if not isinstance(mutable_edges, list) or not mutable_edges:
+                    issues.append(
+                        _workflow_validation_issue(
+                            f"{path}.mutable_edges",
+                            "replace_path must declare mutable_edges",
+                        )
+                    )
+            elif mutable_edges:
+                issues.append(
+                    _workflow_validation_issue(
+                        f"{path}.mutable_edges",
+                        "checkpoint_fanout cannot declare mutable_edges",
+                    )
+                )
+            for edge_id in mutable_edges if isinstance(mutable_edges, list) else []:
+                if edge_id not in edge_ids:
+                    issues.append(
+                        _workflow_validation_issue(
+                            f"{path}.mutable_edges",
+                            f"unknown mutable workflow edge: {edge_id}",
+                        )
+                    )
+                elif (
+                    strategy == "replace_path"
+                    and (
+                        edges_by_id[edge_id].get("from") != controller
+                        or edges_by_id[edge_id].get("to") != region.get("exit")
+                    )
+                ):
+                    issues.append(
+                        _workflow_validation_issue(
+                            f"{path}.mutable_edges",
+                            f"mutable workflow edge {edge_id} must connect the region controller to its exit",
+                        )
+                    )
+                elif edge_id in edge_owners:
+                    issues.append(
+                        _workflow_validation_issue(
+                            f"{path}.mutable_edges",
+                            f"mutable workflow edge {edge_id} already belongs to region {edge_owners[edge_id]}",
+                        )
+                    )
+                else:
+                    edge_owners[edge_id] = str(region_id)
+
+    limits = dynamic.get("limits")
+    if limits is not None:
+        issues.extend(_validate_dynamic_limits(limits))
+    return issues, template_ids
+
+
+def _validate_dynamic_limits(limits: Any) -> list[dict[str, Any]]:
+    if not isinstance(limits, dict):
+        return [
+            _workflow_validation_issue(
+                "workflow.dynamic.limits", "dynamic.limits must be an object"
+            )
+        ]
+    caps = {
+        "max_patches": 100_000,
+        "max_active_steps": 1_000,
+        "max_operations_per_patch": 256,
+    }
+    return [
+        _workflow_validation_issue(
+            f"workflow.dynamic.limits.{key}",
+            f"{key} must be a positive integer no greater than {cap}",
+        )
+        for key, cap in caps.items()
+        if key in limits
+        and (
+            not isinstance(limits[key], int)
+            or isinstance(limits[key], bool)
+            or limits[key] < 1
+            or limits[key] > cap
+        )
+    ] + (
+        [
+            _workflow_validation_issue(
+                "workflow.dynamic.limits.max_instance_input_bytes",
+                "max_instance_input_bytes must be a positive integer",
+            )
+        ]
+        if "max_instance_input_bytes" in limits
+        and (
+            not isinstance(limits["max_instance_input_bytes"], int)
+            or isinstance(limits["max_instance_input_bytes"], bool)
+            or limits["max_instance_input_bytes"] < 1
+        )
+        else []
+    )
+
+
+def _dynamic_checkpoint_only(workflow: dict[str, Any]) -> bool:
+    if workflow.get("mode") != "dynamic_dag":
+        return False
+    dynamic = workflow.get("dynamic")
+    regions = dynamic.get("regions") if isinstance(dynamic, dict) else None
+    return (
+        isinstance(regions, list)
+        and bool(regions)
+        and all(
+            isinstance(region, dict)
+            and region.get("strategy") == "checkpoint_fanout"
+            for region in regions
+        )
+    )
 
 
 def _validate_workflow_edges(
