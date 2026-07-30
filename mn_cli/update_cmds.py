@@ -220,7 +220,7 @@ def get_available_updates() -> list[dict[str, str]]:
     for package_name in PYTHON_PACKAGES:
         current = _installed_python_version(package_name)
         latest = release_plan["python_versions"][package_name]
-        if current != latest:
+        if _is_strictly_newer_version(current, latest):
             updates.append(
                 {
                     "component": package_name,
@@ -234,7 +234,7 @@ def get_available_updates() -> list[dict[str, str]]:
     if _web_ui_installed():
         current = _installed_npm_version()
         latest = release_plan["web_ui_version"]
-        if current != latest:
+        if _is_strictly_newer_version(current, latest):
             updates.append(
                 {
                     "component": NPM_PACKAGE,
@@ -247,7 +247,7 @@ def get_available_updates() -> list[dict[str, str]]:
 
     current_core = _installed_core_tag()
     latest_core = release_plan["release_tag"]
-    if current_core != latest_core:
+    if _is_strictly_newer_version(current_core, latest_core):
         updates.append(
             {
                 "component": "MirrorNeuron core",
@@ -299,6 +299,31 @@ def perform_update(available: list[dict[str, str]] | None = None) -> None:
 def _print_updates(updates: list[dict[str, str]]) -> None:
     for item in updates:
         console.print(f"  - {item['component']}: {item['current']} -> {item['latest']}")
+
+
+def _stable_version_key(version: str) -> tuple[int, int, int] | None:
+    normalized = version.strip().lower()
+    if not normalized.startswith("v"):
+        normalized = f"v{normalized}"
+    match = STABLE_RELEASE_TAG.fullmatch(normalized)
+    if match is None:
+        return None
+    return tuple(int(match.group(part)) for part in ("major", "minor", "patch"))
+
+
+def _is_strictly_newer_version(current: str | None, candidate: str) -> bool:
+    candidate_key = _stable_version_key(candidate)
+    if candidate_key is None:
+        raise RuntimeError(
+            f"Release plan contains an invalid component version: {candidate!r}."
+        )
+    if not current:
+        return True
+
+    current_key = _stable_version_key(current)
+    if current_key is None:
+        return False
+    return candidate_key > current_key
 
 
 def _check_due() -> bool:

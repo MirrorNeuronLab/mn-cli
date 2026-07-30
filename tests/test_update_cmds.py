@@ -176,6 +176,46 @@ def test_available_updates_compares_release_snapshot_packages(mocker, tmp_path):
     }
 
 
+def test_available_updates_does_not_offer_stale_web_ui_downgrade(mocker, tmp_path):
+    metadata_file = tmp_path / "install_metadata.json"
+    metadata_file.write_text(json.dumps({"core_release_tag": "v1.2.31"}))
+    mocker.patch("mn_cli.update_cmds.INSTALL_METADATA_FILE", metadata_file)
+    mocker.patch(
+        "mn_cli.update_cmds._installed_python_version", return_value="1.2.31"
+    )
+    mocker.patch(
+        "mn_cli.update_cmds._release_plan",
+        return_value={
+            "release_tag": "v1.2.31",
+            "python_versions": {
+                "mirrorneuron-python-sdk": "1.2.31",
+                "mirrorneuron-cli": "1.2.31",
+                "mirrorneuron-api": "1.2.31",
+            },
+            "web_ui_version": "1.2.29",
+        },
+    )
+    mocker.patch("mn_cli.update_cmds._web_ui_installed", return_value=True)
+    mocker.patch("mn_cli.update_cmds._installed_npm_version", return_value="1.2.31")
+
+    assert update_cmds.get_available_updates() == []
+
+
+@pytest.mark.parametrize(
+    ("current", "candidate", "expected"),
+    [
+        ("1.2.29", "1.2.31", True),
+        ("1.2.31", "1.2.31", False),
+        ("1.2.31", "1.2.29", False),
+        ("v1.2.31", "v1.2.29", False),
+        (None, "1.2.31", True),
+        ("unknown", "1.2.31", False),
+    ],
+)
+def test_update_requires_strictly_newer_stable_version(current, candidate, expected):
+    assert update_cmds._is_strictly_newer_version(current, candidate) is expected
+
+
 def test_python_package_updates_use_pinned_gar_requirements(mocker):
     mock_run = mocker.patch("mn_cli.update_cmds.subprocess.run")
 

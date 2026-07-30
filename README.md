@@ -232,7 +232,9 @@ package versions, and the Web UI npm version. The updater installs the exact
 Python package versions from the public GAR `agent-skills` index and configures
 the exact Web UI npm version for Docker Compose; it does not follow a source
 branch, package-manager `latest` tag, or the Core repository's latest-release
-endpoint.
+endpoint. A component is shown as an update only when the snapshot version is
+strictly newer than the installed stable version, so a stale snapshot cannot
+offer a downgrade.
 
 The Core remains a versioned GitHub Release binary because it is not a Python
 or npm package. Its release asset URL is constructed from the same support
