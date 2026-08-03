@@ -235,6 +235,8 @@ DEFAULT_BLUEPRINT_WEB_UI_PUBLIC_HOST = "localhost"
 DEFAULT_BLUEPRINT_WEB_UI_PORT_START = "61000"
 DEFAULT_BLUEPRINT_WEB_UI_PORT_END = "61049"
 DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE = "prepublished"
+DEFAULT_AUTO_PORT_START = "62000"
+DEFAULT_AUTO_PORT_END = "62049"
 DEFAULT_CONTAINER_RUNS_ROOT = "/root/.mn/runs"
 DEFAULT_CONTAINER_BLOB_STORE_ROOT = "/root/.mn/blobs"
 DEFAULT_RUNTIME_SHARED_STORAGE_ROOT = "/root/.mn/shared"
@@ -4175,6 +4177,13 @@ def _runtime_blueprint_env_updates(env: dict[str, str]) -> dict[str, str]:
         "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE": str(
             env.get("MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE") or DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE
         ).strip(),
+        "MN_AUTO_PORT_START": str(
+            env.get("MN_AUTO_PORT_START") or os.getenv("MN_AUTO_PORT_START") or DEFAULT_AUTO_PORT_START
+        ).strip(),
+        "MN_AUTO_PORT_END": str(
+            env.get("MN_AUTO_PORT_END") or os.getenv("MN_AUTO_PORT_END") or DEFAULT_AUTO_PORT_END
+        ).strip(),
+        "MN_MCP_CONTAINER_LOOPBACK_PROXY": "1",
     }
     return updates
 
@@ -4502,10 +4511,15 @@ def _write_runtime_compose_cluster_override() -> None:
     ports:
       - "${MN_REDIS_BIND_HOST:-127.0.0.1}:${MN_REDIS_PORT:-56379}:6379"
   mirror-neuron-core:
+    environment:
+      MN_AUTO_PORT_START: "${MN_AUTO_PORT_START:-62000}"
+      MN_AUTO_PORT_END: "${MN_AUTO_PORT_END:-62049}"
+      MN_MCP_CONTAINER_LOOPBACK_PROXY: "1"
     ports:
       - "${MN_EPMD_BIND_HOST:-127.0.0.1}:${MN_EPMD_PORT:-54369}:${MN_EPMD_PORT:-54369}"
       - "${MN_DIST_BIND_HOST:-127.0.0.1}:${MN_DIST_PORT:-54370}:${MN_DIST_PORT:-54370}"
       - "${MN_BLUEPRINT_WEB_UI_BIND_HOST:-0.0.0.0}:${MN_BLUEPRINT_WEB_UI_PORT_START:-61000}-${MN_BLUEPRINT_WEB_UI_PORT_END:-61049}:${MN_BLUEPRINT_WEB_UI_PORT_START:-61000}-${MN_BLUEPRINT_WEB_UI_PORT_END:-61049}"
+      - "127.0.0.1:${MN_AUTO_PORT_START:-62000}-${MN_AUTO_PORT_END:-62049}:${MN_AUTO_PORT_START:-62000}-${MN_AUTO_PORT_END:-62049}"
 """
     path = _runtime_compose_cluster_override_file()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -5800,6 +5814,9 @@ def _build_core_docker_run_command(
     cmd.extend(["-e", f"MN_RUNS_ROOT={env.get('MN_CONTAINER_RUNS_ROOT', DEFAULT_CONTAINER_RUNS_ROOT)}"])
     cmd.extend(["-e", f"MN_SHARED_STORAGE_ROOT={env.get('MN_RUNTIME_SHARED_STORAGE_ROOT', DEFAULT_RUNTIME_SHARED_STORAGE_ROOT)}"])
     cmd.extend(["-e", f"MN_RUNTIME_SHARED_STORAGE_ROOT={env.get('MN_RUNTIME_SHARED_STORAGE_ROOT', DEFAULT_RUNTIME_SHARED_STORAGE_ROOT)}"])
+    cmd.extend(["-e", f"MN_AUTO_PORT_START={env.get('MN_AUTO_PORT_START', DEFAULT_AUTO_PORT_START)}"])
+    cmd.extend(["-e", f"MN_AUTO_PORT_END={env.get('MN_AUTO_PORT_END', DEFAULT_AUTO_PORT_END)}"])
+    cmd.extend(["-e", "MN_MCP_CONTAINER_LOOPBACK_PROXY=1"])
     cmd.extend(["-e", f"ERL_AFLAGS={env['ERL_AFLAGS']}"])
 
     core_publish_host = _docker_publish_host(env["MN_CORE_HOST"])
@@ -5821,6 +5838,14 @@ def _build_core_docker_run_command(
                 "-p",
                 f"{blueprint_web_ui_bind_host}:{blueprint_web_ui_port_start}-{blueprint_web_ui_port_end}:"
                 f"{blueprint_web_ui_port_start}-{blueprint_web_ui_port_end}",
+            ]
+        )
+        auto_port_start = str(env.get("MN_AUTO_PORT_START") or DEFAULT_AUTO_PORT_START)
+        auto_port_end = str(env.get("MN_AUTO_PORT_END") or DEFAULT_AUTO_PORT_END)
+        cmd.extend(
+            [
+                "-p",
+                f"127.0.0.1:{auto_port_start}-{auto_port_end}:{auto_port_start}-{auto_port_end}",
             ]
         )
     if system_name != "Darwin":
@@ -6137,6 +6162,9 @@ def _start_server(
     env.setdefault("MN_BLUEPRINT_WEB_UI_PORT_START", DEFAULT_BLUEPRINT_WEB_UI_PORT_START)
     env.setdefault("MN_BLUEPRINT_WEB_UI_PORT_END", DEFAULT_BLUEPRINT_WEB_UI_PORT_END)
     env.setdefault("MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE", DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE)
+    env.setdefault("MN_AUTO_PORT_START", DEFAULT_AUTO_PORT_START)
+    env.setdefault("MN_AUTO_PORT_END", DEFAULT_AUTO_PORT_END)
+    env.setdefault("MN_MCP_CONTAINER_LOOPBACK_PROXY", "1")
     env.setdefault("MN_GRPC_TARGET", f"localhost:{env.get('MN_GRPC_PORT', DEFAULT_GRPC_PORT)}")
     env.setdefault("MN_GRPC_ADVERTISE_PORT", env.get("MN_GRPC_PORT", DEFAULT_GRPC_PORT))
     env.setdefault("MN_NATIVE_SDK_GRPC_HOST", DEFAULT_NATIVE_SDK_GRPC_HOST)

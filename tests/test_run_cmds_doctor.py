@@ -29,6 +29,7 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.delenv("MN_RUNTIME_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_CONTAINER_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_BLUEPRINT_PYTHON_ENVS_DIR", raising=False)
+    monkeypatch.delenv("MN_CONTAINER_BLUEPRINT_PYTHON_ENVS_DIR", raising=False)
     monkeypatch.setattr(
         run_cmds,
         "sync_litellm_gateway",
@@ -225,6 +226,23 @@ def test_doctor_maps_prepared_python_environment_into_runtime_shared_storage(tmp
     )
 
     assert mapped == runtime_root / "blueprint-python-envs" / "digest"
+
+
+def test_doctor_maps_prepared_python_environment_into_container_cache(
+    tmp_path,
+    monkeypatch,
+):
+    host_root = tmp_path / "host-python-envs"
+    runtime_root = Path("/root/.mn/cache/blueprint-python-envs")
+    monkeypatch.setenv("MN_BLUEPRINT_PYTHON_ENVS_DIR", str(host_root))
+    monkeypatch.setenv(
+        "MN_CONTAINER_BLUEPRINT_PYTHON_ENVS_DIR",
+        str(runtime_root),
+    )
+
+    mapped = run_cmds._doctor_runtime_python_env_path(host_root / "digest")
+
+    assert mapped == runtime_root / "digest"
 
 
 def test_doctor_prepares_hostlocal_python_environment_inside_docker_core(tmp_path, monkeypatch, mocker):

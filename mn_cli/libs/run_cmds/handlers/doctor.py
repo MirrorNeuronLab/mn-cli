@@ -967,6 +967,20 @@ def _doctor_runtime_python_env_path(
 ) -> Path:
     runtime_config = RuntimeConfig.from_env()
     resolved = env_dir.expanduser().resolve()
+    host_env_root = _doctor_configured_python_envs_dir(runtime_config).resolve()
+    runtime_env_root = str(
+        os.getenv("MN_CONTAINER_BLUEPRINT_PYTHON_ENVS_DIR")
+        or runtime_config.runtime_env.get("MN_CONTAINER_BLUEPRINT_PYTHON_ENVS_DIR")
+        or ""
+    ).strip()
+    if runtime_env_root:
+        try:
+            relative = resolved.relative_to(host_env_root)
+        except ValueError:
+            pass
+        else:
+            return Path(runtime_env_root).expanduser() / relative
+
     host_shared_root = Path(runtime_config.shared_storage_root).expanduser().resolve()
     try:
         relative = resolved.relative_to(host_shared_root)

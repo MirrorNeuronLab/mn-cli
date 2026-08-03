@@ -2965,6 +2965,9 @@ def test_compose_native_settings_persists_runtime_blueprint_env(mocker, tmp_path
     assert env["MN_BLUEPRINT_WEB_UI_PORT_START"] == "61000"
     assert env["MN_BLUEPRINT_WEB_UI_PORT_END"] == "61049"
     assert env["MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE"] == "prepublished"
+    assert env["MN_AUTO_PORT_START"] == "62000"
+    assert env["MN_AUTO_PORT_END"] == "62049"
+    assert env["MN_MCP_CONTAINER_LOOPBACK_PROXY"] == "1"
     compose_env_text = compose_env.read_text()
     assert "MN_ENV=prod" in compose_env_text
     assert "MN_BLUEPRINT_SOURCE=local" in compose_env_text
@@ -2978,6 +2981,9 @@ def test_compose_native_settings_persists_runtime_blueprint_env(mocker, tmp_path
     assert "MN_BLUEPRINT_WEB_UI_PORT_START=61000" in compose_env_text
     assert "MN_BLUEPRINT_WEB_UI_PORT_END=61049" in compose_env_text
     assert "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE=prepublished" in compose_env_text
+    assert "MN_AUTO_PORT_START=62000" in compose_env_text
+    assert "MN_AUTO_PORT_END=62049" in compose_env_text
+    assert "MN_MCP_CONTAINER_LOOPBACK_PROXY=1" in compose_env_text
 
 
 def test_compose_native_settings_migrates_openshell_loopback_endpoint_to_bind_host(
@@ -3032,6 +3038,10 @@ def test_compose_cluster_override_publishes_blueprint_web_ui_range(mocker, tmp_p
     text = override.read_text(encoding="utf-8")
     assert "MN_BLUEPRINT_WEB_UI_PORT_START:-61000" in text
     assert "MN_BLUEPRINT_WEB_UI_PORT_END:-61049" in text
+    assert 'MN_AUTO_PORT_START: "${MN_AUTO_PORT_START:-62000}"' in text
+    assert 'MN_AUTO_PORT_END: "${MN_AUTO_PORT_END:-62049}"' in text
+    assert 'MN_MCP_CONTAINER_LOOPBACK_PROXY: "1"' in text
+    assert "127.0.0.1:${MN_AUTO_PORT_START:-62000}-${MN_AUTO_PORT_END:-62049}" in text
 
 def test_compose_native_settings_defaults_runtime_blueprint_repo(mocker, tmp_path):
     compose_env = tmp_path / "docker-compose.env"
@@ -3049,6 +3059,9 @@ def test_compose_native_settings_defaults_runtime_blueprint_repo(mocker, tmp_pat
     assert env["MN_BLUEPRINT_WEB_UI_PORT_START"] == "61000"
     assert env["MN_BLUEPRINT_WEB_UI_PORT_END"] == "61049"
     assert env["MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE"] == "prepublished"
+    assert env["MN_AUTO_PORT_START"] == "62000"
+    assert env["MN_AUTO_PORT_END"] == "62049"
+    assert env["MN_MCP_CONTAINER_LOOPBACK_PROXY"] == "1"
     compose_env_text = compose_env.read_text()
     assert "MN_ENV=dev" in compose_env_text
     assert "MN_BLUEPRINT_SOURCE=github" in compose_env_text
@@ -3060,6 +3073,9 @@ def test_compose_native_settings_defaults_runtime_blueprint_repo(mocker, tmp_pat
     assert "MN_BLUEPRINT_WEB_UI_PORT_START=61000" in compose_env_text
     assert "MN_BLUEPRINT_WEB_UI_PORT_END=61049" in compose_env_text
     assert "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE=prepublished" in compose_env_text
+    assert "MN_AUTO_PORT_START=62000" in compose_env_text
+    assert "MN_AUTO_PORT_END=62049" in compose_env_text
+    assert "MN_MCP_CONTAINER_LOOPBACK_PROXY=1" in compose_env_text
 
 def test_compose_native_settings_normalizes_markdown_blueprint_repo(mocker, tmp_path):
     compose_env = tmp_path / "docker-compose.env"

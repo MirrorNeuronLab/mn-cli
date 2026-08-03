@@ -135,6 +135,13 @@ before membership or launch.
 Context-memory preparation uses the local Compose lifecycle when placement
 selects the submitting node; only genuinely remote selected nodes use the
 native runtime preparation boundary.
+Prepared HostLocal Python environments retain separate host and Core-visible
+paths; submissions use the configured Core cache mount so console-script
+entrypoints resolve inside a containerized local runtime.
+The local Docker runtime constrains automatic service ports to its published
+`MN_AUTO_PORT_START`-`MN_AUTO_PORT_END` range and binds that publication to
+host loopback. Its container-loopback proxy marker is passed only to services
+that explicitly request it from the blueprint.
 
 Detached output relays remain active until the run becomes terminal unless
 `MN_RUN_EVENT_RELAY_MAX_SECONDS` explicitly supplies an operator limit. A

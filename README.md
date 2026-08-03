@@ -80,6 +80,14 @@ Live Spark checks are a separate, opt-in boundary smoke after this injected
 gate passes; they are not the development loop for placement policy.
 
 CPU-only HostLocal workflows stay on the submitting runtime node by default.
+When the local Core runs in Docker, prepared HostLocal Python environments are
+reported to submissions through the Core-visible cache mount rather than the
+host filesystem path.
+Automatic HostLocal service ports use `MN_AUTO_PORT_START` through
+`MN_AUTO_PORT_END` (62000-62049 by default in the local Docker runtime). That
+range is published only on host loopback; the runtime's internal proxy marker
+allows the service process to accept Docker forwarding without advertising a
+non-loopback endpoint.
 Detached runs keep their output relay alive until terminal state unless
 `MN_RUN_EVENT_RELAY_MAX_SECONDS` is explicitly set.
 
