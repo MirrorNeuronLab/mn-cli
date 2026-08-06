@@ -214,7 +214,7 @@ def _present(value: Any) -> bool:
 
 def generate_live_layout(job_id: str, data: Dict[str, Any], state: Optional[JobMonitorState] = None) -> Panel:
     workflow_progress = data.get("workflow_progress")
-    if isinstance(workflow_progress, dict) and workflow_progress.get("steps"):
+    if isinstance(workflow_progress, dict):
         monitor_warning = data.get("monitor_warning")
         if monitor_warning:
             workflow_progress = dict(workflow_progress)

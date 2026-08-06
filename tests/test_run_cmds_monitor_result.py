@@ -22,6 +22,7 @@ from mn_cli.libs.ui import (
 )
 from mn_cli.libs.run_cmds.handlers.monitor import (
     _get_job_for_monitor,
+    _manifest_from_job_data,
     _monitor_api_stream_timeout_seconds,
     _public_progress_from_api_snapshot,
     _workflow_progress_for_monitor,
@@ -381,8 +382,9 @@ def test_monitor_retries_transient_deadline_fetch(mocker, monkeypatch):
     assert get_job.call_count == 2
 
 
-def test_monitor_projects_existing_run_from_blueprint_source_without_get_job(
-    mocker, tmp_path
+@pytest.mark.parametrize("manifest_location", ["blueprint_source", "blueprint_path"])
+def test_monitor_projects_existing_run_from_blueprint_mapping_without_get_job(
+    mocker, tmp_path, manifest_location
 ):
     runs_root = tmp_path / "runs"
     run_dir = runs_root / "vc-run"
@@ -419,16 +421,17 @@ def test_monitor_projects_existing_run_from_blueprint_source_without_get_job(
     (blueprint_root / "index.json").write_text(
         json.dumps([{"id": "vc_assistant", "path": "vc_assistant"}])
     )
-    (run_dir / "job.json").write_text(
-        json.dumps(
-            {
-                "job_id": "job-large",
-                "run_id": "vc-run",
-                "blueprint_id": "vc_assistant",
-                "blueprint_source": str(blueprint_root),
-            }
-        )
-    )
+    mapping = {
+        "job_id": "job-large",
+        "run_id": "vc-run",
+        "blueprint_id": "vc_assistant",
+    }
+    if manifest_location == "blueprint_source":
+        mapping["blueprint_source"] = str(blueprint_root)
+    else:
+        mapping["blueprint_source"] = "catalog"
+        mapping["blueprint_path"] = str(blueprint_dir)
+    (run_dir / "job.json").write_text(json.dumps(mapping))
     (run_dir / "events.jsonl").write_text(
         "\n".join(
             json.dumps(event)
@@ -468,6 +471,88 @@ def test_monitor_projects_existing_run_from_blueprint_source_without_get_job(
         "audit__score_consistency_auditor"
     ]
     get_job.assert_not_called()
+
+
+def test_monitor_prefers_blueprint_path_over_lowered_runtime_workflow(mocker, tmp_path):
+    runs_root = tmp_path / "runs"
+    run_dir = runs_root / "vc-run"
+    run_dir.mkdir(parents=True)
+    blueprint_dir = tmp_path / "vc_assistant"
+    blueprint_dir.mkdir()
+    (blueprint_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "workflow": {
+                    "workflow_id": "vc_assistant_v1",
+                    "steps": [{"id": "collect", "run": "collect__start"}],
+                }
+            }
+        )
+    )
+    (run_dir / "job.json").write_text(
+        json.dumps(
+            {
+                "job_id": "job-vc",
+                "run_id": "vc-run",
+                "blueprint_id": "vc_assistant",
+                "blueprint_source": "catalog",
+                "blueprint_path": str(blueprint_dir),
+            }
+        )
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor.default_runs_root",
+        return_value=runs_root,
+    )
+    data = {
+        "job": {
+            "job_id": "job-vc",
+            "run_id": "vc-run",
+            "workflow_state": {
+                "step_order": ["collect__start", "collect__worker", "collect__end"],
+                "steps": {
+                    "collect__start": {},
+                    "collect__worker": {},
+                    "collect__end": {},
+                },
+            },
+        },
+        "summary": {"status": "running"},
+    }
+
+    manifest = _manifest_from_job_data(data)
+
+    assert [step["id"] for step in manifest["workflow"]["steps"]] == ["collect"]
+
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor.client.get_job",
+        return_value=json.dumps(data),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor.client.stream_events",
+        return_value=[
+            json.dumps(
+                {
+                    "type": "workflow_step_attempt_started",
+                    "payload": {"step_id": "collect", "worker": "collect__worker"},
+                }
+            )
+        ],
+    )
+    progress = _public_progress_from_api_snapshot(
+        "vc-run",
+        {
+            "job_id": "job-vc",
+            "status": "running",
+            "steps": [
+                {"id": "collect__start"},
+                {"id": "collect__worker"},
+                {"id": "collect__end"},
+            ],
+        },
+    )
+
+    assert [step["id"] for step in progress["steps"]] == ["collect"]
 
 
 def test_monitor_reattaches_by_execution_run_id_when_stable_job_id_differs(

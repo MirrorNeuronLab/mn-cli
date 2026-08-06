@@ -74,7 +74,7 @@ class ProgressSnapshotStream:
 
 def stream_api_workflow_progress(
     api_base_url: str,
-    job_id: str,
+    run_id: str,
     *,
     api_token: str = "",
     timeout: float = 10.0,
@@ -82,8 +82,10 @@ def stream_api_workflow_progress(
     base = str(api_base_url or "").rstrip("/")
     if not base:
         return
-    quoted_job_id = urllib.parse.quote(str(job_id), safe="")
-    url = f"{base}/jobs/{quoted_job_id}/workflow-progress/stream"
+    if base.endswith("/api/v1"):
+        base = f"{base[:-len('/api/v1')]}/api/v2"
+    quoted_run_id = urllib.parse.quote(str(run_id), safe="")
+    url = f"{base}/runs/{quoted_run_id}/workflow-progress/stream"
     headers = {"Accept": "text/event-stream"}
     if api_token:
         headers["Authorization"] = f"Bearer {api_token}"

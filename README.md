@@ -154,8 +154,9 @@ mn run delete <terminal-run-id>         # confirms; never deletes shared data
 mn job delete vc-diligence              # confirms; deletes all runs, runtime resources, definition, and data
 ```
 
-The legacy `mn job status/pause/resume/cancel <old-job-id>` commands remain
-execution-oriented v1 compatibility commands. Prefer `mn run ...` for v2.
+Execution status and controls use `mn run ...`; attached blueprint progress
+uses the v2 workflow-progress stream and the same public-step contract as the
+launch-time monitor.
 
 ## Durable bulk operations
 

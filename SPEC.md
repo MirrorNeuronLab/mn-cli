@@ -101,6 +101,9 @@ new run of the `--job-id` definition. For an explicit existing job, the command
 first prepares and atomically installs the current executable bundle while
 preserving job data, schedules, and prior run history. `mn job start` and
 scheduled dispatch remain source independent and reuse the stored bundle.
+Blueprint launches use the SDK run-store writer for the job/run mapping and
+sanitized source-facing monitor manifest; API launches consume the same
+contract so both surfaces render the same public workflow steps.
 Existing v1 `mn job` execution-control commands remain compatible with
 historical execution IDs and must not cause new state to be indefinitely
 dual-written.

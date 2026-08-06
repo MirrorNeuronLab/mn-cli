@@ -3,6 +3,11 @@ from ..live import *
 from ..outputs import *
 from contextlib import contextmanager
 from mn_cli.libs.workflow_progress import build_workflow_progress_snapshot
+from mn_sdk import (
+    is_lowered_runtime_projection as _is_lowered_runtime_projection,
+    matches_public_workflow_contract as _matches_public_workflow_contract,
+    workflow_step_ids as _workflow_step_ids,
+)
 
 
 _MONITOR_JOB_FIELDS = {
@@ -270,8 +275,11 @@ def _blueprint_manifest_from_mapping(
 ) -> dict[str, Any] | None:
     blueprint_id = str(mapping.get("blueprint_id") or "").strip()
     source_values: list[str] = []
+    explicit_path = str(mapping.get("blueprint_path") or "").strip()
+    if explicit_path:
+        source_values.append(explicit_path)
     explicit_source = str(mapping.get("blueprint_source") or "").strip()
-    if explicit_source:
+    if explicit_source and explicit_source not in source_values:
         source_values.append(explicit_source)
 
     try:
@@ -379,6 +387,28 @@ def _workflow_progress_for_monitor(
 ) -> dict[str, Any] | None:
     job, summary = _job_and_summary_from_data(data)
     manifest = _manifest_from_job_data(data)
+    if not _workflow_step_ids(manifest):
+        workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
+        return {
+            "schema_version": 2,
+            "job_id": job_id,
+            "workflow_id": str(
+                workflow.get("workflow_id")
+                or job.get("workflow_id")
+                or job.get("graph_id")
+                or job_id
+            ),
+            "name": str(manifest.get("name") or job.get("job_name") or job_id),
+            "status": str(summary.get("status") or job.get("status") or "unknown"),
+            "completed_steps": 0,
+            "total_steps": 0,
+            "current_step_id": None,
+            "current_step_ids": [],
+            "current_step": None,
+            "steps": [],
+            "edges": [],
+            "layers": [],
+        }
     events: list[dict[str, Any]] = []
     try:
         for event_json in client.stream_events(job_id, follow=False):
@@ -410,6 +440,10 @@ def _manifest_from_job_data(data: dict[str, Any]) -> dict[str, Any]:
     run_manifest = _local_run_store_manifest(data, job, summary)
     if run_manifest and _matches_public_workflow_contract(
         run_manifest, workflow_manifest
+    ):
+        return run_manifest
+    if run_manifest and _is_lowered_runtime_projection(
+        workflow_manifest, run_manifest
     ):
         return run_manifest
 
@@ -449,32 +483,26 @@ def _manifest_from_job_data(data: dict[str, Any]) -> dict[str, Any]:
     if run_manifest:
         return run_manifest
 
-    return _legacy_manifest_from_job_data(data, job=job, summary=summary)
-
-
-def _matches_public_workflow_contract(
-    candidate: Any, public_manifest: dict[str, Any] | None
-) -> bool:
-    if not isinstance(candidate, dict) or not candidate:
-        return False
-    if public_manifest is None:
-        return True
-    candidate_steps = _workflow_step_ids(candidate)
-    return bool(candidate_steps) and candidate_steps == _workflow_step_ids(
-        public_manifest
+    workflow_id = str(
+        job.get("workflow_id")
+        or summary.get("workflow_id")
+        or job.get("graph_id")
+        or summary.get("graph_id")
+        or job.get("job_id")
+        or "workflow"
     )
-
-
-def _workflow_step_ids(manifest: dict[str, Any]) -> list[str]:
-    workflow = (
-        manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
-    )
-    steps = workflow.get("steps") if isinstance(workflow.get("steps"), list) else []
-    return [
-        str(step.get("id"))
-        for step in steps
-        if isinstance(step, dict) and step.get("id")
-    ]
+    return {
+        "apiVersion": "mn.workflow/v1",
+        "kind": "Workflow",
+        "id": workflow_id,
+        "name": str(job.get("job_name") or summary.get("job_name") or workflow_id),
+        "workflow": {
+            "workflow_id": workflow_id,
+            "steps": [],
+            "edges": [],
+        },
+        "runtime": {"bindings": {}},
+    }
 
 
 def _public_workflow_manifest_from_job(
@@ -685,75 +713,6 @@ def _humanize_identifier(value: str) -> str:
     )
 
 
-def _legacy_manifest_from_job_data(
-    data: dict[str, Any], *, job: dict[str, Any], summary: dict[str, Any]
-) -> dict[str, Any]:
-    topology = (
-        job.get("runtime_topology")
-        if isinstance(job.get("runtime_topology"), dict)
-        else {}
-    )
-    topology_nodes = (
-        topology.get("nodes") if isinstance(topology.get("nodes"), list) else []
-    )
-    agents = topology_nodes or (
-        data.get("agents") if isinstance(data.get("agents"), list) else []
-    )
-    nodes = []
-    for index, agent in enumerate(agents):
-        if not isinstance(agent, dict):
-            continue
-        agent_id = str(
-            agent.get("agent_id")
-            or agent.get("id")
-            or agent.get("node_id")
-            or f"agent_{index + 1}"
-        )
-        nodes.append(
-            {
-                "node_id": agent_id,
-                "agent_type": str(
-                    agent.get("agent_type") or agent.get("type") or "worker"
-                ),
-                "role": str(
-                    agent.get("role")
-                    or agent.get("current_task")
-                    or agent.get("agent_type")
-                    or "worker"
-                ),
-                "type": str(agent.get("node_type") or agent.get("type") or ""),
-                "live": agent.get("live?", agent.get("live", False)),
-                "config": {
-                    "llm_config": str(
-                        agent.get("model") or agent.get("llm_config") or "runtime"
-                    )
-                },
-            }
-        )
-    job_type = str(
-        job.get("job_type")
-        or job.get("type")
-        or summary.get("job_type")
-        or summary.get("type")
-        or ""
-    )
-    policies = {"stream_mode": "live"} if job_type.lower() == "service" else {}
-    return {
-        "id": str(
-            job.get("graph_id") or summary.get("graph_id") or job.get("job_id") or "job"
-        ),
-        "name": str(
-            job.get("job_name") or summary.get("job_name") or job.get("job_id") or "Job"
-        ),
-        "description": str(summary.get("description") or job.get("description") or ""),
-        "graph_id": str(job.get("graph_id") or summary.get("graph_id") or ""),
-        "type": job_type,
-        "job_type": job_type,
-        "policies": policies,
-        "nodes": nodes,
-    }
-
-
 def _public_progress_from_api_snapshot(
     job_id: str, snapshot: dict[str, Any]
 ) -> dict[str, Any]:
@@ -786,19 +745,8 @@ def _public_progress_from_api_snapshot(
         return snapshot
     if not isinstance(data, dict):
         return snapshot
-    job, summary = _job_and_summary_from_data(data)
-    if not _public_workflow_manifest_from_job(job, summary):
-        return snapshot
-    try:
-        progress = build_workflow_progress_snapshot(
-            _manifest_from_job_data(data),
-            [],
-            job=job,
-            summary=summary,
-            job_id=job_id,
-        )
-    except Exception:
-        logger.exception("Failed to project API workflow progress onto source contract")
+    progress = _workflow_progress_for_monitor(job_id, data)
+    if not progress:
         return snapshot
 
     return _merge_api_progress_metadata(progress, snapshot)
