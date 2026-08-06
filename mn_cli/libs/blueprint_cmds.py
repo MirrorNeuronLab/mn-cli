@@ -710,7 +710,7 @@ def run_local_blueprint_folder(
     manifest = _load_blueprint_manifest(blueprint_dir, str(blueprint_dir))
     metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
     workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
-    workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v1" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
+    workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v2" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
     blueprint_id = str(
         metadata.get("blueprint_id")
         or manifest.get("id")
@@ -1034,7 +1034,7 @@ def _blueprint_id_from_manifest(
 ) -> str:
     metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
     workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
-    workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v1" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
+    workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v2" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
     return str(
         metadata.get("blueprint_id")
         or catalog_id

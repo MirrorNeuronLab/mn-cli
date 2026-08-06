@@ -1147,7 +1147,7 @@ def test_prepare_manifest_for_submission_lowers_workflow_manifest_for_core_runti
     )
 
     manifest = {
-        "apiVersion": "mn.workflow/v1",
+        "apiVersion": "mn.workflow/v2",
         "kind": "Workflow",
         "id": "workflow_bp",
         "name": "Workflow BP",
@@ -1155,7 +1155,7 @@ def test_prepare_manifest_for_submission_lowers_workflow_manifest_for_core_runti
         "job_name": "workflow-bp",
         "workflow": {
             "schema": "mn.workflow.problem_graph/v1",
-            "workflow_id": "workflow_bp_v1",
+            "workflow_id": "workflow_bp_v2",
             "entrypoint": "load_inputs",
             "source": "load_inputs",
             "sink": "finish",
@@ -1210,7 +1210,7 @@ def test_prepare_manifest_for_submission_lowers_legacy_agent_graph_workflow_id(t
 
     manifest = {
         "manifest_version": "1.0",
-        "workflow_id": "legacy_agent_graph_v1",
+        "workflow_id": "legacy_agent_graph_v2",
         "job_name": "legacy-agent-graph",
         "agents": {
             "entrypoints": ["video_understanding_agent"],

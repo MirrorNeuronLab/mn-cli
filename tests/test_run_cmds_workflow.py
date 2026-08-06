@@ -124,13 +124,13 @@ def test_run_displays_workflow_steps_and_agents(mocker, tmp_path):
     bundle_dir = tmp_path / "workflow_bundle"
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text(json.dumps({
-        "apiVersion": "mn.workflow/v1",
+        "apiVersion": "mn.workflow/v2",
         "kind": "Workflow",
         "id": "workflow-blueprint",
         "name": "Workflow Blueprint",
         "description": "Two workers inside one workflow step.",
         "workflow": {
-            "workflow_id": "workflow-blueprint_v1",
+            "workflow_id": "workflow-blueprint_v2",
             "entrypoint": "research",
             "steps": [
                 {
@@ -187,7 +187,7 @@ def test_run_displays_workflow_steps_and_agents(mocker, tmp_path):
 
 def test_workflow_progress_resolves_lowered_start_node_to_public_binding():
     manifest = {
-        "apiVersion": "mn.workflow/v1",
+        "apiVersion": "mn.workflow/v2",
         "kind": "Workflow",
         "workflow": {
             "steps": [
@@ -239,7 +239,7 @@ def test_workflow_progress_resolves_lowered_start_node_to_public_binding():
 
 def test_workflow_monitor_renders_service_idle_and_ready_counts():
     progress = {
-        "workflow_id": "video_watch_assistant_v1",
+        "workflow_id": "video_watch_assistant_v2",
         "workflow_kind": "service",
         "status": "running",
         "elapsed_seconds": 342,
@@ -334,12 +334,12 @@ def test_workflow_monitor_renders_graph_layers_and_multiple_active_steps():
 
 def test_workflow_renderer_shared_between_live_monitor_and_blueprint_run_paths():
     manifest = {
-        "apiVersion": "mn.workflow/v1",
+        "apiVersion": "mn.workflow/v2",
         "kind": "Workflow",
         "id": "workflow-shared-blueprint",
         "name": "Workflow Shared Blueprint",
         "workflow": {
-            "workflow_id": "workflow_shared_v1",
+            "workflow_id": "workflow_shared_v2",
             "entrypoint": "research",
             "steps": [
                 {
@@ -439,12 +439,12 @@ def test_blueprint_workflow_monitor_uses_shared_detach_keys():
 
 def test_workflow_token_tracking_prefers_usage_fields_and_ignores_budget_only_payloads():
     manifest = {
-        "apiVersion": "mn.workflow/v1",
+        "apiVersion": "mn.workflow/v2",
         "kind": "Workflow",
         "id": "workflow-token-blueprint",
         "name": "Workflow Token Blueprint",
         "workflow": {
-            "workflow_id": "workflow_token_v1",
+            "workflow_id": "workflow_token_v2",
             "entrypoint": "step",
             "steps": [
                 {

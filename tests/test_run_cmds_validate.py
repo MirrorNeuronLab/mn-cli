@@ -36,7 +36,7 @@ def isolated_mn_home(tmp_path, monkeypatch):
 
 def _workflow_manifest_fixture():
     return {
-        "apiVersion": "mn.workflow/v1",
+        "apiVersion": "mn.workflow/v2",
         "kind": "Workflow",
         "id": "tax_flow",
         "name": "Tax Flow",
@@ -48,7 +48,7 @@ def _workflow_manifest_fixture():
         },
         "workflow": {
             "schema": "mn.workflow.problem_graph/v1",
-            "workflow_id": "tax_flow_v1",
+            "workflow_id": "tax_flow_v2",
             "mode": "static_dag",
             "entrypoint": "intake",
             "source": "intake",
@@ -247,7 +247,7 @@ def test_validate_rejects_workflow_manifest_cycles(tmp_path):
     bundle_dir.mkdir()
     manifest = _workflow_manifest_fixture()
     manifest["id"] = "cyclic_flow"
-    manifest["workflow"]["workflow_id"] = "cyclic_flow_v1"
+    manifest["workflow"]["workflow_id"] = "cyclic_flow_v2"
     manifest["workflow"]["entrypoint"] = "a"
     manifest["workflow"]["source"] = "a"
     manifest["workflow"]["sink"] = "c"

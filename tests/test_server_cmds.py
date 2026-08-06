@@ -3746,7 +3746,7 @@ def test_runtime_endpoint_snapshot_uses_local_hosts_for_wildcard_binds():
         web_ui_available=True,
     )
 
-    assert snapshot["api"]["base_url"] == "http://127.0.0.1:54111/api/v1"
+    assert snapshot["api"]["base_url"] == "http://127.0.0.1:54111/api/v2"
     assert snapshot["api"]["host"] == "127.0.0.1"
     assert snapshot["grpc"]["target"] == "127.0.0.1:55111"
     assert snapshot["web_ui"]["url"] == "http://127.0.0.1:55174"
@@ -3828,7 +3828,7 @@ def test_start_server_success(mocker, tmp_path, monkeypatch):
     assert api_env["MN_BLUEPRINT_WEB_UI_PORT_END"] == "61049"
     assert api_env["MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE"] == "prepublished"
     runtime_endpoints = json.loads(server_cmds.RUNTIME_ENDPOINTS_FILE.read_text())
-    assert runtime_endpoints["api"]["base_url"] == "http://localhost:54111/api/v1"
+    assert runtime_endpoints["api"]["base_url"] == "http://localhost:54111/api/v2"
     assert runtime_endpoints["api"]["port"] == "54111"
     assert "MN_GRPC_AUTH_TOKEN" not in json.dumps(runtime_endpoints)
 

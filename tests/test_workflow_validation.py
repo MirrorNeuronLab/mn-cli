@@ -5,7 +5,7 @@ from mn_cli.libs import workflow_validation
 
 def _workflow_manifest() -> dict:
     return {
-        "apiVersion": "mn.workflow/v1",
+        "apiVersion": "mn.workflow/v2",
         "kind": "Workflow",
         "id": "sample_flow",
         "name": "Sample Flow",
@@ -13,7 +13,7 @@ def _workflow_manifest() -> dict:
         "job_name": "sample-flow",
         "workflow": {
             "schema": "mn.workflow.problem_graph/v1",
-            "workflow_id": "sample_flow_v1",
+            "workflow_id": "sample_flow_v2",
             "mode": "static_dag",
             "entrypoint": "start",
             "source": "start",

@@ -35,7 +35,7 @@ def test_api_progress_stream_uses_v2_execution_run_route(mocker):
 
     snapshots = list(
         stream_api_workflow_progress(
-            "http://localhost:54001/api/v1",
+            "http://localhost:54001/api/v2",
             "researcher-346dab41d3",
             timeout=12,
         )

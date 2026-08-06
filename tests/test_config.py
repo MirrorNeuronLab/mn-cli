@@ -94,7 +94,7 @@ def test_typed_parsing_supports_bool_list_url_and_path(tmp_path):
         env={
             "MN_DISABLE_UPDATE_CHECK": "yes",
             "MN_ALLOWED_ORIGINS": "http://localhost:5173,https://example.test",
-            "MN_API_BASE_URL": "http://localhost:8000/api/v1/",
+            "MN_API_BASE_URL": "http://localhost:8000/api/v2/",
             "MN_HOME": str(tmp_path / "home"),
             "MN_RUNS_ROOT": "$MN_HOME/runs",
         },
@@ -103,7 +103,7 @@ def test_typed_parsing_supports_bool_list_url_and_path(tmp_path):
 
     assert config.get("MN_DISABLE_UPDATE_CHECK") is True
     assert config.get("MN_ALLOWED_ORIGINS") == ("http://localhost:5173", "https://example.test")
-    assert config.get("MN_API_BASE_URL") == "http://localhost:8000/api/v1"
+    assert config.get("MN_API_BASE_URL") == "http://localhost:8000/api/v2"
     assert config.get("MN_RUNS_ROOT") == tmp_path / "home" / "runs"
 
 

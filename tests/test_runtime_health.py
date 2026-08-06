@@ -93,7 +93,7 @@ def test_runtime_health_uses_injected_core_client_without_shared_client(mocker, 
 def test_runtime_health_web_ui_down_when_advertised_is_critical(mocker, tmp_path):
     endpoints = _patch_targets(mocker, tmp_path, web_ui_installed=False)
     endpoints.write_text(
-        json.dumps({"web_ui": {"url": "http://localhost:55173"}, "api": {"base_url": "http://localhost:54001/api/v1"}}),
+        json.dumps({"web_ui": {"url": "http://localhost:55173"}, "api": {"base_url": "http://localhost:54001/api/v2"}}),
         encoding="utf-8",
     )
     mocker.patch.object(runtime_health.client, "get_system_summary", return_value='{"nodes":[]}')
@@ -182,7 +182,7 @@ def test_runtime_status_command_human_output_includes_overview(mocker):
     assert "Core gRPC" in result.stdout
     assert "localhost:55051" in result.stdout
     assert "REST API" in result.stdout
-    assert "http://localhost:54001/api/v1" in result.stdout
+    assert "http://localhost:54001/api/v2" in result.stdout
     assert "Web UI" in result.stdout
     assert "http://localhost:55173" in result.stdout
     assert "Nodes" in result.stdout
@@ -394,7 +394,7 @@ def test_runtime_health_repair_rechecks_after_restart(mocker):
             "checked_at": "2026-06-03T00:00:00Z",
             "components": [
                 {"name": "core_grpc", "status": "passing", "target": "localhost:55051", "duration_ms": 1},
-                {"name": "api", "status": "critical", "target": "http://localhost:54001/api/v1/health", "duration_ms": 1},
+                {"name": "api", "status": "critical", "target": "http://localhost:54001/api/v2/health", "duration_ms": 1},
                 {"name": "web_ui", "status": "critical", "target": "http://localhost:55173/health", "duration_ms": 1},
             ],
         },
@@ -403,7 +403,7 @@ def test_runtime_health_repair_rechecks_after_restart(mocker):
             "checked_at": "2026-06-03T00:00:01Z",
             "components": [
                 {"name": "core_grpc", "status": "passing", "target": "localhost:55051", "duration_ms": 1},
-                {"name": "api", "status": "passing", "target": "http://localhost:54001/api/v1/health", "duration_ms": 1},
+                {"name": "api", "status": "passing", "target": "http://localhost:54001/api/v2/health", "duration_ms": 1},
                 {"name": "web_ui", "status": "passing", "target": "http://localhost:55173/health", "duration_ms": 1},
             ],
         },
@@ -428,7 +428,7 @@ def _patch_targets(mocker, tmp_path: Path, *, web_ui_installed: bool) -> Path:
     mocker.patch(
         "mn_cli.libs.runtime_health._runtime_endpoint_snapshot",
         return_value={
-            "api": {"base_url": "http://localhost:54001/api/v1"},
+            "api": {"base_url": "http://localhost:54001/api/v2"},
             "grpc": {"target": "localhost:55051"},
             **({"web_ui": {"url": "http://localhost:55173"}} if web_ui_installed else {}),
         },
@@ -471,12 +471,12 @@ def _status_report(*, overall: str) -> dict:
         "runtime": {"mode": "local", "mn_home": "/tmp/.mn"},
         "endpoints": {
             "core_grpc": "localhost:55051",
-            "api": "http://localhost:54001/api/v1",
+            "api": "http://localhost:54001/api/v2",
             "web_ui": "http://localhost:55173",
         },
         "components": [
             {"name": "core_grpc", "status": "passing", "target": "localhost:55051", "duration_ms": 1},
-            {"name": "api", "status": "passing", "target": "http://localhost:54001/api/v1/health", "duration_ms": 1},
+            {"name": "api", "status": "passing", "target": "http://localhost:54001/api/v2/health", "duration_ms": 1},
             {"name": "web_ui", "status": "warning", "target": "http://localhost:55173", "duration_ms": 1, "detail": "web ui is not installed"},
         ],
         "nodes": {"available": True, "total": 1, "by_status": {"healthy": 1}, "items": []},

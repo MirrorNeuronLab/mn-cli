@@ -82,8 +82,6 @@ def stream_api_workflow_progress(
     base = str(api_base_url or "").rstrip("/")
     if not base:
         return
-    if base.endswith("/api/v1"):
-        base = f"{base[:-len('/api/v1')]}/api/v2"
     quoted_run_id = urllib.parse.quote(str(run_id), safe="")
     url = f"{base}/runs/{quoted_run_id}/workflow-progress/stream"
     headers = {"Accept": "text/event-stream"}

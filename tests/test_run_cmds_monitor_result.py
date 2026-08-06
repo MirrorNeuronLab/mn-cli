@@ -393,7 +393,7 @@ def test_monitor_projects_existing_run_from_blueprint_mapping_without_get_job(
     blueprint_dir = blueprint_root / "vc_assistant"
     blueprint_dir.mkdir(parents=True)
     manifest = {
-        "apiVersion": "mn.workflow/v1",
+        "apiVersion": "mn.workflow/v2",
         "kind": "Workflow",
         "workflow": {
             "workflow_id": "vc-workflow",
@@ -483,7 +483,7 @@ def test_monitor_prefers_blueprint_path_over_lowered_runtime_workflow(mocker, tm
         json.dumps(
             {
                 "workflow": {
-                    "workflow_id": "vc_assistant_v1",
+                    "workflow_id": "vc_assistant_v2",
                     "steps": [{"id": "collect", "run": "collect__start"}],
                 }
             }
@@ -562,7 +562,7 @@ def test_monitor_reattaches_by_execution_run_id_when_stable_job_id_differs(
     run_dir = runs_root / "vc-run"
     run_dir.mkdir(parents=True)
     manifest = {
-        "apiVersion": "mn.workflow/v1",
+        "apiVersion": "mn.workflow/v2",
         "kind": "Workflow",
         "workflow": {
             "workflow_id": "vc-workflow",

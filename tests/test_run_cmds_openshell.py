@@ -135,7 +135,7 @@ def test_run_prebuilds_custom_openshell_image_from_payload_directory(mocker, tmp
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text(json.dumps({
-        "apiVersion": "mn.workflow/v1",
+        "apiVersion": "mn.workflow/v2",
         "kind": "Workflow",
         "id": "openshell-workflow",
         "flow": {

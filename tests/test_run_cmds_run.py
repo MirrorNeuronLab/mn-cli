@@ -913,11 +913,11 @@ def test_run_detached_starts_without_live_workflow_ui(flag, mocker, tmp_path, mo
     bundle_dir = tmp_path / f"run_bundle_{flag.strip('-')}"
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text(json.dumps({
-        "apiVersion": "mn.workflow/v1",
+        "apiVersion": "mn.workflow/v2",
         "kind": "Workflow",
         "id": "detached-workflow",
         "workflow": {
-            "workflow_id": "detached-workflow_v1",
+            "workflow_id": "detached-workflow_v2",
             "entrypoint": "step_one",
             "steps": [{"id": "step_one", "label": "Step One", "run": "step_one"}],
         },

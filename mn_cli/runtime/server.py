@@ -4202,7 +4202,7 @@ def _ensure_host_artifacts_dir(env: dict[str, str]) -> None:
 def _runtime_endpoint_snapshot(env: dict[str, str], web_ui_available: bool = False) -> dict[str, object]:
     api_host = _native_endpoint_host(str(env.get("MN_API_HOST") or DEFAULT_HOST))
     api_port = _valid_port_text(str(env.get("MN_API_PORT") or DEFAULT_API_PORT), DEFAULT_API_PORT)
-    api_base_url = str(env.get("MN_API_BASE_URL") or f"http://{api_host}:{api_port}/api/v1")
+    api_base_url = str(env.get("MN_API_BASE_URL") or f"http://{api_host}:{api_port}/api/v2")
     grpc_host = _cluster_endpoint_host(
         env,
         str(env.get("MN_GRPC_BIND_HOST") or env.get("MN_CORE_HOST") or DEFAULT_HOST)
@@ -4249,7 +4249,7 @@ def _runtime_endpoint_snapshot(env: dict[str, str], web_ui_available: bool = Fal
     return snapshot
 
 def _read_runtime_api_health(api_host: str, api_port: str, *, timeout_seconds: float = 2.0) -> Optional[dict[str, Any]]:
-    url = _api_http_url(api_host, api_port, "/api/v1/health")
+    url = _api_http_url(api_host, api_port, "/api/v2/health")
     try:
         with urllib.request.urlopen(url, timeout=timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
@@ -5314,7 +5314,7 @@ def _start_native_sdk_grpc_if_installed(
         )
     return True
 
-def _api_http_url(api_host: str, api_port: str, path: str = "/api/v1/health") -> str:
+def _api_http_url(api_host: str, api_port: str, path: str = "/api/v2/health") -> str:
     display_host = _native_endpoint_host(api_host)
     if ":" in display_host and not display_host.startswith("["):
         display_host = f"[{display_host}]"
@@ -5322,7 +5322,7 @@ def _api_http_url(api_host: str, api_port: str, path: str = "/api/v1/health") ->
     return f"http://{display_host}:{_valid_port_text(str(api_port), DEFAULT_API_PORT)}{normalized_path}"
 
 def _wait_for_api(api_host: str, api_port: str, *, timeout_seconds: float = 10.0) -> bool:
-    url = _api_http_url(api_host, api_port, "/api/v1/health")
+    url = _api_http_url(api_host, api_port, "/api/v2/health")
     deadline = time.monotonic() + max(timeout_seconds, 0.0)
     last_error: Optional[Exception] = None
 
@@ -5596,7 +5596,7 @@ def _native_service_endpoints(ip: Optional[str] = None, web_ui_available: bool =
                 "service": "REST API",
                 "host": api_host,
                 "port": str(api_port),
-                "target": f"http://{api_host}:{api_port}/api/v1",
+                "target": f"http://{api_host}:{api_port}/api/v2",
             },
         ]
     )

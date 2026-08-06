@@ -219,7 +219,7 @@ def test_air_gapped_backup_streams_referenced_model_blob(mocker, tmp_path, monke
     blob.parent.mkdir(parents=True)
     blob.write_bytes(model_bytes)
     manifest = {
-        "apiVersion": "mn.workflow/v1",
+        "apiVersion": "mn.workflow/v2",
         "runtime": {
             "models": {
                 "primary": {

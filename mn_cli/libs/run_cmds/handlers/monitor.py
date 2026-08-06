@@ -492,7 +492,7 @@ def _manifest_from_job_data(data: dict[str, Any]) -> dict[str, Any]:
         or "workflow"
     )
     return {
-        "apiVersion": "mn.workflow/v1",
+        "apiVersion": "mn.workflow/v2",
         "kind": "Workflow",
         "id": workflow_id,
         "name": str(job.get("job_name") or summary.get("job_name") or workflow_id),
@@ -599,7 +599,7 @@ def _public_workflow_manifest_from_job(
     )
     policies = {"stream_mode": "live"} if job_type.lower() == "service" else {}
     return {
-        "apiVersion": "mn.workflow/v1",
+        "apiVersion": "mn.workflow/v2",
         "kind": "Workflow",
         "id": str(job.get("graph_id") or summary.get("graph_id") or workflow_id),
         "name": str(job.get("job_name") or summary.get("job_name") or workflow_id),
