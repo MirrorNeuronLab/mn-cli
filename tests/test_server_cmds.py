@@ -490,6 +490,79 @@ def test_ensure_syncthing_for_runtime_starts_sidecar_without_sudo(mocker, tmp_pa
     assert compose_env["MN_SYNCTHING_DEVICE_ID"] == "LOCALDEVICE"
     assert compose_env["MN_SYNCTHING_ADVERTISE_HOST"] == "192.168.6.28"
     assert compose_env["MN_SYNCTHING_RESCAN_INTERVAL_SECONDS"] == "3600"
+    override = server_cmds._runtime_compose_syncthing_override_file().read_text(
+        encoding="utf-8"
+    )
+    assert 'MN_SYNCTHING_LAN_ONLY: "1"' in override
+    for setting in (
+        "<relaysEnabled>false</relaysEnabled>",
+        "<globalAnnounceEnabled>false</globalAnnounceEnabled>",
+        "<natEnabled>false</natEnabled>",
+        "<localAnnounceEnabled>true</localAnnounceEnabled>",
+        "<stunKeepaliveStartS>0</stunKeepaliveStartS>",
+        "<urAccepted>-1</urAccepted>",
+        "<autoUpgradeIntervalH>0</autoUpgradeIntervalH>",
+        "<crashReportingEnabled>false</crashReportingEnabled>",
+    ):
+        assert setting in override
+
+
+def test_ensure_syncthing_for_runtime_direct_container_is_lan_only(
+    mocker, tmp_path, monkeypatch
+):
+    host_shared = tmp_path / "shared"
+    monkeypatch.setenv("MN_SYNCTHING_ENABLED", "auto")
+    mocker.patch("mn_cli.server_cmds.runtime_compose_available", return_value=False)
+    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
+    mocker.patch("mn_cli.server_cmds._port_available_or_owned", return_value=True)
+    mocker.patch("mn_cli.server_cmds._wait_for_syncthing_api")
+    mocker.patch(
+        "mn_cli.server_cmds._syncthing_status", return_value={"myID": "LOCALDEVICE"}
+    )
+    mocker.patch("mn_cli.server_cmds._ensure_syncthing_folder")
+    run = mocker.patch(
+        "mn_cli.server_cmds.subprocess.run", return_value=mocker.Mock(returncode=0)
+    )
+
+    server_cmds._ensure_syncthing_for_runtime(
+        {"MN_HOST_SHARED_STORAGE_ROOT": str(host_shared)},
+        advertised_host="192.168.6.28",
+    )
+
+    run_command = next(
+        call_args.args[0]
+        for call_args in run.call_args_list
+        if call_args.args[0][:3] == ["docker", "run", "-d"]
+    )
+    assert f"MN_SYNCTHING_LAN_ONLY={server_cmds.SYNCTHING_LAN_ONLY_MARKER}" in run_command
+    entrypoint_index = run_command.index("--entrypoint")
+    assert run_command[entrypoint_index:] == [
+        "--entrypoint",
+        "/bin/sh",
+        server_cmds.DEFAULT_SYNCTHING_IMAGE,
+        "-ec",
+        server_cmds.SYNCTHING_LAN_ONLY_ENTRYPOINT_SCRIPT,
+    ]
+
+
+def test_syncthing_compose_override_refreshes_existing_runtime_template(
+    mocker,
+):
+    server_cmds.RUNTIME_COMPOSE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    server_cmds.RUNTIME_COMPOSE_FILE.write_text(
+        "services:\n  syncthing:\n    image: old\n", encoding="utf-8"
+    )
+    override_path = server_cmds._runtime_compose_syncthing_override_file()
+    override_path.write_text("stale\n", encoding="utf-8")
+    mocker.patch("mn_cli.server_cmds.runtime_compose_available", return_value=True)
+
+    assert server_cmds._ensure_compose_syncthing_service_definition() is True
+
+    override = override_path.read_text(encoding="utf-8")
+    assert "stale" not in override
+    assert "SYNCTHING_LAN_ONLY" in override
+    assert "<relaysEnabled>false</relaysEnabled>" in override
+    assert "<stunKeepaliveStartS>0</stunKeepaliveStartS>" in override
 
 
 def test_connect_syncthing_peers_configures_both_nodes(mocker):
@@ -717,6 +790,18 @@ def test_deploy_compose_passes_host_shared_storage_to_core():
     assert "membrane-context-engine:" in compose_text
     assert "MN_CONTEXT_MODEL_ENDPOINT" in compose_text
     assert "MN_CONTEXT_MODEL_NAME" in compose_text
+    assert 'MN_SYNCTHING_LAN_ONLY: "1"' in compose_text
+    for setting in (
+        "<relaysEnabled>false</relaysEnabled>",
+        "<globalAnnounceEnabled>false</globalAnnounceEnabled>",
+        "<natEnabled>false</natEnabled>",
+        "<localAnnounceEnabled>true</localAnnounceEnabled>",
+        "<stunKeepaliveStartS>0</stunKeepaliveStartS>",
+        "<urAccepted>-1</urAccepted>",
+        "<autoUpgradeIntervalH>0</autoUpgradeIntervalH>",
+        "<crashReportingEnabled>false</crashReportingEnabled>",
+    ):
+        assert setting in compose_text
 
 def test_runtime_blueprint_env_updates_ignores_legacy_host_mn_dir(tmp_path):
     legacy_home = tmp_path / "legacy-mn-home"

@@ -262,6 +262,28 @@ SYNCTHING_CONTAINER_SYNC_PORT = 22000
 SYNCTHING_FOLDER_ID = "mirror-neuron-shared"
 SYNCTHING_FOLDER_LABEL = "MirrorNeuron shared storage"
 SYNCTHING_FOLDER_PATH = "/var/syncthing/MirrorNeuronShared"
+SYNCTHING_LAN_ONLY_MARKER = "1"
+SYNCTHING_LAN_ONLY_ENTRYPOINT_SCRIPT = """set -eu
+config_dir="${STHOMEDIR:-/var/syncthing/config}"
+config_file="$config_dir/config.xml"
+mkdir -p "$config_dir"
+
+if [ ! -f "$config_file" ]; then
+  /bin/syncthing generate --home "$config_dir" --no-port-probing
+fi
+
+sed -i \\
+  -e 's#<relaysEnabled>[^<]*</relaysEnabled>#<relaysEnabled>false</relaysEnabled>#' \\
+  -e 's#<globalAnnounceEnabled>[^<]*</globalAnnounceEnabled>#<globalAnnounceEnabled>false</globalAnnounceEnabled>#' \\
+  -e 's#<natEnabled>[^<]*</natEnabled>#<natEnabled>false</natEnabled>#' \\
+  -e 's#<localAnnounceEnabled>[^<]*</localAnnounceEnabled>#<localAnnounceEnabled>true</localAnnounceEnabled>#' \\
+  -e 's#<stunKeepaliveStartS>[^<]*</stunKeepaliveStartS>#<stunKeepaliveStartS>0</stunKeepaliveStartS>#' \\
+  -e 's#<urAccepted>[^<]*</urAccepted>#<urAccepted>-1</urAccepted>#' \\
+  -e 's#<autoUpgradeIntervalH>[^<]*</autoUpgradeIntervalH>#<autoUpgradeIntervalH>0</autoUpgradeIntervalH>#' \\
+  -e 's#<crashReportingEnabled>[^<]*</crashReportingEnabled>#<crashReportingEnabled>false</crashReportingEnabled>#' \\
+  "$config_file"
+
+exec /bin/entrypoint.sh /bin/syncthing serve"""
 SYNCTHING_MANAGED_IGNORE_PATTERNS = (
     "/blueprint-python-envs",
     "/blueprint-python-sources",
@@ -1051,14 +1073,12 @@ def _syncthing_rescan_interval_seconds(value: object = None) -> int:
 def _runtime_compose_syncthing_override_file() -> Path:
     return RUNTIME_COMPOSE_FILE.parent / RUNTIME_SYNCTHING_OVERRIDE_FILE
 
-def _compose_file_has_syncthing(path: Path) -> bool:
-    try:
-        return bool(re.search(r"(?m)^  syncthing:\s*$", path.read_text(encoding="utf-8")))
-    except OSError:
-        return False
-
 def _write_runtime_compose_syncthing_override() -> Path:
     path = _runtime_compose_syncthing_override_file()
+    compose_script = "\n".join(
+        f"        {line}" if line else ""
+        for line in SYNCTHING_LAN_ONLY_ENTRYPOINT_SCRIPT.replace("$", "$$").splitlines()
+    )
     override = """services:
   syncthing:
     image: ${MN_SYNCTHING_IMAGE:-syncthing/syncthing:latest}
@@ -1067,10 +1087,16 @@ def _write_runtime_compose_syncthing_override() -> Path:
       - syncthing
     restart: unless-stopped
     user: "0:0"
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+__SYNCTHING_LAN_ONLY_ENTRYPOINT__
     environment:
       STGUIADDRESS: 0.0.0.0:8384
       STGUIAPIKEY: ${MN_SYNCTHING_API_KEY:-}
       STHOMEDIR: /var/syncthing/config
+      MN_SYNCTHING_LAN_ONLY: "1"
       MN_HOST_SHARED_STORAGE_ROOT: ${MN_HOST_SHARED_STORAGE_ROOT:-${MN_SHARED_STORAGE_ROOT:-${MN_HOST_SHARED_ARTIFACT_ROOT:-./mn/shared}}}
       MN_SYNCTHING_API_KEY: ${MN_SYNCTHING_API_KEY:-}
     ports:
@@ -1081,7 +1107,7 @@ def _write_runtime_compose_syncthing_override() -> Path:
       - ${MN_HOST_SHARED_STORAGE_ROOT:-${MN_SHARED_STORAGE_ROOT:-${MN_HOST_SHARED_ARTIFACT_ROOT:-./mn/shared}}}:${MN_SYNCTHING_FOLDER_PATH:-/var/syncthing/MirrorNeuronShared}:rw
     networks:
       - runtime
-"""
+""".replace("__SYNCTHING_LAN_ONLY_ENTRYPOINT__", compose_script)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(override, encoding="utf-8")
     return path
@@ -1089,10 +1115,9 @@ def _write_runtime_compose_syncthing_override() -> Path:
 def _ensure_compose_syncthing_service_definition() -> bool:
     if not runtime_compose_available():
         return False
-    if _compose_file_has_syncthing(RUNTIME_COMPOSE_FILE):
-        return True
-    if _compose_file_has_syncthing(_runtime_compose_syncthing_override_file()):
-        return True
+    # Always refresh the override. Besides defining the service for historical
+    # runtime templates, it upgrades templates that predate the LAN-only guard
+    # before Compose creates or starts the container.
     _write_runtime_compose_syncthing_override()
     return True
 
@@ -1340,8 +1365,14 @@ def _ensure_syncthing_for_runtime(env: dict[str, str], *, advertised_host: str) 
         if not recreate:
             current_root = _docker_container_env_value(SYNCTHING_CONTAINER, "MN_HOST_SHARED_STORAGE_ROOT")
             current_api_key = _docker_container_env_value(SYNCTHING_CONTAINER, "MN_SYNCTHING_API_KEY")
+            lan_only_marker = _docker_container_env_value(SYNCTHING_CONTAINER, "MN_SYNCTHING_LAN_ONLY")
             current_user = _docker_container_user(SYNCTHING_CONTAINER)
-            if current_root != host_root or current_api_key != api_key or current_user != "0:0":
+            if (
+                current_root != host_root
+                or current_api_key != api_key
+                or lan_only_marker != SYNCTHING_LAN_ONLY_MARKER
+                or current_user != "0:0"
+            ):
                 recreate = True
         if recreate:
             subprocess.run(["docker", "rm", "-f", SYNCTHING_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
@@ -1362,6 +1393,8 @@ def _ensure_syncthing_for_runtime(env: dict[str, str], *, advertised_host: str) 
                 "-e",
                 "STHOMEDIR=/var/syncthing/config",
                 "-e",
+                f"MN_SYNCTHING_LAN_ONLY={SYNCTHING_LAN_ONLY_MARKER}",
+                "-e",
                 f"MN_HOST_SHARED_STORAGE_ROOT={host_root}",
                 "-e",
                 f"MN_SYNCTHING_API_KEY={api_key}",
@@ -1373,7 +1406,11 @@ def _ensure_syncthing_for_runtime(env: dict[str, str], *, advertised_host: str) 
                 f"{SYNCTHING_CONFIG_DIR}:/var/syncthing/config:rw",
                 "-v",
                 f"{host_root}:{folder_path}:rw",
+                "--entrypoint",
+                "/bin/sh",
                 image,
+                "-ec",
+                SYNCTHING_LAN_ONLY_ENTRYPOINT_SCRIPT,
             ]
             subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
         else:
