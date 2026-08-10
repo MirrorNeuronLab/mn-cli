@@ -235,6 +235,7 @@ DEFAULT_BLUEPRINT_WEB_UI_PUBLIC_HOST = "localhost"
 DEFAULT_BLUEPRINT_WEB_UI_PORT_START = "61000"
 DEFAULT_BLUEPRINT_WEB_UI_PORT_END = "61049"
 DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE = "prepublished"
+BLUEPRINT_WEB_UI_PORT_SEARCH_END = 61999
 DEFAULT_AUTO_PORT_START = "62000"
 DEFAULT_AUTO_PORT_END = "62049"
 DEFAULT_CONTAINER_RUNS_ROOT = "/root/.mn/runs"
@@ -818,7 +819,82 @@ def _redis_url_with_database(redis_url: str, database: str) -> str:
     return f"{scheme}://{netloc}/{database}"
 
 def _avoid_local_compose_port_conflicts(env: dict[str, str]) -> dict[str, str]:
-    return dict(env)
+    """Move the generated blueprint UI range when a host port is occupied.
+
+    Docker Desktop must publish every pre-published blueprint UI port when the
+    Core container starts.  A single unrelated listener in the default range
+    otherwise prevents the entire runtime from starting.  Explicit process
+    environment overrides remain operator-owned and are never changed.
+    """
+    adjusted = dict(env)
+    allocation_mode = str(
+        adjusted.get("MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE") or ""
+    ).strip().lower()
+    if allocation_mode != "prepublished":
+        return adjusted
+
+    start = _parse_configured_port(adjusted.get("MN_BLUEPRINT_WEB_UI_PORT_START"))
+    end = _parse_configured_port(adjusted.get("MN_BLUEPRINT_WEB_UI_PORT_END"))
+    if start is None or end is None or end < start:
+        return adjusted
+
+    # A running Core already owns its mapped range.  Do not move its
+    # configuration simply because Docker correctly reports those ports busy.
+    if _docker_container_running(LOCAL_CORE_CONTAINER):
+        return adjusted
+
+    bind_host = str(
+        adjusted.get("MN_BLUEPRINT_WEB_UI_BIND_HOST") or DEFAULT_BLUEPRINT_WEB_UI_BIND_HOST
+    ).strip()
+
+    def range_is_available(candidate_start: int) -> bool:
+        return all(
+            _host_port_available(bind_host, port)
+            for port in range(candidate_start, candidate_start + (end - start) + 1)
+        )
+
+    if range_is_available(start):
+        return adjusted
+
+    explicit_range = any(
+        os.getenv(key, "").strip()
+        for key in ("MN_BLUEPRINT_WEB_UI_PORT_START", "MN_BLUEPRINT_WEB_UI_PORT_END")
+    )
+    generated_default_range = (
+        start == int(DEFAULT_BLUEPRINT_WEB_UI_PORT_START)
+        and end == int(DEFAULT_BLUEPRINT_WEB_UI_PORT_END)
+        and not explicit_range
+    )
+    if not generated_default_range:
+        print_error(
+            console,
+            f"Blueprint Web UI port range {start}-{end} is already in use. "
+            "Set MN_BLUEPRINT_WEB_UI_PORT_START and MN_BLUEPRINT_WEB_UI_PORT_END to a free range.",
+        )
+        raise typer.Exit(1)
+
+    width = end - start + 1
+    for candidate_start in range(
+        start + width,
+        BLUEPRINT_WEB_UI_PORT_SEARCH_END - width + 2,
+        width,
+    ):
+        if range_is_available(candidate_start):
+            candidate_end = candidate_start + width - 1
+            adjusted["MN_BLUEPRINT_WEB_UI_PORT_START"] = str(candidate_start)
+            adjusted["MN_BLUEPRINT_WEB_UI_PORT_END"] = str(candidate_end)
+            print_warning(
+                console,
+                f"Blueprint Web UI port range {start}-{end} is occupied; using {candidate_start}-{candidate_end}.",
+            )
+            return adjusted
+
+    print_error(
+        console,
+        f"No free {width}-port Blueprint Web UI range is available between "
+        f"{DEFAULT_BLUEPRINT_WEB_UI_PORT_START} and {BLUEPRINT_WEB_UI_PORT_SEARCH_END}.",
+    )
+    raise typer.Exit(1)
 
 def _resolve_mn_cookie() -> str:
     env_cookie = os.getenv("MN_COOKIE", "").strip()
@@ -4518,6 +4594,15 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
         updates["ERL_AFLAGS"] = _erl_aflags(dist_port)
 
     adjusted.update(updates)
+    resolved = _avoid_local_compose_port_conflicts(adjusted)
+    updates.update(
+        {
+            key: resolved[key]
+            for key in ("MN_BLUEPRINT_WEB_UI_PORT_START", "MN_BLUEPRINT_WEB_UI_PORT_END")
+            if resolved.get(key) != adjusted.get(key)
+        }
+    )
+    adjusted = resolved
     _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
     return adjusted
 
@@ -6202,6 +6287,8 @@ def _start_server(
     env.setdefault("MN_AUTO_PORT_START", DEFAULT_AUTO_PORT_START)
     env.setdefault("MN_AUTO_PORT_END", DEFAULT_AUTO_PORT_END)
     env.setdefault("MN_MCP_CONTAINER_LOOPBACK_PROXY", "1")
+    if os.uname().sysname == "Darwin" or requested_docker_mode != "disabled":
+        env = _avoid_local_compose_port_conflicts(env)
     env.setdefault("MN_GRPC_TARGET", f"localhost:{env.get('MN_GRPC_PORT', DEFAULT_GRPC_PORT)}")
     env.setdefault("MN_GRPC_ADVERTISE_PORT", env.get("MN_GRPC_PORT", DEFAULT_GRPC_PORT))
     env.setdefault("MN_NATIVE_SDK_GRPC_HOST", DEFAULT_NATIVE_SDK_GRPC_HOST)

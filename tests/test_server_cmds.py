@@ -65,6 +65,8 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     monkeypatch.delenv("MN_BLUEPRINT_SOURCE", raising=False)
     monkeypatch.delenv("MN_BLUEPRINT_REPO", raising=False)
     monkeypatch.delenv("MN_BLUEPRINT_LOCAL", raising=False)
+    monkeypatch.delenv("MN_BLUEPRINT_WEB_UI_PORT_START", raising=False)
+    monkeypatch.delenv("MN_BLUEPRINT_WEB_UI_PORT_END", raising=False)
     # Runtime-start unit tests must never launch a detached host sidecar. The
     # source module is importable in this checkout, so make the explicit
     # production override authoritative for the duration of each test.
@@ -106,6 +108,7 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_FILE', state_dir / "docker-compose.yml")
     mocker.patch('mn_cli.server_cmds.RUNTIME_COMPOSE_ENV', state_dir / "docker-compose.env")
     mocker.patch('mn_cli.server_cmds._docker_host_socket', return_value=None)
+    mocker.patch('mn_cli.server_cmds._host_port_available', return_value=True)
     mocker.patch('mn_cli.server_cmds.RUNTIME_ENDPOINTS_FILE', state_dir / "runtime-endpoints.json")
     mocker.patch('mn_cli.server_cmds.NETWORK_TOKEN_FILE', state_dir / "network.token")
     mocker.patch('mn_cli.server_cmds.NETWORK_REDIS_ENV_FILE', state_dir / "network-redis.env")
@@ -3803,20 +3806,62 @@ def test_compose_runtime_env_preserves_docker_alias_identity(mocker):
     assert resolved["MN_CLUSTER_NODES"] == "mirror_neuron@mn-seed"
     assert resolved["ERL_AFLAGS"] == _erl_aflags("4500")
 
-def test_compose_port_conflict_resolution_leaves_internal_ports_unchanged(mocker):
-    host_probe = mocker.patch("mn_cli.server_cmds._host_port_available")
+def test_compose_port_conflict_resolution_moves_generated_blueprint_web_ui_range(mocker):
+    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
 
+    def port_available(_host, port):
+        return port != 61041
+
+    mocker.patch("mn_cli.server_cmds._host_port_available", side_effect=port_available)
     env = {
-        "MN_EPMD_BIND_HOST": "0.0.0.0",
-        "MN_EPMD_PORT": "54369",
-        "MN_DIST_BIND_HOST": "0.0.0.0",
-        "MN_DIST_PORT": "54370",
-        "ERL_AFLAGS": _erl_aflags("54370"),
+        "MN_BLUEPRINT_WEB_UI_BIND_HOST": "0.0.0.0",
+        "MN_BLUEPRINT_WEB_UI_PORT_START": "61000",
+        "MN_BLUEPRINT_WEB_UI_PORT_END": "61049",
+        "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE": "prepublished",
     }
+
     resolved = _avoid_local_compose_port_conflicts(env)
 
-    assert resolved == env
-    host_probe.assert_not_called()
+    assert resolved["MN_BLUEPRINT_WEB_UI_PORT_START"] == "61050"
+    assert resolved["MN_BLUEPRINT_WEB_UI_PORT_END"] == "61099"
+
+
+def test_compose_port_conflict_resolution_keeps_explicit_blueprint_web_ui_range(mocker, monkeypatch):
+    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
+    mocker.patch("mn_cli.server_cmds._host_port_available", return_value=False)
+    monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_PORT_START", "61000")
+    monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_PORT_END", "61049")
+
+    env = {
+        "MN_BLUEPRINT_WEB_UI_PORT_START": "61000",
+        "MN_BLUEPRINT_WEB_UI_PORT_END": "61049",
+        "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE": "prepublished",
+    }
+
+    with pytest.raises(typer.Exit) as exc:
+        _avoid_local_compose_port_conflicts(env)
+
+    assert exc.value.exit_code == 1
+
+
+def test_compose_native_settings_persists_relocated_generated_blueprint_web_ui_range(mocker, tmp_path):
+    compose_env = tmp_path / "docker-compose.env"
+    compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
+    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
+    mocker.patch(
+        "mn_cli.server_cmds._host_port_available",
+        side_effect=lambda _host, port: port != 61041,
+    )
+
+    env = server_cmds._ensure_compose_native_port_settings({})
+
+    assert env["MN_BLUEPRINT_WEB_UI_PORT_START"] == "61050"
+    assert env["MN_BLUEPRINT_WEB_UI_PORT_END"] == "61099"
+    compose_env_text = compose_env.read_text()
+    assert "MN_BLUEPRINT_WEB_UI_PORT_START=61050" in compose_env_text
+    assert "MN_BLUEPRINT_WEB_UI_PORT_END=61099" in compose_env_text
+
 
 def test_runtime_endpoint_snapshot_uses_local_hosts_for_wildcard_binds():
     snapshot = _runtime_endpoint_snapshot(
