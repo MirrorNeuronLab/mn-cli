@@ -1,6 +1,7 @@
 from ..common import *
 from ..context import *
 from ..models import *
+import re
 from ..model_cluster import _cluster_node_endpoint, _local_runtime_node_name, _prepare_runtime_model_with_retry, _runtime_model_prepare_client
 from ..openshell import *
 from ..run_state import *
@@ -637,6 +638,7 @@ def _doctor_prepare_python_env_from_content(
     requirements_content: str,
     timeout: float,
     local_source_roots: list[Path] | None = None,
+    local_source_versions: dict[str, str] | None = None,
 ) -> Path:
 
     core_container = _doctor_running_core_container(timeout)
@@ -661,6 +663,11 @@ def _doctor_prepare_python_env_from_content(
         is not None
     }
     local_sources = list(dict.fromkeys(local_sources_by_argument.values()))
+    local_source_versions_by_path = {
+        source: _doctor_local_source_version(local_source_versions.get(package, ""))
+        for package, source in local_sources_by_argument.items()
+        if local_source_versions and _doctor_local_source_version(local_source_versions.get(package, ""))
+    }
     digest = hashlib.sha256(
         json.dumps(
             {
@@ -740,6 +747,10 @@ def _doctor_prepare_python_env_from_content(
                         "*.pyo",
                     ),
                 )
+                _doctor_preserve_staged_local_source_version(
+                    staged,
+                    local_source_versions_by_path.get(source, ""),
+                )
             staged_sources[str(source)] = (
                 _doctor_runtime_python_env_path(staged, core_container=core_container)
                 if core_container
@@ -799,6 +810,33 @@ def _doctor_prepare_python_env_from_content(
         raise RuntimeError(_truncate_doctor_detail((install.stdout + install.stderr).strip() or "pip install failed"))
     ready.write_text(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + "\n", encoding="utf-8")
     return env_dir
+
+
+def _doctor_local_source_version(value: Any) -> str:
+    version = str(value or "").strip()
+    return version if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+!-]*", version) else ""
+
+
+def _doctor_preserve_staged_local_source_version(source: Path, version: str) -> None:
+    """Keep a copied setuptools-scm package compatible with its declared pin."""
+
+    if not version:
+        return
+    pyproject = source / "pyproject.toml"
+    if not pyproject.is_file():
+        return
+    try:
+        text = pyproject.read_text(encoding="utf-8")
+    except OSError:
+        return
+    updated = re.sub(
+        r"(?m)^fallback_version\s*=\s*(['\"]).*?\1\s*$",
+        f'fallback_version = "{version}"',
+        text,
+        count=1,
+    )
+    if updated != text:
+        pyproject.write_text(updated, encoding="utf-8")
 
 
 def _doctor_local_source_digest(source: Path) -> str:

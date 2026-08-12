@@ -371,6 +371,49 @@ def test_doctor_stages_local_hostlocal_packages_outside_read_only_source(
     assert not any(source.glob("*.egg-info"))
 
 
+def test_doctor_preserves_declared_version_in_staged_local_hostlocal_package(
+    tmp_path,
+    monkeypatch,
+    mocker,
+):
+    source = tmp_path / "workspace" / "local-skill"
+    source.mkdir(parents=True)
+    source.joinpath("pyproject.toml").write_text(
+        "[tool.setuptools_scm]\nfallback_version = '0.0.0'\n",
+        encoding="utf-8",
+    )
+    host_root = tmp_path / "host-shared"
+    mn_home = Path(os.environ["MN_HOME"])
+    mn_home.mkdir(parents=True)
+    mn_home.joinpath("docker-compose.env").write_text(
+        f"MN_WORKSPACE_ROOT={tmp_path / 'workspace'}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", str(host_root))
+    mocker.patch("mn_cli.libs.run_cmds._doctor_running_core_container", return_value="")
+    mocker.patch(
+        "mn_cli.libs.run_cmds.subprocess.run",
+        side_effect=lambda args, **_kwargs: subprocess.CompletedProcess(
+            args,
+            0,
+            stdout="Python 3.11.2\n" if args[-1] == "--version" else "",
+            stderr="",
+        ),
+    )
+
+    env_dir = run_cmds._doctor_prepare_python_env_from_content(
+        blueprint_id="local-source-version",
+        node_id="worker",
+        packages=[str(source)],
+        requirements_content="",
+        timeout=1,
+        local_source_versions={str(source): "1.2.31"},
+    )
+
+    staged = mn_home / "cache" / "blueprint-python-sources" / env_dir.name / "0-local-skill"
+    assert 'fallback_version = "1.2.31"' in staged.joinpath("pyproject.toml").read_text()
+
+
 def test_doctor_resolves_hostlocal_sources_from_persisted_skills_root(
     tmp_path,
     monkeypatch,
