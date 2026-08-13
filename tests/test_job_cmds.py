@@ -64,6 +64,57 @@ def test_clear_runs_without_local_admin_token_preflight(monkeypatch):
     assert "Operation ID:" in rendered
 
 
+@pytest.mark.parametrize("plain_output", [False, True])
+def test_clear_with_no_jobs_ignores_operation_completion_event(
+    monkeypatch, plain_output
+):
+    output = _capture_console(monkeypatch)
+    if plain_output:
+        monkeypatch.setenv("MN_CLI_OUTPUT", "plain")
+    else:
+        monkeypatch.delenv("MN_CLI_OUTPUT", raising=False)
+
+    cleaned_up = []
+    monkeypatch.setattr(job_cmds, "_cleanup_cleared_job_resources", cleaned_up.append)
+    monkeypatch.setattr(
+        job_cmds,
+        "client",
+        _operation_client(
+            {
+                "operation_id": "op-empty",
+                "status": "completed",
+                "counters": {
+                    "total": 0,
+                    "finished": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "deferred": 0,
+                },
+            },
+            [
+                json.dumps(
+                    {
+                        "type": "operation_completed",
+                        "status": "completed",
+                        "counters": {
+                            "total": 0,
+                            "finished": 0,
+                            "succeeded": 0,
+                            "failed": 0,
+                            "deferred": 0,
+                        },
+                    }
+                )
+            ],
+        ),
+    )
+
+    job_cmds.clear(yes=True)
+
+    assert cleaned_up == []
+    assert "Job clear successful" in output.getvalue()
+
+
 def test_clear_cleans_local_resources_for_each_cleared_job(monkeypatch):
     _capture_console(monkeypatch)
     cleaned_up = []

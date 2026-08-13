@@ -115,7 +115,7 @@ def _watch(
             ):
                 event = _json_object(event_json)
                 sequence = max(sequence, _int(event.get("sequence")))
-                if on_accepted_item and _accepted_item_status(event.get("status")):
+                if on_accepted_item and _accepted_item_event(event):
                     on_accepted_item(event)
                 _record_event(items, event)
                 live.update(_operation_table(operation, items))
@@ -172,7 +172,7 @@ def _print_plain_event(
     if event_type == "stream_heartbeat":
         return
 
-    if on_accepted_item and _accepted_item_status(event.get("status")):
+    if on_accepted_item and _accepted_item_event(event):
         on_accepted_item(event)
 
     item_id = str(event.get("item_id") or "operation")
@@ -258,6 +258,16 @@ def _int(value: Any) -> int:
 def _accepted_item_status(value: Any) -> bool:
     status = str(value or "")
     return status in _SUCCESS_ITEM_STATUSES or status == "cancellation_pending"
+
+
+def _accepted_item_event(event: dict[str, Any]) -> bool:
+    item_id = event.get("item_id")
+    return (
+        event.get("type") in {"item_completed", "item_deferred"}
+        and isinstance(item_id, str)
+        and bool(item_id)
+        and _accepted_item_status(event.get("status"))
+    )
 
 
 def _plain_output() -> bool:
