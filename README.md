@@ -41,6 +41,9 @@ references. Use `mn model list --available` to include catalog-only choices.
 Add `--default` to make one newly added DMR or provider model the logical
 default ahead of the built-in Nemotron/Gemma fallback chain. Provider files
 used with `--default` must contain exactly one model.
+When the requested DMR artifact is already installed locally or on a cluster
+node, `mn model add` reuses it and creates the same managed registry record
+without pulling a second copy.
 
 ## Fast runtime-model orchestration tests
 

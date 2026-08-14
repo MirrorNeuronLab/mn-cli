@@ -136,6 +136,9 @@ Blueprint launches use the SDK run-store writer for the job/run mapping and
 sanitized source-facing monitor manifest; API launches consume the same
 contract so both surfaces render the same public workflow steps.
 Historical execution-control commands are not registered under `mn job`.
+`mn run result` materializes the structured terminal result for completed,
+failed, and cancelled runs so worker diagnostics remain available before an
+operator deletes the run.
 
 ## Runtime-Model Launch Contract
 
@@ -144,7 +147,9 @@ The public `mn model` command surface is exactly `list`, `add`, `show`,
 reference or one canonical provider JSON file. DMR placement chooses the best
 eligible cluster node unless `--local` or `--node` is supplied. Provider files
 are validated in full, including required environment references, before the
-SDK registry changes.
+SDK registry changes. If the requested DMR artifact is already installed on an
+eligible local or cluster node, `add` adopts that artifact and registers it
+without reinstalling it.
 
 `list` renders registered models and discovered unmanaged DMR artifacts;
 `--available` also includes catalog-only choices. Machine records expose
@@ -196,6 +201,8 @@ native runtime preparation boundary.
 Prepared HostLocal Python environments retain separate host and Core-visible
 paths; submissions use the configured Core cache mount so console-script
 entrypoints resolve inside a containerized local runtime.
+An explicitly configured non-default gRPC target is not treated as the local
+managed Docker Core merely because a standard Core container is also running.
 The local Docker runtime constrains automatic service ports to its published
 `MN_AUTO_PORT_START`-`MN_AUTO_PORT_END` range and binds that publication to
 host loopback. Its container-loopback proxy marker is passed only to services

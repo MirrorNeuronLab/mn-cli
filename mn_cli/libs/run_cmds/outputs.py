@@ -17,13 +17,16 @@ def fetch_and_save_results(job_id: str, data: dict = None, output_dir: Path | st
     job = job if isinstance(job, dict) else {}
     status = job.get("status")
 
-    # Save final result if completed
-    if status == "completed":
+    # Preserve the terminal payload for both successful output and failure
+    # diagnostics. Failed jobs carry their structured worker error in the same
+    # result reference used by completed jobs.
+    if status in {"completed", "failed", "cancelled", "canceled"}:
         result = _resolve_job_result(job)
-        if result:
+        if result is not None:
             with open(log_dir / "result.txt", "w") as f:
                 json.dump(result, f, indent=2)
-        _copy_shared_submission_outputs(job, log_dir)
+        if status == "completed":
+            _copy_shared_submission_outputs(job, log_dir)
 
     # Save stream results (progressive)
     stream_events = []

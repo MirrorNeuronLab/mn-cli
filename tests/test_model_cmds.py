@@ -1058,9 +1058,18 @@ def test_model_add_adopts_cluster_artifact_before_new_placement(mocker):
     assert cli_data(result)["reused"] is True
     automatic.assert_not_called()
     assert install.call_args.kwargs["node"] == "worker-1"
+    registration = get_registered_model("gemma4:e2b")
+    assert registration is not None
+    assert registration["kind"] == "dmr"
+    assert registration["selected_node"] == "worker-1"
 
 
 def test_model_add_uses_automatic_best_node_by_default(mocker):
+    mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=False)
+    mocker.patch(
+        "mn_cli.libs.model_cmds._installed_cluster_model_node",
+        return_value=None,
+    )
     selected = mocker.patch("mn_cli.libs.model_cmds._automatic_model_install_node", return_value="spark")
     install = mocker.patch(
         "mn_cli.libs.model_cmds._install_model_on_cluster_node",

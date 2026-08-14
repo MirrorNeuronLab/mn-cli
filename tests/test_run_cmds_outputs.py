@@ -366,6 +366,30 @@ def test_resolve_job_result_reads_staged_snapshot(monkeypatch):
     assert captured["env"]["MN_HOST_SHARED_STORAGE_ROOT"] == "/tmp/mn-shared"
 
 
+def test_fetch_and_save_results_preserves_failed_worker_payload(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        run_cmds,
+        "_resolve_job_result",
+        lambda _job: {"status": "failed", "error": "worker failed"},
+    )
+    monkeypatch.setattr(run_cmds.client, "stream_events", lambda *_args, **_kwargs: [])
+    output = tmp_path / "result"
+
+    run_cmds.fetch_and_save_results(
+        "job-failed",
+        data={"job": {"status": "failed", "result_ref": {"kind": "job_result"}}},
+        output_dir=output,
+    )
+
+    assert json.loads((output / "result.txt").read_text(encoding="utf-8")) == {
+        "status": "failed",
+        "error": "worker failed",
+    }
+
+
 def test_copy_shared_submission_outputs_materializes_worker_result_files(monkeypatch, tmp_path):
     shared_root = tmp_path / "shared"
     source = shared_root / "submissions" / "submission-1" / "outputs" / "user"

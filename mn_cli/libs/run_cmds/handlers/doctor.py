@@ -1008,6 +1008,11 @@ def _doctor_remove_shared_cache_path(
 
 
 def _doctor_running_core_container(timeout: float) -> str:
+    target = str(RuntimeConfig.from_env().grpc_target or "").strip().lower()
+    if target.startswith("dns:///"):
+        target = target.removeprefix("dns:///")
+    if target not in {"localhost:55051", "127.0.0.1:55051", "[::1]:55051"}:
+        return ""
     return running_core_container(timeout_seconds=max(timeout, 1.0)) or ""
 
 

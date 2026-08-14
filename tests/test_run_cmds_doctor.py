@@ -318,6 +318,20 @@ def test_doctor_maps_prepared_python_environment_into_container_cache(
     assert mapped == runtime_root / "digest"
 
 
+def test_doctor_ignores_unrelated_managed_core_for_explicit_runtime(
+    monkeypatch,
+    mocker,
+):
+    monkeypatch.setenv("MN_GRPC_TARGET", "127.0.0.1:52119")
+    running = mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor.running_core_container",
+        return_value="mirror-neuron-core",
+    )
+
+    assert run_cmds._doctor_running_core_container(1) == ""
+    running.assert_not_called()
+
+
 def test_doctor_prepares_hostlocal_python_environment_inside_docker_core(tmp_path, monkeypatch, mocker):
     bundle_dir = tmp_path / "bundle"
     requirements = bundle_dir / "payloads" / "worker" / "requirements.txt"

@@ -74,11 +74,21 @@ def stabilize_cluster_join_tests(request, monkeypatch):
 @pytest.fixture(autouse=True)
 def use_cli_model_pull_for_legacy_install_tests(request, monkeypatch):
     name = request.node.name
-    if name.startswith("test_model_install_") and "dmr" not in name and "gateway" not in name:
+    if name.startswith("test_model_install_") and "gateway" not in name:
         from mn_cli.libs import model_cmds
 
         monkeypatch.setattr(model_cmds, "_endpoint_responds", lambda: False)
         monkeypatch.setattr(model_cmds, "_model_installed", lambda _model: False)
+        monkeypatch.setattr(
+            model_cmds,
+            "_installed_cluster_model_node",
+            lambda _model: None,
+        )
+        monkeypatch.setattr(
+            model_cmds,
+            "_automatic_model_install_node",
+            lambda _entry: None,
+        )
         monkeypatch.setattr("mn_sdk.model_service.endpoint_responds", lambda: False)
 
 
