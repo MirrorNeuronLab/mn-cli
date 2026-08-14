@@ -8,6 +8,7 @@ from rich.console import Console
 
 from mn_cli.config import CliConfig
 from mn_cli.libs.ui import print_error
+from mn_cli.output import record_error
 from mn_cli.logging_config import configure_logging
 from mn_sdk.errors import AppError, normalize_exception, sanitize_context
 
@@ -32,15 +33,14 @@ CONTEXT_MESSAGES = {
     "drain-node": "Error draining node",
     "undrain-node": "Error cancelling node drain",
     "maintenance-node": "Error changing node maintenance",
-    "metrics": "Error fetching metrics",
-    "resource list": "Error fetching resources",
+    "resource usage": "Error fetching usage",
+    "resource show": "Error fetching resources",
     "resource set": "Error setting resource limits",
     "service list": "Error listing services",
-    "service resolve": "Error resolving service",
-    "service check": "Service validation failed",
+    "service show": "Error showing service",
     "deploy": "Error deploying bundle",
     "deployment list": "Error listing deployments",
-    "deployment status": "Error fetching deployment",
+    "deployment show": "Error fetching deployment",
     "deployment promote": "Error promoting deployment",
     "deployment rollback": "Error rolling back deployment",
     "deployment pause": "Error pausing deployment",
@@ -74,6 +74,7 @@ def handle_cli_error(
 ) -> None:
     """Log full diagnostics and print a stable user-safe CLI error."""
     app_error = normalize_exception(error, context=command_context)
+    record_error(app_error, command_context=dict(command_context or {}))
     sanitized = sanitize_context(
         {
             "context": context,
@@ -91,6 +92,10 @@ def handle_cli_error(
 
 
 def print_cli_error(app_error: AppError, console: Console, *, debug: bool = False) -> None:
+    if getattr(console, "_mn_shared_console", False):
+        from mn_cli.shared import error_console
+
+        console = error_console
     print_error(console, app_error.user_message, code=app_error.code)
     if app_error.hint:
         console.print(f"[bold yellow]! Hint:[/bold yellow] {app_error.hint}")

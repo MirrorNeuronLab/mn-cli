@@ -9,7 +9,8 @@ from rich.live import Live
 from rich.table import Table
 
 from mn_cli.error_handler import handle_cli_error
-from mn_cli.libs.ui import print_error, print_info, print_success_confirmation, print_warning
+from mn_cli.libs.ui import print_detail, print_error, print_info, print_success_confirmation, print_warning
+from mn_cli.output import emit_stream_record, json_enabled, record_result
 from mn_cli.shared import client, console
 
 
@@ -59,9 +60,9 @@ def status(
 ):
     """Show a durable group operation and its item states."""
     try:
-        console.print_json(data=_json_object(client.get_operation(operation_id)))
+        print_detail(console, "Operation", _json_object(client.get_operation(operation_id)))
     except Exception as error:
-        handle_cli_error(error, console, "operation-status")
+        handle_cli_error(error, console, "operation show")
 
 
 def watch(
@@ -74,7 +75,7 @@ def watch(
         print_info(console, f"Detached from operation {operation_id}; it continues in the cluster.")
         console.print(f"Operation ID: {operation_id}")
     except Exception as error:
-        handle_cli_error(error, console, "operation-watch")
+        handle_cli_error(error, console, "operation watch")
 
 
 def _watch(
@@ -90,7 +91,9 @@ def _watch(
     sequence = 0
     items: dict[str, dict[str, Any]] = {}
 
-    if _plain_output():
+    if _plain_output() or json_enabled():
+        if json_enabled():
+            emit_stream_record("snapshot", data=operation)
         for event_json in selected_client.stream_operation_events(
             operation_id,
             after_sequence=sequence,
@@ -101,7 +104,11 @@ def _watch(
             event = _json_object(event_json)
             sequence = max(sequence, _int(event.get("sequence")))
             _record_event(items, event)
-            _print_plain_event(event, on_accepted_item)
+            if json_enabled():
+                if event.get("type") != "stream_heartbeat":
+                    emit_stream_record("event", data=event)
+            else:
+                _print_plain_event(event, on_accepted_item)
             if stop_on_deferred and event.get("type") == "operation_deferred":
                 break
     else:
@@ -124,6 +131,7 @@ def _watch(
 
     final_operation = _json_object(selected_client.get_operation(operation_id))
     _print_completion(action, final_operation)
+    record_result(final_operation)
     return final_operation
 
 

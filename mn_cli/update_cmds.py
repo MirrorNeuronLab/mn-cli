@@ -20,9 +20,11 @@ from typing import Any, Optional, TypedDict
 from urllib.parse import quote
 
 import typer
-from rich.console import Console
 
-from mn_cli.libs.ui import print_confirmed, print_info, print_success_confirmation
+from mn_cli.libs.ui import print_confirmed, print_error, print_info, print_success_confirmation, print_warning
+from mn_cli.output import json_enabled, record_result
+from mn_cli.shared import console
+from mn_cli.terminal import is_interactive
 from mn_cli.runtime_state import read_json_object
 from mn_cli.server_cmds import (
     DIR,
@@ -32,8 +34,6 @@ from mn_cli.server_cmds import (
     _start_server,
     _write_env_file_values,
 )
-
-console = Console()
 
 
 CHECK_FILE = DIR / ".update-check.json"
@@ -185,30 +185,33 @@ def update(
     try:
         available = get_available_updates()
     except Exception as exc:
-        console.print(f"[red]Could not check for updates: {exc}[/red]")
+        print_error(console, f"Could not check for updates: {exc}")
         raise typer.Exit(1) from exc
 
     if not available:
         print_confirmed(console, "MirrorNeuron update", status="up to date")
         return
 
-    console.print("[yellow]A MirrorNeuron update is available.[/yellow]")
+    print_warning(console, "A MirrorNeuron update is available.")
     _print_updates(available)
 
     if check_only:
+        record_result({"updates": available, "count": len(available), "mutation": False})
         return
 
-    console.print(
-        "[bold red]Updating will stop all MirrorNeuron components and all running jobs.[/bold red]"
-    )
-    console.print(
-        "[yellow]Please update only when no important jobs are running. "
-        "Backward compatibility is not guaranteed between releases.[/yellow]"
+    print_warning(console, "Updating will stop all MirrorNeuron components and all running jobs.")
+    print_warning(
+        console,
+        "Update only when no important jobs are running; backward compatibility is not guaranteed between releases.",
     )
 
-    if not yes and not typer.confirm("Do you want to update now?", default=False):
-        console.print("[yellow]Update cancelled.[/yellow]")
-        return
+    if not yes:
+        if json_enabled() or not is_interactive():
+            print_error(console, "Runtime update requires --yes in JSON or non-interactive mode.", code="MN_CONFIRMATION_REQUIRED")
+            raise typer.Exit(2)
+        if not typer.confirm("Do you want to update now?", default=False):
+            print_error(console, "Runtime update was not confirmed.", code="MN_CONFIRMATION_REQUIRED")
+            raise typer.Exit(2)
 
     perform_update(available)
 
@@ -290,7 +293,7 @@ def perform_update(available: list[dict[str, str]] | None = None) -> None:
         "MirrorNeuron update",
         status="installed",
         details={"Components": ", ".join(item["component"] for item in available)},
-        next_steps="mn runtime health",
+        next_steps="mn runtime status",
     )
     print_info(console, "Restarting MirrorNeuron…")
     _start_server()

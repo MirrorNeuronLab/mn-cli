@@ -5,12 +5,10 @@ import typer
 
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.bundles import read_bundle
-from mn_cli.libs.ui import print_success_confirmation
+from mn_cli.libs.ui import print_collection, print_detail, print_error, print_success_confirmation, require_confirmation
+from mn_cli.output import record_result
 from mn_cli.shared import client, console
 from mn_sdk import deployment_policy
-
-deployment_app = typer.Typer(help="Deployment commands")
-
 
 def deploy(
     bundle: str,
@@ -42,25 +40,29 @@ def deploy(
         handle_cli_error(exc, console, "deploy")
 
 
-@deployment_app.command(name="list")
 def list_deployments():
     """List deployments."""
     try:
-        console.print_json(data=json.loads(client.list_deployments()))
+        payload = json.loads(client.list_deployments())
+        items = payload.get("deployments") or payload.get("data") or [] if isinstance(payload, dict) else []
+        print_collection(
+            console,
+            "Deployments",
+            items,
+            columns=(("ID", "deployment_id"), ("Kind", "strategy"), ("State", "status"), ("Node / Owner", "deployment_key"), ("Updated", "updated_at")),
+        )
     except Exception as exc:
         handle_cli_error(exc, console, "deployment list")
 
 
-@deployment_app.command(name="status")
 def status(id_or_key: str):
     """Show deployment status."""
     try:
-        console.print_json(data=json.loads(client.get_deployment(id_or_key)))
+        print_detail(console, "Deployment", json.loads(client.get_deployment(id_or_key)))
     except Exception as exc:
-        handle_cli_error(exc, console, "deployment status")
+        handle_cli_error(exc, console, "deployment show")
 
 
-@deployment_app.command(name="promote")
 def promote(id_or_key: str):
     """Promote a canary deployment."""
     try:
@@ -68,20 +70,37 @@ def promote(id_or_key: str):
             "Deployment promote",
             client.promote_deployment(id_or_key),
             details={"Deployment": id_or_key},
-            next_steps=f"mn deployment status {id_or_key}",
+            next_steps=f"mn deployment show {id_or_key}",
         )
     except Exception as exc:
         handle_cli_error(exc, console, "deployment promote")
 
 
-@deployment_app.command(name="rollback")
 def rollback(
     id_or_key: str,
     version: Optional[str] = typer.Option(None, "--version", help="Version to roll back to."),
     tag: str = typer.Option("", "--tag", help="Version tag to roll back to."),
     reason: str = typer.Option("", "--reason", help="Reason recorded on rollback."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Confirm rollback without prompting."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview rollback without changing state."),
 ):
     """Roll back to a previous stable version."""
+    yes = yes is True
+    dry_run = dry_run is True
+    if dry_run:
+        print_success_confirmation(
+            console,
+            "Deployment rollback dry run",
+            status="planned",
+            details={"Deployment": id_or_key, "Version": version or tag},
+        )
+        return
+    require_confirmation(
+        console,
+        action="Deployment rollback",
+        prompt=f"Roll back deployment {id_or_key!r}?",
+        yes=yes,
+    )
     try:
         _print_deployment_confirmation(
             "Deployment rollback",
@@ -92,13 +111,12 @@ def rollback(
                 reason=reason,
             ),
             details=[("Deployment", id_or_key), ("Version", version or tag)],
-            next_steps=f"mn deployment status {id_or_key}",
+            next_steps=f"mn deployment show {id_or_key}",
         )
     except Exception as exc:
         handle_cli_error(exc, console, "deployment rollback")
 
 
-@deployment_app.command(name="pause")
 def pause(id_or_key: str, reason: str = typer.Option("", "--reason")):
     """Pause deployment bookkeeping."""
     try:
@@ -106,13 +124,12 @@ def pause(id_or_key: str, reason: str = typer.Option("", "--reason")):
             "Deployment pause",
             client.pause_deployment(id_or_key, reason=reason),
             details={"Deployment": id_or_key},
-            next_steps=f"mn deployment status {id_or_key}",
+            next_steps=f"mn deployment show {id_or_key}",
         )
     except Exception as exc:
         handle_cli_error(exc, console, "deployment pause")
 
 
-@deployment_app.command(name="resume")
 def resume(id_or_key: str, reason: str = typer.Option("", "--reason")):
     """Resume deployment bookkeeping."""
     try:
@@ -120,13 +137,12 @@ def resume(id_or_key: str, reason: str = typer.Option("", "--reason")):
             "Deployment resume",
             client.resume_deployment(id_or_key, reason=reason),
             details={"Deployment": id_or_key},
-            next_steps=f"mn deployment status {id_or_key}",
+            next_steps=f"mn deployment show {id_or_key}",
         )
     except Exception as exc:
         handle_cli_error(exc, console, "deployment resume")
 
 
-@deployment_app.command(name="fail")
 def fail(id_or_key: str, reason: str = typer.Option("", "--reason")):
     """Mark a deployment failed."""
     try:
@@ -134,7 +150,7 @@ def fail(id_or_key: str, reason: str = typer.Option("", "--reason")):
             "Deployment fail",
             client.fail_deployment(id_or_key, reason=reason),
             details={"Deployment": id_or_key},
-            next_steps=f"mn deployment status {id_or_key}",
+            next_steps=f"mn deployment show {id_or_key}",
         )
     except Exception as exc:
         handle_cli_error(exc, console, "deployment fail")
@@ -166,6 +182,7 @@ def _print_deployment_confirmation(
         details=detail_items,
         next_steps=next_steps,
     )
+    record_result(payload)
 
 
 def update_policy(

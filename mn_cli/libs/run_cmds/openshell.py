@@ -273,8 +273,8 @@ def _openshell_policy_path(bundle_dir: Path, source: Any) -> Path | None:
         resolved = candidate.resolve()
         if resolved.is_file():
             return resolved
-    console.print(f"[red]OpenShell policy file was not found: {source}[/red]")
-    raise typer.Exit(1)
+    print_error(console, f"OpenShell policy file was not found: {source}", code="MN_NOT_FOUND")
+    raise typer.Exit(2)
 
 def _openshell_skill_dependency_context(source_path: Path, manifest: dict[str, Any]) -> Path:
     requirements_text = gar_requirements_text(manifest)

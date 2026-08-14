@@ -178,14 +178,27 @@ def test_doctor_environment_probe_reports(mocker, tmp_path):
 
 
 def test_doctor_prepares_hostlocal_python_on_selected_remote_node(mocker, tmp_path):
+    local_source = tmp_path / "local-skill"
     manifest = {
-        "metadata": {"mn_workflow_placement": {"selected_node": "mirror_neuron@spark"}},
+        "metadata": {
+            "mn_workflow_placement": {"selected_node": "mirror_neuron@spark"},
+            "mn_local_skill_dependencies": {
+                "sources": [
+                    {
+                        "source": str(local_source),
+                        "version": "1.2.31",
+                    }
+                ]
+            },
+        },
         "nodes": [
             {
                 "node_id": "report_writer",
                 "config": {
                     "runner_module": "MirrorNeuron.Runner.HostLocal",
-                    "python_environment": {"packages": ["requests==2.32.0"]},
+                    "python_environment": {
+                        "packages": [str(local_source), "requests==2.32.0"]
+                    },
                 },
             }
         ],
@@ -212,7 +225,67 @@ def test_doctor_prepares_hostlocal_python_on_selected_remote_node(mocker, tmp_pa
     assert prepare.call_args.args[0] is runtime_client
     assert prepare.call_args.args[1]["node"] == "mirror_neuron@spark"
     assert prepare.call_args.args[1]["ensure_hostlocal_python_environment"] is True
+    assert prepare.call_args.args[1]["local_source_versions"] == {
+        str(local_source): "1.2.31"
+    }
     local_prepare.assert_not_called()
+
+
+def test_doctor_passes_declared_local_source_versions_to_local_hostlocal_prepare(
+    mocker,
+    tmp_path,
+):
+    local_source = tmp_path / "local-skill"
+    env_dir = tmp_path / "env"
+    manifest = {
+        "metadata": {
+            "mn_local_skill_dependencies": {
+                "sources": [
+                    {
+                        "source": str(local_source),
+                        "version": "1.2.31",
+                    }
+                ]
+            }
+        },
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.HostLocal",
+                    "python_environment": {"packages": [str(local_source)]},
+                },
+            }
+        ],
+    }
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor._local_runtime_node_name",
+        return_value="mirror_neuron@mac",
+    )
+    prepare = mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor._doctor_prepare_python_env",
+        return_value=env_dir,
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor._doctor_runtime_python_env_path",
+        return_value=Path("/runtime/env"),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor._doctor_running_core_container",
+        return_value="",
+    )
+
+    report = run_cmds._doctor_prepare_hostlocal_python_envs(
+        tmp_path,
+        manifest,
+        timeout=1,
+        check_only=False,
+    )
+
+    assert report["status"] == "passing"
+    assert prepare.call_args.kwargs["local_source_versions"] == {
+        str(local_source): "1.2.31"
+    }
 
 
 def test_doctor_maps_prepared_python_environment_into_runtime_shared_storage(tmp_path, monkeypatch):
@@ -623,6 +696,15 @@ def test_doctor_llm_and_embedding_smoke_uses_host_reachable_urls(mocker):
         {},
         timeout=2,
     )
+    managed_default = run_cmds._doctor_chat_smoke(
+        "managed-default",
+        {
+            "provider": "litellm_proxy",
+            "model": "default",
+        },
+        {},
+        timeout=2,
+    )
     embedding = run_cmds._doctor_embedding_smoke(
         {
             "embedding_model": "embedding-model",
@@ -632,6 +714,61 @@ def test_doctor_llm_and_embedding_smoke_uses_host_reachable_urls(mocker):
     )
 
     assert chat["status"] == "passing"
+    assert managed_default["status"] == "passing"
     assert embedding["status"] == "passing"
     assert calls[0][1] == "http://127.0.0.1:4000/v1/chat/completions"
-    assert calls[1][1] == "http://127.0.0.1:12434/engines/v1/embeddings"
+    assert calls[1][1] == "http://127.0.0.1:4000/v1/chat/completions"
+    assert calls[2][1] == "http://127.0.0.1:12434/engines/v1/embeddings"
+
+
+def test_doctor_llm_smoke_uses_prepared_default_model_from_environment(tmp_path, mocker):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps({"llm": {"configs": {"primary": {"max_tokens": 256}}}})
+    )
+    post = mocker.patch(
+        "mn_cli.libs.run_cmds._doctor_post_openai_payload",
+        return_value={"name": "primary", "status": "passing"},
+    )
+
+    report = run_cmds._doctor_llm_smoke_report(
+        tmp_path,
+        {},
+        {"MN_LLM_MODEL": "default"},
+        timeout=2,
+    )
+
+    assert report["status"] == "passing"
+    assert post.call_args.args[1] == "http://127.0.0.1:4000/v1/chat/completions"
+    assert post.call_args.args[2]["model"] == "default"
+
+
+def test_doctor_llm_smoke_merges_manifest_model_contract(tmp_path, mocker):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "default.json").write_text(
+        json.dumps({"llm": {"configs": {"primary": {"max_tokens": 256}}}})
+    )
+    post = mocker.patch(
+        "mn_cli.libs.run_cmds._doctor_post_openai_payload",
+        return_value={"name": "primary", "status": "passing"},
+    )
+
+    report = run_cmds._doctor_llm_smoke_report(
+        tmp_path,
+        {},
+        {},
+        manifest={
+            "llm": {
+                "model": "default",
+                "provider": "docker_model_runner",
+                "configs": {"primary": {"api_base": "auto", "mode": "live"}},
+            }
+        },
+        timeout=2,
+    )
+
+    assert report["status"] == "passing"
+    assert post.call_args.args[1] == "http://127.0.0.1:4000/v1/chat/completions"
+    assert post.call_args.args[2]["model"] == "default"

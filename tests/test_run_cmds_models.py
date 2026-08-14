@@ -1327,7 +1327,7 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
     assert result["endpoint"]["node"] == "mirror_neuron@192.168.4.173"
     assert result["endpoint"]["api_base"] == "http://192.168.4.173:4000/v1"
     assert result["endpoint"]["source"] == "remote_litellm_gateway"
-    output = " ".join(capsys.readouterr().out.split())
+    output = " ".join(capsys.readouterr().err.split())
     assert (
         "Preparing runtime model nemotron3 on mirror_neuron@192.168.4.173 "
         "with native SDK gRPC"
@@ -1595,18 +1595,22 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
     prepared_worker_manifest = run_cmds.prepare_manifest_for_submission(
         bundle_dir,
         {
-            "nodes": [
-                {
-                    "node_id": "assistant",
-                    "config": {
-                        "runner_module": "MirrorNeuron.Runner.DockerWorker"
-                    },
-                }
-            ]
+            "apiVersion": "mn.workflow/v2",
+            "graph_id": "adaptive-model-placement",
+            "agents": {
+                "nodes": [
+                    {
+                        "node_id": "assistant",
+                        "config": {
+                            "runner_module": "MirrorNeuron.Runner.DockerWorker"
+                        },
+                    }
+                ]
+            },
         },
         env_overrides=env_overrides,
     )
-    worker_environment = prepared_worker_manifest["nodes"][0]["config"][
+    worker_environment = prepared_worker_manifest["agents"]["nodes"][0]["config"][
         "environment"
     ]
     assert worker_environment["MN_LLM_PROVIDER"] == "litellm"
@@ -1614,7 +1618,7 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
     assert worker_environment["MN_LLM_API_BASE"] == (
         "http://mn-litellm-proxy:4000/v1"
     )
-    debug_output = capsys.readouterr().out
+    debug_output = capsys.readouterr().err
     assert "Runtime model prepare plan" in debug_output
     assert f"on {expected_node}" in debug_output
     assert expected_chat_model in debug_output

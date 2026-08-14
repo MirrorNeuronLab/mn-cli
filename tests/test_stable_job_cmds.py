@@ -5,6 +5,66 @@ import mn_cli.libs.stable_job_cmds as stable_job_cmds
 from mn_cli.libs.job_cleanup import JobResourceCleanupError
 
 
+def test_create_prepares_source_bundle_before_stable_submission(monkeypatch, tmp_path):
+    bundle = tmp_path / "blueprint"
+    bundle.mkdir()
+    prepared = SimpleNamespace(
+        manifest_json='{"graph_id":"prepared","nodes":[]}',
+        payloads={"runtime.py": b"prepared"},
+    )
+    calls = {}
+
+    monkeypatch.setattr(
+        stable_job_cmds,
+        "read_bundle",
+        lambda _bundle: ('{"apiVersion":"mn.workflow.source/v2"}', {"source.py": b"raw"}),
+    )
+    monkeypatch.setattr(
+        stable_job_cmds,
+        "prepare_manifest_for_submission",
+        lambda bundle_dir, manifest, **kwargs: {
+            "graph_id": "prepared",
+            "source_manifest": manifest,
+        },
+    )
+    monkeypatch.setattr(
+        stable_job_cmds,
+        "_stage_bundle_payloads",
+        lambda _bundle_dir, _manifest: {"runtime.py": b"staged"},
+    )
+
+    def prepare(manifest_json, payloads, **kwargs):
+        calls["prepare"] = (manifest_json, payloads, kwargs)
+        return prepared
+
+    monkeypatch.setattr(stable_job_cmds, "prepare_job_submission", prepare)
+    monkeypatch.setattr(
+        stable_job_cmds,
+        "client",
+        SimpleNamespace(
+            create_stable_job=lambda manifest_json, payloads, **kwargs: json.dumps(
+                {
+                    "job_id": "stable-job",
+                    "manifest_json": manifest_json,
+                    "payloads": sorted(payloads),
+                    "kwargs": kwargs,
+                }
+            )
+        ),
+    )
+    printed = []
+    monkeypatch.setattr(stable_job_cmds, "record_result", printed.append)
+
+    stable_job_cmds.create(str(bundle), job_id="stable-job", config=None)
+
+    assert calls["prepare"][2]["bundle_dir"] == str(bundle.resolve())
+    assert calls["prepare"][2]["job_id"] == "stable-job"
+    assert calls["prepare"][0]["graph_id"] == "prepared"
+    assert calls["prepare"][1] == {"runtime.py": b"staged"}
+    assert printed[0]["manifest_json"] == prepared.manifest_json
+    assert printed[0]["payloads"] == ["runtime.py"]
+
+
 def test_delete_cleans_every_historical_run_and_definition_resources(monkeypatch):
     cleaned = []
     printed = []
@@ -31,11 +91,7 @@ def test_delete_cleans_every_historical_run_and_definition_resources(monkeypatch
         "cleanup_cleared_job_resources",
         lambda job_id, **_kwargs: cleaned.append(job_id),
     )
-    monkeypatch.setattr(
-        stable_job_cmds.console,
-        "print_json",
-        lambda *, data: printed.append(data),
-    )
+    monkeypatch.setattr(stable_job_cmds, "record_result", printed.append)
 
     stable_job_cmds.delete("stable-job", yes=True)
 

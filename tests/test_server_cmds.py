@@ -1675,7 +1675,7 @@ def test_start_network_seed_already_exposed_prints_existing_token(mocker):
     assert "MirrorNeuron node ready confirmed." in rendered
     assert "already running" in rendered
     assert "seed-token" in rendered
-    assert "mn node join 192.168.4.10 --token seed-token" in rendered
+    assert "mn node add 192.168.4.10 --token seed-token" in rendered
     mock_start_redis.assert_not_called()
     mock_start_core.assert_not_called()
 
@@ -1698,7 +1698,7 @@ def test_start_network_seed_running_local_runtime_prints_existing_token(mocker):
     assert "MirrorNeuron node ready confirmed." in rendered
     assert "already running" in rendered
     assert "runtime-token" in rendered
-    assert "mn node join 192.168.4.20 --token runtime-token" in rendered
+    assert "mn node add 192.168.4.20 --token runtime-token" in rendered
     mock_start_redis.assert_not_called()
     mock_start_core.assert_not_called()
 
@@ -1969,7 +1969,7 @@ def test_add_node_uses_handshake_and_local_core(mocker, tmp_path, capsys):
     assert "2 shared across 2 nodes" in output
     assert "redis://:" in output
     assert "mn node list" in output
-    assert "mn resource list" in output
+    assert "mn resource show" in output
 
 
 def test_confirm_joined_node_retries_add_until_summary_is_active():
@@ -2558,7 +2558,8 @@ def test_wait_for_local_cluster_grpc_raises_after_injected_client_timeout(capsys
 
     assert exc_info.value.exit_code == 1
     assert core_client.calls == 1
-    assert "Local MirrorNeuron core did not become ready" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert "Local MirrorNeuron core did not become ready" in captured.err
 
 class _FlakyCoreClient:
     def __init__(self, *, failures: int):

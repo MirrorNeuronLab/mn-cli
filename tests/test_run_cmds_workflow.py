@@ -81,11 +81,11 @@ def test_run_displays_live_job_type_and_follow_status(mocker, tmp_path, monkeypa
         "nodes": [],
     }))
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--follow-seconds", "0", "--web-ui"])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir), "--follow-seconds", "0", "--web-ui"])
 
     assert result.exit_code == 0
     assert "Live service" in result.stdout
-    assert "Monitor" in result.stdout
+    assert "Watch" in result.stdout
     assert "75%" not in result.stdout
 
 def test_run_displays_workflow_steps_and_agents(mocker, tmp_path):
@@ -174,7 +174,7 @@ def test_run_displays_workflow_steps_and_agents(mocker, tmp_path):
         },
     }))
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
 
     assert result.exit_code == 0
     assert "Workflow" in result.stdout

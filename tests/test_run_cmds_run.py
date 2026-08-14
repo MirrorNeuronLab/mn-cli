@@ -72,7 +72,7 @@ def test_run_success(mocker, tmp_path, monkeypatch):
     nested_payloads.mkdir()
     (nested_payloads / "input.json").write_text("{}")
     
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--web-ui"])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir), "--web-ui"])
     
     assert result.exit_code == 0
     assert "Job submitted" in result.stdout
@@ -104,10 +104,7 @@ def test_run_web_ui_host_and_port_override_blueprint_config(
     result = runner.invoke(
         app,
         [
-            "blueprint",
-            "run",
-            "--folder",
-            str(tmp_path / "blueprint"),
+            "blueprint", "run", str(tmp_path / "blueprint"),
             "--web-ui",
             "--set",
             "web_ui.service.port=60000",
@@ -134,10 +131,7 @@ def test_run_rejects_invalid_web_ui_port(tmp_path):
     result = runner.invoke(
         app,
         [
-            "blueprint",
-            "run",
-            "--folder",
-            str(tmp_path / "blueprint"),
+            "blueprint", "run", str(tmp_path / "blueprint"),
             "--web-ui-port",
             "70000",
         ],
@@ -174,12 +168,12 @@ def test_run_stream_error_falls_back_to_status_polling(mocker, tmp_path, monkeyp
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text('{"nodes": []}')
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--follow-seconds", "0"])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir), "--follow-seconds", "0"])
 
     assert result.exit_code == 0
     assert "Job submitted" in result.stdout
     assert "Completed" in result.stdout
-    assert "Monitor" in result.stdout
+    assert "Watch" in result.stdout
     mock_get.assert_called_once_with("run-stream-fallback")
 
 def test_run_records_lazy_runtime_models_before_model_validation(mocker, tmp_path, monkeypatch):
@@ -313,7 +307,7 @@ def test_run_auto_schedule_creates_resource_wait_schedule(mocker, tmp_path, monk
     (bundle_dir / "manifest.json").write_text('{"nodes": []}')
     (bundle_dir / "payloads").mkdir()
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--auto-schedule"])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir), "--auto-schedule"])
 
     assert result.exit_code == 0
     assert "schedule-123" in result.stdout
@@ -345,7 +339,7 @@ def test_run_force_skips_input_validation(mocker, tmp_path, monkeypatch):
     }))
     (bundle_dir / "payloads").mkdir()
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--force"])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir), "--force"])
 
     assert result.exit_code == 0
     assert "Validation skipped because --force was provided" in result.stdout
@@ -398,7 +392,7 @@ def test_run_prevalidates_command_rules_before_core_submission(mocker, tmp_path,
     )
     (bundle_dir / "payloads").mkdir()
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
 
     assert result.exit_code == 0
     submitted_manifest = json.loads(mock_submit.call_args.args[0])
@@ -466,7 +460,7 @@ def test_run_submits_python_environment_requirements_payload(mocker, tmp_path, m
     payloads_dir.mkdir(parents=True)
     (payloads_dir / "requirements.txt").write_text("opencv-python-headless>=4.10,<5\n")
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--web-ui"])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir), "--web-ui"])
 
     assert result.exit_code == 0
     submitted_manifest = json.loads(mock_submit.call_args.args[0])
@@ -504,10 +498,7 @@ def test_run_injects_blueprint_config_with_cli_set_over_overwrite(mocker, tmp_pa
     result = runner.invoke(
         app,
         [
-            "blueprint",
-            "run",
-            "--folder",
-            str(bundle_dir),
+            "blueprint", "run", str(bundle_dir),
             "--set",
             "video_source.uri=cli",
         ],
@@ -592,7 +583,7 @@ def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_pat
     web_dir.mkdir(parents=True)
     (web_dir / "index.html").write_text("<html></html>")
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--web-ui"])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir), "--web-ui"])
 
     assert result.exit_code == 0
     assert "bp-1-auto-run" in result.stdout
@@ -874,7 +865,7 @@ def test_run_uses_detach_log_seconds_env(mocker, tmp_path, monkeypatch):
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text('{"nodes": []}')
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
 
     assert result.exit_code == 0
     assert "4.5s event tail" in result.stdout
@@ -895,7 +886,7 @@ def test_run_follow_seconds_option_overrides_env(mocker, tmp_path, monkeypatch):
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text('{"nodes": []}')
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--follow-seconds", "1.25"])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir), "--follow-seconds", "1.25"])
 
     assert result.exit_code == 0
     assert "1.25s event tail" in result.stdout
@@ -930,7 +921,7 @@ def test_run_detached_starts_without_live_workflow_ui(flag, mocker, tmp_path, mo
         "runtime": {"bindings": {"step_one": {"worker": {"id": "worker-one"}}}},
     }))
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), flag])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir), flag])
 
     assert result.exit_code == 0
     assert "Detached immediately" in result.stdout
@@ -956,10 +947,10 @@ def test_run_error_submitting(mocker, tmp_path):
     manifest_file = bundle_dir / "manifest.json"
     manifest_file.write_text('{"nodes": []}')
     
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
     
     assert result.exit_code == 1
-    assert "MN_EXECUTION_FAILED" in result.stdout
+    assert "MN_EXECUTION_FAILED" in result.stderr
     cleanup.assert_called_once_with('{"nodes": []}')
 
 
@@ -1059,12 +1050,12 @@ def test_run_command_debug_prints_preparation_diagnostic(mocker, tmp_path):
 
     result = runner.invoke(
         app,
-        ["blueprint", "run", "--folder", str(bundle_dir), "--debug"],
+        ["blueprint", "run", str(bundle_dir), "--debug"],
     )
 
     assert result.exit_code == 1
-    assert "Diagnostic:" in result.stdout
-    assert "status_ineligible (offline)" in result.stdout
+    assert "Diagnostic:" in result.stderr
+    assert "status_ineligible (offline)" in result.stderr
     assert prepare.call_args.kwargs["env"]["MN_DEBUG"] == "1"
 
 
@@ -1137,10 +1128,7 @@ def test_run_reports_remote_docker_worker_preparation(mocker, tmp_path):
     result = runner.invoke(
         app,
         [
-            "blueprint",
-            "run",
-            "--folder",
-            str(bundle_dir),
+            "blueprint", "run", str(bundle_dir),
             "--force",
             "--detached",
             "--debug",
@@ -1148,11 +1136,11 @@ def test_run_reports_remote_docker_worker_preparation(mocker, tmp_path):
     )
 
     assert result.exit_code == 0
-    assert "→ Prepare DockerWorker on mirror_neuron@spark" in result.stdout
+    assert "Prepare DockerWorker on mirror_neuron@spark" in result.stderr
     assert "DockerWorker ready: visual_detector on mirror_neuron@spark" in result.stdout
-    assert "Docker build on mirror_neuron@spark: action=built" in result.stdout
-    assert "docker build --progress=plain" in result.stdout
-    assert "#1 build complete" in result.stdout
+    assert "Docker build on mirror_neuron@spark: action=built" in result.stderr
+    assert "docker build --progress=plain" in result.stderr
+    assert "#1 build complete" in result.stderr
     submitted = json.loads(submit.call_args.args[0])
     assert "build" not in submitted["metadata"]["mn_docker_workers"]["services"][0]
 
@@ -1166,20 +1154,20 @@ def test_run_keyboard_interrupt(mocker, tmp_path):
     manifest_file = bundle_dir / "manifest.json"
     manifest_file.write_text('{"nodes": []}')
     
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
     
     assert result.exit_code == 0
     assert "Detached from workflow UI. Job is still running." in result.stdout
 
 def test_run_not_dir(tmp_path):
     not_a_dir = tmp_path / "not_a_dir"
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(not_a_dir)])
-    assert result.exit_code == 1
-    assert "is not a directory" in re.sub(r"\s+", " ", result.stdout)
+    result = runner.invoke(app, ["blueprint", "run", str(not_a_dir)])
+    assert result.exit_code == 2
+    assert "is not a directory" in re.sub(r"\s+", " ", result.stderr)
 
 def test_run_no_manifest(tmp_path):
     bundle_dir = tmp_path / "no_manifest"
     bundle_dir.mkdir()
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
-    assert result.exit_code == 1
-    assert "manifest.json not found" in result.stdout
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
+    assert result.exit_code == 2
+    assert "missing manifest.json" in result.stderr

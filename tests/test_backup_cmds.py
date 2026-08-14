@@ -3,12 +3,17 @@ import json
 import subprocess
 import zipfile
 
+import typer
 from typer.testing import CliRunner
 
-from mn_cli.main import app
 from mn_cli.libs import backup_cmds
 
 runner = CliRunner()
+handler_app = typer.Typer()
+handler_job_app = typer.Typer()
+handler_app.add_typer(handler_job_app, name="job")
+handler_job_app.command("backup")(backup_cmds.backup)
+handler_job_app.command("restore")(backup_cmds.restore)
 
 
 def test_backup_fails_when_job_is_not_paused(mocker, tmp_path):
@@ -18,10 +23,10 @@ def test_backup_fails_when_job_is_not_paused(mocker, tmp_path):
     )
     mock_export = mocker.patch("mn_cli.libs.backup_cmds.client.export_job_backup")
 
-    result = runner.invoke(app, ["job", "backup", "job-1", "--output", str(tmp_path)])
+    result = runner.invoke(handler_app, ["job", "backup", "job-1", "--output", str(tmp_path)])
 
     assert result.exit_code == 1
-    assert "must be paused before backup" in result.stdout
+    assert "must be paused before backup" in result.stderr
     mock_export.assert_not_called()
 
 
@@ -62,10 +67,10 @@ def test_backup_writes_zip_members_and_secret_warning(mocker, tmp_path):
         ),
     )
 
-    result = runner.invoke(app, ["job", "backup", "job-1", "--output", str(tmp_path)])
+    result = runner.invoke(handler_app, ["job", "backup", "job-1", "--output", str(tmp_path)])
 
     assert result.exit_code == 0
-    assert "may contain secrets" in result.stdout
+    assert "may contain secrets" in result.stderr
     assert "Job backup successful." in result.stdout
     assert "job-1" in result.stdout
     archives = list(tmp_path.glob("*.mnbackup.zip"))
@@ -91,10 +96,10 @@ def test_restore_rejects_path_traversal_zip(mocker, tmp_path):
 
     mock_restore = mocker.patch("mn_cli.libs.backup_cmds.client.restore_job_backup")
 
-    result = runner.invoke(app, ["job", "restore", "bp", "--input", str(archive)])
+    result = runner.invoke(handler_app, ["job", "restore", "bp", "--input", str(archive)])
 
     assert result.exit_code == 1
-    assert "escapes the backup root" in result.stdout
+    assert "escapes the backup root" in result.stderr
     mock_restore.assert_not_called()
 
 
@@ -105,12 +110,12 @@ def test_restore_rejects_missing_required_archive_entries(mocker, tmp_path):
 
     mock_restore = mocker.patch("mn_cli.libs.backup_cmds.client.restore_job_backup")
 
-    result = runner.invoke(app, ["job", "restore", "bp", "--input", str(archive)])
+    result = runner.invoke(handler_app, ["job", "restore", "bp", "--input", str(archive)])
 
     assert result.exit_code == 1
-    assert "Backup zip is missing required entries" in result.stdout
-    assert "runtime/job.json" in result.stdout
-    assert "bundle/manifest.json" in result.stdout
+    assert "Backup zip is missing required entries" in result.stderr
+    assert "runtime/job.json" in result.stderr
+    assert "bundle/manifest.json" in result.stderr
     mock_restore.assert_not_called()
 
 
@@ -139,10 +144,10 @@ def test_restore_rejects_checksum_mismatch(mocker, tmp_path):
 
     mock_restore = mocker.patch("mn_cli.libs.backup_cmds.client.restore_job_backup")
 
-    result = runner.invoke(app, ["job", "restore", "bp", "--input", str(archive)])
+    result = runner.invoke(handler_app, ["job", "restore", "bp", "--input", str(archive)])
 
     assert result.exit_code == 1
-    assert "Checksum mismatch for runtime/job.json" in result.stdout
+    assert "Checksum mismatch for runtime/job.json" in result.stderr
     mock_restore.assert_not_called()
 
 
@@ -195,7 +200,7 @@ def test_restore_writes_new_run_mapping_and_prints_provenance(mocker, tmp_path, 
         ),
     )
 
-    result = runner.invoke(app, ["job", "restore", "bp", "--input", str(archive)])
+    result = runner.invoke(handler_app, ["job", "restore", "bp", "--input", str(archive)])
 
     assert result.exit_code == 0
     assert "Job restore successful." in result.stdout
@@ -265,7 +270,7 @@ def test_air_gapped_backup_streams_referenced_model_blob(mocker, tmp_path, monke
     )
 
     result = runner.invoke(
-        app,
+        handler_app,
         ["job", "backup", "job-1", "--output", str(tmp_path), "--air-gapped"],
     )
 

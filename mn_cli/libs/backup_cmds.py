@@ -109,7 +109,7 @@ def backup(
             console,
             "Job backup",
             details=[("Backup", archive_path), ("Source job", job_id)],
-            next_steps=f"mn job restore <blueprint-id> --input {archive_path}",
+            next_steps="Store this compatibility archive securely.",
         )
     except BackupRestoreError as exc:
         print_error(console, exc)
@@ -125,7 +125,7 @@ def restore(
         ...,
         "--input",
         "-i",
-        help="Backup zip file created by mn job backup.",
+        help="MirrorNeuron compatibility backup zip file.",
         exists=True,
         file_okay=True,
         dir_okay=False,
@@ -168,10 +168,10 @@ def restore(
                 ("Run ID", new_run_id),
                 ("Original job", result.get("source_job_id", "unknown")),
             ],
-            next_steps=f"mn run resume {new_job_id}",
+            next_steps=f"mn run resume {new_run_id}",
         )
     except BackupRestoreError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(console, exc)
         raise typer.Exit(1)
     except Exception as exc:
         handle_cli_error(exc, console, "restore")

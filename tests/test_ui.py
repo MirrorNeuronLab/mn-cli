@@ -18,7 +18,7 @@ def test_print_success_confirmation_outputs_structured_lines():
         "Node join",
         status="connected",
         details=[("Node", "mirror_neuron@192.168.4.173"), ("Remote Redis", "192.168.4.173:56380")],
-        next_steps=("mn node list", "mn resource list"),
+        next_steps=("mn node list", "mn resource show"),
     )
 
     output = [line.strip() for line in stream.getvalue().splitlines() if line.strip()]
@@ -43,7 +43,7 @@ def test_print_success_confirmation_keeps_detail_labels_readable():
             ("Node", "mirror_neuron@192.168.4.173"),
             ("Token", "bdf21a9c1f101cce95786862b19ab5b0ac1f5d196d2183e7bcec5b4bc9ec6c4d"),
         ],
-        next_steps="mn node join 192.168.4.173 --token bdf21a9c1f101cce95786862b19ab5b0ac1f5d196d2183e7bcec5b4bc9ec6c4d",
+        next_steps="mn node add 192.168.4.173 --token bdf21a9c1f101cce95786862b19ab5b0ac1f5d196d2183e7bcec5b4bc9ec6c4d",
     )
 
     output = stream.getvalue()

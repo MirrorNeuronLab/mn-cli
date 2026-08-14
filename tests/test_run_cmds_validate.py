@@ -21,6 +21,12 @@ from mn_sdk import AgentProgress, load_model_ownership, load_model_remotes, upse
 runner = CliRunner()
 
 
+def cli_data(result):
+    payload = json.loads(result.stdout)
+    assert payload["schema"] == "mn.cli/v1"
+    return payload["data"] if payload["ok"] else payload["error"].get("details", {})
+
+
 @pytest.fixture(autouse=True)
 def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.setenv("MN_HOME", str(tmp_path / "mn-home"))
@@ -208,39 +214,36 @@ def test_validate_accepts_source_manifest_after_expansion(monkeypatch, tmp_path)
 
     assert result.exit_code == 0, result.stdout
     assert "Job bundle validation confirmed." in result.stdout
-    assert "source_flow_v1" in result.stdout
+    assert "Workflow ID" in result.stdout
 
-def test_validate_records_first_use_models_as_deferred(mocker, tmp_path):
+def test_validate_is_static_and_does_not_probe_runtime_readiness(mocker, tmp_path):
     bundle_dir = tmp_path / "lazy_model_bundle"
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text(json.dumps(_workflow_manifest_fixture()))
-    deferred = {
-        "ok": True,
-        "deferred": True,
-        "models": [
-            {
-                "id": "default",
-                "model": "default",
-                "runtime_model": "docker.io/ai/nemotron3:latest",
-                "status": "deferred_runtime_install",
-            }
-        ],
-    }
     defer_models = mocker.patch(
-        "mn_cli.libs.run_cmds._defer_runtime_models_for_run_or_exit",
-        return_value=deferred,
+        "mn_cli.libs.run_cmds.handlers.validate._defer_runtime_models_for_run_or_exit",
+        side_effect=AssertionError("static validation must not prepare models"),
     )
     validate_models = mocker.patch(
-        "mn_cli.libs.run_cmds._validate_manifest_models_or_exit",
-        return_value={"ok": True, "results": []},
+        "mn_cli.libs.run_cmds.handlers.validate._validate_manifest_models_or_exit",
+        side_effect=AssertionError("static validation must not probe models"),
+    )
+    validate_services = mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.validate._validate_manifest_services_or_exit",
+        side_effect=AssertionError("static validation must not probe services"),
+    )
+    validate_hardware = mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.validate._validate_manifest_hardware_or_exit",
+        side_effect=AssertionError("static validation must not probe hardware"),
     )
 
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
 
     assert result.exit_code == 0
-    defer_models.assert_called_once()
-    assert defer_models.call_args.kwargs["quiet"] is True
-    assert validate_models.call_args.kwargs["model_install_summary"] is deferred
+    defer_models.assert_not_called()
+    validate_models.assert_not_called()
+    validate_services.assert_not_called()
+    validate_hardware.assert_not_called()
 
 def test_validate_rejects_workflow_manifest_cycles(tmp_path):
     bundle_dir = tmp_path / "workflow_cycle"
@@ -259,10 +262,10 @@ def test_validate_rejects_workflow_manifest_cycles(tmp_path):
     ]
     (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
 
-    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--output", "json"])
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--json"])
 
-    assert result.exit_code == 1
-    report = json.loads(result.stdout)
+    assert result.exit_code == 2
+    report = cli_data(result)
     assert any("acyclic" in issue["message"] for issue in report["issues"])
 
 def test_validate_rejects_workflow_manifest_root_graph_id(tmp_path):
@@ -272,10 +275,10 @@ def test_validate_rejects_workflow_manifest_root_graph_id(tmp_path):
     manifest["graph_id"] = "tax_flow_v1"
     (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
 
-    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--output", "json"])
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--json"])
 
-    assert result.exit_code == 1
-    report = json.loads(result.stdout)
+    assert result.exit_code == 2
+    report = cli_data(result)
     assert any(issue["location"]["path"] == "graph_id" for issue in report["issues"])
 
 def test_validate_rejects_workflow_manifest_missing_workflow_id(tmp_path):
@@ -285,10 +288,10 @@ def test_validate_rejects_workflow_manifest_missing_workflow_id(tmp_path):
     del manifest["workflow"]["workflow_id"]
     (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
 
-    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--output", "json"])
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--json"])
 
-    assert result.exit_code == 1
-    report = json.loads(result.stdout)
+    assert result.exit_code == 2
+    report = cli_data(result)
     assert any("workflow_id" in issue["message"] for issue in report["issues"])
 
 def test_validate_rejects_old_flow_workflow_manifest(tmp_path):
@@ -299,24 +302,24 @@ def test_validate_rejects_old_flow_workflow_manifest(tmp_path):
     del manifest["workflow"]
     (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
 
-    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--output", "json"])
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--json"])
 
-    assert result.exit_code == 1
-    report = json.loads(result.stdout)
+    assert result.exit_code == 2
+    report = cli_data(result)
     assert any(issue["location"]["path"] in {"flow", "manifest"} for issue in report["issues"])
 
 def test_validate_not_directory(tmp_path):
     not_a_dir = tmp_path / "not_a_dir"
     result = runner.invoke(app, ["blueprint", "validate", str(not_a_dir)])
-    assert result.exit_code == 1
-    assert "is not a directory" in re.sub(r"\s+", " ", result.stdout)
+    assert result.exit_code == 2
+    assert "is not a directory" in re.sub(r"\s+", " ", result.stderr)
 
 def test_validate_no_manifest(tmp_path):
     bundle_dir = tmp_path / "no_manifest"
     bundle_dir.mkdir()
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
-    assert result.exit_code == 1
-    assert "manifest.json not found in" in result.stdout
+    assert result.exit_code == 2
+    assert "manifest.json not found in" in result.stderr
 
 def test_validate_bad_json(tmp_path):
     bundle_dir = tmp_path / "bad_json"
@@ -324,8 +327,8 @@ def test_validate_bad_json(tmp_path):
     manifest_file = bundle_dir / "manifest.json"
     manifest_file.write_text("{bad_json: 1}")
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
-    assert result.exit_code == 1
-    assert "is not valid JSON" in result.stdout
+    assert result.exit_code == 2
+    assert "is not valid JSON" in result.stderr
 
 def test_validate_missing_keys(tmp_path):
     bundle_dir = tmp_path / "missing_keys"
@@ -333,8 +336,8 @@ def test_validate_missing_keys(tmp_path):
     manifest_file = bundle_dir / "manifest.json"
     manifest_file.write_text('{"manifest_version": "1.0"}')
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
-    assert result.exit_code == 1
-    assert "missing required keys" in result.stdout
+    assert result.exit_code == 2
+    assert "missing required keys" in result.stderr
 
 def test_validate_nodes_not_list(tmp_path):
     bundle_dir = tmp_path / "nodes_not_list"
@@ -349,8 +352,8 @@ def test_validate_nodes_not_list(tmp_path):
     }
     manifest_file.write_text(json.dumps(manifest_data))
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
-    assert result.exit_code == 1
-    assert "'nodes' must be a list" in result.stdout
+    assert result.exit_code == 2
+    assert "'nodes' must be a list" in result.stderr
 
 def test_validate_rejects_bad_resource_specs(tmp_path):
     bundle_dir = tmp_path / "bad_resources"
@@ -372,10 +375,10 @@ def test_validate_rejects_bad_resource_specs(tmp_path):
         ],
     }))
 
-    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--output", "json"])
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--json"])
 
-    assert result.exit_code == 1
-    report = json.loads(result.stdout)
+    assert result.exit_code == 2
+    report = cli_data(result)
     codes = {issue["code"] for issue in report["issues"]}
     assert "manifest.resources.port_number" in codes
     assert "manifest.resources.volume_source" in codes
@@ -434,7 +437,7 @@ def test_validate_rejects_invalid_python_environment(tmp_path):
 
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     normalized = re.sub(r"\s+", " ", result.stdout)
     assert "python_environment.requirements must be a relative path inside payloads" in normalized
     assert "python_environment.packages must be a list of non-empty strings" in result.stdout
@@ -469,7 +472,7 @@ def test_validate_rejects_missing_explicit_skill_runtime_dockerfile(tmp_path):
 
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "mn_skill_runtime Dockerfile not found" in result.stdout
 
 def test_validate_runs_manifest_input_validation(tmp_path):
@@ -499,13 +502,13 @@ def test_validate_runs_manifest_input_validation(tmp_path):
 
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "Input validation failed" in result.stdout
     assert "camera_url" in result.stdout
     assert "Field" in result.stdout
     assert "Fix" in result.stdout
 
-def test_validate_runs_required_service_checks_before_input_validation(tmp_path):
+def test_validate_does_not_run_required_service_probes(tmp_path):
     bundle_dir = tmp_path / "service_validated_inputs"
     bundle_dir.mkdir()
     (bundle_dir / "config").mkdir()
@@ -545,9 +548,9 @@ def test_validate_runs_required_service_checks_before_input_validation(tmp_path)
 
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
 
-    assert result.exit_code == 1
-    assert "Service validation failed" in result.stdout
-    assert "Input validation failed" not in result.stdout
+    assert result.exit_code == 2
+    assert "Service validation failed" not in result.stdout
+    assert "Input validation failed" in result.stdout
 
 def test_validate_outputs_json_report(tmp_path):
     bundle_dir = tmp_path / "validated_inputs"
@@ -575,10 +578,10 @@ def test_validate_outputs_json_report(tmp_path):
         },
     }))
 
-    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--output", "json"])
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--json"])
 
-    assert result.exit_code == 1
-    report = json.loads(result.stdout)
+    assert result.exit_code == 2
+    report = cli_data(result)
     assert report["ok"] is False
     assert report["issues"][0]["location"]["path"] == "video_source.uri"
     assert report["issues"][0]["rule"]["name"] == "camera_url"
@@ -595,4 +598,4 @@ def test_validate_unexpected_error(mocker, tmp_path):
     
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
     assert result.exit_code == 1
-    assert "MN_EXECUTION_FAILED" in result.stdout
+    assert "MN_EXECUTION_FAILED" in result.stderr

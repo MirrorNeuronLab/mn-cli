@@ -65,16 +65,16 @@ def test_run_ensures_context_engine_when_blueprint_memory_enabled(mocker, tmp_pa
         encoding="utf-8",
     )
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--force"])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir), "--force"])
 
     assert result.exit_code == 0
     stdout_text = re.sub(r"\s+", " ", result.stdout)
     assert "This blueprint uses context memory" in result.stdout
     assert "First launch may download the context model" in stdout_text
     assert "Context memory ready" in result.stdout
-    assert "→ Check runtime resources" in result.stdout
-    assert "→ Package workflow" in result.stdout
-    assert "→ Submit runtime job" in result.stdout
+    assert "Check runtime resources" in result.stderr
+    assert "Package workflow" in result.stderr
+    assert "Submit runtime job" in result.stderr
     mock_ensure.assert_called_once_with(force=True)
     mock_submit.assert_called_once()
 
@@ -238,7 +238,7 @@ def test_run_does_not_ensure_context_engine_when_memory_disabled_by_env(mocker, 
         encoding="utf-8",
     )
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir), "--force"])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir), "--force"])
 
     assert result.exit_code == 0
     mock_ensure.assert_not_called()

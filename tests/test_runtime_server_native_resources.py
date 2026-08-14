@@ -10,6 +10,11 @@ import pytest
 from mn_cli.runtime import server
 
 
+@pytest.fixture(autouse=True)
+def available_blueprint_ui_ports(monkeypatch):
+    monkeypatch.setattr(server, "_host_port_available", lambda *_args, **_kwargs: True)
+
+
 def test_compose_env_includes_sdk_node_resource_advertisement(monkeypatch):
     hardware = {
         "platform": {"display_name": "sdk-node", "hostname": "sdk-host"},

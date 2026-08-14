@@ -7,7 +7,7 @@ from typing import Annotated, Any, Optional
 import typer
 
 from mn_cli.error_handler import handle_cli_error
-from mn_cli.libs.ui import print_confirmed
+from mn_cli.libs.ui import print_collection, print_confirmed, print_detail
 from mn_cli.libs.run_cmds import (
     _emit_validation_report,
     _normalize_validation_output,
@@ -17,10 +17,6 @@ from mn_cli.shared import client, console
 from mn_sdk import run_service_validation
 
 
-service_app = typer.Typer(help="Inspect and check MirrorNeuron service discovery")
-
-
-@service_app.command(name="list")
 def list_services(
     name: Annotated[Optional[str], typer.Option("--name", help="Filter by service name.")] = None,
     node: Annotated[Optional[str], typer.Option("--node", help="Filter by node name.")] = None,
@@ -37,12 +33,18 @@ def list_services(
             status=status,
             passing_only=not all_statuses,
         )
-        console.print_json(data=json.loads(response))
+        payload = json.loads(response)
+        items = payload.get("services") or payload.get("data") or [] if isinstance(payload, dict) else []
+        print_collection(
+            console,
+            "Services",
+            items,
+            columns=(("ID", "id"), ("Kind", "name"), ("State", "status"), ("Node / Owner", "node"), ("Updated", "updated_at")),
+        )
     except Exception as exc:
         handle_cli_error(exc, console, "service list")
 
 
-@service_app.command(name="resolve")
 def resolve_service(
     name: str,
     tag: Annotated[Optional[list[str]], typer.Option("--tag", help="Require a service tag.")] = None,
@@ -57,12 +59,12 @@ def resolve_service(
             node=node,
             passing_only=not all_statuses,
         )
-        console.print_json(data=json.loads(response))
+        payload = json.loads(response)
+        print_detail(console, "Service", payload if isinstance(payload, dict) else {"services": payload})
     except Exception as exc:
-        handle_cli_error(exc, console, "service resolve")
+        handle_cli_error(exc, console, "service show")
 
 
-@service_app.command(name="check")
 def check_services(
     bundle_path: str,
     output: Annotated[

@@ -4,20 +4,6 @@
 inspecting runtime state, managing jobs, exporting artifacts, and starting local
 services installed by `mn-deploy`.
 
-## Air-gapped jobs
-
-Blueprints may bundle source packages or wheels under `payloads/skills` and
-`payloads/agents`, and Docker Model Runner sources under `payloads/models`.
-Large model files are streamed into the local blob store.
-
-For a paused job, `mn job backup <id> --air-gapped --output <folder>` writes an
-`mn.backup.v2` capsule containing the runtime snapshot, payload blobs, Python
-wheelhouse, and required DockerWorker images. `mn job restore` hydrates those
-assets without package-index access. An extracted capsule can also be run by
-passing its `bundle` directory to `mn blueprint run --folder`. Every runtime
-model must have a physical `payloads/models` source; export fails instead of
-silently depending on a catalog download.
-
 ## Quick Start
 
 Install locally and run tests:
@@ -43,6 +29,18 @@ the MirrorNeuron GAR package index configured, install it with:
 ```bash
 .venv/bin/python -m pip install "mirrorneuron-cli[web-ui]"
 ```
+
+## Model operations
+
+`mn model` exposes one type-aware workflow: `list`, `add`, `show`, `update`,
+`remove`, and `doctor`. Add a catalog or arbitrary DMR reference with
+`mn model add <MODEL>`, or register canonical provider JSON with
+`mn model add --file <definition.json>`. Registrations are stored in
+`$MN_HOME/models/registry.json`; provider secrets remain environment-variable
+references. Use `mn model list --available` to include catalog-only choices.
+Add `--default` to make one newly added DMR or provider model the logical
+default ahead of the built-in Nemotron/Gemma fallback chain. Provider files
+used with `--default` must contain exactly one model.
 
 ## Fast runtime-model orchestration tests
 
@@ -94,7 +92,7 @@ Detached runs keep their output relay alive until terminal state unless
 Override blueprint config for one run without changing `config/overwrite.json`:
 
 ```bash
-mn blueprint run --folder ./vc_assistant \
+mn blueprint run ./vc_assistant \
   --set document_sources.folder_path=/path/to/documents \
   --set execution.debug=true
 ```
@@ -106,7 +104,7 @@ For a blueprint-owned web service, override the listener without editing its
 checked-in config:
 
 ```bash
-mn blueprint run --folder ./cctv_operator --web-ui \
+mn blueprint run ./cctv_operator --web-ui \
   --web-ui-host 0.0.0.0 \
   --web-ui-port 61017
 ```
@@ -123,12 +121,11 @@ job data:
 
 ```bash
 mn job create ./vc_assistant --job-id vc-diligence
-mn job inspect vc-diligence
+mn job show vc-diligence
 mn job start vc-diligence --inputs run-input.json
-mn job runs vc-diligence
+mn run list --job vc-diligence
 
-mn run list vc-diligence
-mn run status <run-id>
+mn run show <run-id>
 mn run pause <run-id>
 mn run resume <run-id>
 mn run cancel <run-id>
@@ -171,7 +168,7 @@ request was accepted and cleanup is queued for that node's rejoin. It is not a
 command failure. Ctrl+C detaches without aborting the operation; reattach with:
 
 ```bash
-mn operation status op-…
+mn operation show op-…
 mn operation watch op-…
 ```
 
@@ -251,8 +248,8 @@ snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
 - A running MirrorNeuron core is required for live runtime commands.
 - The default gRPC target comes from `MN_GRPC_TARGET`, then local deployment
   settings, then `localhost:55051`.
-- Use `mn blueprint validate` before `mn blueprint run --folder` when checking a local bundle.
-- Validation honors first-use runtime-model installation, so a compatible
+- Use `mn blueprint validate` before `mn blueprint run ./folder` when checking a local bundle.
+- Validation honors first-use runtime-model preparation, so a compatible
   declared model need not already be installed.
 - `mn blueprint run` validates model declarations but does not install models.
   Workers select, install, and route each managed model on its first actual use.

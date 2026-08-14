@@ -14,6 +14,13 @@ from mn_sdk.blueprint_support.local_inputs import stage_local_input_payloads
 runner = CliRunner()
 
 
+def cli_data(result):
+    payload = json.loads(result.stdout)
+    assert payload["schema"] == "mn.cli/v1"
+    assert payload["ok"] is True
+    return payload["data"]
+
+
 @pytest.fixture(autouse=True)
 def isolated_blueprint_source_env(monkeypatch, tmp_path):
     monkeypatch.delenv("MN_BLUEPRINT_SOURCE", raising=False)
@@ -399,8 +406,8 @@ def test_blueprint_model_dependency_cluster_provided_skips_local_install(
 def test_blueprint_list_not_initialized(monkeypatch, tmp_path):
     _use_local_blueprint_source(monkeypatch, tmp_path)
     result = runner.invoke(app, ["blueprint", "list"])
-    assert result.exit_code == 1
-    assert "MN_BLUEPRINT_LOCAL must point to a blueprint catalog with index.json" in result.stdout
+    assert result.exit_code == 2
+    assert "MN_BLUEPRINT_LOCAL must point to a blueprint catalog with index.json" in result.stderr
 
 def test_blueprint_list_success(monkeypatch, tmp_path):
     index_file = tmp_path / "index.json"
@@ -440,8 +447,8 @@ def test_blueprint_list_error(monkeypatch, tmp_path):
     index_file.write_text("invalid json")
     _use_local_blueprint_source(monkeypatch, tmp_path)
     result = runner.invoke(app, ["blueprint", "list"])
-    assert result.exit_code == 1
-    assert "Error: Could not read blueprints index" in result.stdout
+    assert result.exit_code == 2
+    assert "Could not read blueprints index" in result.stderr
 
 
 def test_print_run_table_wraps_on_narrow_console(monkeypatch):
@@ -523,12 +530,12 @@ def test_blueprint_observability_commands_read_shared_run_store(tmp_path):
         "llm": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15, "calls": 1, "estimated": False},
     }) + "\n")
 
-    logs = runner.invoke(app, ["blueprint", "logs", "observe-run", "--runs-root", str(tmp_path)])
-    human = runner.invoke(app, ["blueprint", "human", "observe-run", "--pending", "--runs-root", str(tmp_path)])
+    logs = runner.invoke(app, ["run", "logs", "observe-run", "--channel", "logs", "--runs-root", str(tmp_path)])
+    human = runner.invoke(app, ["run", "human", "list", "observe-run", "--pending", "--runs-root", str(tmp_path)])
     response = runner.invoke(
         app,
         [
-            "blueprint",
+            "run",
             "human",
             "respond",
             "observe-run",
@@ -539,7 +546,9 @@ def test_blueprint_observability_commands_read_shared_run_store(tmp_path):
             str(tmp_path),
         ],
     )
-    resources = runner.invoke(app, ["blueprint", "resources", "observe-run", "--window", "24000h", "--runs-root", str(tmp_path)])
+    resources = runner.invoke(app, ["run", "resources", "observe-run", "--window", "24000h", "--runs-root", str(tmp_path)])
+    human_json = runner.invoke(app, ["run", "human", "list", "observe-run", "--runs-root", str(tmp_path), "--json"])
+    resources_json = runner.invoke(app, ["run", "resources", "observe-run", "--window", "24000h", "--runs-root", str(tmp_path), "--json"])
 
     assert logs.exit_code == 0
     assert "needs" in logs.stdout
@@ -551,6 +560,8 @@ def test_blueprint_observability_commands_read_shared_run_store(tmp_path):
     assert "True" in response.stdout
     assert resources.exit_code == 0
     assert "15" in resources.stdout
+    assert cli_data(human_json)["count"] >= 1
+    assert cli_data(resources_json)["run_id"] == "observe-run"
 
 
 def test_blueprint_list_blueprint_repo_reads_custom_index(mocker, tmp_path):
@@ -623,7 +634,7 @@ def test_blueprint_run_init_success(mocker, tmp_path):
     
     result = runner.invoke(app, ["blueprint", "run", "bp-1"])
     assert result.exit_code == 0
-    assert "Initializing blueprint storage" in result.stdout
+    assert "Initializing blueprint storage" in result.stderr
     mock_run_bundle.assert_called_once()
     assert mock_run_bundle.call_args.args[0] == str(storage_dir / "bp-1-dir")
     assert mock_run_bundle.call_args.kwargs["env_overrides"]["MN_RUN_ID"].startswith("bp-1-")
@@ -671,7 +682,7 @@ def test_blueprint_run_update_success(mocker, tmp_path):
     
     result = runner.invoke(app, ["blueprint", "run", "bp-1"])
     assert result.exit_code == 0
-    assert "Using cached blueprint storage" in result.stdout
+    assert "Using cached blueprint storage" in result.stderr
     assert not any("pull" in call.args[0] for call in mock_run.call_args_list if call.args)
     mock_run_bundle.assert_called_once()
     assert mock_run_bundle.call_args.args[0] == str(storage_dir / "bp-1-dir")
@@ -694,7 +705,7 @@ def test_blueprint_run_update_flag_pulls_cache(mocker, tmp_path):
     result = runner.invoke(app, ["blueprint", "run", "bp-1", "--update"])
 
     assert result.exit_code == 0
-    assert "Updating blueprint storage" in result.stdout
+    assert "Updating blueprint storage" in result.stderr
     assert any("pull" in call.args[0] for call in mock_run.call_args_list if call.args)
     mock_run_bundle.assert_called_once()
 
@@ -740,7 +751,7 @@ def test_blueprint_update_cleans_resources_for_removed_blueprints(mocker, tmp_pa
 
     mocker.patch("mn_cli.libs.blueprint_cmds._git_pull", side_effect=fake_pull)
 
-    result = runner.invoke(app, ["blueprint", "update", "--source", str(storage_dir)])
+    result = runner.invoke(app, ["blueprint", "update", "--all", "--source", str(storage_dir)])
 
     assert result.exit_code == 0
     assert not removed_env.exists()
@@ -753,6 +764,38 @@ def test_blueprint_update_cleans_resources_for_removed_blueprints(mocker, tmp_pa
     assert active_bundle_cache.exists()
     assert "Blueprint cleanup successful." in result.stdout
     assert "1" in result.stdout
+
+
+def test_blueprint_update_all_refreshes_dependencies_for_added_blueprints(mocker, tmp_path, monkeypatch):
+    storage_dir = tmp_path / "catalog"
+    storage_dir.mkdir()
+    (storage_dir / "index.json").write_text(
+        json.dumps([{"id": "bp-active", "path": "bp-active"}])
+    )
+    installs_dir = tmp_path / "installs"
+    installs_dir.mkdir()
+    (installs_dir / "bp-active.json").write_text(
+        json.dumps({"blueprint_id": "bp-active"})
+    )
+    monkeypatch.setenv("MN_BLUEPRINT_INSTALLS_DIR", str(installs_dir))
+    mocker.patch("mn_cli.libs.blueprint_cmds._git_pull")
+    mocker.patch(
+        "mn_cli.libs.blueprint_cmds._cleanup_catalog_resources",
+        return_value={"removed": [], "errors": []},
+    )
+    mocker.patch("mn_cli.libs.blueprint_cmds._print_cleanup_summary")
+    refresh = mocker.patch(
+        "mn_cli.libs.blueprint_cmds._install_catalog_blueprint_with_models"
+    )
+
+    result = runner.invoke(
+        app,
+        ["blueprint", "update", "--all", "--source", str(storage_dir)],
+    )
+
+    assert result.exit_code == 0
+    assert refresh.call_args.kwargs["blueprint_id"] == "bp-active"
+    assert refresh.call_args.kwargs["source"] == str(storage_dir)
 
 
 def test_blueprint_cleanup_removes_dead_and_stale_resources(mocker, tmp_path, monkeypatch):
@@ -795,7 +838,7 @@ def test_blueprint_cleanup_removes_dead_and_stale_resources(mocker, tmp_path, mo
     monkeypatch.setenv("MN_BLUEPRINT_RESOURCE_STALE_SECONDS", "0")
     mocker.patch("mn_cli.libs.blueprint_resources.shutil.which", return_value=None)
 
-    result = runner.invoke(app, ["blueprint", "cleanup", "--source", str(storage_dir)])
+    result = runner.invoke(app, ["blueprint", "cleanup", "--source", str(storage_dir), "--yes"])
 
     assert result.exit_code == 0
     assert active_env.exists()
@@ -836,7 +879,7 @@ def test_blueprint_uninstall_removes_storage_and_owned_resources(mocker, tmp_pat
     monkeypatch.setenv("MN_BUNDLE_CACHE_DIR", str(bundle_cache_root))
     mocker.patch("mn_cli.libs.blueprint_resources.shutil.which", return_value=None)
 
-    result = runner.invoke(app, ["blueprint", "uninstall", "--source", str(storage_dir)])
+    result = runner.invoke(app, ["blueprint", "remove", "--all", "--source", str(storage_dir), "--yes"])
 
     assert result.exit_code == 0
     assert not storage_dir.exists()
@@ -882,7 +925,7 @@ def test_blueprint_run_blueprint_repo_uses_repo_specific_cache(mocker, tmp_path)
     storage_dir = Path(clone_args[-1])
     assert storage_dir.parent == custom_cache_root
     assert storage_dir != default_storage
-    assert "Initializing blueprint storage for" in result.stdout
+    assert "Initializing blueprint storage for" in result.stderr
     mock_run_bundle.assert_called_once()
     assert mock_run_bundle.call_args.args[0] == str(storage_dir / "bp-1-dir")
 
@@ -939,10 +982,7 @@ def test_blueprint_run_set_overrides_local_bundle_without_persisting(
     result = runner.invoke(
         app,
         [
-            "blueprint",
-            "run",
-            "--folder",
-            str(bp_dir),
+            "blueprint", "run", str(bp_dir),
             "--set",
             "video_source.uri=cli",
             "--set",
@@ -991,7 +1031,7 @@ def test_blueprint_run_delegates_default_model_preparation_to_runtime_launch(
     )
     run_bundle = mocker.patch("mn_cli.libs.blueprint_cmds._run_bundle")
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bp_dir)])
+    result = runner.invoke(app, ["blueprint", "run", str(bp_dir)])
 
     assert result.exit_code == 0
     premature_prepare.assert_not_called()
@@ -1009,12 +1049,12 @@ def test_blueprint_run_set_rejects_invalid_assignment_before_submit(
 
     result = runner.invoke(
         app,
-        ["blueprint", "run", "--folder", str(bp_dir), "--set", assignment],
+        ["blueprint", "run", str(bp_dir), "--set", assignment],
     )
 
     assert result.exit_code == 2
-    assert "Error:" in result.stdout
-    assert "Invalid --set" in result.stdout
+    assert "Error:" in result.stderr
+    assert "Invalid --set" in result.stderr
     mock_run_bundle.assert_not_called()
 
 
@@ -1037,10 +1077,7 @@ def test_blueprint_run_set_is_forwarded_to_scheduled_bundle(mocker, tmp_path):
     result = runner.invoke(
         app,
         [
-            "blueprint",
-            "run",
-            "--folder",
-            str(bp_dir),
+            "blueprint", "run", str(bp_dir),
             "--schedule",
             "30m",
             "--set",
@@ -1082,7 +1119,7 @@ def test_blueprint_run_fake_llm_flag_overrides_local_bundle(mocker, tmp_path):
     )
     mock_run_bundle = mocker.patch("mn_cli.libs.blueprint_cmds._run_bundle")
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bp_dir), "--fake-llm"])
+    result = runner.invoke(app, ["blueprint", "run", str(bp_dir), "--fake-llm"])
 
     assert result.exit_code == 0
     mock_run_bundle.assert_called_once()
@@ -1110,7 +1147,7 @@ def test_blueprint_run_testing_flags_override_local_bundle(mocker, tmp_path):
     (config_dir / "default.json").write_text(json.dumps({"execution": {"existing": True}}))
     mock_run_bundle = mocker.patch("mn_cli.libs.blueprint_cmds._run_bundle")
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bp_dir), "--fake-skills", "--benchmark", "--debug"])
+    result = runner.invoke(app, ["blueprint", "run", str(bp_dir), "--fake-skills", "--benchmark", "--debug"])
 
     assert result.exit_code == 0
     mock_run_bundle.assert_called_once()
@@ -1135,7 +1172,7 @@ def test_blueprint_run_passes_follow_seconds_to_bundle(mocker, tmp_path):
     (bp_dir / "manifest.json").write_text(json.dumps({}))
     mock_run_bundle = mocker.patch("mn_cli.libs.blueprint_cmds._run_bundle")
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bp_dir), "--follow-seconds", "2.5"])
+    result = runner.invoke(app, ["blueprint", "run", str(bp_dir), "--follow-seconds", "2.5"])
 
     assert result.exit_code == 0
     assert mock_run_bundle.call_args.kwargs["follow_seconds"] == 2.5
@@ -1156,7 +1193,6 @@ def test_blueprint_doctor_local_folder_passes_flags(mocker, tmp_path):
         [
             "blueprint",
             "doctor",
-            "--folder",
             str(bp_dir),
             "--json",
             "--timeout",
@@ -1250,27 +1286,27 @@ def test_blueprint_doctor_blueprint_repo_flag_uses_custom_cache(mocker, tmp_path
     assert mock_doctor.call_args.args[0] == str(storage_dir / "bp-1-dir")
 
 
-def test_blueprint_doctor_rejects_invalid_target_combinations(mocker, tmp_path):
+def test_blueprint_doctor_rejects_removed_folder_option(mocker, tmp_path):
     bp_dir = tmp_path / "bundle"
     bp_dir.mkdir()
     mock_doctor = mocker.patch("mn_cli.libs.blueprint_cmds._doctor_bundle")
 
     result = runner.invoke(app, ["blueprint", "doctor", "bp-1", "--folder", str(bp_dir)])
 
-    assert result.exit_code == 1
-    assert "Pass either a blueprint ID or --folder" in result.stdout
+    assert result.exit_code == 2
+    assert "No such option: --folder" in result.stderr
     mock_doctor.assert_not_called()
 
 
-def test_blueprint_doctor_rejects_local_path_without_folder(mocker, tmp_path):
+def test_blueprint_doctor_explicit_local_path_requires_manifest(mocker, tmp_path):
     bp_dir = tmp_path / "bundle"
     bp_dir.mkdir()
     mock_doctor = mocker.patch("mn_cli.libs.blueprint_cmds._doctor_bundle")
 
     result = runner.invoke(app, ["blueprint", "doctor", str(bp_dir)])
 
-    assert result.exit_code == 1
-    assert "local folders must be passed with --folder" in result.stdout
+    assert result.exit_code == 2
+    assert "missing manifest.json" in result.stderr
     mock_doctor.assert_not_called()
 
 
@@ -1313,8 +1349,8 @@ def test_blueprint_run_blueprint_repo_missing_index_errors(mocker, tmp_path):
 
     result = runner.invoke(app, ["blueprint", "run", "--blueprint-repo", repo_url, "bp-1"])
 
-    assert result.exit_code == 1
-    assert "index.json not found" in result.stdout
+    assert result.exit_code == 2
+    assert "index.json not found" in result.stderr
     mock_run_bundle.assert_not_called()
 
 
@@ -1343,8 +1379,8 @@ def test_blueprint_run_blueprint_repo_malformed_index_errors(mocker, tmp_path):
 
     result = runner.invoke(app, ["blueprint", "run", "--blueprint-repo", repo_url, "bp-1"])
 
-    assert result.exit_code == 1
-    assert "index.json is not well formatted" in result.stdout
+    assert result.exit_code == 2
+    assert "index.json is not well formatted" in result.stderr
     mock_run_bundle.assert_not_called()
 
 
@@ -1392,7 +1428,7 @@ def test_blueprint_run_generates_python_source_bundle(mocker, tmp_path, monkeypa
     assert mock_run_bundle.call_args.args[0] == str(generated_root / "run-123")
 
 
-def test_blueprint_run_local_bundle_folder_is_rejected(mocker, tmp_path):
+def test_blueprint_run_accepts_explicit_local_bundle_path(mocker, tmp_path):
     bundle_dir = tmp_path / "local-bundle"
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text(
@@ -1408,13 +1444,12 @@ def test_blueprint_run_local_bundle_folder_is_rejected(mocker, tmp_path):
 
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir), "--run-id", "run-local"])
 
-    assert result.exit_code == 1
-    assert "local folders must be passed with --folder" in result.stdout
-    assert f"mnblueprintrun--folder{bundle_dir}" in "".join(result.stdout.split())
-    mock_run_bundle.assert_not_called()
+    assert result.exit_code == 0
+    mock_run_bundle.assert_called_once()
+    assert mock_run_bundle.call_args.args[0] == str(bundle_dir)
 
 
-def test_blueprint_run_local_python_source_folder_is_rejected(mocker, tmp_path):
+def test_blueprint_run_accepts_explicit_local_python_source_path(mocker, tmp_path):
     source_dir = tmp_path / "source-blueprint"
     source_dir.mkdir()
     (source_dir / "manifest.json").write_text(
@@ -1428,17 +1463,22 @@ def test_blueprint_run_local_python_source_folder_is_rejected(mocker, tmp_path):
             }
         )
     )
+    def generate_bundle(_source, output):
+        output.mkdir(parents=True)
+        (output / "manifest.json").write_text(json.dumps({"nodes": []}))
+        return output
+
     mock_generate_bundle = mocker.patch(
-        'mn_cli.libs.blueprint_cmds._generate_python_source_bundle'
+        'mn_cli.libs.blueprint_cmds._generate_python_source_bundle',
+        side_effect=generate_bundle,
     )
     mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
 
     result = runner.invoke(app, ["blueprint", "run", str(source_dir), "--run-id", "run-source"])
 
-    assert result.exit_code == 1
-    assert "local folders must be passed with --folder" in result.stdout
-    mock_generate_bundle.assert_not_called()
-    mock_run_bundle.assert_not_called()
+    assert result.exit_code == 0
+    mock_generate_bundle.assert_called_once()
+    mock_run_bundle.assert_called_once()
 
 
 def test_blueprint_run_local_folder_missing_manifest_is_rejected(mocker, tmp_path):
@@ -1448,11 +1488,11 @@ def test_blueprint_run_local_folder_missing_manifest_is_rejected(mocker, tmp_pat
 
     result = runner.invoke(app, ["blueprint", "run", str(source_dir)])
 
-    assert result.exit_code == 1
-    assert "local folders must be passed with --folder" in result.stdout
+    assert result.exit_code == 2
+    assert "manifest.json" in result.stderr
 
 
-def test_blueprint_run_local_python_source_generation_failure_is_not_reached(mocker, tmp_path):
+def test_blueprint_run_local_python_source_generation_failure_is_reported(mocker, tmp_path):
     source_dir = tmp_path / "source-blueprint"
     source_dir.mkdir()
     (source_dir / "manifest.json").write_text(
@@ -1476,7 +1516,7 @@ def test_blueprint_run_local_python_source_generation_failure_is_not_reached(moc
     result = runner.invoke(app, ["blueprint", "run", str(source_dir), "--run-id", "run-source"])
 
     assert result.exit_code == 1
-    assert "local folders must be passed with --folder" in result.stdout
+    assert "compiler exploded" in result.stderr
     mock_run_bundle.assert_not_called()
 
 
@@ -1514,10 +1554,7 @@ def test_run_folder_generates_local_python_source_bundle(mocker, tmp_path, monke
     result = runner.invoke(
         app,
         [
-            "blueprint",
-            "run",
-            "--folder",
-            str(source_dir),
+            "blueprint", "run", str(source_dir),
             "--run-id",
             "run-source",
             "--set",
@@ -1553,7 +1590,7 @@ def test_blueprint_run_init_fail(mocker, tmp_path):
     
     result = runner.invoke(app, ["blueprint", "run", "bp-1"])
     assert result.exit_code == 1
-    assert "Failed to clone blueprint repository" in result.stdout
+    assert "Failed to clone blueprint repository" in result.stderr
 
 def test_blueprint_run_no_index(mocker, tmp_path):
     storage_dir = _default_blueprint_storage(tmp_path)
@@ -1564,8 +1601,8 @@ def test_blueprint_run_no_index(mocker, tmp_path):
     mock_run.return_value.returncode = 0
     
     result = runner.invoke(app, ["blueprint", "run", "bp-1"])
-    assert result.exit_code == 1
-    assert "index.json not found" in result.stdout
+    assert result.exit_code == 2
+    assert "index.json not found" in result.stderr
 
 def test_blueprint_run_invalid_index(mocker, tmp_path):
     storage_dir = _default_blueprint_storage(tmp_path)
@@ -1579,8 +1616,8 @@ def test_blueprint_run_invalid_index(mocker, tmp_path):
     index_file.write_text("{badjson}")
     
     result = runner.invoke(app, ["blueprint", "run", "bp-1"])
-    assert result.exit_code == 1
-    assert "Error parsing index.json" in result.stdout
+    assert result.exit_code == 2
+    assert "Error parsing index.json" in result.stderr
 
 def test_blueprint_run_not_found(mocker, tmp_path):
     storage_dir = _default_blueprint_storage(tmp_path)
@@ -1594,8 +1631,8 @@ def test_blueprint_run_not_found(mocker, tmp_path):
     index_file.write_text(json.dumps([{"id": "bp-2", "path": "bp-2"}]))
     
     result = runner.invoke(app, ["blueprint", "run", "bp-1"])
-    assert result.exit_code == 1
-    assert "was not found in the index" in result.stdout
+    assert result.exit_code == 2
+    assert "was not found in the index" in result.stderr
 
 def test_blueprint_run_no_manifest(mocker, tmp_path):
     storage_dir = _default_blueprint_storage(tmp_path)
@@ -1613,8 +1650,8 @@ def test_blueprint_run_no_manifest(mocker, tmp_path):
     # explicitly NO manifest.json
     
     result = runner.invoke(app, ["blueprint", "run", "bp-1"])
-    assert result.exit_code == 1
-    assert "missing manifest.json" in result.stdout
+    assert result.exit_code == 2
+    assert "missing manifest.json" in result.stderr
 def test_blueprint_run_update_fail(mocker, tmp_path):
     storage_dir = _default_blueprint_storage(tmp_path)
     storage_dir.mkdir()
@@ -1637,7 +1674,7 @@ def test_blueprint_run_update_fail(mocker, tmp_path):
     
     result = runner.invoke(app, ["blueprint", "run", "bp-1", "--update"])
     assert result.exit_code == 0
-    assert "Warning: Failed to update blueprint repository: git pull error" in result.stdout
+    assert "Failed to update blueprint repository: git pull error" in result.stderr
     mock_run_bundle.assert_called_once()
 
 
@@ -1678,23 +1715,22 @@ def _write_run(runs_root, run_id, blueprint_id="general_closed_loop_agent_runtim
     return run_dir
 
 
-def test_blueprint_monitor_reads_shared_run_store(tmp_path):
+def test_run_list_reads_shared_run_store(tmp_path):
     runs_root = tmp_path / "runs"
     _write_run(runs_root, "run-1", action="rebalance")
 
-    result = runner.invoke(app, ["blueprint", "monitor", "--runs-root", str(runs_root)])
+    result = runner.invoke(app, ["run", "list", "--runs-root", str(runs_root)])
 
     assert result.exit_code == 0
     assert "run-1" in result.stdout
     assert "completed" in result.stdout
-    assert "file://" in result.stdout
 
 
-def test_blueprint_tail_prints_event_stream(tmp_path):
+def test_run_logs_prints_event_stream(tmp_path):
     runs_root = tmp_path / "runs"
     _write_run(runs_root, "run-1", action="escalate_review")
 
-    result = runner.invoke(app, ["blueprint", "tail", "run-1", "--runs-root", str(runs_root), "--lines", "2"])
+    result = runner.invoke(app, ["run", "logs", "run-1", "--channel", "events", "--runs-root", str(runs_root), "--lines", "2"])
 
     assert result.exit_code == 0
     assert "agent_decision" in result.stdout
@@ -1702,18 +1738,26 @@ def test_blueprint_tail_prints_event_stream(tmp_path):
     assert "run_completed" in result.stdout
 
 
-def test_blueprint_compare_shows_artifact_differences(tmp_path):
+def test_run_compare_shows_artifact_differences(tmp_path):
     runs_root = tmp_path / "runs"
     _write_run(runs_root, "run-a", action="hold_policy")
     _write_run(runs_root, "run-b", action="rebalance")
 
-    result = runner.invoke(app, ["blueprint", "compare", "run-a", "run-b", "--runs-root", str(runs_root)])
+    result = runner.invoke(app, ["run", "compare", "run-a", "run-b", "--runs-root", str(runs_root)])
 
     assert result.exit_code == 0
     assert "run-a" in result.stdout
     assert "run-b" in result.stdout
     assert "hold_policy" in result.stdout
     assert "rebalance" in result.stdout
+
+    json_result = runner.invoke(
+        app,
+        ["run", "compare", "run-a", "run-b", "--runs-root", str(runs_root), "--json"],
+    )
+    payload = cli_data(json_result)
+    assert payload["run_a"]["final_artifact"]["recommended_action"] == "hold_policy"
+    assert payload["run_b"]["final_artifact"]["recommended_action"] == "rebalance"
 
 
 def test_blueprint_export_markdown_contains_standard_artifacts(tmp_path):
@@ -1731,6 +1775,34 @@ def test_blueprint_export_markdown_contains_standard_artifacts(tmp_path):
     assert "approve_plan" in result.stdout
     assert "## Event Tail" in result.stdout
     assert "## Web UI" in result.stdout
+
+    envelope = runner.invoke(
+        app,
+        ["blueprint", "export", "run-1", "--runs-root", str(runs_root), "--format", "markdown", "--json"],
+    )
+    assert envelope.exit_code == 0
+    payload = cli_data(envelope)
+    assert payload["format"] == "markdown"
+    assert "# Blueprint Run run-1" in payload["report"]
+
+
+def test_blueprint_export_output_is_separate_from_json_result_envelope(tmp_path):
+    runs_root = tmp_path / "runs"
+    _write_run(runs_root, "run-1", action="approve_plan")
+    destination = tmp_path / "reports" / "run-1.md"
+
+    result = runner.invoke(
+        app,
+        [
+            "blueprint", "export", "run-1", "--runs-root", str(runs_root),
+            "--format", "markdown", "--output", str(destination), "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = cli_data(result)
+    assert payload["output"] == str(destination)
+    assert destination.read_text().startswith("# Blueprint Run run-1")
 
 
 def test_blueprint_export_html_writes_static_report(monkeypatch, tmp_path):
@@ -1753,7 +1825,7 @@ def test_blueprint_export_html_writes_static_report(monkeypatch, tmp_path):
     )
 
     assert result.exit_code == 0
-    assert result.stdout.strip().startswith("file://")
+    assert "file://" in result.stdout
     assert report_path.exists()
 
 
@@ -1772,7 +1844,7 @@ def test_blueprint_export_html_reports_missing_optional_dependency(monkeypatch, 
     )
 
     assert result.exit_code == 1
-    assert "optional web-ui dependency" in result.stdout
+    assert "optional web-ui dependency" in result.stderr
 
 
 def test_blueprint_export_rejects_unknown_format(tmp_path):
@@ -1781,16 +1853,19 @@ def test_blueprint_export_rejects_unknown_format(tmp_path):
 
     result = runner.invoke(app, ["blueprint", "export", "run-1", "--runs-root", str(runs_root), "--format", "yaml"])
 
-    assert result.exit_code == 1
-    assert "Unsupported export format" in result.stdout
+    assert result.exit_code == 2
+    assert "--format must be json, markdown, or html" in result.stderr
 
 
-def test_blueprint_tail_missing_run_reports_error(tmp_path):
+def test_run_logs_missing_run_reports_error(tmp_path):
     runs_root = tmp_path / "runs"
     runs_root.mkdir()
 
-    result = runner.invoke(app, ["blueprint", "tail", "missing-run", "--runs-root", str(runs_root)])
+    result = runner.invoke(
+        app,
+        ["run", "logs", "missing-run", "--channel", "events", "--runs-root", str(runs_root)],
+    )
 
-    assert result.exit_code == 1
-    assert "missing-run" in result.stdout
-    assert "not found" in result.stdout
+    assert result.exit_code == 2
+    assert "missing-run" in result.stderr
+    assert "not found" in result.stderr

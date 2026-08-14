@@ -1,40 +1,37 @@
 from ..common import *
 from ..models import *
+from mn_cli.output import json_enabled, record_result
 
 def validate(
     bundle_path: Annotated[
         str,
         typer.Argument(help="Path to the local job bundle folder."),
     ],
-    output: Annotated[
-        str,
-        typer.Option("--output", "-o", help="Output format: table or json."),
-    ] = "table",
 ):
     """Validate a local job bundle before submitting it.
 
     Examples:
       mn blueprint validate ./bundle
-      mn blueprint validate ./bundle --output json
+      mn blueprint validate ./bundle --json
     """
     try:
-        output_format = _normalize_validation_output(output)
+        output_format = "json" if json_enabled() else "table"
         bundle_dir = Path(bundle_path)
         if not bundle_dir.is_dir():
             print_error(console, f"'{bundle_path}' is not a directory. Expected a bundle folder.")
-            raise typer.Exit(1)
+            raise typer.Exit(2)
 
         manifest_file = bundle_dir / "manifest.json"
         if not manifest_file.exists():
             print_error(console, f"manifest.json not found in '{bundle_path}'.")
-            raise typer.Exit(1)
+            raise typer.Exit(2)
 
         with open(manifest_file, "r") as f:
             try:
                 manifest = json.load(f)
             except json.JSONDecodeError as e:
                 print_error(console, f"manifest.json is not valid JSON: {e}")
-                raise typer.Exit(1)
+                raise typer.Exit(2)
 
         if is_manifest_source(manifest):
             manifest = expand_manifest_source(manifest, root_dir=bundle_dir)
@@ -47,7 +44,7 @@ def validate(
                 _emit_validation_report(
                     report, output_format, title="Workflow manifest schema validation failed"
                 )
-                raise typer.Exit(1)
+                raise typer.Exit(2)
 
             workflow_issues = _validate_workflow_manifest_issues(manifest)
             if workflow_issues:
@@ -55,22 +52,22 @@ def validate(
                 _emit_validation_report(
                     report, output_format, title="Workflow manifest validation failed"
                 )
-                raise typer.Exit(1)
+                raise typer.Exit(2)
         else:
             required_keys = ["manifest_version", "graph_id", "job_name", "entrypoints", "nodes"]
             missing = [k for k in required_keys if k not in manifest]
             if missing:
                 print_error(console, f"manifest.json is missing required keys: {', '.join(missing)}")
-                raise typer.Exit(1)
+                raise typer.Exit(2)
             if not isinstance(manifest.get("nodes"), type([])):
                 print_error(console, "'nodes' must be a list in manifest.json.")
-                raise typer.Exit(1)
+                raise typer.Exit(2)
 
         if "requiredContextEngine" in manifest and not isinstance(
             manifest.get("requiredContextEngine"), bool
         ):
             print_error(console, "'requiredContextEngine' must be true or false in manifest.json.")
-            raise typer.Exit(1)
+            raise typer.Exit(2)
 
         python_environment_errors = validate_python_environments(bundle_dir, manifest)
         if python_environment_errors:
@@ -83,7 +80,7 @@ def validate(
             _emit_validation_report(
                 report, output_format, title="Manifest validation failed"
             )
-            raise typer.Exit(1)
+            raise typer.Exit(2)
 
         skill_runtime_errors = validate_skill_runtime_requirements(bundle_dir, manifest)
         if skill_runtime_errors:
@@ -96,7 +93,7 @@ def validate(
             _emit_validation_report(
                 report, output_format, title="Manifest validation failed"
             )
-            raise typer.Exit(1)
+            raise typer.Exit(2)
 
         manifest_spec_issues = (
             validate_service_spec_issues(manifest)
@@ -109,36 +106,17 @@ def validate(
             _emit_validation_report(
                 report, output_format, title="Manifest validation failed"
             )
-            raise typer.Exit(1)
-
-        _validate_manifest_hardware_or_exit(
-            manifest,
-            output_format=output_format,
-            allow_local_fallback=True,
-        )
-
-        service_result = _validate_manifest_services_or_exit(
-            bundle_dir, manifest, output_format=output_format
-        )
-
-        model_install_summary = _defer_runtime_models_for_run_or_exit(
-            bundle_dir,
-            manifest,
-            quiet=True,
-        )
-        model_result = _validate_manifest_models_or_exit(
-            bundle_dir,
-            manifest,
-            model_install_summary=model_install_summary,
-            output_format=output_format,
-        )
+            raise typer.Exit(2)
 
         validation_result = _validate_manifest_inputs_or_exit(
-            bundle_dir, manifest, output_format=output_format
+            bundle_dir,
+            manifest,
+            output_format=output_format,
+            exit_code=2,
         )
 
-        if output_format == "json":
-            console.print_json(data=validation_result)
+        if json_enabled():
+            record_result(validation_result)
             return
 
         details: list[tuple[str, Any]] = [
@@ -152,11 +130,6 @@ def validate(
             details.append(("Workflow steps", len(steps if isinstance(steps, list) else [])))
         else:
             details.append(("Nodes", len(manifest.get("nodes"))))
-        details.append(("Service checks", len(service_result.get("results") or [])))
-        details.append(("Model checks", len(model_result.get("results") or [])))
-        capacity_summary = _model_capacity_summary(model_result)
-        if capacity_summary:
-            details.append(("Model capacity", capacity_summary))
         details.append(("Input validation rules", len(validation_result.get("results") or [])))
         print_confirmed(
             console,
@@ -243,6 +216,7 @@ def _validate_manifest_inputs_or_exit(
     env_overrides: Optional[dict[str, str]] = None,
     config_overrides: Optional[dict[str, Any]] = None,
     output_format: str = "table",
+    exit_code: int = 1,
 ) -> dict[str, Any]:
     config = load_blueprint_config(bundle_dir, config_overrides=config_overrides)
     env = _blueprint_runtime_environment(
@@ -262,7 +236,7 @@ def _validate_manifest_inputs_or_exit(
         return result
 
     _emit_validation_report(result, output_format, title="Input validation failed")
-    raise typer.Exit(1)
+    raise typer.Exit(exit_code)
 
 def _validate_manifest_hardware_or_exit(
     manifest: dict[str, Any],
@@ -397,7 +371,7 @@ def _emit_validation_report(
     report: dict[str, Any], output_format: str, *, title: str
 ) -> None:
     if output_format == "json":
-        console.print_json(data=report)
+        record_result(report)
         return
 
     issues = report.get("issues") if isinstance(report.get("issues"), list) else []

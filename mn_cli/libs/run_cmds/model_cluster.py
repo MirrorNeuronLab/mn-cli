@@ -152,7 +152,7 @@ def _cluster_node_native_sdk_endpoint(
     if not native:
         raise RuntimeError(
             f"cluster node {node_name} does not advertise native SDK gRPC; "
-            "restart that worker with an updated `mn runtime start --worker-node` "
+            "restart that worker with an updated `mn runtime start --worker` "
             "so runtime model preparation can run outside Core"
         )
     if native.get("enabled") is False:

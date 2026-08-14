@@ -46,7 +46,7 @@ def test_update_check_only_prints_available_updates(mocker):
     mock_perform.assert_not_called()
 
 
-def test_update_requires_ack_by_default(mocker):
+def test_update_requires_yes_in_non_interactive_mode(mocker):
     mocker.patch(
         "mn_cli.update_cmds.get_available_updates",
         return_value=[
@@ -60,11 +60,11 @@ def test_update_requires_ack_by_default(mocker):
     )
     mock_perform = mocker.patch("mn_cli.update_cmds.perform_update")
 
-    result = runner.invoke(app, ["runtime", "update"], input="n\n")
+    result = runner.invoke(app, ["runtime", "update"])
 
-    assert result.exit_code == 0
-    assert "Updating will stop all MirrorNeuron components" in result.stdout
-    assert "Update cancelled" in result.stdout
+    assert result.exit_code == 2
+    assert "Updating will stop all MirrorNeuron components" in result.stderr
+    assert "requires --yes" in result.stderr
     mock_perform.assert_not_called()
 
 

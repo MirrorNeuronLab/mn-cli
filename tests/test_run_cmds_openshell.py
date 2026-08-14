@@ -154,7 +154,7 @@ def test_run_prebuilds_custom_openshell_image_from_payload_directory(mocker, tmp
     sandbox_dir.mkdir(parents=True)
     (sandbox_dir / "Dockerfile").write_text("FROM base\n")
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
 
     assert result.exit_code == 0
     assert "OpenShell sandbox image build successful." in result.stdout
@@ -200,7 +200,7 @@ def test_run_prebuilds_legacy_openshell_from_directory(mocker, tmp_path, monkeyp
     sandbox_dir.mkdir(parents=True)
     (sandbox_dir / "Dockerfile").write_text("FROM base\n")
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
 
     assert result.exit_code == 0
     manifest = json.loads(mock_submit.call_args.args[0])

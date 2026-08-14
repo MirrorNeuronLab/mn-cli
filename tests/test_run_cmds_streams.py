@@ -87,7 +87,7 @@ def test_stream_bad_json(mocker, tmp_path):
     manifest_file = bundle_dir / "manifest.json"
     manifest_file.write_text('{"nodes": []}')
     
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
     assert result.exit_code == 0
     assert "Status: Failed" in result.stdout
 
@@ -108,7 +108,7 @@ def test_stream_all_events(mocker, tmp_path):
     manifest_file = bundle_dir / "manifest.json"
     manifest_file.write_text('{"nodes": []}')
     
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
     assert result.exit_code == 0
     assert "Status: Completed" in result.stdout
     assert "result.txt" in result.stdout
@@ -128,7 +128,7 @@ def test_stream_cancelled_event_is_terminal(mocker, tmp_path, monkeypatch):
     manifest_file = bundle_dir / "manifest.json"
     manifest_file.write_text('{"nodes": []}')
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
 
     assert result.exit_code == 0
     assert "Status: Cancelled" in result.stdout
@@ -158,7 +158,7 @@ def test_stream_keyboard_interrupt(mocker, tmp_path):
     manifest_file = bundle_dir / "manifest.json"
     manifest_file.write_text('{"nodes": []}')
     
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
     assert result.exit_code == 0
     assert "Detached from workflow UI. Job is still running." in result.stdout
 
@@ -181,7 +181,7 @@ def test_post_submit_keyboard_interrupt_detaches_without_stopping_job(mocker, tm
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text(json.dumps({"nodes": []}))
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
 
     assert result.exit_code == 0
     assert "Detached from workflow UI. Job is still running." in result.stdout

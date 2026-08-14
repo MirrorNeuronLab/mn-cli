@@ -13,19 +13,39 @@ runtime, SDK, API, or blueprint contracts it consumes.
 
 The root command registers these operator-facing families:
 
-- `blueprint`: catalog, validation, installation, execution, and outputs;
+- `blueprint`: catalog, validation, registration, execution, and report export;
 - `job`: durable definition creation, inspection, archive, data reset, and start;
 - `run`: listing, inspection, and lifecycle control of executions;
-- `node`: cluster membership, exposure, drain, reconcile, and maintenance;
-- `operation`: durable group-operation status and reattachment;
-- `runtime`: start, stop, status, health, doctor, sidecars, and updates;
+- `node`: cluster membership, drain, reconcile, and maintenance;
+- `operation`: durable group-operation inspection and reattachment;
+- `runtime`: start, stop, aggregate status, doctor, sidecars, and updates;
 - `resource`, `service`, and `model`: local and cluster capability management;
 - `deployment`: versioned deployment operations; and
-- `schedule`, `trigger`, and `event`: scheduled/event-driven execution.
+- `schedule` and `event`: periodic, delayed, and event-driven execution.
 
 `mn_cli/main.py` and each Typer sub-application are authoritative for exact
 commands and options. Public command names, option meanings, exit codes, and
 machine-readable output are compatibility-sensitive.
+
+```text
+blueprint  list add show update remove run validate doctor cleanup export
+job        list create show start archive reset-data delete
+run        list show watch logs result resources compare pause resume cancel delete
+run human  list respond ack
+model      list add show update remove doctor
+runtime    start stop status doctor restart-sidecars ensure-context-engine update
+node       list show add remove reconcile drain undrain maintenance refresh-token
+operation  show watch
+resource   show usage set
+service    list show
+deployment list deploy show promote rollback pause resume fail
+schedule   list add show pause resume run remove
+event      list emit
+```
+
+Removed paths are recognized only to return an actionable replacement with
+exit code `2`; they are never execution aliases. The root diagnostic flag is
+`--debug`; `--verbose` is not registered.
 
 `mn blueprint run --web-ui-host HOST --web-ui-port PORT` projects per-run
 listener overrides into `web_ui.service.host` and `web_ui.service.port`.
@@ -53,13 +73,20 @@ those contracts.
 
 ## Output Contract
 
-- Default output is concise, human readable, and action oriented.
+- Every leaf command accepts `--json`. One-shot commands return exactly one
+  `mn.cli/v1` envelope; followed and watch commands emit `mn.cli.stream/v1`
+  NDJSON records.
+- Default output is concise, human readable, and action oriented. Results use
+  stdout while progress, warnings, and errors use stderr.
 - `MN_CLI_OUTPUT=plain` removes terminal decoration and stays stable enough for
   automation. `NO_COLOR` removes color without removing meaning.
 - Rich result panels are reserved for lifecycle results; routine mutations use
   a compact status and summary.
-- Errors identify the failed operation and provide a stable code or next action
-  when available. Internal diagnostics appear only in debug/verbose mode.
+- Errors use the same JSON envelope with `ok: false` and sanitized
+  `code/message/hint/details`. Internal diagnostics appear only with `--debug`.
+- Exit codes are `0` success, `1` operational/critical diagnostics, `2`
+  usage/validation/not-found/confirmation, `13` authorization, and `130`
+  interruption except an intentional watcher detach.
 - Interactive monitors must preserve keyboard accessibility and clearly show
   selection without relying on reverse-video backgrounds.
 - Durable group operations render item completion in arrival order. Ctrl+C
@@ -69,7 +96,7 @@ those contracts.
 
 ## Safety
 
-- Commands that delete, clear, uninstall, cancel broadly, expose listeners, or
+- Commands that delete, clear, remove, cancel broadly, expose listeners, or
   alter cluster membership require deliberate user intent.
 - Values from manifests, catalogs, the filesystem, environment, SDK, gRPC, and
   subprocesses are untrusted and must be validated or safely rendered.
@@ -82,6 +109,9 @@ those contracts.
   presented as deleting stable job data. Terminal clearing removes every
   run-owned runtime resource before reporting success; permanent job deletion
   also removes all historical runs and definition-owned runtime resources.
+- `--yes` answers confirmation only, `--force` overrides one documented
+  precondition but never supplies consent, and `--dry-run` never mutates.
+  Destructive JSON/non-interactive commands require `--yes`.
 - Air-gapped backup fails closed when a dependency, blob, model source, or
   required image cannot be materialized. Restore verifies checksums and the
   recorded operating system, architecture, Python implementation, and ABI
@@ -89,9 +119,9 @@ those contracts.
 
 ## Stable Job/Run Contract
 
-`mn job create/list/inspect/archive/reset-data/delete/start/runs` address
-durable job definitions. `mn run list/status/pause/resume/cancel/delete` address
-executions and always
+`mn job list/create/show/start/archive/reset-data/delete` addresses durable job
+definitions. `mn run list/show/watch/logs/result/resources/compare/pause/resume/cancel/delete`
+addresses executions and always
 accepts `run_id`. A stable `job_id` owns configuration, schedules, and job data;
 every intentional start gets a distinct run identity, while attempts retain
 their run. CLI output must label and persist both fields without treating them
@@ -108,6 +138,32 @@ contract so both surfaces render the same public workflow steps.
 Historical execution-control commands are not registered under `mn job`.
 
 ## Runtime-Model Launch Contract
+
+The public `mn model` command surface is exactly `list`, `add`, `show`,
+`update`, `remove`, and `doctor`. `add` accepts either one catalog/arbitrary DMR
+reference or one canonical provider JSON file. DMR placement chooses the best
+eligible cluster node unless `--local` or `--node` is supplied. Provider files
+are validated in full, including required environment references, before the
+SDK registry changes.
+
+`list` renders registered models and discovered unmanaged DMR artifacts;
+`--available` also includes catalog-only choices. Machine records expose
+explicit kind, state, registration, installation, routing, node, catalog, and
+verification facts. Mutating commands support `--json`. `remove` is ID-based,
+requires confirmation or `--yes`, preserves blueprint ownership unless
+`--force`, and deletes a DMR artifact unless `--keep-artifact` is used.
+Provider removal never deletes its source JSON.
+
+The removed `install`, `proxy`, and `remote` command trees have no compatibility
+aliases. Reusable provider parsing, registry persistence, resolution, and
+gateway projection remain SDK-owned; the CLI owns input parsing, confirmation,
+placement/fan-out orchestration, progress, and rendering.
+
+`mn model add ... --default` records exactly one operator-selected default in
+the SDK registry. It may be a DMR registration or a single-model provider file.
+The selected route precedes Nemotron and Gemma; the built-ins remain ordered
+fallbacks. Selecting another default does not remove the earlier registration,
+and removing the selected registration restores built-in selection.
 
 `mn blueprint run` validates the effective blueprint-declared foundational LLM
 models without installing or routing them. RAG and OCR model specifications are
@@ -150,10 +206,11 @@ Detached output relays remain active until the run becomes terminal unless
 blueprint's stream-duration budget does not truncate output materialization.
 
 The blueprint run adapter must not prepare models. A logical `default`
-declaration remains blueprint-owned intent; the runtime SDK chooses Nemotron on
-a healthy 48 GB-or-above accelerator node or Gemma when no compatible Nemotron
-node exists. Debug launch output reports the deferred `default -> nemotron3 ->
-gemma4:e2b` policy and complete DockerWorker build command/output details.
+declaration remains blueprint-owned intent; the runtime SDK first uses the
+operator-selected registry default, then chooses Nemotron on a healthy 48
+GB-or-above accelerator node or Gemma when no compatible Nemotron node exists.
+Debug launch output reports the effective deferred fallback policy and complete
+DockerWorker build command/output details.
 Skill-owned RAG/OCR model details are absent from launch preparation and appear
 in runtime events only when invoked. Runtime events report the actual model,
 selected node, install/reuse state, fallback reason, and duration.

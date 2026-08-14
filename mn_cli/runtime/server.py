@@ -18,13 +18,13 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 from urllib.parse import urlencode, urlparse
 import typer
-from rich.console import Console
 from rich.table import Table
 from mn_sdk.blueprint_source import DEFAULT_BLUEPRINT_REPO, normalize_blueprint_repo_value
 from mn_sdk.native_resources import node_resource_environment
 from mn_cli.config import CliConfig
 from mn_cli.libs.ui import print_confirmed, print_error, print_info, print_success_confirmation, print_warning
 from mn_cli.logging_config import configure_logging
+from mn_cli.shared import console
 from mn_cli.runtime_state import (
     mn_home as _runtime_mn_home,
     read_env_file as _runtime_read_env_file,
@@ -33,7 +33,6 @@ from mn_cli.runtime_state import (
     write_private_text,
 )
 
-console = Console()
 logger = configure_logging("mn-cli", CliConfig.from_env().log_path)
 GRPC_ADMIN_TOKEN_ENV = "MN_GRPC_ADMIN_TOKEN"
 GRPC_AUTH_TOKEN_FILE_ENV = "MN_GRPC_AUTH_TOKEN_FILE"
@@ -2623,7 +2622,7 @@ def _configure_worker_sentinel_primary(
             "MN_EXECUTION_FAILED",
             "Could not configure worker Redis Sentinel.",
             internal_message=str(exc),
-            hint="Check that the worker Sentinel port is reachable and retry the node join.",
+            hint="Check that the worker Sentinel port is reachable and retry the node add.",
             exit_code=1,
             http_status=500,
             cause=exc,
@@ -2732,7 +2731,7 @@ def _print_network_seed_ready(
             "MirrorNeuron node ready",
             status="already running",
             details=details,
-            next_steps=f"mn node join {host} --token {token}{network_args}",
+            next_steps=f"mn node add {host} --token {token}{network_args}",
         )
     elif worker_node:
         print_success_confirmation(
@@ -2740,7 +2739,7 @@ def _print_network_seed_ready(
             "Worker node start",
             status="running",
             details=details,
-            next_steps=f"mn node join {host} --token {token}{network_args}",
+            next_steps=f"mn node add {host} --token {token}{network_args}",
         )
     else:
         print_success_confirmation(
@@ -2748,7 +2747,7 @@ def _print_network_seed_ready(
             "Node expose",
             status="running",
             details=details,
-            next_steps=f"mn node join {host} --token {token}{network_args}",
+            next_steps=f"mn node add {host} --token {token}{network_args}",
         )
 
 def _return_running_network_seed(
@@ -3091,7 +3090,7 @@ def _join_network(
         action,
         status=status,
         details=details,
-        next_steps=("mn node list", "mn resource list", "mn model list"),
+        next_steps=("mn node list", "mn resource show", "mn model list"),
     )
     return handshake
 
@@ -4891,7 +4890,7 @@ def _configure_worker_redis_replica(
             "MN_EXECUTION_FAILED",
             "Could not configure worker Redis replication.",
             internal_message=str(exc),
-            hint="Check that both Redis endpoints are reachable and retry the node join.",
+            hint="Check that both Redis endpoints are reachable and retry the node add.",
             exit_code=1,
             http_status=500,
             cause=exc,
@@ -6156,7 +6155,7 @@ def _start_server(
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     if ip and not token:
-        print_error(console, "mn node join requires --token from the main node.")
+        print_error(console, "Worker registration requires the token printed by 'mn runtime start --worker'.")
         raise typer.Exit(1)
 
     network_token = token or _resolve_network_token()

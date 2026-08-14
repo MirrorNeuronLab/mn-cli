@@ -7,7 +7,8 @@ import typer
 
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.deployment_cmds import read_bundle
-from mn_cli.libs.ui import print_success_confirmation
+from mn_cli.libs.ui import print_collection, print_detail, print_success_confirmation, require_confirmation
+from mn_cli.output import record_result
 from mn_cli.shared import client, console
 from mn_sdk import (
     ValidationError,
@@ -18,9 +19,93 @@ from mn_sdk import (
 )
 
 
-schedule_app = typer.Typer(help="Periodic, delayed, and event-triggered job schedules")
-trigger_app = typer.Typer(help="Event trigger schedules")
-event_app = typer.Typer(help="Runtime trigger events")
+def add_schedule(
+    bundle: str = typer.Argument(help="Blueprint/job bundle directory or archive."),
+    cron: Optional[list[str]] = typer.Option(None, "--cron", help="Five-field cron expression; repeat for multiple schedules."),
+    at: Optional[str] = typer.Option(None, "--at", help="ISO-8601 timestamp for a one-shot schedule."),
+    in_: Optional[str] = typer.Option(None, "--in", help="Delay for a one-shot schedule, for example 30m."),
+    event: Optional[str] = typer.Option(None, "--event", help="Event type for an event-driven schedule."),
+    name: str = typer.Option("", "--name", help="Schedule name."),
+    timezone_name: str = typer.Option("", "--timezone", help="IANA timezone for periodic schedules."),
+    missed_policy: str = typer.Option("skip", "--missed-policy", help="skip, catchup_one, or catchup_all."),
+    catchup_limit: int = typer.Option(10, "--catchup-limit", help="Maximum catch-up runs."),
+    allow_overlap: bool = typer.Option(False, "--allow-overlap", help="Allow overlapping child runs."),
+    window: str = typer.Option("", "--window", help="Optional run window, for example 30m."),
+    filter_json: str = typer.Option("", "--filter", help="JSON event payload filters."),
+) -> None:
+    """Add one periodic, delayed, or event-driven schedule."""
+    periodic = bool(cron)
+    delayed = bool(at or in_)
+    event_driven = bool(event)
+    if sum((periodic, delayed, event_driven)) != 1:
+        raise typer.BadParameter("choose exactly one schedule mode: --cron, --at/--in, or --event")
+    if at and in_:
+        raise typer.BadParameter("use only one of --at or --in")
+    try:
+        manifest_json, payloads = read_bundle(bundle)
+        if periodic:
+            schedule = sdk_periodic_schedule(
+                crons=cron,
+                name=name,
+                timezone_name=timezone_name,
+                missed_policy=missed_policy,
+                catchup_limit=catchup_limit,
+                allow_overlap=allow_overlap,
+                window=window,
+            )
+            kind = "periodic"
+        elif delayed:
+            schedule = sdk_delayed_schedule(at=at, delay=in_, name=name)
+            kind = "delayed"
+        else:
+            schedule = sdk_event_schedule(
+                event_type=str(event),
+                name=name,
+                filters=_json_option(filter_json, "--filter"),
+                allow_overlap=allow_overlap,
+            )
+            kind = "event"
+        _print_result(
+            client.create_schedule(
+                manifest_json,
+                payloads,
+                schedule=schedule,
+                source={"cli": "schedule add"},
+            ),
+            action="Schedule add",
+            details=[("Bundle", bundle), ("Kind", kind), ("Name", name)],
+            next_steps="mn schedule list",
+        )
+    except typer.BadParameter:
+        raise
+    except Exception as exc:
+        handle_cli_error(exc, console, "schedule add")
+
+
+def show_schedule(schedule_id: str = typer.Argument(help="Schedule ID.")) -> None:
+    """Show one schedule."""
+    schedule_status(schedule_id)
+
+
+def remove_schedule(
+    schedule_id: str = typer.Argument(help="Schedule ID."),
+    reason: str = typer.Option("", "--reason", help="Reason recorded with removal."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Confirm removal without prompting."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview removal without changing state."),
+) -> None:
+    """Remove one schedule."""
+    yes = yes is True
+    dry_run = dry_run is True
+    if dry_run:
+        print_success_confirmation(console, "Schedule remove dry run", status="planned", details={"Schedule ID": schedule_id})
+        return
+    require_confirmation(
+        console,
+        action="Schedule removal",
+        prompt=f"Remove schedule {schedule_id!r}?",
+        yes=yes,
+    )
+    delete_schedule(schedule_id, reason=reason)
 
 
 def _json_option(value: str, flag: str) -> dict[str, Any]:
@@ -51,7 +136,30 @@ def _print_result(
 ) -> None:
     payload = json.loads(result_json)
     if action is None:
-        console.print_json(data=payload)
+        items = None
+        collection_key = ""
+        if isinstance(payload, dict):
+            for key in ("schedules", "events", "data", "items"):
+                if isinstance(payload.get(key), list):
+                    items = payload[key]
+                    collection_key = key
+                    break
+        if items is not None:
+            is_events = collection_key == "events"
+            print_collection(
+                console,
+                "Events" if is_events else "Schedules",
+                items,
+                columns=(
+                    ("ID", "event_id" if is_events else "schedule_id"),
+                    ("Kind", "event_type" if is_events else "kind"),
+                    ("State", "status"),
+                    ("Node / Owner", "source" if is_events else "owner"),
+                    ("Updated", "timestamp" if is_events else "updated_at"),
+                ),
+            )
+        else:
+            print_detail(console, "Schedule", payload if isinstance(payload, dict) else {"value": payload})
         return
     detail_items: list[tuple[str, Any]] = []
     if details:
@@ -70,67 +178,9 @@ def _print_result(
         details=detail_items,
         next_steps=next_steps,
     )
+    record_result(payload)
 
 
-@schedule_app.command(name="create")
-def create_schedule(
-    bundle: str,
-    cron: Optional[list[str]] = typer.Option(None, "--cron", help="Five-field cron expression. Repeat for multiple schedules."),
-    name: str = typer.Option("", "--name", help="Schedule name."),
-    timezone_name: str = typer.Option("", "--timezone", help="IANA timezone label stored on the schedule."),
-    missed_policy: str = typer.Option("skip", "--missed-policy", help="skip, catchup_one, or catchup_all."),
-    catchup_limit: int = typer.Option(10, "--catchup-limit", help="Maximum catch-up runs when catchup_all is used."),
-    allow_overlap: bool = typer.Option(False, "--allow-overlap", help="Allow overlapping child jobs."),
-    window: str = typer.Option("", "--window", help="Optional run window, e.g. 30m. Window end cancels the child job."),
-    schedule_json: str = typer.Option("", "--schedule-json", help="Raw schedule JSON merged with CLI flags."),
-):
-    """Create a periodic schedule for a bundle."""
-    try:
-        manifest_json, payloads = read_bundle(bundle)
-        schedule = sdk_periodic_schedule(
-            crons=cron,
-            name=name,
-            timezone_name=timezone_name,
-            missed_policy=missed_policy,
-            catchup_limit=catchup_limit,
-            allow_overlap=allow_overlap,
-            window=window,
-            schedule=_json_option(schedule_json, "--schedule-json"),
-        )
-        _print_result(
-            client.create_schedule(manifest_json, payloads, schedule=schedule, source={"cli": "schedule create"}),
-            action="Schedule create",
-            details=[("Bundle", bundle), ("Kind", "periodic"), ("Name", name)],
-            next_steps="mn schedule list",
-        )
-    except Exception as exc:
-        handle_cli_error(exc, console, "schedule create")
-
-
-@schedule_app.command(name="delay")
-def delay_schedule(
-    bundle: str,
-    at: Optional[str] = typer.Option(None, "--at", help="ISO-8601 timestamp to run once."),
-    in_: Optional[str] = typer.Option(None, "--in", help="Delay before running once, e.g. 10m."),
-    name: str = typer.Option("", "--name", help="Schedule name."),
-):
-    """Create a one-shot delayed schedule."""
-    try:
-        if not at and not in_:
-            raise typer.BadParameter("provide --at or --in")
-        manifest_json, payloads = read_bundle(bundle)
-        schedule = sdk_delayed_schedule(at=at, delay=in_, name=name)
-        _print_result(
-            client.create_schedule(manifest_json, payloads, schedule=schedule, source={"cli": "schedule delay"}),
-            action="Schedule delay",
-            details=[("Bundle", bundle), ("Kind", "delayed"), ("Name", name)],
-            next_steps="mn schedule list",
-        )
-    except Exception as exc:
-        handle_cli_error(exc, console, "schedule delay")
-
-
-@schedule_app.command(name="list")
 def list_schedules(kind: Optional[str] = typer.Option(None, "--kind"), status: Optional[str] = typer.Option(None, "--status")):
     """List schedules."""
     try:
@@ -139,16 +189,14 @@ def list_schedules(kind: Optional[str] = typer.Option(None, "--kind"), status: O
         handle_cli_error(exc, console, "schedule list")
 
 
-@schedule_app.command(name="status")
 def schedule_status(schedule_id: str):
     """Show one schedule."""
     try:
         _print_result(client.get_schedule(schedule_id))
     except Exception as exc:
-        handle_cli_error(exc, console, "schedule status")
+        handle_cli_error(exc, console, "schedule show")
 
 
-@schedule_app.command(name="pause")
 def pause_schedule(schedule_id: str, reason: str = typer.Option("", "--reason")):
     """Pause a schedule."""
     try:
@@ -156,13 +204,12 @@ def pause_schedule(schedule_id: str, reason: str = typer.Option("", "--reason"))
             client.pause_schedule(schedule_id, reason=reason),
             action="Schedule pause",
             details={"Schedule": schedule_id},
-            next_steps=f"mn schedule status {schedule_id}",
+            next_steps=f"mn schedule show {schedule_id}",
         )
     except Exception as exc:
         handle_cli_error(exc, console, "schedule pause")
 
 
-@schedule_app.command(name="resume")
 def resume_schedule(schedule_id: str, reason: str = typer.Option("", "--reason")):
     """Resume a schedule."""
     try:
@@ -170,13 +217,12 @@ def resume_schedule(schedule_id: str, reason: str = typer.Option("", "--reason")
             client.resume_schedule(schedule_id, reason=reason),
             action="Schedule resume",
             details={"Schedule": schedule_id},
-            next_steps=f"mn schedule status {schedule_id}",
+            next_steps=f"mn schedule show {schedule_id}",
         )
     except Exception as exc:
         handle_cli_error(exc, console, "schedule resume")
 
 
-@schedule_app.command(name="delete")
 def delete_schedule(schedule_id: str, reason: str = typer.Option("", "--reason")):
     """Delete a schedule."""
     try:
@@ -190,7 +236,6 @@ def delete_schedule(schedule_id: str, reason: str = typer.Option("", "--reason")
         handle_cli_error(exc, console, "schedule delete")
 
 
-@schedule_app.command(name="run-now")
 def run_now(schedule_id: str, payload_json: str = typer.Option("", "--payload-json")):
     """Dispatch a schedule immediately."""
     try:
@@ -200,53 +245,12 @@ def run_now(schedule_id: str, payload_json: str = typer.Option("", "--payload-js
             details={"Schedule": schedule_id},
             next_steps="mn job list --running-only",
         )
+    except typer.BadParameter:
+        raise
     except Exception as exc:
-        handle_cli_error(exc, console, "schedule run-now")
+        handle_cli_error(exc, console, "schedule run")
 
 
-@trigger_app.command(name="create")
-def create_trigger(
-    bundle: str,
-    event_type: str = typer.Option(..., "--event", help="Event type to match."),
-    name: str = typer.Option("", "--name", help="Trigger name."),
-    filter_json: str = typer.Option("", "--filter-json", help="Declarative event payload filters."),
-    allow_overlap: bool = typer.Option(False, "--allow-overlap", help="Allow overlapping child jobs."),
-):
-    """Create an event-triggered schedule."""
-    try:
-        manifest_json, payloads = read_bundle(bundle)
-        schedule = sdk_event_schedule(
-            event_type=event_type,
-            name=name,
-            filters=_json_option(filter_json, "--filter-json"),
-            allow_overlap=allow_overlap,
-        )
-        _print_result(
-            client.create_schedule(manifest_json, payloads, schedule=schedule, source={"cli": "trigger create"}),
-            action="Trigger create",
-            details=[("Bundle", bundle), ("Event", event_type), ("Name", name)],
-            next_steps="mn trigger list",
-        )
-    except Exception as exc:
-        handle_cli_error(exc, console, "trigger create")
-
-
-@trigger_app.command(name="list")
-def list_triggers():
-    """List event schedules."""
-    try:
-        _print_result(client.list_schedules(kind="event"))
-    except Exception as exc:
-        handle_cli_error(exc, console, "trigger list")
-
-
-@trigger_app.command(name="delete")
-def delete_trigger(schedule_id: str, reason: str = typer.Option("", "--reason")):
-    """Delete an event trigger."""
-    delete_schedule(schedule_id, reason=reason)
-
-
-@event_app.command(name="emit")
 def emit_event(
     event_type: str,
     payload_json: str = typer.Option("", "--payload-json", help="Event payload JSON."),
@@ -260,11 +264,12 @@ def emit_event(
             details=[("Event", event_type), ("Source", source)],
             next_steps="mn event list",
         )
+    except typer.BadParameter:
+        raise
     except Exception as exc:
         handle_cli_error(exc, console, "event emit")
 
 
-@event_app.command(name="list")
 def list_events(limit: int = typer.Option(100, "--limit")):
     """List recent trigger events."""
     try:

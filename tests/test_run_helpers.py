@@ -1195,7 +1195,7 @@ def test_prepare_manifest_for_submission_lowers_workflow_manifest_for_core_runti
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
 
     assert "graph_id" not in manifest
-    assert prepared["graph_id"] == "workflow_bp_v1"
+    assert prepared["graph_id"] == "workflow_bp_v2"
     assert prepared["flow"]["nodes"] == prepared["agents"]["nodes"]
     assert prepared["flow"]["edges"] == prepared["agents"]["edges"]
     assert prepared["entrypoints"] == ["ingress"]
@@ -1229,7 +1229,7 @@ def test_prepare_manifest_for_submission_lowers_legacy_agent_graph_workflow_id(t
 
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
 
-    assert prepared["graph_id"] == "legacy_agent_graph_v1"
+    assert prepared["graph_id"] == "legacy_agent_graph_v2"
     assert prepared["flow"]["nodes"] == prepared["agents"]["nodes"]
     assert prepared["flow"]["edges"] == []
     assert prepared["entrypoints"] == ["video_understanding_agent"]

@@ -5,15 +5,16 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+from mn_sdk import prepare_job_submission
+from mn_sdk.submission_preparation import prepare_manifest_for_submission
 
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.bundles import read_bundle
 from mn_cli.libs.job_cleanup import JobResourceCleanupError, cleanup_cleared_job_resources
-from mn_cli.libs.ui import print_success_confirmation
+from mn_cli.libs.run_cmds.common import _stage_bundle_payloads
+from mn_cli.libs.ui import print_collection, print_detail, print_error, print_success_confirmation, require_confirmation
+from mn_cli.output import record_result
 from mn_cli.shared import client, console, logger
-
-
-run_app = typer.Typer(help="Inspect and control individual stable-job runs.")
 
 
 def create(
@@ -27,10 +28,28 @@ def create(
     try:
         manifest_json, payloads = read_bundle(bundle)
         resolved = _read_json_object(config) if config else {}
+        bundle_path = Path(bundle).expanduser().resolve()
+        prepared_manifest = prepare_manifest_for_submission(
+            bundle_path,
+            json.loads(manifest_json),
+            config_overrides=resolved,
+        )
+        prepared_payloads = (
+            _stage_bundle_payloads(bundle_path, prepared_manifest)
+            if bundle_path.is_dir()
+            else payloads
+        )
+        prepared = prepare_job_submission(
+            prepared_manifest,
+            prepared_payloads,
+            bundle_dir=str(bundle_path) if bundle_path.is_dir() else None,
+            job_id=job_id,
+            cluster_client=client,
+        )
         result = json.loads(
             client.create_stable_job(
-                manifest_json,
-                payloads,
+                prepared.manifest_json,
+                prepared.payloads,
                 job_id=job_id or "",
                 resolved_configuration=resolved,
             )
@@ -41,6 +60,7 @@ def create(
             details=[("Job ID", result.get("job_id")), ("Bundle", bundle)],
             next_steps=f"mn job start {result.get('job_id')}",
         )
+        record_result(result)
     except Exception as exc:
         handle_cli_error(exc, console, "job create")
 
@@ -50,10 +70,13 @@ def definitions(
 ):
     """List durable job definitions."""
     try:
-        console.print_json(
-            data=json.loads(
-                client.list_stable_jobs(include_archived=include_archived)
-            )
+        payload = json.loads(client.list_stable_jobs(include_archived=include_archived))
+        items = payload.get("data") or payload.get("jobs") or payload.get("items") or [] if isinstance(payload, dict) else []
+        print_collection(
+            console,
+            "Jobs",
+            items,
+            columns=(("ID", "job_id"), ("Kind", "kind"), ("State", "status"), ("Owner", "owner"), ("Updated", "updated_at")),
         )
     except Exception as exc:
         handle_cli_error(exc, console, "job definitions")
@@ -62,15 +85,17 @@ def definitions(
 def inspect(job_id: str = typer.Argument(help="Stable job ID.")):
     """Inspect a stable job definition."""
     try:
-        console.print_json(data=json.loads(client.get_stable_job(job_id)))
+        print_detail(console, "Job", json.loads(client.get_stable_job(job_id)))
     except Exception as exc:
-        handle_cli_error(exc, console, "job inspect")
+        handle_cli_error(exc, console, "job show")
 
 
 def archive(job_id: str = typer.Argument(help="Stable job ID.")):
     """Archive a job while retaining its persistent data."""
     try:
-        console.print_json(data=json.loads(client.archive_stable_job(job_id)))
+        result = json.loads(client.archive_stable_job(job_id))
+        print_success_confirmation(console, "Job archive", status=result.get("status"), details={"Job ID": job_id})
+        record_result(result)
     except Exception as exc:
         handle_cli_error(exc, console, "job archive")
 
@@ -78,14 +103,19 @@ def archive(job_id: str = typer.Argument(help="Stable job ID.")):
 def reset_data(
     job_id: str = typer.Argument(help="Stable job ID."),
     yes: bool = typer.Option(False, "--yes", "-y"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview the reset without changing data."),
 ):
     """Clear job data and advance its data generation."""
-    if not yes and not typer.confirm(
-        f"Reset all persistent data for {job_id}?", default=False
-    ):
+    yes = yes is True
+    dry_run = dry_run is True
+    if dry_run:
+        print_success_confirmation(console, "Job data reset dry run", status="planned", details={"Job ID": job_id})
         return
+    _confirm_destructive(f"Reset all persistent data for {job_id}?", yes=yes, action="Job data reset")
     try:
-        console.print_json(data=json.loads(client.reset_stable_job_data(job_id)))
+        result = json.loads(client.reset_stable_job_data(job_id))
+        print_success_confirmation(console, "Job data reset", status=result.get("status"), details={"Job ID": job_id})
+        record_result(result)
     except Exception as exc:
         handle_cli_error(exc, console, "job reset-data")
 
@@ -93,13 +123,19 @@ def reset_data(
 def delete(
     job_id: str = typer.Argument(help="Stable job ID."),
     yes: bool = typer.Option(False, "--yes", "-y"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview deletion without changing state."),
 ):
     """Permanently delete a stable job, its runs, resources, and data."""
-    if not yes and not typer.confirm(
-        f"Permanently delete {job_id}, all runs, runtime resources, and shared job data?",
-        default=False,
-    ):
+    yes = yes is True
+    dry_run = dry_run is True
+    if dry_run:
+        print_success_confirmation(console, "Job delete dry run", status="planned", details={"Job ID": job_id})
         return
+    _confirm_destructive(
+        f"Permanently delete {job_id}, all runs, runtime resources, and shared job data?",
+        yes=yes,
+        action="Job deletion",
+    )
     try:
         run_ids = _stable_job_run_ids(job_id)
         cleanup_errors = []
@@ -119,7 +155,8 @@ def delete(
         ]
         if cleanup_errors:
             raise JobResourceCleanupError("; ".join(cleanup_errors))
-        console.print_json(data=result)
+        print_success_confirmation(console, "Job delete", status=result.get("status"), details={"Job ID": job_id})
+        record_result(result)
     except Exception as exc:
         handle_cli_error(exc, console, "job delete")
 
@@ -142,8 +179,9 @@ def start(
             console,
             "Run start",
             details=[("Job ID", job_id), ("Run ID", result.get("run_id"))],
-            next_steps=f"mn run status {result.get('run_id')}",
+            next_steps=f"mn run show {result.get('run_id')}",
         )
+        record_result(result)
     except Exception as exc:
         handle_cli_error(exc, console, "job start")
 
@@ -153,49 +191,57 @@ def runs(job_id: str = typer.Argument(help="Stable job ID.")):
     try:
         console.print_json(data=json.loads(client.list_runs(job_id)))
     except Exception as exc:
-        handle_cli_error(exc, console, "job runs")
+        handle_cli_error(exc, console, "run list")
 
 
-@run_app.command(name="status")
 def run_status(run_id: str):
     """Inspect one execution run."""
-    _print_run(client.get_run, run_id, "run status")
+    _print_run(client.get_run, run_id, "run show")
 
 
-@run_app.command(name="pause")
 def run_pause(run_id: str):
     """Pause one execution run."""
     _print_run(client.pause_run, run_id, "run pause")
 
 
-@run_app.command(name="resume")
 def run_resume(run_id: str):
     """Resume one execution run."""
     _print_run(client.resume_run, run_id, "run resume")
 
 
-@run_app.command(name="cancel")
 def run_cancel(run_id: str):
     """Cancel one execution run without deleting job data."""
     _print_run(client.cancel_run, run_id, "run cancel")
 
 
-@run_app.command(name="delete")
-def run_delete(run_id: str, yes: bool = typer.Option(False, "--yes", "-y")):
+def run_delete(
+    run_id: str,
+    yes: bool = typer.Option(False, "--yes", "-y"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview deletion without changing state."),
+):
     """Delete one terminal run without deleting job data."""
-    if not yes and not typer.confirm(f"Delete run {run_id}?", default=False):
+    yes = yes is True
+    dry_run = dry_run is True
+    if dry_run:
+        print_success_confirmation(console, "Run delete dry run", status="planned", details={"Run ID": run_id})
         return
+    _confirm_destructive(f"Delete run {run_id}?", yes=yes, action="Run deletion")
     try:
-        console.print_json(
-            data=json.loads(client.delete_run(run_id, confirmed=True))
-        )
+        result = json.loads(client.delete_run(run_id, confirmed=True))
+        print_success_confirmation(console, "Run delete", status=result.get("status"), details={"Run ID": run_id})
+        record_result(result)
     except Exception as exc:
         handle_cli_error(exc, console, "run delete")
 
 
 def _print_run(operation, run_id: str, label: str) -> None:
     try:
-        console.print_json(data=json.loads(operation(run_id)))
+        result = json.loads(operation(run_id))
+        if label == "run show":
+            print_detail(console, "Run", result)
+        else:
+            print_success_confirmation(console, label.replace("run ", "Run "), status=result.get("status"), details={"Run ID": run_id})
+            record_result(result)
     except Exception as exc:
         handle_cli_error(exc, console, label)
 
@@ -229,3 +275,7 @@ def _stable_job_run_ids(job_id: str) -> list[str]:
         and isinstance((run_id := run.get("run_id")), str)
         and run_id
     ]
+
+
+def _confirm_destructive(prompt: str, *, yes: bool, action: str) -> None:
+    require_confirmation(console, action=action, prompt=prompt, yes=yes)

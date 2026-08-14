@@ -678,4 +678,4 @@ def test_node_list_strips_restart_history_and_reasons(monkeypatch):
     assert "model emitted invalid JSON" not in rendered
     assert "actor failed" not in rendered
     assert "attempts exhausted" not in rendered
-    assert "operator maintenance" in rendered
+    assert "operator maintenance" not in rendered

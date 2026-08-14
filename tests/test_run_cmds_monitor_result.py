@@ -64,6 +64,10 @@ def isolated_mn_home(tmp_path, monkeypatch):
 
 def test_monitor_success(mocker):
     mocker.patch(
+        "mn_cli.libs.run_public.client.get_run",
+        return_value=json.dumps({"run_id": "run-123", "runtime_job_id": "job-123"}),
+    )
+    mocker.patch(
         "mn_cli.libs.run_cmds.client.get_job",
         return_value=json.dumps(
             {
@@ -77,7 +81,7 @@ def test_monitor_success(mocker):
     )
     mocker.patch("sys.stdin.isatty", return_value=False)
 
-    result = runner.invoke(app, ["run", "monitor", "job-123"])
+    result = runner.invoke(app, ["run", "watch", "run-123"])
 
     assert result.exit_code == 0
     assert "Workflow Job Monitor" in result.stdout
@@ -657,55 +661,63 @@ def test_agent_selection_has_no_reverse_background():
 def test_monitor_error(mocker):
     mocker.patch("sys.stdin.isatty", return_value=False)
     mocker.patch(
+        "mn_cli.libs.run_public.client.get_run",
+        return_value=json.dumps({"run_id": "run-123", "runtime_job_id": "job-123"}),
+    )
+    mocker.patch(
         "mn_cli.libs.run_cmds.client.get_job", side_effect=Exception("Network fail")
     )
-    result = runner.invoke(app, ["run", "monitor", "job-123"])
+    result = runner.invoke(app, ["run", "watch", "run-123"])
     assert result.exit_code == 0
     assert "Error fetching job: Network fail" in result.stdout
 
 
 def test_result_success(mocker, tmp_path):
     mocker.patch(
-        "mn_cli.libs.run_cmds.client.get_job",
-        return_value=json.dumps(
-            {
-                "job": {"status": "completed", "result": {"test": "result"}},
-                "recent_events": [],
-            }
-        ),
+        "mn_cli.libs.run_public.client.get_run",
+        return_value=json.dumps({"run_id": "run-123", "runtime_job_id": "job-123"}),
     )
-    mocker.patch(
-        "mn_cli.libs.run_cmds.client.stream_events",
-        return_value=[json.dumps({"type": "custom_event", "payload": "progressive"})],
-    )
+    fetch = mocker.patch("mn_cli.libs.run_public.run_cmds.fetch_and_save_results")
 
-    result = runner.invoke(app, ["run", "result", "job-123"])
+    result = runner.invoke(app, ["run", "result", "run-123", "--output", str(tmp_path)])
 
     assert result.exit_code == 0
-    assert "Job result fetch successful." in result.stdout
-    assert "Final result:" in result.stdout
-    assert "Stream results:" in result.stdout
+    assert "Results saved to" in result.stdout
+    assert tmp_path.name in result.stdout
+    fetch.assert_called_once_with(
+        "job-123",
+        data={"run_id": "run-123", "runtime_job_id": "job-123"},
+        output_dir=tmp_path,
+    )
 
 
 def test_result_not_completed(mocker, tmp_path):
     mocker.patch(
-        "mn_cli.libs.run_cmds.client.get_job",
-        return_value=json.dumps({"job": {"status": "running"}, "recent_events": []}),
+        "mn_cli.libs.run_public.client.get_run",
+        return_value=json.dumps({"run_id": "run-999", "runtime_job_id": "job-999"}),
     )
-    mocker.patch("mn_cli.libs.run_cmds.client.stream_events", return_value=[])
+    fetch = mocker.patch("mn_cli.libs.run_public.run_cmds.fetch_and_save_results")
 
-    result = runner.invoke(app, ["run", "result", "job-999"])
+    result = runner.invoke(app, ["run", "result", "run-999", "--output", str(tmp_path)])
 
     assert result.exit_code == 0
-    assert "No final result found" in result.stdout
+    fetch.assert_called_once_with(
+        "job-999",
+        data={"run_id": "run-999", "runtime_job_id": "job-999"},
+        output_dir=tmp_path,
+    )
 
 
 def test_result_error(mocker):
     mocker.patch(
-        "mn_cli.libs.run_cmds.fetch_and_save_results", side_effect=Exception("DB Error")
+        "mn_cli.libs.run_public.client.get_run",
+        return_value=json.dumps({"run_id": "run-888", "runtime_job_id": "job-888"}),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_public.run_cmds.fetch_and_save_results", side_effect=Exception("DB Error")
     )
 
-    result = runner.invoke(app, ["run", "result", "job-888"])
+    result = runner.invoke(app, ["run", "result", "run-888"])
 
     assert result.exit_code == 1
-    assert "MN_EXECUTION_FAILED" in result.stdout
+    assert "MN_EXECUTION_FAILED" in result.stderr

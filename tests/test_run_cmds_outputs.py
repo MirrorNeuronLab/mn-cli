@@ -91,7 +91,7 @@ def test_run_injects_user_home_output_environment(mocker, tmp_path, monkeypatch)
         )
     )
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
 
     assert result.exit_code == 0
     manifest = json.loads(mock_submit.call_args.args[0])
@@ -182,7 +182,7 @@ def test_run_materializes_vc_final_artifact_outputs(mocker, tmp_path, monkeypatc
         )
     )
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
 
     assert result.exit_code == 0
     assert "Materialized blueprint outputs" in result.stdout
@@ -291,7 +291,7 @@ def test_run_materializes_deeply_nested_hostlocal_vc_artifact(
         )
     )
 
-    result = runner.invoke(app, ["blueprint", "run", "--folder", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
 
     assert result.exit_code == 0
     assert "Materialized blueprint outputs" in result.stdout
@@ -364,6 +364,41 @@ def test_resolve_job_result_reads_staged_snapshot(monkeypatch):
         "final_artifact": {"ok": True}
     }
     assert captured["env"]["MN_HOST_SHARED_STORAGE_ROOT"] == "/tmp/mn-shared"
+
+
+def test_copy_shared_submission_outputs_materializes_worker_result_files(monkeypatch, tmp_path):
+    shared_root = tmp_path / "shared"
+    source = shared_root / "submissions" / "submission-1" / "outputs" / "user"
+    source.mkdir(parents=True)
+    (source / "final_artifact.json").write_text('{"ok": true}\n', encoding="utf-8")
+    (source / "company" / "analysis.md").parent.mkdir()
+    (source / "company" / "analysis.md").write_text("# Analysis\n", encoding="utf-8")
+
+    class RuntimeConfig:
+        shared_storage_root = str(shared_root)
+
+    monkeypatch.setattr(run_cmds.RuntimeConfig, "from_env", lambda: RuntimeConfig())
+    target = tmp_path / "result"
+
+    assert run_cmds._copy_shared_submission_outputs(
+        {
+            "result_ref": {
+                "type": "artifact_ref",
+                "version": "mn.staged_artifact/v1",
+                "storage": "syncthing",
+                "kind": "job_result",
+                "submission_id": "submission-1",
+                "run_id": "run-1",
+                "relative_path": "outputs/runs/run-1/artifacts/aa/result.json",
+                "content_type": "application/json",
+                "size_bytes": 11,
+                "sha256": "a" * 64,
+            }
+        },
+        target,
+    ) is True
+    assert json.loads((target / "final_artifact.json").read_text()) == {"ok": True}
+    assert (target / "company" / "analysis.md").read_text() == "# Analysis\n"
 
 
 def test_materialize_shared_storage_outputs_copies_host_runtime_path(tmp_path):
@@ -498,7 +533,7 @@ def test_detached_batch_run_starts_output_event_relay_for_shared_storage(
     )
 
     result = runner.invoke(
-        app, ["blueprint", "run", "--folder", str(bundle_dir), "--follow-seconds", "0"]
+        app, ["blueprint", "run", str(bundle_dir), "--follow-seconds", "0"]
     )
 
     assert result.exit_code == 0

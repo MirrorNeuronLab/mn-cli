@@ -21,7 +21,7 @@ def test_leave_does_not_rotate_grpc_tokens(monkeypatch, tmp_path):
     monkeypatch.setattr(shared, "console", Console(file=StringIO(), force_terminal=False, width=160))
     monkeypatch.setattr(sys_cmds, "_detach_local_docker_node_if_matches", lambda node: calls.append(node))
 
-    sys_cmds.leave("mirror_neuron@192.168.4.20")
+    sys_cmds.leave("mirror_neuron@192.168.4.20", yes=True)
 
     assert calls == ["mirror_neuron@192.168.4.20"]
     assert auth_file.read_text().strip() == "stable-auth-token"
@@ -36,6 +36,7 @@ def test_stop_attempts_joined_cluster_leave_before_teardown(monkeypatch, mocker,
     monkeypatch.setattr(sys_cmds, "runtime_compose_available", lambda: False)
     monkeypatch.setattr(sys_cmds, "web_ui_pid_files", lambda: ())
     monkeypatch.setattr(sys_cmds, "api_pid_files", lambda: ())
+    monkeypatch.setattr(sys_cmds, "native_sdk_grpc_pid_files", lambda: ())
     monkeypatch.setattr(sys_cmds, "BEAM_PID_FILE", tmp_path / "beam.pid")
     monkeypatch.setattr(sys_cmds, "_stop_matching_sidecar_processes", lambda *_args: None)
     mocker.patch.object(sys_cmds.subprocess, "run")

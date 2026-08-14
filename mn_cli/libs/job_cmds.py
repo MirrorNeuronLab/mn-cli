@@ -56,7 +56,7 @@ def submit(
             console,
             "Job submit",
             details=[("Job ID", job_id), ("Manifest", manifest_path)],
-            next_steps=f"mn run status {job_id}",
+            next_steps=f"mn run show {job_id}",
         )
     except Exception as e:
         handle_cli_error(e, console, 'submit')
@@ -71,7 +71,7 @@ def status(
     """Print the raw job status payload as JSON.
 
     Examples:
-      mn run status run-123
+      mn run show run-123
     """
     try:
         job_json = client.get_job(job_id)
@@ -188,7 +188,7 @@ def cancel(
             "Job cancel",
             status=status,
             details={"Job ID": job_id},
-            next_steps=f"mn run status {job_id}",
+            next_steps=f"mn run show {job_id}",
         )
     except Exception as e:
         _cleanup_cancelled_job_web_ui(job_id)
@@ -330,7 +330,7 @@ def pause(job_id: str):
             "Job pause",
             status=status,
             details={"Job ID": job_id},
-            next_steps=f"mn run status {job_id}",
+            next_steps=f"mn run show {job_id}",
         )
     except Exception as e:
         handle_cli_error(e, console, 'pause')
@@ -345,7 +345,7 @@ def resume(job_id: str):
             "Job resume",
             status=status,
             details={"Job ID": job_id},
-            next_steps=f"mn run status {job_id}",
+            next_steps=f"mn run show {job_id}",
         )
     except Exception as e:
         handle_cli_error(e, console, 'resume')
@@ -380,7 +380,7 @@ def unfinished():
                 f"{job.get('job_id', 'N/A')} recovery={recovery_label(job)} review={review}"
             )
         console.print(
-            "Use [bold]mn run status <run_id>[/bold] to inspect and "
+            "Use [bold]mn run show <run_id>[/bold] to inspect and "
             "[bold]mn run resume <run_id>[/bold] to continue a paused run."
         )
     except Exception as e:
@@ -419,9 +419,48 @@ def nodes():
         summary_json = client.get_system_summary()
         summary = json.loads(summary_json)
         summary = _strip_node_list_restart_history(summary)
-        console.print_json(data=summary)
+        from mn_cli.libs.ui import print_collection
+        from mn_cli.output import record_result
+
+        items = summary.get("nodes") if isinstance(summary, dict) else []
+        print_collection(
+            console,
+            "Nodes",
+            items if isinstance(items, list) else [],
+            columns=(("ID", "name"), ("Kind", "kind"), ("State", "status"), ("Node / Owner", "owner"), ("Updated", "updated_at")),
+        )
+        record_result(summary)
     except Exception as e:
         handle_cli_error(e, console, 'nodes')
+
+
+def show_node(node_name: str = typer.Argument(help="Runtime node name.")):
+    """Show one runtime node from the current system summary."""
+    try:
+        summary = json.loads(client.get_system_summary())
+        items = summary.get("nodes") if isinstance(summary, dict) else []
+        items = items if isinstance(items, list) else []
+        node = next(
+            (
+                item
+                for item in items
+                if isinstance(item, dict)
+                and str(item.get("name") or item.get("node") or item.get("id")) == node_name
+            ),
+            None,
+        )
+        if node is None:
+            from mn_cli.libs.ui import print_error
+
+            print_error(console, f"Node {node_name!r} was not found.", code="MN_NOT_FOUND")
+            raise typer.Exit(2)
+        from mn_cli.libs.ui import print_detail
+
+        print_detail(console, "Node", node)
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        handle_cli_error(exc, console, "node show")
 
 
 def _strip_node_list_restart_history(value):
@@ -610,11 +649,13 @@ def _print_node_mutation_confirmation(
 
 
 def metrics():
-    """Show runtime metrics derived from the core system summary"""
+    """Show runtime resource usage derived from the core system summary."""
     try:
         summary = json.loads(client.get_system_summary())
         if "metrics" in summary:
-            console.print_json(data=summary["metrics"])
+            from mn_cli.libs.ui import print_detail
+
+            print_detail(console, "Resource usage", summary["metrics"])
             return
 
         jobs = summary.get("jobs", [])
@@ -634,8 +675,12 @@ def metrics():
                 if pressure.get("backpressure") is True:
                     pressured_agents += 1
 
-        console.print_json(
-            data={
+        from mn_cli.libs.ui import print_detail
+
+        print_detail(
+            console,
+            "Resource usage",
+            {
                 "jobs": {"total": len(jobs), "by_status": status_counts},
                 "agents": {
                     "queue_depth_total": queue_depth_total,
@@ -644,10 +689,10 @@ def metrics():
                 },
                 "nodes": {"total": len(summary.get("nodes", []))},
                 "source": "system_summary",
-            }
+            },
         )
     except Exception as e:
-        handle_cli_error(e, console, "metrics")
+        handle_cli_error(e, console, "resource usage")
 
 
 def dead_letters(job_id: str):

@@ -12,6 +12,7 @@ from ..web_ui import (
 )
 from .validate import *
 from .doctor import _doctor_prepare_hostlocal_python_envs
+from mn_cli.output import record_result
 
 
 def _record_prevalidated_command_rules(
@@ -151,20 +152,17 @@ def _print_docker_worker_ready(
         node = str(service.get("node") or "the selected runtime node")
         image = str(build.get("image") or service.get("image") or "")
         action = str(build.get("action") or "unknown")
-        console.print(
-            f"Docker build on {node}: action={action}, image={image}",
-            markup=False,
-        )
+        print_info(console, f"Docker build on {node}: action={action}, image={image}")
         command = build.get("command")
         if isinstance(command, list) and command:
-            console.print(
+            print_info(
+                console,
                 "Docker build command: " + " ".join(str(part) for part in command),
-                markup=False,
             )
         output = str(build.get("output") or "").strip()
         if output:
-            console.print("Docker build output:", markup=False)
-            console.print(output, markup=False)
+            print_info(console, "Docker build output:")
+            print_info(console, output)
 
 
 def _strip_docker_worker_debug_details(manifest: dict[str, Any]) -> None:
@@ -535,7 +533,18 @@ def run_bundle(
                     source={"cli": "blueprint run --schedule"},
                 )
             )
-            console.print_json(data=result)
+            print_success_confirmation(
+                console,
+                "Schedule create",
+                status=result.get("status"),
+                details=[
+                    ("Schedule ID", result.get("schedule_id") or result.get("id")),
+                    ("Kind", result.get("kind") or schedule_attrs.get("kind")),
+                    ("Job", stable_job_id),
+                ],
+                next_steps="mn schedule list",
+            )
+            record_result(result)
             return
         started = json.loads(
             client.start_run(

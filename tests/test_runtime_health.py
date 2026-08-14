@@ -14,6 +14,12 @@ from mn_cli.libs import runtime_health
 runner = CliRunner()
 
 
+def cli_data(result):
+    payload = json.loads(result.stdout)
+    assert payload["schema"] == "mn.cli/v1"
+    return payload["data"] if payload["ok"] else payload["error"].get("details", {})
+
+
 def test_runtime_health_all_passing(mocker, tmp_path):
     _patch_targets(mocker, tmp_path, web_ui_installed=True)
     mocker.patch.object(runtime_health.client, "get_system_summary", return_value='{"nodes":[]}')
@@ -136,22 +142,13 @@ def test_runtime_health_compose_native_port_env_normalizes_legacy_ports():
     assert env["MN_WEB_UI_PORT"] == "55173"
 
 
-def test_runtime_health_command_json_exits_nonzero_for_critical(mocker):
-    mocker.patch(
-        "mn_cli.libs.runtime_health.collect_runtime_health",
-        return_value={
-            "overall": "critical",
-            "checked_at": "2026-06-03T00:00:00Z",
-            "components": [
-                {"name": "core_grpc", "status": "critical", "target": "localhost:55051", "duration_ms": 1, "error": "down"}
-            ],
-        },
-    )
-
+def test_runtime_health_command_is_removed_with_status_replacement():
     result = runner.invoke(app, ["runtime", "health", "--json"])
 
-    assert result.exit_code == 1
-    assert json.loads(result.stdout)["overall"] == "critical"
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert "mn runtime status" in payload["error"]["message"]
 
 
 def test_runtime_status_command_json_emits_sdk_payload(mocker):
@@ -163,7 +160,7 @@ def test_runtime_status_command_json_emits_sdk_payload(mocker):
     result = runner.invoke(app, ["runtime", "status", "--json"])
 
     assert result.exit_code == 0
-    body = json.loads(result.stdout)
+    body = cli_data(result)
     assert body["overall"] == "passing"
     assert body["endpoints"]["core_grpc"] == "localhost:55051"
     assert body["shared_storage"]["host_root"] == "/tmp/mn-shared"
@@ -229,7 +226,7 @@ def test_runtime_status_command_exits_nonzero_for_critical(mocker):
     result = runner.invoke(app, ["runtime", "status", "--json"])
 
     assert result.exit_code == 1
-    assert json.loads(result.stdout)["overall"] == "critical"
+    assert cli_data(result)["overall"] == "critical"
 
 
 def test_runtime_doctor_detects_stale_litellm_gateway_config(mocker):
@@ -311,6 +308,21 @@ def test_runtime_doctor_rejects_divergent_or_read_only_coordination_stores(
     assert "divergent Redis datasets" in component["detail"]
 
 
+def test_runtime_doctor_checks_shared_storage_writability(tmp_path):
+    report = _status_report(overall="passing")
+    report["shared_storage"] = {
+        "host_root": str(tmp_path),
+        "runtime_root": "/runtime/shared",
+        "configured": True,
+    }
+
+    component = runtime_health._shared_storage_component(report)
+
+    assert component["name"] == "shared_storage"
+    assert component["status"] == "passing"
+    assert component["runtime_root"] == "/runtime/shared"
+
+
 def test_runtime_doctor_detects_legacy_compose_model_override(mocker, tmp_path):
     compose_file = tmp_path / ".mn" / "docker-compose.yml"
     compose_file.parent.mkdir(parents=True)
@@ -382,7 +394,7 @@ def test_runtime_doctor_command_json_exits_nonzero_for_stale_gateway(mocker):
     result = runner.invoke(app, ["runtime", "doctor", "--json"])
 
     assert result.exit_code == 1
-    payload = json.loads(result.stdout)
+    payload = cli_data(result)
     assert payload["overall"] == "critical"
     assert payload["components"][0]["missing_models"] == ["nemotron3"]
 
@@ -408,13 +420,13 @@ def test_runtime_health_repair_rechecks_after_restart(mocker):
             ],
         },
     ]
-    mock_collect = mocker.patch("mn_cli.libs.runtime_health.collect_runtime_health", side_effect=reports)
+    mock_collect = mocker.patch("mn_cli.libs.runtime_health.collect_runtime_doctor", side_effect=reports)
     mock_repair = mocker.patch("mn_cli.libs.runtime_health._repair_runtime_sidecars", return_value=True)
 
-    result = runner.invoke(app, ["runtime", "health", "--json", "--repair"])
+    result = runner.invoke(app, ["runtime", "doctor", "--json", "--repair"])
 
     assert result.exit_code == 0
-    assert json.loads(result.stdout)["overall"] == "passing"
+    assert cli_data(result)["overall"] == "passing"
     assert mock_collect.call_count == 2
     mock_repair.assert_called_once_with(reports[0])
 

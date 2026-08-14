@@ -20,6 +20,7 @@ from mn_sdk.blueprint_support.observability import (
 )
 
 from mn_cli.shared import console
+from mn_cli.libs.ui import print_error
 
 
 def load_observability_api() -> tuple[Callable[..., list[dict[str, Any]]], Callable[..., dict[str, Any]], Callable[..., list[dict[str, Any]]]]:
@@ -121,8 +122,8 @@ def load_run_or_exit(run_id: str, runs_root: Optional[str], *, include_observabi
     try:
         return load_run(run_id, runs_root=runs_root, include_observability=include_observability)
     except FileNotFoundError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(1)
+        print_error(console, exc, code="MN_NOT_FOUND")
+        raise typer.Exit(2)
 
 
 def markdown_table(rows: list[tuple[str, Any]]) -> list[str]:

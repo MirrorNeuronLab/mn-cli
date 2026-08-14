@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -14,7 +16,8 @@ from mn_sdk.litellm_gateway import litellm_gateway_health, validate_litellm_gate
 from mn_sdk.model_runtime import DOCKER_MODEL_RUNNER_HOST_API_BASE, dmr_api_list_models
 
 from mn_cli.runtime_state import read_json_file
-from mn_cli.libs.ui import print_info
+from mn_cli.libs.ui import print_doctor_checks, print_info
+from mn_cli.output import record_result
 from mn_cli.shared import client, console
 from mn_cli.server_cmds import (
     RUNTIME_ENDPOINTS_FILE,
@@ -48,7 +51,7 @@ def health(
     if repair and _repair_runtime_sidecars(report):
         report = collect_runtime_health(timeout)
     if json_output:
-        console.print_json(data=report)
+        record_result(report)
     else:
         print_health_report(report)
     if report["overall"] == "critical":
@@ -62,7 +65,7 @@ def status(
     """Report runtime endpoints, health, nodes, jobs, and shared storage."""
     report = collect_runtime_status(timeout)
     if json_output:
-        console.print_json(data=report)
+        record_result(report)
     else:
         print_status_report(report)
     if report["overall"] == "critical":
@@ -72,11 +75,14 @@ def status(
 def doctor(
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
     timeout: float = typer.Option(3.0, "--timeout", min=0.1, help="Per-component timeout in seconds."),
+    repair: bool = typer.Option(False, "--repair", help="Repair unhealthy replaceable runtime sidecars, then recheck."),
 ) -> None:
     """Check runtime foundation services before running blueprints."""
     report = collect_runtime_doctor(timeout)
+    if repair and _repair_runtime_sidecars(report):
+        report = collect_runtime_doctor(timeout)
     if json_output:
-        console.print_json(data=report)
+        record_result(report)
     else:
         print_doctor_report(report)
     if report["overall"] == "critical":
@@ -105,6 +111,7 @@ def collect_runtime_doctor(timeout: float = 3.0, *, core_client: Any | None = No
     status_report = collect_runtime_status(timeout, core_client=core_client)
     foundation = [
         _coordination_store_component(status_report),
+        _shared_storage_component(status_report),
         _runtime_compose_model_override_component(),
         _docker_model_runner_component(timeout),
         _litellm_gateway_component(timeout),
@@ -235,33 +242,38 @@ def print_doctor_report(report: dict[str, Any]) -> None:
         for component in report.get("components", [])
         if isinstance(component, dict)
     }
-    sections = [
-        Text.assemble("Runtime doctor: ", (str(report.get("overall") or "unknown"), _status_style(report.get("overall"))), overflow="fold")
-    ]
+    checks = []
     for name, label in (
         ("core_grpc", "Core gRPC"),
         ("api", "REST API"),
         ("web_ui", "Web UI"),
         ("coordination_store", "Coordination store"),
+        ("shared_storage", "Shared storage"),
         ("runtime_compose_model_override", "Compose model override"),
         ("docker_model_runner", "Docker Model Runner"),
         ("litellm_gateway", "LiteLLM gateway"),
     ):
         component = components.get(name, {})
-        sections.append(
-            _status_section(
-                label,
-                str(component.get("status") or "unknown"),
-                [
-                    ("endpoint", component.get("target")),
-                    ("detail", component.get("error") or component.get("detail")),
-                    ("configured_models", _format_model_list(component.get("configured_models"))),
-                    ("live_models", _format_model_list(component.get("live_models"))),
-                    ("missing_models", _format_model_list(component.get("missing_models"))),
-                ],
-            )
+        detail = component.get("error") or component.get("detail") or component.get("target") or ""
+        missing = _format_model_list(component.get("missing_models"))
+        if missing:
+            detail = f"{detail}; missing models: {missing}" if detail else f"missing models: {missing}"
+        fix = component.get("fix") or component.get("help") or ""
+        if not fix and str(component.get("status") or "") == "critical":
+            fix = "mn runtime doctor --repair" if name in {"api", "web_ui"} else "Review runtime configuration and retry."
+        checks.append(
+            {
+                "check": label,
+                "state": component.get("status") or "unknown",
+                "detail": detail,
+                "fix": fix,
+            }
         )
-    console.print(Group(*sections))
+    print_doctor_checks(
+        console,
+        f"Runtime doctor: {report.get('overall') or 'unknown'}",
+        checks,
+    )
 
 
 def _coordination_store_component(status_report: dict[str, Any]) -> dict[str, Any]:
@@ -308,6 +320,60 @@ def _coordination_store_component(status_report: dict[str, Any]) -> dict[str, An
         ),
         "identities": sorted(identities),
         "rejected_nodes": rejected,
+    }
+
+
+def _shared_storage_component(status_report: dict[str, Any]) -> dict[str, Any]:
+    storage = status_report.get("shared_storage")
+    storage = storage if isinstance(storage, dict) else {}
+    host_root = str(storage.get("host_root") or "").strip()
+    runtime_root = str(storage.get("runtime_root") or "").strip()
+    configured = bool(storage.get("configured"))
+    if not host_root or not runtime_root:
+        return {
+            "name": "shared_storage",
+            "status": "critical",
+            "detail": "Shared storage host and runtime roots must both be configured.",
+            "fix": "Configure MN_SHARED_STORAGE_ROOT and MN_RUNTIME_SHARED_STORAGE_ROOT.",
+        }
+
+    path = Path(host_root).expanduser()
+    if path.exists() and not path.is_dir():
+        return {
+            "name": "shared_storage",
+            "status": "critical",
+            "target": host_root,
+            "detail": "The shared storage host root exists but is not a directory.",
+            "fix": "Select a writable directory for MN_SHARED_STORAGE_ROOT.",
+        }
+    if path.exists() and not os.access(path, os.W_OK):
+        return {
+            "name": "shared_storage",
+            "status": "critical",
+            "target": host_root,
+            "detail": "The shared storage host root is not writable.",
+            "fix": "Grant the runtime write access on every participating node.",
+        }
+    if not path.exists():
+        parent = next((candidate for candidate in (path, *path.parents) if candidate.exists()), None)
+        parent_writable = bool(parent and parent.is_dir() and os.access(parent, os.W_OK))
+        return {
+            "name": "shared_storage",
+            "status": "warning" if parent_writable else "critical",
+            "target": host_root,
+            "detail": "The shared storage host root does not exist yet.",
+            "fix": "Create the same writable shared directory on every participating node.",
+        }
+    return {
+        "name": "shared_storage",
+        "status": "passing",
+        "target": host_root,
+        "detail": (
+            "Configured shared storage is writable."
+            if configured
+            else "The default local shared storage is writable."
+        ),
+        "runtime_root": runtime_root,
     }
 
 

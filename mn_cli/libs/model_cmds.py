@@ -1,79 +1,117 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
-import hashlib
 import re
-import subprocess
 import socket
+import subprocess
 import urllib.parse
 import uuid
-from pathlib import Path
+from collections.abc import Callable
 from functools import lru_cache
-from typing import Annotated, Any, Callable, Optional
+from pathlib import Path
+from typing import Annotated, Any
 
 import typer
-from rich.table import Table
-
-from mn_cli.error_handler import handle_cli_error
-from mn_cli.libs.ui import print_confirmation, print_confirmed, print_success_confirmation, print_warning
-from mn_cli.shared import client, config as cli_config, console, logger
 from mn_sdk import (
-    Client,
     DEFAULT_MODEL_ID,
     DOCKER_MODEL_RUNNER_HOST_API_BASE,
+    AppError,
+    Client,
+    ModelRegistryError,
+    add_registered_models,
+    assess_model_compatibility,
+    build_litellm_gateway_config,
     build_prepare_runtime_model_request,
     call_prepare_runtime_model,
-    build_litellm_gateway_config,
-    assess_model_compatibility,
-    default_model_proxies_path,
+    default_model_registry_path,
     detect_host_hardware,
     dmr_api_list_models,
     dmr_api_pull_model,
+    dmr_registration,
     docker_model_match_keys,
-    docker_model_runner_endpoint,
     docker_model_name,
+    docker_model_runner_endpoint,
     docker_runner_command,
-    default_model_remotes_path,
-    litellm_gateway_health,
-    litellm_gateway_internal_api_base,
+    get_registered_model,
     list_model_entries,
+    litellm_gateway_health,
     load_model_catalog,
     load_model_ownership,
+    load_model_registry,
     load_model_remotes,
-    merge_catalog_and_installed_models,
-    proxy_model_ids,
+    load_provider_definition,
+    model_cluster_gpu_requirement,
     reconcile_cluster_model_remotes,
     record_manual_model_install,
+    registered_model_records,
     remote_model_api_base,
     remote_runtime_model_endpoint,
     remove_litellm_gateway_route,
-    remove_model_proxy,
-    remove_model_remote,
     remove_model_record,
+    remove_registered_model,
+    replace_registered_model,
+    resolve_cluster_model_placement,
+    resolve_custom_model_placement,
+    resolve_model_entry,
+    run_hardware_requirements_validation,
+    runtime_model_prepare_timeout_seconds,
+    save_model_registry,
+    set_registered_default_model,
     save_model_remotes,
     sync_litellm_gateway,
+    upsert_litellm_external_routes,
     validate_litellm_gateway_config_file,
-    resolve_model_entry,
-    runtime_model_prepare_timeout_seconds,
-    upsert_model_proxy,
-    upsert_model_remote,
 )
-from mn_sdk.model_access import runtime_model_gateway_name
 from mn_sdk import (
     docker_status as sdk_docker_status,
+)
+from mn_sdk import (
     install_model_entry as sdk_install_model_entry,
+)
+from mn_sdk import (
     installed_model_names as sdk_installed_model_names,
+)
+from mn_sdk import (
     model_entry_payload as sdk_model_entry_payload,
+)
+from mn_sdk import (
     model_installed as sdk_model_installed,
+)
+from mn_sdk import (
     parse_model_list as sdk_parse_model_list,
+)
+from mn_sdk import (
     remove_model_ref as sdk_remove_model_ref,
 )
+from mn_sdk.model_access import runtime_model_gateway_name
 
+from mn_cli.error_handler import handle_cli_error
+from mn_cli.libs.model_rendering import (
+    print_compatibility as _print_compatibility,
+)
+from mn_cli.libs.model_rendering import (
+    print_dmr_doctor as _print_doctor,
+)
+from mn_cli.libs.model_rendering import (
+    print_model_detail as _print_model_detail,
+)
+from mn_cli.libs.model_rendering import (
+    print_model_table as _print_model_table,
+)
+from mn_cli.libs.model_rendering import (
+    print_provider_doctor as _print_provider_doctor,
+)
+from mn_cli.libs.ui import print_success_confirmation, print_warning, require_confirmation
+from mn_cli.output import RemediatingTyperGroup, record_result
+from mn_cli.shared import client, console, logger
+from mn_cli.shared import config as cli_config
 
-model_app = typer.Typer(help="Manage local Docker Model Runner models")
-remote_app = typer.Typer(help="Manage remote model endpoints")
-model_app.add_typer(remote_app, name="remote")
+model_app = typer.Typer(
+    help="Manage Docker Model Runner and provider-backed runtime models",
+    cls=RemediatingTyperGroup,
+)
 
 REMOTE_DMR_SOURCE = "remote-dmr"
 REMOTE_LITELLM_GATEWAY_SOURCE = "remote_litellm_gateway"
@@ -83,130 +121,150 @@ CLUSTER_REMOTE_MODEL_SOURCES = {
 }
 
 
+def _handle_model_error(error: Exception, context: str) -> None:
+    if isinstance(error, (ValueError, ModelRegistryError)):
+        error = AppError(
+            "MN_MODEL_INVALID",
+            str(error),
+            internal_message=str(error),
+            hint="Review the model command arguments or definition and try again.",
+            exit_code=2,
+            http_status=422,
+            cause=error,
+        )
+    handle_cli_error(error, console, context)
+
+
 @model_app.command(name="list")
 def list_models(
-    installed: Annotated[bool, typer.Option("--installed", help="Only show installed Docker Model Runner models.")] = False,
+    available: Annotated[bool, typer.Option("--available", help="Include catalog models that have not been added.")] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ):
-    """List known or installed runtime models."""
+    """List registered models and discovered DMR artifacts."""
     try:
-        catalog = load_model_catalog()
         try:
             installed_models = _installed_model_names()
         except Exception:
             installed_models = set()
-        installed_model_ids = installed_models | proxy_model_ids()
-        ownership = load_model_ownership()
-        entries = merge_catalog_and_installed_models(
-            catalog=catalog,
-            installed_models=installed_model_ids,
-            ownership=ownership,
-        )
+        registry = load_model_registry()
+        records = registered_model_records(registry)
         remote_records = [
             remote
             for remote in (load_model_remotes().get("remotes") or {}).values()
-            if isinstance(remote, dict)
+            if isinstance(remote, dict) and str(remote.get("managed_by") or "") == "mirror-neuron-cluster"
         ]
-        installed_model_keys = {key for model in installed_model_ids for key in docker_model_match_keys(model)}
-
-        def is_installed(entry: dict[str, Any]) -> bool:
-            if _is_proxy_entry(entry):
-                return True
-            return bool(docker_model_match_keys(docker_model_name(entry)) & installed_model_keys)
-
-        payload = {
-            "models": [
-                _entry_payload(
-                    entry,
-                    installed=is_installed(entry),
-                    ownership=ownership,
-                )
-                for entry in entries
-            ]
-        }
-        for model_payload in payload["models"]:
-            local_installed = bool(model_payload.get("installed"))
-            remote_installations = _remote_installations_for_model(
-                model_payload,
-                remote_records,
-            )
-            installations: list[dict[str, Any]] = []
-            if local_installed:
-                installations.append(
-                    {
-                        "node": _local_runtime_node_name() or "local",
-                        "installed": True,
-                        "local": True,
-                        "route_source": "local-dmr",
-                    }
-                )
-            installations.extend(remote_installations)
-            model_payload["installations"] = installations
-            if remote_installations and not local_installed:
-                preferred = remote_installations[0]
-                model_payload["installed"] = True
-                model_payload["backend"] = "remote-dmr"
-                model_payload["status"] = "remote"
-                model_payload["node"] = preferred.get("node") or ""
-                model_payload["route_source"] = REMOTE_DMR_SOURCE
-            else:
-                model_payload["route_source"] = _route_source_for_model_payload(model_payload)
-        payload["models"].extend(
-            _remote_model_payloads(
-                existing_entries=payload["models"],
+        gateway = litellm_gateway_health()
+        routed_names = {str(name) for name in gateway.get("models") or []}
+        models = [
+            _registered_model_payload(
+                record,
+                installed_models=installed_models,
                 remote_records=remote_records,
+                routed_names=routed_names,
             )
-        )
-        if installed:
-            payload["models"] = [entry for entry in payload["models"] if entry.get("installed")]
+            for record in records
+        ]
+        registered_dmr_keys = {
+            key
+            for record in records
+            if record.get("kind") == "dmr"
+            for key in docker_model_match_keys(str(record.get("model") or ""))
+        }
+        for installed_model in sorted(installed_models):
+            if docker_model_match_keys(installed_model) & registered_dmr_keys:
+                continue
+            models.append(_unmanaged_dmr_payload(installed_model, routed_names=routed_names))
+        known_model_keys = {
+            key
+            for item in models
+            for key in _model_payload_match_keys(item)
+        }
+        for remote in remote_records:
+            if _remote_record_match_keys(remote) & known_model_keys:
+                continue
+            unmanaged = _unmanaged_remote_dmr_payload(remote, routed_names=routed_names)
+            models.append(unmanaged)
+            known_model_keys.update(_model_payload_match_keys(unmanaged))
+        if available:
+            existing_ids = {str(model.get("id") or "") for model in models}
+            for entry in list_model_entries(load_model_catalog()):
+                model_id = str(entry.get("id") or "")
+                if not model_id or model_id in existing_ids:
+                    continue
+                models.append(_available_model_payload(entry))
+        payload = {"models": sorted(models, key=lambda item: str(item.get("id") or "")), "registry": str(default_model_registry_path())}
         if json_output:
-            console.print_json(data=payload)
+            record_result(payload)
             return
         _print_model_table(payload["models"])
     except Exception as exc:
-        handle_cli_error(exc, console, "model list")
+        _handle_model_error(exc, "model list")
         raise typer.Exit(1)
 
 
-@model_app.command(name="show")
 def show_model(
-    model: Annotated[str, typer.Argument(help="Model id, alias, or Docker model reference.")] = DEFAULT_MODEL_ID,
-    compatibility: Annotated[bool, typer.Option("--compatibility", help="Include host hardware compatibility.")] = False,
+    model: Annotated[str, typer.Argument(help="Registered model id, catalog id, alias, or DMR reference.")] = DEFAULT_MODEL_ID,
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ):
-    """Show model catalog details."""
+    """Show stored model facts. Use `mn model doctor` for live checks."""
     try:
-        catalog = load_model_catalog()
-        entry = resolve_model_entry(model, catalog=catalog)
-        payload = _entry_payload(entry, installed=_model_installed(docker_model_name(entry)))
-        if compatibility:
-            payload["compatibility"] = assess_model_compatibility(entry).to_dict()
-            payload["hardware"] = detect_host_hardware().to_dict()
+        record = get_registered_model(model)
+        if record is not None:
+            payload = _stored_registered_model_payload(record)
+            payload["registration"] = record
+        else:
+            entry = resolve_model_entry(model, catalog=load_model_catalog())
+            payload = _available_model_payload(entry)
         if json_output:
-            console.print_json(data=payload)
+            record_result(payload)
             return
         _print_model_detail(payload)
     except Exception as exc:
-        handle_cli_error(exc, console, "model show")
+        _handle_model_error(exc, "model show")
         raise typer.Exit(1)
 
 
-@model_app.command(name="install")
-def install_model(
-    model: Annotated[str, typer.Argument(help="Model id, alias, or Docker model reference.")] = DEFAULT_MODEL_ID,
+@model_app.command(name="add")
+def add_model(
+    model: Annotated[str | None, typer.Argument(help="Catalog id or Docker Model Runner model reference.")] = None,
+    definition_file: Annotated[Path | None, typer.Option("--file", help="Provider model definition JSON file.")] = None,
     backend: Annotated[str, typer.Option("--backend", help="Backend: auto, llama.cpp, or vllm.")] = "auto",
-    context_size: Annotated[Optional[int], typer.Option("--context-size", help="Override model context size.")] = None,
-    force: Annotated[bool, typer.Option("--force", help="Install even when hardware compatibility fails.")] = False,
-    node: Annotated[Optional[str], typer.Option("--node", help="Install on a named runtime cluster node.")] = None,
-    local: Annotated[bool, typer.Option("--local", help="Force local Docker Model Runner install.")] = False,
+    context_size: Annotated[int | None, typer.Option("--context-size", help="Override model context size.")] = None,
+    force: Annotated[bool, typer.Option("--force", help="Add even when hardware compatibility fails.")] = False,
+    node: Annotated[str | None, typer.Option("--node", help="Add on a named runtime cluster node.")] = None,
+    local: Annotated[bool, typer.Option("--local", help="Force local Docker Model Runner placement.")] = False,
+    default: Annotated[bool, typer.Option("--default", help="Make the added model the highest-priority logical default.")] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ):
-    """Pull and start a Docker Model Runner model."""
+    """Add a DMR model or provider definition."""
     try:
+        if bool(model) == bool(definition_file):
+            raise ValueError("provide exactly one MODEL argument or --file <definition.json>")
+        if definition_file is not None:
+            if local or node or backend != "auto" or context_size is not None or force:
+                raise ValueError("DMR placement, backend, context, and force options cannot be used with --file")
+            _add_provider_definition(definition_file, json_output=json_output, make_default=default)
+            return
         if local and node:
             raise ValueError("--local and --node cannot be used together")
+        requested = str(model or "").strip()
+        if get_registered_model(requested) is not None:
+            raise ValueError(f"model {requested!r} is already registered; run 'mn model remove {requested}' before adding it again")
         catalog = load_model_catalog()
-        entry = resolve_model_entry(model, catalog=catalog)
-        selected_node = None if local else (node or _selected_model_install_node())
+        try:
+            entry = resolve_model_entry(requested, catalog=catalog)
+            cataloged = True
+        except KeyError:
+            entry = _uncataloged_dmr_entry(requested, backend=backend, context_size=context_size)
+            cataloged = False
+        target = docker_model_name(entry)
+        requested_node = "" if local else str(node or _selected_model_install_node() or "")
+        local_artifact_installed = _model_installed(target) if not requested_node else False
+        selected_node = None
+        if not local:
+            selected_node = requested_node
+            if not selected_node and not local_artifact_installed:
+                selected_node = _installed_cluster_model_node(target) or _automatic_model_install_node(entry)
         if selected_node:
             result = _install_model_on_cluster_node(
                 entry,
@@ -216,7 +274,21 @@ def install_model(
                 force=force,
             )
         else:
-            result = install_model_entry_with_progress(entry, backend=backend, context_size=context_size, force=force)
+            if local_artifact_installed:
+                compatibility_result = assess_model_compatibility(entry, backend=backend, force=force)
+                if not compatibility_result.ok:
+                    raise RuntimeError(compatibility_result.message)
+                result = {
+                    "entry": entry,
+                    "docker_model": target,
+                    "compatibility": compatibility_result.to_dict(),
+                    "transport": "existing",
+                    "reused": True,
+                }
+            elif json_output:
+                result = install_model_entry(entry, backend=backend, context_size=context_size, force=force)
+            else:
+                result = install_model_entry_with_progress(entry, backend=backend, context_size=context_size, force=force)
         compatibility = result["compatibility"]
         target = result["docker_model"]
         if not selected_node:
@@ -226,17 +298,70 @@ def install_model(
         # full inventory reconciliation again here can immediately replace that
         # fresh route with an older shared-status snapshot.
         if not selected_node:
-            _sync_installed_model_gateway_route(entry, result=result, node=None)
+            try:
+                _sync_installed_model_gateway_route(entry, result=result, node=None, strict=True)
+            except Exception as exc:
+                raise AppError(
+                    "MN_MODEL_ROUTE_FAILED",
+                    f"The DMR artifact for {entry.get('id')!r} is installed but route finalization failed; it remains unmanaged.",
+                    internal_message=str(exc),
+                    hint=f"Run 'mn model doctor {entry.get('id')}' after fixing the managed gateway.",
+                    cause=exc,
+                ) from exc
         _record_runtime_model_install(entry)
+        registration = dmr_registration(
+            entry,
+            selected_node=selected_node or _local_runtime_node_name() or "local",
+            cataloged=cataloged,
+        )
+        registry_snapshot = load_model_registry()
+        try:
+            added, registry_path = add_registered_models([registration])
+            if default:
+                added[0], registry_path = set_registered_default_model(added[0]["id"])
+                sync_litellm_gateway(restart=True)
+                cluster_results = _sync_default_model_across_cluster(
+                    restart=True,
+                    quiet=json_output,
+                )
+                if any(result.get("status") == "error" for result in cluster_results):
+                    raise RuntimeError(
+                        "the custom default could not be synchronized to every cluster gateway"
+                    )
+        except Exception as exc:
+            save_model_registry(registry_snapshot)
+            _sync_gateway_best_effort(restart=True, quiet=True)
+            _sync_default_model_across_cluster(restart=True, quiet=True)
+            raise AppError(
+                "MN_MODEL_REGISTRY_FAILED",
+                f"The DMR artifact for {entry.get('id')!r} is installed but registration failed; it remains unmanaged.",
+                internal_message=str(exc),
+                hint=f"Run 'mn model doctor {entry.get('id')}' after fixing the registry.",
+                cause=exc,
+            ) from exc
+        payload = {
+            "status": "ready",
+            "model": added[0],
+            "docker_model": target,
+            "node": selected_node or _local_runtime_node_name() or "local",
+            "reused": bool(result.get("reused") or result.get("status") == "ready"),
+            "registry": str(registry_path),
+            "default": bool(default),
+        }
+        if json_output:
+            record_result(payload)
+            return
         print_success_confirmation(
             console,
-            "Model install",
-            status="running",
+            "Model add",
+            status="ready",
             details=[
                 ("Model", entry.get("id")),
                 ("Docker model", target),
                 ("Backend", compatibility.get("backend")),
+                ("Node", payload["node"]),
                 ("Route", "remote-dmr" if selected_node else "local-litellm-gateway"),
+                ("Default", "yes" if default else "no"),
             ],
             next_steps=f"mn model doctor {entry.get('id')}",
         )
@@ -246,420 +371,789 @@ def install_model(
     except typer.Exit:
         raise
     except Exception as exc:
-        handle_cli_error(exc, console, "model install")
+        _handle_model_error(exc, "model add")
         raise typer.Exit(1)
+
+
+model_app.command(name="show")(show_model)
 
 
 @model_app.command(name="update")
 def update_model(
-    model: Annotated[Optional[str], typer.Argument(help="Model id, alias, or Docker model reference.")] = None,
-    all_models: Annotated[bool, typer.Option("--all", help="Update all installed catalog models.")] = False,
+    model: Annotated[str | None, typer.Argument(help="Registered model id.")] = None,
+    all_models: Annotated[bool, typer.Option("--all", help="Update all registered models.")] = False,
     force: Annotated[bool, typer.Option("--force", help="Update even when hardware compatibility fails.")] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ):
-    """Pull the latest model artifact and restart it."""
+    """Update a registered model from its source."""
     try:
-        catalog = load_model_catalog()
-        entries = list_model_entries(catalog) if all_models else [resolve_model_entry(model or DEFAULT_MODEL_ID, catalog=catalog)]
-        installed = _installed_model_names() if all_models else None
-        updated = 0
-        for entry in entries:
-            target = docker_model_name(entry)
-            if installed is not None and target not in installed:
-                continue
-            compatibility = assess_model_compatibility(entry, force=force)
-            if not compatibility.ok:
-                _print_compatibility(compatibility.to_dict())
-                raise typer.Exit(1)
-            _ensure_docker_model_cli()
-            _ensure_runner(compatibility.backend, compatibility.accelerator)
-            _docker(["model", "pull", target], timeout=900, stream=True)
-            _docker(["model", "run", "--detach", target], timeout=300)
-            record_manual_model_install(entry, backend=compatibility.backend)
-            _sync_installed_model_gateway_route(
-                entry,
-                result={
-                    "entry": entry,
-                    "docker_model": target,
-                    "compatibility": compatibility.to_dict(),
-                },
-                node=None,
-            )
-            _record_runtime_model_install(entry)
+        if bool(model) == bool(all_models):
+            raise ValueError("provide one registered MODEL or --all")
+        records = registered_model_records()
+        selected = records if all_models else [get_registered_model(str(model or ""))]
+        selected = [record for record in selected if isinstance(record, dict)]
+        if not selected:
+            raise ValueError(f"model is not registered: {model}")
+        results = []
+        provider_cache: dict[str, list[dict[str, Any]]] = {}
+        for record in selected:
+            if record.get("kind") == "provider":
+                results.append(_update_provider_registration(record, provider_cache=provider_cache))
+            else:
+                results.append(_update_dmr_registration(record, force=force, json_output=json_output))
+        payload = {"updated": len(results), "models": results}
+        if json_output:
+            record_result(payload)
+            return
+        for result in results:
             print_success_confirmation(
                 console,
                 "Model update",
-                status="running",
-                details=[("Model", entry.get("id")), ("Docker model", target), ("Backend", compatibility.backend)],
-                next_steps=f"mn model doctor {entry.get('id')}",
+                status="ready",
+                details=[("Model", result.get("id")), ("Kind", result.get("kind")), ("Node", result.get("node") or "")],
+                next_steps=f"mn model doctor {result.get('id')}",
             )
-            updated += 1
-        if all_models and updated == 0:
-            console.print("[yellow]No installed catalog models found to update.[/yellow]")
     except typer.Exit:
         raise
     except Exception as exc:
-        handle_cli_error(exc, console, "model update")
+        _handle_model_error(exc, "model update")
         raise typer.Exit(1)
 
 
 @model_app.command(name="remove")
 def remove_model(
-    model: Annotated[str, typer.Argument(help="Model id, alias, or Docker model reference.")],
-    force: Annotated[bool, typer.Option("--force", help="Force removal when Docker supports it.")] = False,
-    node: Annotated[Optional[str], typer.Option("--node", help="Remove this model route from a named runtime cluster node and reconcile all node gateways.")] = None,
+    model: Annotated[str, typer.Argument(help="Registered model id or unmanaged DMR reference.")],
+    force: Annotated[bool, typer.Option("--force", help="Remove a DMR model even when blueprint owners remain.")] = False,
+    keep_artifact: Annotated[bool, typer.Option("--keep-artifact", help="Unregister a DMR model without deleting its artifact.")] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Confirm removal without prompting.")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Preview removal without changing state.")] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ):
-    """Remove a Docker Model Runner model."""
+    """Remove a registered model or unmanaged DMR artifact."""
     try:
-        if node:
-            _remove_gateway_route_on_cluster_node(model, node=node, restart=True)
-            removed_remotes = _remove_remote_model_records_for_node(model, node=node)
-            remove_litellm_gateway_route(model)
-            for removed_remote in removed_remotes:
-                remove_litellm_gateway_route(str(removed_remote.get("name") or ""))
-                remove_litellm_gateway_route(str(removed_remote.get("model") or ""))
-                remove_litellm_gateway_route(str(removed_remote.get("api_model") or ""))
-            _sync_gateway_best_effort(restart=True)
-            print_success_confirmation(
-                console,
-                "Model route remove",
-                status="removed",
-                details={"Model": model, "Node": node},
-                next_steps="mn model list --installed",
-            )
-            return
-        try:
-            entry = resolve_model_entry(model)
-        except KeyError:
-            entry = None
-        if _is_proxy_entry(entry) or entry is None:
-            proxy_name = str(entry.get("id") or model) if entry else model
-            removed = remove_model_proxy(proxy_name)
-            if removed is not None or _is_proxy_entry(entry):
-                remove_litellm_gateway_route(proxy_name)
-                _remove_gateway_route_across_cluster(proxy_name, restart=True)
-                print_success_confirmation(
-                    console,
-                    "Model proxy",
-                    status="removed",
-                    details={"Model": proxy_name, "Backend": "proxy"},
-                    next_steps="mn model list --installed",
-                )
+        record = get_registered_model(model)
+        kind = str(record.get("kind") or "dmr") if record else "dmr"
+        if kind == "provider" and keep_artifact:
+            raise ValueError("--keep-artifact applies only to DMR models")
+        if dry_run:
+            payload = {
+                "status": "planned",
+                "id": str((record or {}).get("id") or model),
+                "kind": kind,
+                "artifact_removed": kind == "dmr" and not keep_artifact,
+            }
+            if json_output:
+                record_result(payload)
                 return
-        target = docker_model_name(entry) if entry else _resolve_or_raw_model(model)
-        removed_remotes = _remove_remote_model_records(model)
-        local_installed = model_installed(target)
-        if local_installed:
-            remove_model_ref(target, force=force)
-        remove_model_record(target)
-        remove_litellm_gateway_route(target)
-        if entry:
-            remove_litellm_gateway_route(str(entry.get("id") or ""))
-        for removed_remote in removed_remotes:
-            remove_litellm_gateway_route(str(removed_remote.get("name") or ""))
-            remove_litellm_gateway_route(str(removed_remote.get("model") or ""))
-            remove_litellm_gateway_route(str(removed_remote.get("api_model") or ""))
-        _sync_gateway_best_effort(restart=True)
-        reconcile_cluster_model_routes(restart=True)
+            print_success_confirmation(console, "Model remove dry run", status="planned", details={"Model": payload["id"], "Kind": kind})
+            return
+        require_confirmation(
+            console,
+            action="Model removal",
+            prompt=f"Remove model {model!r}?",
+            yes=yes,
+        )
+        if kind == "provider":
+            snapshot = load_model_registry()
+            removed, registry_path = remove_registered_model(model)
+            if removed is None:
+                raise ValueError(f"model is not registered: {model}")
+            try:
+                remove_litellm_gateway_route(str(removed.get("id") or model))
+                sync_litellm_gateway(restart=True)
+                cluster_results = _remove_gateway_route_across_cluster(
+                    str(removed.get("id") or model),
+                    restart=True,
+                    quiet=json_output,
+                )
+                cluster_results.extend(
+                    _sync_external_litellm_config_across_cluster(
+                        {"model_list": []},
+                        source_path=Path(str(removed.get("definition_path") or default_model_registry_path())),
+                        restart=True,
+                        quiet=json_output,
+                    )
+                )
+                if any(result.get("status") == "error" for result in cluster_results):
+                    raise RuntimeError("provider route removal could not be synchronized to every cluster node")
+            except Exception as exc:
+                save_model_registry(snapshot)
+                _sync_gateway_best_effort(restart=True, quiet=True)
+                if isinstance(removed.get("litellm_entry"), dict):
+                    _sync_external_litellm_config_across_cluster(
+                        {"model_list": [removed["litellm_entry"]]},
+                        source_path=Path(str(removed.get("definition_path") or default_model_registry_path())),
+                        restart=True,
+                        quiet=True,
+                    )
+                raise AppError(
+                    "MN_MODEL_ROUTE_CLEANUP_FAILED",
+                    f"Provider model {removed.get('id')!r} could not be removed from every managed gateway; its registration was restored.",
+                    internal_message=str(exc),
+                    hint=f"Run 'mn model doctor {removed.get('id')}' and retry removal.",
+                    cause=exc,
+                ) from exc
+            payload = {"status": "removed", "id": removed["id"], "kind": "provider", "artifact_removed": False, "registry": str(registry_path)}
+        else:
+            entry = _dmr_entry_for_record_or_ref(record, model)
+            target = docker_model_name(entry)
+            was_default = bool((record or {}).get("default"))
+            owners = _model_owner_ids(target)
+            if owners and not force:
+                raise ValueError(f"model is still owned by blueprints: {', '.join(owners)}; use --force to remove it")
+            node = str((record or {}).get("selected_node") or "")
+            artifact_removed = False
+            if not keep_artifact:
+                if node and node not in {"local", _local_runtime_node_name()}:
+                    _remove_runtime_model_on_cluster_node(target, node=node, force=force)
+                elif _model_installed(target):
+                    remove_model_ref(target, force=force)
+                artifact_removed = True
+            registry_snapshot = load_model_registry()
+            try:
+                remove_model_record(target)
+                remove_litellm_gateway_route(target)
+                remove_litellm_gateway_route(str(entry.get("id") or model))
+                _remove_remote_model_records(model, node=node or None)
+                if record is not None:
+                    remove_registered_model(str(record.get("id") or model))
+                sync_litellm_gateway(restart=True)
+                reconcile_cluster_model_routes(restart=True)
+                if was_default:
+                    cluster_results = _sync_default_model_across_cluster(
+                        restart=True,
+                        quiet=json_output,
+                    )
+                    if any(result.get("status") == "error" for result in cluster_results):
+                        raise RuntimeError(
+                            "the updated default could not be synchronized to every cluster gateway"
+                        )
+            except Exception as exc:
+                save_model_registry(registry_snapshot)
+                _sync_gateway_best_effort(restart=True, quiet=True)
+                if was_default:
+                    _sync_default_model_across_cluster(restart=True, quiet=True)
+                raise AppError(
+                    "MN_MODEL_ROUTE_CLEANUP_FAILED",
+                    f"Route cleanup failed for {entry.get('id')!r} after its DMR artifact was {'removed' if artifact_removed else 'retained'}; the registration is degraded and retained for retry.",
+                    internal_message=str(exc),
+                    hint=f"Run 'mn model doctor {entry.get('id')}' and retry removal.",
+                    cause=exc,
+                ) from exc
+            payload = {"status": "removed", "id": str((record or {}).get("id") or model), "kind": "dmr", "artifact_removed": artifact_removed, "artifact": target, "node": node}
+        if json_output:
+            record_result(payload)
+            return
         print_success_confirmation(
             console,
             "Model remove",
             status="removed",
-            details={"Model": target, "Routes cleared": str(len(removed_remotes))},
-            next_steps="mn model list --installed",
-        )
-    except Exception as exc:
-        handle_cli_error(exc, console, "model remove")
-        raise typer.Exit(1)
-
-
-@model_app.command(name="proxy")
-def proxy_model(
-    config: Annotated[Path, typer.Option("--config", help="Proxy config file. Supports LiteLLM model_list or MirrorNeuron provider JSON.")],
-    port: Annotated[int, typer.Option("--port", help="Host port for the LiteLLM proxy.")] = 4000,
-    host: Annotated[str, typer.Option("--host", help="Host bind address for the LiteLLM proxy.")] = "127.0.0.1",
-    image: Annotated[str, typer.Option("--image", help="LiteLLM Docker image.")] = "ghcr.io/berriai/litellm:main-latest",
-    container_name: Annotated[Optional[str], typer.Option("--container-name", help="Docker container name.")] = None,
-    no_start: Annotated[bool, typer.Option("--no-start", help="Only generate config and register proxy models.")] = False,
-    replace: Annotated[bool, typer.Option("--replace", help="Replace an existing proxy container with the same name.")] = False,
-    standalone: Annotated[bool, typer.Option("--standalone", help="Use the legacy standalone LiteLLM container instead of the runtime gateway.")] = False,
-    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
-):
-    """Create a LiteLLM proxy and register its models as installed runtime models."""
-    try:
-        config_path = config.expanduser().resolve()
-        proxy_spec = _build_proxy_spec(config_path, host=host, port=port)
-        if standalone:
-            resolved_container = container_name or proxy_spec["container_name"]
-            generated_config = _write_litellm_proxy_config(proxy_spec["litellm_config"], resolved_container)
-            if not no_start:
-                _start_litellm_proxy(
-                    generated_config,
-                    container_name=resolved_container,
-                    host=host,
-                    port=port,
-                    image=image,
-                    env_names=proxy_spec["env_names"],
-                    replace=replace,
-                )
-            base_url = f"http://{host}:{port}/v1"
-            service_name = resolved_container
-            resolved_image = image
-        else:
-            gateway = sync_litellm_gateway(
-                external_litellm_config=proxy_spec["litellm_config"],
-                external_source_path=config_path,
-                restart=not no_start,
-            )
-            _sync_external_litellm_config_across_cluster(
-                proxy_spec["litellm_config"],
-                source_path=config_path,
-                restart=not no_start,
-                quiet=json_output,
-            )
-            generated_config = Path(str(gateway["config_path"]))
-            base_url = litellm_gateway_internal_api_base()
-            service_name = "mn-litellm-proxy"
-            resolved_container = "mn-litellm-proxy"
-            resolved_image = "mirror-neuron-core:latest"
-
-        proxies = [
-            upsert_model_proxy(
-                model["id"],
-                display_name=model.get("name"),
-                source_model=model.get("source_model"),
-                api_model=model["id"],
-                base_url=base_url,
-                config_path=config_path,
-                litellm_config_path=generated_config,
-                container_name=resolved_container,
-                image=resolved_image,
-                port=port if standalone else 4000,
-                host=host if standalone else "mn-litellm-proxy",
-            )
-            for model in proxy_spec["models"]
-        ]
-        payload = {
-            "status": "registered" if no_start else "running",
-            "models": proxies,
-            "container_name": resolved_container,
-            "service": service_name,
-            "base_url": base_url,
-            "config": str(generated_config),
-            "ledger": str(default_model_proxies_path()),
-        }
-        if json_output:
-            console.print_json(data=payload)
-            return
-        print_success_confirmation(
-            console,
-            "Model proxy",
-            status=payload["status"],
-            details=[
-                ("Models", ", ".join(proxy["id"] for proxy in proxies)),
-                ("Backend", "proxy"),
-                ("Base URL", base_url),
-                ("Config", str(generated_config)),
-            ],
-            next_steps="mn model list --installed",
+            details={"Model": payload["id"], "Kind": payload["kind"], "Artifact removed": str(payload["artifact_removed"]).lower()},
+            next_steps="mn model list",
         )
     except typer.Exit:
         raise
     except Exception as exc:
-        handle_cli_error(exc, console, "model proxy")
+        _handle_model_error(exc, "model remove")
         raise typer.Exit(1)
 
 
 @model_app.command(name="doctor")
 def doctor_model(
-    model: Annotated[str, typer.Argument(help="Model id, alias, or Docker model reference.")] = DEFAULT_MODEL_ID,
+    model: Annotated[str, typer.Argument(help="Registered model id, catalog id, or DMR reference.")] = DEFAULT_MODEL_ID,
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
 ):
-    """Check Docker Model Runner, model install state, and host compatibility."""
+    """Check model definition, runtime state, and route health."""
     try:
-        entry = resolve_model_entry(model)
+        record = get_registered_model(model)
+        if record is not None and record.get("kind") == "provider":
+            payload = _doctor_provider_registration(record)
+            if json_output:
+                record_result(payload)
+                return
+            _print_provider_doctor(payload)
+            if not payload.get("ok"):
+                raise typer.Exit(1)
+            return
+        entry = _dmr_entry_for_record_or_ref(record, model)
         target = docker_model_name(entry)
-        compatibility = assess_model_compatibility(entry)
-        status = _docker_status()
-        installed = _model_installed(target)
-        endpoint_ok = _endpoint_responds()
+        selected_node = str((record or {}).get("selected_node") or _local_runtime_node_name() or "local")
+        local_node = _local_runtime_node_name()
+        remote_selected = selected_node not in {"", "local", local_node}
+        inventory: list[dict[str, Any]] = []
+        inventory_error = ""
+        if remote_selected:
+            try:
+                node_endpoint = next(
+                    endpoint
+                    for endpoint in _cluster_runtime_status_endpoints(quiet=True)
+                    if str(endpoint.get("node_name") or "") == selected_node
+                )
+                inventory = _runtime_model_inventory_for_node(node_endpoint)
+                installed = any(
+                    docker_model_match_keys(target)
+                    & _model_payload_match_keys(candidate)
+                    for candidate in inventory
+                )
+                node_status = str((node_endpoint.get("node") or {}).get("status") or "healthy").lower()
+                runner_running = node_status in {"healthy", "joining"}
+                endpoint_ok = True
+                status = {"node": selected_node, "status": node_status, "inventory": inventory}
+                hardware_payload = (node_endpoint.get("node") or {}).get("resources") or node_endpoint.get("node") or {}
+                compatibility_payload = _remote_node_compatibility(
+                    entry,
+                    selected_node=selected_node,
+                    node=node_endpoint.get("node") or {},
+                )
+            except (RuntimeError, StopIteration) as exc:
+                installed = False
+                runner_running = False
+                endpoint_ok = False
+                inventory_error = str(exc)
+                status = {"node": selected_node, "status": "unavailable", "inventory": []}
+                hardware_payload = {}
+                compatibility_payload = {
+                    "ok": False,
+                    "status": "unavailable",
+                    "message": f"Could not inspect selected runtime node {selected_node!r}.",
+                    "help": "Restore the node and rerun model doctor.",
+                }
+        else:
+            compatibility = assess_model_compatibility(entry)
+            compatibility_payload = compatibility.to_dict()
+            status = _docker_status()
+            installed = _model_installed(target)
+            endpoint_ok = _endpoint_responds()
+            runner_running = bool(status.get("running")) or "running" in json.dumps(status).lower()
+            hardware_payload = detect_host_hardware().to_dict()
         gateway_health = litellm_gateway_health()
         gateway_config = build_litellm_gateway_config()
         gateway_config_file = validate_litellm_gateway_config_file()
-        runner_running = bool(status.get("running")) or "running" in json.dumps(status).lower()
+        routed = bool(
+            _model_route_keys(entry)
+            & {str(name) for name in gateway_health.get("models") or []}
+        )
         payload = {
-            "model": _entry_payload(entry, installed=installed),
-            "compatibility": compatibility.to_dict(),
+            "model": {
+                **_entry_payload(entry, installed=installed),
+                "kind": "dmr",
+                "registered": record is not None,
+                "verification": str((record or {}).get("verification") or entry.get("verification") or "catalog"),
+                "node": selected_node,
+            },
+            "compatibility": compatibility_payload,
             "docker_model_runner": {
                 "status": status,
                 "running": runner_running,
-                "endpoint": DOCKER_MODEL_RUNNER_HOST_API_BASE,
+                "endpoint": DOCKER_MODEL_RUNNER_HOST_API_BASE if not remote_selected else selected_node,
                 "endpoint_ok": endpoint_ok,
+                "inventory_error": inventory_error,
             },
             "litellm_gateway": {
                 "service": "mn-litellm-proxy",
                 "endpoint": gateway_health["url"].removesuffix("/models"),
                 "endpoint_ok": bool(gateway_health.get("ok")),
+                "routed": routed,
                 "models": gateway_health.get("models") or [],
                 "config_model_count": int(gateway_config_file.get("model_count") or len(gateway_config.get("model_list") or [])),
                 "config_ok": bool(gateway_config_file.get("ok")) and isinstance(gateway_config.get("model_list"), list),
                 "config_path": gateway_config_file.get("path"),
                 "config_error": gateway_config_file.get("error"),
             },
-            "hardware": detect_host_hardware().to_dict(),
-            "ok": compatibility.ok and installed and runner_running and endpoint_ok and bool(gateway_health.get("ok")),
+            "hardware": hardware_payload,
+            "ok": bool(
+                (compatibility_payload.get("ok") is not False)
+                and installed
+                and runner_running
+                and endpoint_ok
+                and gateway_health.get("ok")
+                and routed
+            ),
         }
         if json_output:
-            console.print_json(data=payload)
+            record_result(payload)
             return
         _print_doctor(payload)
+        if not payload.get("ok"):
+            raise typer.Exit(1)
+    except typer.Exit:
+        raise
     except Exception as exc:
-        handle_cli_error(exc, console, "model doctor")
+        _handle_model_error(exc, "model doctor")
         raise typer.Exit(1)
 
 
-@remote_app.command(name="add")
-def add_remote_model(
-    model: Annotated[str, typer.Argument(help="Model id, alias, or Docker/OpenAI model reference.")],
-    base_url: Annotated[str, typer.Option("--base-url", help="OpenAI-compatible base URL for this model.")],
-    name: Annotated[Optional[str], typer.Option("--name", help="Stable remote endpoint name.")] = None,
-    api_model: Annotated[Optional[str], typer.Option("--api-model", help="Model name to pass to the remote API.")] = None,
-    api_key: Annotated[str, typer.Option("--api-key", help="API key for the remote endpoint.")] = "not-needed",
-    node: Annotated[Optional[str], typer.Option("--node", help="Optional node label for display/advertisement.")] = None,
-    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
-):
-    """Declare an already-running remote model endpoint."""
+def _cluster_managed_remote_records() -> list[dict[str, Any]]:
+    return [
+        record
+        for record in (load_model_remotes().get("remotes") or {}).values()
+        if isinstance(record, dict) and str(record.get("managed_by") or "") == "mirror-neuron-cluster"
+    ]
+
+
+def _remote_node_compatibility(
+    entry: dict[str, Any],
+    *,
+    selected_node: str,
+    node: dict[str, Any],
+) -> dict[str, Any]:
+    if str(entry.get("verification") or "").lower() == "unverified":
+        return {
+            "ok": True,
+            "status": "unverified_custom_model",
+            "message": (
+                f"{selected_node} is available, but {entry.get('id')!r} has no catalog "
+                "requirements to verify against its reported resources."
+            ),
+            "help": "Docker Model Runner determines compatibility for this custom model during add/update.",
+        }
+    gpu_requirement = model_cluster_gpu_requirement(entry)
+    if gpu_requirement is None:
+        return {
+            "ok": True,
+            "status": "compatible",
+            "message": f"{selected_node} is available and this catalog model has no node-specific GPU requirement.",
+        }
+    report = run_hardware_requirements_validation(
+        {"requirements": {"gpu": gpu_requirement}},
+        resource_report={"nodes": [{**node, "name": selected_node}]},
+    )
+    matching_nodes = {
+        str(name)
+        for result in report.get("results") or []
+        if isinstance(result, dict)
+        for name in result.get("matching_nodes") or []
+    }
+    compatible = bool(report.get("ok") and selected_node in matching_nodes)
+    return {
+        "ok": compatible,
+        "status": "compatible" if compatible else "incompatible",
+        "message": (
+            f"{selected_node} satisfies the catalog hardware requirement."
+            if compatible
+            else f"{selected_node} does not satisfy the catalog hardware requirement."
+        ),
+        "help": "Run model update to select a compatible node." if not compatible else "",
+        "requirement": gpu_requirement,
+    }
+
+
+def _registered_model_payload(
+    record: dict[str, Any],
+    *,
+    installed_models: set[str],
+    remote_records: list[dict[str, Any]],
+    routed_names: set[str],
+) -> dict[str, Any]:
+    model_id = str(record.get("id") or "")
+    kind = str(record.get("kind") or "")
+    route_keys = {
+        str(record.get("id") or ""),
+        str(record.get("model") or ""),
+        str(record.get("api_model") or ""),
+    }
+    routed = bool(
+        {key for value in route_keys if value for key in docker_model_match_keys(value)}
+        & {key for value in routed_names for key in docker_model_match_keys(value)}
+    )
+    if kind == "provider":
+        installed = False
+        node = ""
+        state = "ready" if routed else "degraded"
+    else:
+        installed_keys = {key for installed_model in installed_models for key in docker_model_match_keys(installed_model)}
+        installed = bool(docker_model_match_keys(str(record.get("model") or "")) & installed_keys)
+        remote_installations = _remote_installations_for_model(record, remote_records)
+        installed = installed or bool(remote_installations)
+        node = str(record.get("selected_node") or (remote_installations[0].get("node") if remote_installations else "") or _local_runtime_node_name() or "local")
+        state = "ready" if installed and routed else "degraded"
+    return {
+        "id": model_id,
+        "name": record.get("name") or model_id,
+        "kind": kind,
+        "source": record.get("source") or "",
+        "state": state,
+        "registered": True,
+        "installed": installed,
+        "routed": routed,
+        "node": node,
+        "model": record.get("model") or model_id,
+        "docker_model": record.get("model") or model_id if kind == "dmr" else None,
+        "api_model": record.get("api_model") or model_id,
+        "backend": record.get("backend") or "",
+        "cataloged": bool(record.get("cataloged")),
+        "verification": record.get("verification") or "unverified",
+        "default": bool(record.get("default")),
+    }
+
+
+def _stored_registered_model_payload(record: dict[str, Any]) -> dict[str, Any]:
+    """Render registry facts without turning ``show`` into a health probe.
+
+    A successful add/update records a ready registration. Whether its DMR
+    artifact or gateway route is still live is deliberately left unknown here;
+    ``model list`` discovers inventory and ``model doctor`` performs the deep
+    checks.
+    """
+
+    model_id = str(record.get("id") or "")
+    kind = str(record.get("kind") or "")
+    return {
+        "id": model_id,
+        "name": record.get("name") or model_id,
+        "kind": kind,
+        "source": record.get("source") or "",
+        "state": str(record.get("state") or "ready"),
+        "registered": True,
+        "installed": None,
+        "routed": None,
+        "node": str(record.get("selected_node") or "") if kind == "dmr" else "",
+        "model": record.get("model") or model_id,
+        "docker_model": (record.get("model") or model_id) if kind == "dmr" else None,
+        "api_model": record.get("api_model") or model_id,
+        "backend": record.get("backend") or "",
+        "cataloged": bool(record.get("cataloged")),
+        "verification": record.get("verification") or "unverified",
+        "default": bool(record.get("default")),
+        "created_at": record.get("created_at") or "",
+        "updated_at": record.get("updated_at") or "",
+    }
+
+
+def _unmanaged_dmr_payload(model: str, *, routed_names: set[str]) -> dict[str, Any]:
+    routed = bool(docker_model_match_keys(model) & {key for name in routed_names for key in docker_model_match_keys(name)})
+    entry = next(
+        (
+            candidate
+            for candidate in list_model_entries(load_model_catalog())
+            if docker_model_match_keys(docker_model_name(candidate)) & docker_model_match_keys(model)
+        ),
+        None,
+    )
+    model_id = str((entry or {}).get("id") or model)
+    return {
+        "id": model_id,
+        "name": str((entry or {}).get("name") or model_id),
+        "kind": "dmr",
+        "source": "docker_model_runner",
+        "state": "unmanaged",
+        "registered": False,
+        "installed": True,
+        "routed": routed,
+        "node": _local_runtime_node_name() or "local",
+        "model": model,
+        "docker_model": model,
+        "api_model": model,
+        "backend": str((entry or {}).get("backend") or "unknown"),
+        "cataloged": entry is not None,
+        "verification": str((entry or {}).get("verification") or ("catalog" if entry else "unverified")),
+        "default": False,
+    }
+
+
+def _unmanaged_remote_dmr_payload(remote: dict[str, Any], *, routed_names: set[str]) -> dict[str, Any]:
+    model = str(remote.get("model") or remote.get("api_model") or "").strip()
+    entry = next(
+        (
+            candidate
+            for candidate in list_model_entries(load_model_catalog())
+            if docker_model_match_keys(docker_model_name(candidate)) & docker_model_match_keys(model)
+        ),
+        None,
+    )
+    model_id = str((entry or {}).get("id") or remote.get("cluster_model_id") or remote.get("name") or model)
+    route_keys = {
+        model_id,
+        model,
+        str(remote.get("api_model") or ""),
+        str(remote.get("name") or ""),
+    }
+    routed = bool(
+        {key for value in route_keys if value for key in docker_model_match_keys(value)}
+        & {key for value in routed_names for key in docker_model_match_keys(value)}
+    )
+    return {
+        "id": model_id,
+        "name": str((entry or {}).get("name") or model_id),
+        "kind": "dmr",
+        "source": "docker_model_runner",
+        "state": "unmanaged",
+        "registered": False,
+        "installed": True,
+        "routed": routed,
+        "node": str(remote.get("node") or "remote"),
+        "model": model,
+        "docker_model": model,
+        "api_model": str(remote.get("api_model") or model),
+        "backend": str((entry or {}).get("backend") or "unknown"),
+        "cataloged": entry is not None,
+        "verification": str((entry or {}).get("verification") or ("catalog" if entry else "unverified")),
+        "default": False,
+    }
+
+
+def _available_model_payload(entry: dict[str, Any]) -> dict[str, Any]:
+    provider = str(entry.get("provider") or "docker_model_runner")
+    kind = "provider" if provider == "litellm_proxy" else "dmr"
+    return {
+        "id": str(entry.get("id") or entry.get("model") or ""),
+        "name": entry.get("name") or entry.get("id") or entry.get("model"),
+        "kind": kind,
+        "source": "catalog",
+        "state": "available",
+        "registered": False,
+        "installed": False,
+        "routed": False,
+        "node": "",
+        "model": entry.get("model") or "",
+        "api_model": entry.get("api_model") or entry.get("model") or "",
+        "backend": entry.get("backend") or "",
+        "cataloged": True,
+        "default": False,
+        "verification": entry.get("verification") or "catalog",
+        "requirements": entry.get("requirements") or {},
+    }
+
+
+def _uncataloged_dmr_entry(model: str, *, backend: str, context_size: int | None) -> dict[str, Any]:
+    requested = str(model or "").strip()
+    if not requested or any(character.isspace() for character in requested) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9][A-Za-z0-9._-]*)?", requested):
+        raise ValueError("unknown models must use a valid Docker Model Runner or Hugging Face reference")
+    target = docker_model_name({"id": requested, "model": requested})
+    return {
+        "id": requested,
+        "name": requested,
+        "provider": "docker_model_runner",
+        "model": target,
+        "api_model": target,
+        "backend": "llama.cpp" if backend == "auto" else backend,
+        "backends": ["llama.cpp" if backend == "auto" else backend],
+        "context_size": context_size,
+        "requirements": {},
+        "cataloged": False,
+        "verification": "unverified",
+        "risk_assumed": True,
+        "source_model": requested,
+    }
+
+
+def _add_provider_definition(
+    definition_file: Path,
+    *,
+    json_output: bool,
+    make_default: bool = False,
+) -> None:
+    records = load_provider_definition(definition_file)
+    if make_default and len(records) != 1:
+        raise ValueError("--default requires a provider definition containing exactly one model")
+    conflicts = sorted(
+        str(record.get("id") or "")
+        for record in records
+        if get_registered_model(str(record.get("id") or "")) is not None
+    )
+    if conflicts:
+        commands = ", ".join(f"mn model remove {model_id}" for model_id in conflicts)
+        raise ValueError(
+            f"provider model IDs are already registered: {', '.join(conflicts)}; run {commands} before adding the replacement"
+        )
+    snapshot = load_model_registry()
+    added, registry_path = add_registered_models(records)
+    if make_default:
+        added[0], registry_path = set_registered_default_model(added[0]["id"])
+    litellm_config = {"model_list": [record["litellm_entry"] for record in added]}
     try:
-        try:
-            entry = resolve_model_entry(model)
-            runtime_model = docker_model_name(entry)
-            resolved_api_model = api_model or str(entry.get("api_model") or runtime_model)
-            remote_name = name or str(entry.get("id") or runtime_model).replace("/", "-").replace(":", "-")
-        except Exception:
-            runtime_model = model
-            resolved_api_model = api_model or model
-            remote_name = name or model.replace("/", "-").replace(":", "-")
-        remote = upsert_model_remote(
-            remote_name,
-            runtime_model,
-            base_url,
-            api_key=api_key,
-            api_model=resolved_api_model,
+        sync_litellm_gateway(restart=True)
+        cluster_results = _sync_external_litellm_config_across_cluster(
+            litellm_config,
+            source_path=definition_file.expanduser().resolve(),
+            restart=True,
+            quiet=json_output,
+        )
+        failed = [result for result in cluster_results if result.get("status") == "error"]
+        if failed:
+            raise RuntimeError("provider definition could not be synchronized to every cluster node")
+    except Exception as exc:
+        save_model_registry(snapshot)
+        _sync_gateway_best_effort(restart=True, quiet=True)
+        for record in added:
+            _remove_gateway_route_across_cluster(str(record.get("id") or ""), restart=True, quiet=True)
+        _sync_external_litellm_config_across_cluster(
+            {"model_list": []},
+            source_path=definition_file.expanduser().resolve(),
+            restart=True,
+            quiet=True,
+        )
+        raise AppError(
+            "MN_MODEL_GATEWAY_SYNC_FAILED",
+            "The provider definition could not be synchronized to every managed gateway; registry and gateway state were restored.",
+            internal_message=str(exc),
+            hint="Check managed gateway health and add the provider definition again.",
+            cause=exc,
+        ) from exc
+    payload = {
+        "status": "ready",
+        "models": [
+            {"id": record["id"], "kind": "provider", "state": "ready", "source": record["source"]}
+            for record in added
+        ],
+        "registry": str(registry_path),
+        "definition": str(definition_file.expanduser().resolve()),
+        "default": added[0]["id"] if make_default else None,
+    }
+    if json_output:
+        record_result(payload)
+        return
+    print_success_confirmation(
+        console,
+        "Model add",
+        status="ready",
+        details=[
+            ("Models", ", ".join(record["id"] for record in added)),
+            ("Kind", "provider"),
+            ("Gateway", "managed"),
+            ("Default", added[0]["id"] if make_default else "no"),
+        ],
+        next_steps="mn model list",
+    )
+
+
+def _update_provider_registration(record: dict[str, Any], *, provider_cache: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+    path = str(record.get("definition_path") or "")
+    if not path:
+        raise ValueError(f"provider model {record.get('id')!r} has no stored definition path")
+    if path not in provider_cache:
+        provider_cache[path] = load_provider_definition(path)
+    records = provider_cache[path]
+    replacement = next((candidate for candidate in records if candidate.get("id") == record.get("id")), None)
+    if replacement is None:
+        raise ValueError(f"provider definition no longer declares model {record.get('id')!r}")
+    snapshot = load_model_registry()
+    replacement["created_at"] = record.get("created_at")
+    updated, _path = replace_registered_model(replacement)
+    try:
+        sync_litellm_gateway(restart=True)
+        cluster_results = _sync_external_litellm_config_across_cluster(
+            {"model_list": [updated["litellm_entry"]]},
+            source_path=Path(path),
+            restart=True,
+            quiet=True,
+        )
+        if any(result.get("status") == "error" for result in cluster_results):
+            raise RuntimeError("provider update could not be synchronized to every cluster node")
+    except Exception as exc:
+        save_model_registry(snapshot)
+        _sync_gateway_best_effort(restart=True, quiet=True)
+        if isinstance(record.get("litellm_entry"), dict):
+            _sync_external_litellm_config_across_cluster(
+                {"model_list": [record["litellm_entry"]]},
+                source_path=Path(path),
+                restart=True,
+                quiet=True,
+            )
+        raise AppError(
+            "MN_MODEL_GATEWAY_SYNC_FAILED",
+            f"Provider model {record.get('id')!r} could not be updated on every managed gateway; its previous registration was restored.",
+            internal_message=str(exc),
+            hint=f"Run 'mn model doctor {record.get('id')}' after fixing the managed gateway.",
+            cause=exc,
+        ) from exc
+    return {"id": updated["id"], "kind": "provider", "node": "", "state": "ready"}
+
+
+def _update_dmr_registration(record: dict[str, Any], *, force: bool, json_output: bool) -> dict[str, Any]:
+    entry = _dmr_entry_for_record_or_ref(record, str(record.get("id") or ""))
+    node = str(record.get("selected_node") or "")
+    if node and node not in {"local", _local_runtime_node_name()}:
+        result = _install_model_on_cluster_node(
+            entry,
             node=node,
+            backend=str(record.get("backend") or "auto"),
+            context_size=record.get("context_size"),
+            force=force,
+            update=True,
         )
-        _sync_gateway_best_effort(
-            runtime_endpoints={
-                remote["model"]: {
-                    "provider": remote.get("provider") or "docker_model_runner",
-                    "model": remote.get("api_model") or remote.get("model"),
-                    "runtime_model": remote.get("model") or remote.get("api_model"),
-                    "api_model": remote.get("api_model") or remote.get("model"),
-                    "api_base": remote.get("base_url"),
-                    "api_key": remote.get("api_key") or "not-needed",
-                    "node": remote.get("node") or "",
-                    "source": "manual-remote",
-                }
-            },
-            restart=True,
-            quiet=json_output,
-        )
-        _sync_gateway_runtime_endpoints_across_cluster(
-            {
-                remote["model"]: {
-                    "provider": remote.get("provider") or "docker_model_runner",
-                    "model": remote.get("api_model") or remote.get("model"),
-                    "runtime_model": remote.get("model") or remote.get("api_model"),
-                    "api_model": remote.get("api_model") or remote.get("model"),
-                    "api_base": remote.get("base_url"),
-                    "api_key": remote.get("api_key") or "not-needed",
-                    "node": remote.get("node") or "",
-                    "source": "manual-remote",
-                }
-            },
-            restart=True,
-            quiet=json_output,
-        )
-        payload = {"remote": remote, "path": str(default_model_remotes_path())}
-        if json_output:
-            console.print_json(data=payload)
-            return
-        print_success_confirmation(
-            console,
-            "Remote model",
-            status="registered",
-            details=[
-                ("Name", remote["name"]),
-                ("Model", remote["model"]),
-                ("API base", remote["base_url"]),
-            ],
-            next_steps="mn model remote list",
-        )
-    except Exception as exc:
-        handle_cli_error(exc, console, "model remote add")
-        raise typer.Exit(1)
+    else:
+        result = install_model_entry(entry, backend=str(record.get("backend") or "auto"), context_size=record.get("context_size"), force=force)
+        record_manual_model_install(entry, backend=str(result.get("compatibility", {}).get("backend") or record.get("backend") or "auto"))
+        try:
+            _sync_installed_model_gateway_route(entry, result=result, node=None, strict=True)
+        except Exception as exc:
+            raise AppError(
+                "MN_MODEL_ROUTE_FAILED",
+                f"DMR model {record.get('id')!r} was updated but route reconciliation failed.",
+                internal_message=str(exc),
+                hint=f"Run 'mn model doctor {record.get('id')}' and retry the update.",
+                cause=exc,
+            ) from exc
+    replacement = dmr_registration(
+        entry,
+        selected_node=node or _local_runtime_node_name() or "local",
+        cataloged=bool(record.get("cataloged")),
+        verification=str(record.get("verification") or "unverified"),
+    )
+    replacement["created_at"] = record.get("created_at")
+    replace_registered_model(replacement)
+    return {"id": replacement["id"], "kind": "dmr", "node": replacement["selected_node"], "state": "ready"}
 
 
-@remote_app.command(name="list")
-def list_remote_models(
-    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
-):
-    """List declared remote model endpoints."""
+def _dmr_entry_for_record_or_ref(record: dict[str, Any] | None, model: str) -> dict[str, Any]:
+    if isinstance(record, dict):
+        if record.get("kind") != "dmr":
+            raise ValueError(f"model {model!r} is not a DMR model")
+        definition = record.get("definition")
+        if isinstance(definition, dict):
+            return dict(definition)
+        return {"id": record.get("id"), "provider": "docker_model_runner", "model": record.get("model"), "api_model": record.get("api_model")}
     try:
-        ledger = load_model_remotes()
-        remotes = list((ledger.get("remotes") or {}).values())
-        payload = {"remotes": remotes, "path": str(default_model_remotes_path())}
-        if json_output:
-            console.print_json(data=payload)
-            return
-        table = Table(title="Remote model endpoints")
-        table.add_column("Name")
-        table.add_column("Model")
-        table.add_column("API model")
-        table.add_column("Base URL")
-        for remote in remotes:
-            table.add_row(
-                str(remote.get("name") or ""),
-                str(remote.get("model") or ""),
-                str(remote.get("api_model") or ""),
-                str(remote.get("base_url") or ""),
-            )
-        console.print(table)
-    except Exception as exc:
-        handle_cli_error(exc, console, "model remote list")
-        raise typer.Exit(1)
+        entry = resolve_model_entry(model)
+    except KeyError:
+        entry = _uncataloged_dmr_entry(model, backend="auto", context_size=None)
+    return entry
 
 
-@remote_app.command(name="remove")
-def remove_remote_model(
-    name: Annotated[str, typer.Argument(help="Remote endpoint name.")],
-    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
-):
-    """Remove a declared remote model endpoint."""
-    try:
-        removed = remove_model_remote(name)
-        remove_litellm_gateway_route(name)
-        if removed:
-            remove_litellm_gateway_route(str(removed.get("model") or ""))
-        _sync_gateway_best_effort(restart=True, quiet=json_output)
-        _remove_gateway_route_across_cluster(name, restart=True, quiet=json_output)
-        if removed:
-            _remove_gateway_route_across_cluster(str(removed.get("model") or ""), restart=True, quiet=json_output)
-        payload = {"removed": removed, "path": str(default_model_remotes_path())}
-        if json_output:
-            console.print_json(data=payload)
-            return
-        if removed:
-            print_success_confirmation(
-                console,
-                "Remote model",
-                status="removed",
-                details=[("Name", removed.get("name")), ("Model", removed.get("model"))],
-                next_steps="mn model remote list",
-            )
-        else:
-            console.print(f"[yellow]Remote model endpoint {name!r} was not registered.[/yellow]")
-    except Exception as exc:
-        handle_cli_error(exc, console, "model remote remove")
-        raise typer.Exit(1)
+def _model_owner_ids(model: str) -> list[str]:
+    wanted = docker_model_match_keys(model)
+    for key, record in (load_model_ownership().get("models") or {}).items():
+        if not isinstance(record, dict):
+            continue
+        keys = docker_model_match_keys(str(key)) | docker_model_match_keys(str(record.get("docker_model") or ""))
+        if wanted & keys:
+            owners = record.get("owners") if isinstance(record.get("owners"), dict) else {}
+            return sorted(str(owner) for owner in owners)
+    return []
+
+
+def _remove_runtime_model_on_cluster_node(model: str, *, node: str, force: bool) -> None:
+    node_endpoint = _cluster_node_endpoint(node)
+    runtime_client = _native_runtime_client_for_node(node_endpoint)
+    response = runtime_client.prepare_runtime_model({"action": "remove", "model": model, "node": node, "force": force, "source": "mn-cli"})
+    payload = json.loads(response) if isinstance(response, str) else response
+    if not isinstance(payload, dict) or payload.get("status") not in {"removed", "not_found"}:
+        raise RuntimeError(str((payload or {}).get("error") if isinstance(payload, dict) else "remote model removal failed"))
+
+
+def _doctor_provider_registration(record: dict[str, Any]) -> dict[str, Any]:
+    definition_path = str(record.get("definition_path") or "")
+    definition_ok = False
+    definition_error = "definition path is missing"
+    if definition_path:
+        try:
+            records = load_provider_definition(definition_path, require_environment=False)
+            definition_ok = any(candidate.get("id") == record.get("id") for candidate in records)
+            definition_error = "" if definition_ok else "model id is absent from the definition"
+        except Exception as exc:
+            definition_error = str(exc)
+    env_name = str(record.get("api_key_env") or "")
+    environment_ok = not env_name or bool(os.environ.get(env_name))
+    health = litellm_gateway_health()
+    routed = str(record.get("id") or "") in {str(name) for name in health.get("models") or []}
+    return {
+        "model": {"id": record.get("id"), "kind": "provider", "registered": True, "state": "ready" if definition_ok and environment_ok and health.get("ok") and routed else "degraded"},
+        "definition": {"path": definition_path, "ok": definition_ok, "error": definition_error},
+        "environment": {"name": env_name, "ok": environment_ok},
+        "litellm_gateway": {**health, "routed": routed},
+        "ok": bool(definition_ok and environment_ok and health.get("ok") and routed),
+    }
 
 
 def _install_model_on_cluster_node(
@@ -667,8 +1161,9 @@ def _install_model_on_cluster_node(
     *,
     node: str,
     backend: str,
-    context_size: Optional[int],
+    context_size: int | None,
     force: bool,
+    update: bool = False,
 ) -> dict[str, Any]:
     node_endpoint = _cluster_node_endpoint(node)
     runtime_client = _native_runtime_client_for_node(node_endpoint)
@@ -682,6 +1177,7 @@ def _install_model_on_cluster_node(
         context_size=context_size,
         force=force,
         source="mn-cli",
+        action="update" if update else None,
     )
     payload = call_prepare_runtime_model(runtime_client, request, logger=logger)
     install = payload.get("install") if isinstance(payload.get("install"), dict) else {}
@@ -689,10 +1185,19 @@ def _install_model_on_cluster_node(
     if not compatibility:
         compatibility = {"backend": backend, "warnings": []}
     remote_endpoint = _cluster_gateway_endpoint(entry, node_endpoint=node_endpoint, payload=payload)
-    _sync_gateway_best_effort(
-        runtime_endpoints={key: remote_endpoint for key in _model_route_keys(entry)},
-        restart=True,
-    )
+    try:
+        sync_litellm_gateway(
+            runtime_endpoints={key: remote_endpoint for key in _model_route_keys(entry)},
+            restart=True,
+        )
+    except Exception as exc:
+        raise AppError(
+            "MN_MODEL_ROUTE_FAILED",
+            f"The DMR artifact for {entry.get('id')!r} is installed on {node!r}, but route finalization failed.",
+            internal_message=str(exc),
+            hint=f"Run 'mn model doctor {entry.get('id')}' after fixing the managed gateway.",
+            cause=exc,
+        ) from exc
     reconcile_cluster_model_remotes(
         {key: remote_endpoint for key in _model_route_keys(entry)},
         local_installed_models=_installed_model_names(),
@@ -704,6 +1209,8 @@ def _install_model_on_cluster_node(
         "docker_model": str(payload.get("docker_model") or docker_model),
         "compatibility": compatibility,
         "transport": "runtime_node_grpc",
+        "status": str(payload.get("status") or "installed"),
+        "reused": str(payload.get("status") or "") == "already_installed",
         "prepare": payload,
         "endpoint": remote_endpoint,
     }
@@ -719,6 +1226,68 @@ def _selected_model_install_node() -> str:
         value = str(os.environ.get(name) or "").strip()
         if value:
             return value
+    return ""
+
+
+def _automatic_model_install_node(entry: dict[str, Any]) -> str:
+    try:
+        raw_resources = client.get_resource()
+        raw_systems = client.get_system_summary()
+        resource_report = json.loads(raw_resources) if isinstance(raw_resources, str) else raw_resources
+        system_summary = json.loads(raw_systems) if isinstance(raw_systems, str) else raw_systems
+        if not isinstance(resource_report, dict) or not isinstance(system_summary, dict):
+            return ""
+        if str(entry.get("verification") or "").lower() == "unverified":
+            placement = resolve_custom_model_placement(
+                resource_report=resource_report,
+                system_summary=system_summary,
+            )
+        else:
+            systems = {
+                str(node.get("name") or node.get("node") or "").strip(): node
+                for node in system_summary.get("nodes") or []
+                if isinstance(node, dict)
+            }
+            merged_nodes = []
+            for resource in resource_report.get("nodes") or []:
+                if not isinstance(resource, dict):
+                    continue
+                name = str(resource.get("name") or resource.get("node") or "").strip()
+                system = systems.get(name)
+                if not name or system is None:
+                    continue
+                merged = {**resource, **system, "name": name}
+                if resource.get("devices") is not None:
+                    merged["devices"] = resource["devices"]
+                if resource.get("hardware") is not None:
+                    merged["hardware"] = resource["hardware"]
+                merged_nodes.append(merged)
+            placement = resolve_cluster_model_placement(
+                entry,
+                resource_report={"nodes": merged_nodes},
+                prefer_local=False,
+            )
+        return str((placement or {}).get("node") or "")
+    except Exception:
+        # A manual add remains usable before Core/cluster startup. Local
+        # compatibility validation is still enforced by the installer.
+        return ""
+
+
+def _installed_cluster_model_node(model: str) -> str:
+    for node_endpoint in sorted(
+        _cluster_runtime_status_endpoints(quiet=True),
+        key=lambda endpoint: str(endpoint.get("node_name") or ""),
+    ):
+        try:
+            inventory = _runtime_model_inventory_for_node(node_endpoint)
+        except RuntimeError:
+            continue
+        if any(
+            docker_model_match_keys(model) & _model_payload_match_keys(candidate)
+            for candidate in inventory
+        ):
+            return str(node_endpoint.get("node_name") or "")
     return ""
 
 
@@ -988,7 +1557,7 @@ def _cluster_node_native_sdk_endpoint(node_name: str, node: dict[str, Any]) -> d
     if not native:
         raise RuntimeError(
             f"cluster node {node_name} does not advertise native SDK gRPC; "
-            "restart that worker with an updated `mn runtime start --worker-node`"
+            "restart that worker with an updated `mn runtime start --worker`"
         )
     if native.get("enabled") is False:
         raise RuntimeError(f"cluster node {node_name} advertises native SDK gRPC as disabled")
@@ -1015,14 +1584,16 @@ def _sync_installed_model_gateway_route(
     *,
     result: dict[str, Any],
     node: str | None,
+    strict: bool = False,
 ) -> None:
     endpoint = result.get("endpoint") if isinstance(result.get("endpoint"), dict) else None
     if endpoint is None:
         endpoint = docker_model_runner_endpoint(entry, node=node, source="local-dmr")
-    _sync_gateway_best_effort(
-        runtime_endpoints={key: endpoint for key in _model_route_keys(entry)},
-        restart=True,
-    )
+    runtime_endpoints = {key: endpoint for key in _model_route_keys(entry)}
+    if strict:
+        sync_litellm_gateway(runtime_endpoints=runtime_endpoints, restart=True)
+    else:
+        _sync_gateway_best_effort(runtime_endpoints=runtime_endpoints, restart=True)
     reconcile_cluster_model_routes(restart=True)
 
 
@@ -1046,6 +1617,18 @@ def _sync_external_litellm_config_across_cluster(
     restart: bool,
     quiet: bool = False,
 ) -> list[dict[str, Any]]:
+    forwarded_config = dict(litellm_config)
+    forwarded_config["mn_default_model_id"] = str(
+        load_model_registry().get("default_model_id") or ""
+    )
+    # Persist the fanout contract locally before contacting native runtime
+    # services. The local gateway can then retain the operator-selected
+    # default even when a runtime service has no access to the CLI registry.
+    upsert_litellm_external_routes(
+        forwarded_config,
+        source_path=source_path,
+        managed_by="model_registry_fanout",
+    )
     results: list[dict[str, Any]] = []
     for node_endpoint in _cluster_node_endpoints(quiet=True):
         node_name = str(node_endpoint.get("node_name") or "")
@@ -1054,10 +1637,11 @@ def _sync_external_litellm_config_across_cluster(
             response = runtime_client.sync_litellm_gateway(
                 {
                     "node": node_name,
-                    "external_litellm_config": litellm_config,
+                    "external_litellm_config": forwarded_config,
                     "external_source_path": str(source_path),
+                    "external_managed_by": "model_registry_fanout",
                     "restart": restart,
-                    "source": "mn-cli-proxy-fanout",
+                    "source": "mn-cli-model-registry-fanout",
                 }
             )
             results.append({"node": node_name, "status": "ok", "response": response})
@@ -1065,7 +1649,25 @@ def _sync_external_litellm_config_across_cluster(
             results.append({"node": node_name, "status": "error", "error": str(exc)})
             if not quiet:
                 print_warning(console, f"Could not sync LiteLLM proxy config on {node_name}: {exc}")
+    # A cluster fanout can include this host through an independently packaged
+    # native service. Reconcile once more with the CLI's current registry so an
+    # older service cannot silently replace the selected default locally.
+    sync_litellm_gateway(restart=restart)
     return results
+
+
+def _sync_default_model_across_cluster(
+    *,
+    restart: bool,
+    quiet: bool = False,
+) -> list[dict[str, Any]]:
+    """Publish only the registry default marker to every managed gateway."""
+    return _sync_external_litellm_config_across_cluster(
+        {"model_list": []},
+        source_path=default_model_registry_path(),
+        restart=restart,
+        quiet=quiet,
+    )
 
 
 def _sync_gateway_runtime_endpoints_across_cluster(
@@ -1647,16 +2249,6 @@ def _model_route_keys(entry: dict[str, Any]) -> set[str]:
     return {key for key in keys if key}
 
 
-def _route_source_for_model_payload(payload: dict[str, Any]) -> str:
-    provider = str(payload.get("provider") or "").strip().lower()
-    backend = str(payload.get("backend") or "").strip().lower()
-    if provider == "litellm_proxy" or backend == "proxy":
-        return "external-proxy"
-    if payload.get("installed"):
-        return "local-dmr"
-    return ""
-
-
 def _remote_installations_for_model(
     model: dict[str, Any],
     remote_records: list[dict[str, Any]],
@@ -1722,220 +2314,11 @@ def _remote_record_match_keys(remote: dict[str, Any]) -> set[str]:
     }
 
 
-def _remote_model_payloads(
-    *,
-    existing_entries: list[dict[str, Any]],
-    remote_records: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    existing_keys = {
-        key
-        for entry in existing_entries
-        for key in _model_payload_match_keys(entry)
-    }
-    remotes = []
-    seen: set[tuple[str, str]] = set()
-    for remote in remote_records:
-        model_id = str(remote.get("name") or remote.get("model") or "").strip()
-        if not model_id or existing_keys & _remote_record_match_keys(remote):
-            continue
-        identity = (model_id, str(remote.get("node") or ""))
-        if identity in seen:
-            continue
-        seen.add(identity)
-        installation = _remote_installations_for_model(
-            {
-                "id": model_id,
-                "model": remote.get("model"),
-                "api_model": remote.get("api_model"),
-                "aliases": remote.get("route_aliases") or [],
-            },
-            remote_records,
-        )
-        remotes.append(
-            {
-                "id": model_id,
-                "name": model_id,
-                "provider": remote.get("provider") or "docker_model_runner",
-                "model": remote.get("model"),
-                "api_model": remote.get("api_model") or remote.get("model"),
-                "backend": "remote-dmr" if remote.get("node") else "remote",
-                "installed": True,
-                "status": "remote",
-                "owner_count": 0,
-                "route_source": REMOTE_DMR_SOURCE if remote.get("node") else "manual-remote",
-                "node": remote.get("node") or "",
-                "installations": installation,
-            }
-        )
-    return sorted(remotes, key=lambda item: str(item.get("id") or ""))
-
-
-def _build_proxy_spec(config_path: Path, *, host: str, port: int) -> dict[str, Any]:
-    raw = _load_proxy_config(config_path)
-    model_entries: list[dict[str, Any]] = []
-    env_names: set[str] = set()
-
-    if isinstance(raw.get("model_list"), list):
-        litellm_config = dict(raw)
-        for item in raw["model_list"]:
-            if not isinstance(item, dict):
-                continue
-            model_name = str(item.get("model_name") or "").strip()
-            params = item.get("litellm_params") if isinstance(item.get("litellm_params"), dict) else {}
-            source_model = str(params.get("model") or model_name).strip()
-            if not model_name:
-                continue
-            model_entries.append({"id": model_name, "name": str(item.get("name") or model_name), "source_model": source_model})
-            for value in params.values():
-                if isinstance(value, str) and value.startswith("os.environ/"):
-                    env_names.add(value.split("/", 1)[1])
-    else:
-        litellm_models, model_entries, env_names = _provider_config_to_litellm_models(raw)
-        litellm_config = {"model_list": litellm_models}
-
-    if not model_entries:
-        raise ValueError(f"{config_path} does not declare any proxy models")
-
-    digest = hashlib.sha256(str(config_path).encode("utf-8")).hexdigest()[:10]
-    return {
-        "container_name": f"mn-litellm-proxy-{digest}",
-        "litellm_config": litellm_config,
-        "models": model_entries,
-        "env_names": sorted(env_names),
-        "base_url": f"http://{host}:{port}/v1",
-    }
-
-
-def _load_proxy_config(config_path: Path) -> dict[str, Any]:
-    if not config_path.is_file():
-        raise FileNotFoundError(f"proxy config file not found: {config_path}")
-    raw = config_path.read_text(encoding="utf-8")
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        try:
-            import yaml  # type: ignore
-        except ModuleNotFoundError as exc:
-            raise ValueError(f"{config_path} is not JSON; install PyYAML or provide JSON config") from exc
-        data = yaml.safe_load(raw)
-    if not isinstance(data, dict):
-        raise ValueError(f"{config_path} must contain a JSON/YAML object")
-    return data
-
-
-def _provider_config_to_litellm_models(config: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], set[str]]:
-    providers = config.get("provider")
-    if not isinstance(providers, dict):
-        raise ValueError("proxy config must contain either model_list or provider")
-
-    litellm_models: list[dict[str, Any]] = []
-    model_entries: list[dict[str, Any]] = []
-    env_names: set[str] = set()
-    for provider_key, provider in providers.items():
-        if not isinstance(provider, dict):
-            continue
-        options = provider.get("options") if isinstance(provider.get("options"), dict) else {}
-        api_base = str(options.get("baseURL") or options.get("base_url") or options.get("api_base") or "").strip()
-        api_key_env = str(options.get("apiKeyEnv") or options.get("api_key_env") or "").strip()
-        if api_key_env:
-            env_names.add(api_key_env)
-        models = provider.get("models") if isinstance(provider.get("models"), dict) else {}
-        for model_id, model_config in models.items():
-            if not isinstance(model_config, dict):
-                continue
-            proxy_model_id = str(model_id).strip()
-            source_model = _litellm_source_model(str(provider_key), str(model_config.get("model") or proxy_model_id), api_base)
-            if not proxy_model_id or not source_model:
-                continue
-            params: dict[str, Any] = {"model": source_model}
-            if api_base:
-                params["api_base"] = api_base
-            if api_key_env:
-                params["api_key"] = f"os.environ/{api_key_env}"
-            timeout = model_config.get("timeout_seconds")
-            if timeout is not None:
-                params["timeout"] = timeout
-            litellm_entry: dict[str, Any] = {
-                "model_name": proxy_model_id,
-                "litellm_params": params,
-            }
-            rpm = model_config.get("rate_limit_rpm") or model_config.get("rpm")
-            if rpm is not None:
-                litellm_entry["rpm"] = rpm
-            litellm_models.append(litellm_entry)
-            model_entries.append(
-                {
-                    "id": proxy_model_id,
-                    "name": str(model_config.get("name") or proxy_model_id),
-                    "source_model": source_model,
-                }
-            )
-    return litellm_models, model_entries, env_names
-
-
-def _litellm_source_model(provider_key: str, model: str, api_base: str) -> str:
-    source = str(model or "").strip()
-    if not source:
-        return ""
-    if "/" in source:
-        return source
-    provider = provider_key.strip().lower().replace("_", "-")
-    if provider in {"openai", "openai-compatible"} and ("api.openai.com" in api_base or provider == "openai"):
-        return f"openai/{source}"
-    if provider and provider not in {"openai-compatible", "compatible"}:
-        return f"{provider}/{source}"
-    return source
-
-
-def _write_litellm_proxy_config(litellm_config: dict[str, Any], container_name: str) -> Path:
-    root = default_model_proxies_path().parent / "proxies" / _safe_path_name(container_name)
-    root.mkdir(parents=True, exist_ok=True)
-    path = root / "config.yaml"
-    path.write_text(json.dumps(litellm_config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return path
-
-
-def _start_litellm_proxy(
-    config_path: Path,
-    *,
-    container_name: str,
-    host: str,
-    port: int,
-    image: str,
-    env_names: list[str],
-    replace: bool,
-) -> None:
-    if replace:
-        _docker(["rm", "-f", container_name], check=False, timeout=60)
-    args = [
-        "run",
-        "-d",
-        "--name",
-        container_name,
-        "-p",
-        f"{host}:{port}:4000",
-        "-v",
-        f"{config_path}:/app/config.yaml:ro",
-    ]
-    for env_name in env_names:
-        if env_name in os.environ:
-            args.extend(["-e", env_name])
-        else:
-            print_warning(console, f"Environment variable {env_name} is not set for the proxy container.")
-            args.extend(["-e", env_name])
-    args.extend([image, "--config", "/app/config.yaml"])
-    _docker(args, timeout=300)
-
-
-def _safe_path_name(value: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_.-]+", "-", str(value or "").strip()).strip("-._") or "proxy"
-
-
 def install_model_entry(
     entry: dict[str, Any],
     *,
     backend: str = "auto",
-    context_size: Optional[int] = None,
+    context_size: int | None = None,
     force: bool = False,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
@@ -1957,7 +2340,7 @@ def install_model_entry_with_progress(
     entry: dict[str, Any],
     *,
     backend: str = "auto",
-    context_size: Optional[int] = None,
+    context_size: int | None = None,
     force: bool = False,
     label: str | None = None,
 ) -> dict[str, Any]:
@@ -2049,97 +2432,6 @@ def _entry_payload(
     ownership: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return sdk_model_entry_payload(entry, installed=installed, ownership=ownership)
-
-
-def _is_proxy_entry(entry: dict[str, Any] | None) -> bool:
-    if not isinstance(entry, dict):
-        return False
-    return str(entry.get("provider") or "").strip().lower() == "litellm_proxy" or str(entry.get("backend") or "").strip().lower() == "proxy"
-
-
-def _print_model_table(models: list[dict[str, Any]]) -> None:
-    table = Table(title="Runtime models", show_header=True, header_style="bold")
-    table.add_column("ID")
-    table.add_column("Model")
-    table.add_column("Backend")
-    table.add_column("Route")
-    table.add_column("Installed")
-    table.add_column("Status")
-    table.add_column("Owners")
-    for model in models:
-        table.add_row(
-            str(model.get("id") or ""),
-            str(model.get("model") or ""),
-            str(model.get("backend") or ""),
-            str(model.get("route_source") or ""),
-            "yes" if model.get("installed") else "no",
-            str(model.get("status") or ""),
-            str(model.get("owner_count") or 0),
-        )
-    console.print(table)
-
-
-def _print_model_detail(payload: dict[str, Any]) -> None:
-    title = f"{payload.get('id')}" if payload.get('id') else "Model"
-    if payload.get('name'):
-        title = f"{title} - {payload.get('name')}"
-    details = [
-        ("Model", payload.get('model')),
-        ("Backend", payload.get('backend')),
-        ("Installed", "yes" if payload.get('installed') else "no"),
-        ("Owners", payload.get('owner_count', 0)),
-    ]
-    if payload.get("default"):
-        details.append(("Status", "default"))
-    requirements = payload.get("requirements") or {}
-    if requirements:
-        details.append(("Requirements", json.dumps(requirements, sort_keys=True)))
-    console.print(f"[bold]{title}[/bold]")
-    print_confirmation(
-        console,
-        "Model detail",
-        status="installed" if payload.get('installed') else "not installed",
-        details=details,
-    )
-    if payload.get("compatibility"):
-        _print_compatibility(payload["compatibility"])
-
-
-def _print_compatibility(payload: dict[str, Any]) -> None:
-    status = str(payload.get("status") or "unknown")
-    color = "green" if payload.get("ok") else "yellow" if status == "warning" else "red"
-    console.print(f"[{color}]Compatibility: {status}[/{color}] {payload.get('message')}")
-    if payload.get("help"):
-        console.print(str(payload["help"]))
-
-
-def _print_doctor(payload: dict[str, Any]) -> None:
-    model = payload["model"]
-    runner = payload["docker_model_runner"]
-    gateway = payload.get("litellm_gateway") or {}
-    print_confirmed(
-        console,
-        "Model doctor",
-        status="ready" if payload.get("ok") else "attention needed",
-        details={
-            "Model": model.get("id"),
-            "Installed": "yes" if model.get('installed') else "no",
-            "Runner": "running" if runner.get('running') else "not running",
-            "Endpoint": "ok" if runner.get('endpoint_ok') else "not reachable",
-            "LiteLLM gateway": "ok" if gateway.get("endpoint_ok") else "not reachable",
-            "Gateway config": "ok" if gateway.get("config_ok") else str(gateway.get("config_error") or "invalid"),
-        },
-    )
-    _print_compatibility(payload["compatibility"])
-    if payload.get("ok") is not True:
-        console.print("[yellow]Model runtime needs attention.[/yellow]")
-
-
-def _resolve_or_raw_model(model: str) -> str:
-    try:
-        return docker_model_name(resolve_model_entry(model))
-    except KeyError:
-        return model
 
 
 def _ensure_docker_model_cli() -> None:

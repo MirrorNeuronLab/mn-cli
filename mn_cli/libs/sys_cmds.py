@@ -10,7 +10,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from mn_cli.banner import format_banner
 from mn_cli.shared import console, logger
 from mn_cli.error_handler import handle_cli_error
-from mn_cli.libs.ui import print_error, print_info, print_success_confirmation
+from mn_cli.libs.ui import print_error, print_info, print_success_confirmation, require_confirmation
 from mn_cli.terminal import use_progress
 from mn_cli.server_cmds import (
     _start_server,
@@ -56,7 +56,7 @@ CONTEXT_ENGINE_EXPECTATION = (
 def start(
     worker_node: bool = typer.Option(
         False,
-        "--worker-node",
+        "--worker",
         help="Start this box as a headless resource-pool node for a primary box to join.",
     ),
     host: Optional[str] = typer.Option(
@@ -64,36 +64,18 @@ def start(
         "--host",
         help="Advertised host or IP for this node.",
     ),
-    join_host: Optional[str] = typer.Option(
-        None,
-        "--join-host",
-        help="Start this runtime already joined to a primary node at this host.",
-    ),
-    token: Optional[str] = typer.Option(
-        None,
-        "--token",
-        help="Network token from the primary node; required with --join-host.",
-    ),
     grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Core gRPC port."),
 ):
     """Start MirrorNeuron services"""
     console.print(format_banner("MirrorNeuron Local Runtime"))
-    if worker_node and join_host:
-        print_error(console, "--worker-node and --join-host cannot be used together.")
-        raise typer.Exit(1)
-    if join_host and not token:
-        print_error(console, "mn runtime start --join-host requires --token from the primary node.")
-        raise typer.Exit(1)
     if worker_node:
         _start_worker_node(host=host, grpc_port=grpc_port)
-    elif join_host:
-        _start_server(ip=join_host, token=token, host=host, grpc_port=grpc_port)
     else:
         _start_server(host=host, grpc_port=grpc_port)
 
 def join(
     host: str,
-    token: str = typer.Option(..., "--token", help="Worker token printed by mn runtime start --worker-node."),
+    token: str = typer.Option(..., "--token", help="Worker token printed by mn runtime start --worker."),
     grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Worker node gRPC port."),
     local_host: Optional[str] = typer.Option(
         None,
@@ -182,7 +164,7 @@ def expose_node(
 
 def add_node(
     host: str,
-    token: str = typer.Option(..., "--token", help="Token printed by mn node expose on the remote box."),
+    token: str = typer.Option(..., "--token", help="Token printed by mn runtime start --worker on the remote box."),
     grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Remote exposed node gRPC port."),
     docker_network_mode: Optional[str] = typer.Option(
         None,
@@ -282,11 +264,12 @@ def status(
 def doctor(
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
     timeout: float = typer.Option(3.0, "--timeout", min=0.1, help="Per-component timeout in seconds."),
+    repair: bool = typer.Option(False, "--repair", help="Repair unhealthy replaceable runtime sidecars, then recheck."),
 ):
     """Check runtime foundation services before running blueprints"""
     from mn_cli.libs.runtime_health import doctor as runtime_doctor
 
-    runtime_doctor(json_output=json_output, timeout=timeout)
+    runtime_doctor(json_output=json_output, timeout=timeout, repair=repair)
 
 
 def restart_sidecars(
@@ -332,7 +315,7 @@ def restart_sidecars(
         "Runtime sidecar restart",
         status="complete",
         details=details,
-        next_steps="mn runtime health",
+        next_steps="mn runtime status",
     )
 
 def ensure_context_engine(
@@ -369,7 +352,7 @@ def ensure_context_engine(
             "Context engine",
             status=summary["status"],
             details=details,
-            next_steps="mn runtime health",
+            next_steps="mn runtime doctor",
         )
     except Exception as exc:
         handle_cli_error(exc, console, "runtime ensure-context-engine")
@@ -419,15 +402,36 @@ def _unlink_pid_file(pid_file: Path) -> None:
     except OSError:
         pass
 
-def leave(node_name: str):
-    """Remove a node from the cluster by its node name (e.g. mirror_neuron@192.168.4.173)"""
+def leave(
+    node_name: str,
+    yes: bool = typer.Option(False, "--yes", "-y", help="Confirm membership removal without prompting."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview membership removal without changing state."),
+):
+    """Remove a node from cluster membership."""
     from mn_cli.shared import client, console
+    yes = yes is True
+    dry_run = dry_run is True
+    if not dry_run:
+        require_confirmation(
+            console,
+            action="Node removal",
+            prompt=f"Remove node {node_name!r} from cluster membership?",
+            yes=yes,
+        )
     try:
+        if dry_run:
+            print_success_confirmation(
+                console,
+                "Node remove dry run",
+                status="planned",
+                details={"Node": node_name},
+            )
+            return
         status = client.remove_node(node_name)
         _detach_local_docker_node_if_matches(node_name)
         print_success_confirmation(
             console,
-            "Node leave",
+            "Node remove",
             status=status,
             details={"Node": node_name},
             next_steps="mn node list",

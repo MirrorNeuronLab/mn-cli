@@ -7,6 +7,7 @@ from ..openshell import *
 from ..run_state import *
 from .validate import *
 from mn_cli.runtime_mode import running_core_container
+from mn_cli.output import record_result
 from mn_sdk.runtime_config import RuntimeConfig
 
 def doctor_bundle(
@@ -214,7 +215,13 @@ def doctor_bundle(
         report["llm_smoke"] = (
             _doctor_component("llm_smoke", "skipped", "Disabled by --no-llm-call.")
             if no_llm_call
-            else _doctor_llm_smoke_report(bundle_dir, config_overrides, env_overrides, timeout=timeout)
+            else _doctor_llm_smoke_report(
+                bundle_dir,
+                config_overrides,
+                env_overrides,
+                manifest=manifest_dict,
+                timeout=timeout,
+            )
         )
         if cleanup and prepared_submission_id:
             report["cleanup"] = _doctor_cleanup(prepared_submission_id, timeout=timeout)
@@ -509,6 +516,10 @@ def _doctor_prepare_hostlocal_python_envs(
             if isinstance(package, str) and package.strip()
         ]
         requirements_path = str(python_env.get("requirements") or "").strip()
+        local_source_versions = _doctor_hostlocal_local_source_versions(
+            manifest,
+            packages,
+        )
         if not packages and not requirements_path:
             skipped += 1
             continue
@@ -525,18 +536,21 @@ def _doctor_prepare_hostlocal_python_envs(
                 )
                 endpoint = _cluster_node_endpoint(selected_node)
                 runtime_client = _runtime_model_prepare_client(selected_node, endpoint)
+                prepare_request = {
+                    "node": selected_node,
+                    "ensure_hostlocal_python_environment": True,
+                    "blueprint_id": _doctor_blueprint_id(bundle_dir, manifest, {}),
+                    "node_id": node_id,
+                    "packages": packages,
+                    "requirements_content": requirements_content,
+                    "timeout": timeout,
+                    "source": "mn-cli-workflow-placement",
+                }
+                if local_source_versions:
+                    prepare_request["local_source_versions"] = local_source_versions
                 remote_result = _prepare_runtime_model_with_retry(
                     runtime_client,
-                    {
-                        "node": selected_node,
-                        "ensure_hostlocal_python_environment": True,
-                        "blueprint_id": _doctor_blueprint_id(bundle_dir, manifest, {}),
-                        "node_id": node_id,
-                        "packages": packages,
-                        "requirements_content": requirements_content,
-                        "timeout": timeout,
-                        "source": "mn-cli-workflow-placement",
-                    },
+                    prepare_request,
                 )
                 runtime_env_dir = Path(str(remote_result["runtime_path"]))
                 env_dir = Path(str(remote_result.get("host_path") or runtime_env_dir))
@@ -548,6 +562,7 @@ def _doctor_prepare_hostlocal_python_envs(
                     packages=packages,
                     requirements_path=requirements_path,
                     timeout=timeout,
+                    local_source_versions=local_source_versions,
                 )
                 runtime_env_dir = _doctor_runtime_python_env_path(
                     env_dir,
@@ -598,6 +613,7 @@ def _doctor_prepare_python_env(
     packages: list[str],
     requirements_path: str,
     timeout: float,
+    local_source_versions: dict[str, str] | None = None,
 ) -> Path:
     requirements_content = _doctor_requirements_content(
         bundle_dir,
@@ -614,7 +630,41 @@ def _doctor_prepare_python_env(
             bundle_dir / "payloads" / "skills",
             bundle_dir / "payloads" / "agents",
         ],
+        local_source_versions=local_source_versions,
     )
+
+
+def _doctor_hostlocal_local_source_versions(
+    manifest: dict[str, Any],
+    packages: list[str],
+) -> dict[str, str]:
+    """Return declared versions for localized HostLocal dependency paths."""
+
+    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    local = (
+        metadata.get("mn_local_skill_dependencies")
+        if isinstance(metadata.get("mn_local_skill_dependencies"), dict)
+        else {}
+    )
+    sources = local.get("sources") if isinstance(local.get("sources"), list) else []
+    versions_by_path: dict[str, str] = {}
+    for entry in sources:
+        if not isinstance(entry, dict):
+            continue
+        source = str(entry.get("source") or "").strip()
+        version = _doctor_local_source_version(entry.get("version"))
+        if source and version:
+            versions_by_path.setdefault(str(Path(source).expanduser().resolve()), version)
+
+    local_versions: dict[str, str] = {}
+    for package in packages:
+        candidate = Path(package).expanduser()
+        if not candidate.is_absolute():
+            continue
+        version = versions_by_path.get(str(candidate.resolve()))
+        if version:
+            local_versions[package] = version
+    return local_versions
 
 
 def _doctor_requirements_content(
@@ -1139,11 +1189,30 @@ def _doctor_llm_smoke_report(
     config_overrides: dict[str, Any],
     env_overrides: dict[str, str],
     *,
+    manifest: dict[str, Any] | None = None,
     timeout: float,
 ) -> dict[str, Any]:
     config = _doctor_effective_config(bundle_dir, config_overrides, env_overrides)
     checks: list[dict[str, Any]] = []
     llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
+    manifest_llm = manifest.get("llm") if isinstance(manifest, dict) and isinstance(manifest.get("llm"), dict) else {}
+    if manifest_llm:
+        config_entries = llm.get("configs") if isinstance(llm.get("configs"), dict) else {}
+        manifest_entries = manifest_llm.get("configs") if isinstance(manifest_llm.get("configs"), dict) else {}
+        merged_entries = {
+            name: {
+                **(entry if isinstance(entry, dict) else {}),
+                **(config_entries.get(name) if isinstance(config_entries.get(name), dict) else {}),
+            }
+            for name, entry in manifest_entries.items()
+        }
+        for name, entry in config_entries.items():
+            if name not in merged_entries:
+                merged_entries[name] = entry
+        llm = {**manifest_llm, **llm, "configs": merged_entries}
+    env_model = str(env_overrides.get("MN_LLM_MODEL") or env_overrides.get("LITELLM_MODEL") or "").strip()
+    if env_model and not str(llm.get("model") or llm.get("runtime_model") or "").strip():
+        llm = {**llm, "model": env_model}
     configs = llm.get("configs") if isinstance(llm.get("configs"), dict) else {}
     if configs:
         for name, entry in configs.items():
@@ -1182,6 +1251,15 @@ def _doctor_chat_smoke(name: str, entry: dict[str, Any], llm: dict[str, Any], *,
         return {"name": name, "status": "skipped", "detail": "fake LLM config"}
     model = str(entry.get("model") or entry.get("runtime_model") or llm.get("model") or llm.get("runtime_model") or "").strip()
     api_base = _doctor_host_api_base(str(entry.get("api_base") or llm.get("api_base") or "").strip())
+    if model and (not api_base or api_base == "auto") and provider in {
+        "docker_model_runner",
+        "docker-model-runner",
+        "dmr",
+        "litellm",
+        "litellm_proxy",
+        "openai-compatible",
+    }:
+        api_base = LITELLM_GATEWAY_HOST_API_BASE
     if not model or not api_base or api_base == "auto":
         return {"name": name, "status": "warning", "detail": "model or api_base is not resolved"}
     payload = {
@@ -1276,7 +1354,7 @@ def _doctor_statuses(value: Any) -> list[str]:
 def _doctor_print_report(report: dict[str, Any], *, json_output: bool) -> None:
     redacted = _doctor_redact(report)
     if json_output:
-        console.print_json(data=redacted)
+        record_result(redacted)
         return
 
     summary = redacted.get("summary", {})

@@ -1,8 +1,8 @@
 from .common import *
 
 
-def fetch_and_save_results(job_id: str, data: dict = None):
-    log_dir = Path(f"/tmp/mn_{job_id}")
+def fetch_and_save_results(job_id: str, data: dict = None, output_dir: Path | str | None = None):
+    log_dir = Path(output_dir).expanduser() if output_dir is not None else Path(f"/tmp/mn_{job_id}")
     log_dir.mkdir(parents=True, exist_ok=True)
 
     if data is None:
@@ -23,6 +23,7 @@ def fetch_and_save_results(job_id: str, data: dict = None):
         if result:
             with open(log_dir / "result.txt", "w") as f:
                 json.dump(result, f, indent=2)
+        _copy_shared_submission_outputs(job, log_dir)
 
     # Save stream results (progressive)
     stream_events = []
@@ -69,6 +70,36 @@ def _resolve_job_result(job: dict[str, Any]) -> Any:
     except StagedArtifactError:
         logger.exception("Failed to resolve staged job result")
         return result
+
+
+def _copy_shared_submission_outputs(job: dict[str, Any], target_dir: Path) -> bool:
+    reference = job.get("result_ref")
+    if not is_staged_artifact_ref(reference):
+        return False
+    submission_id = str(reference.get("submission_id") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", submission_id):
+        return False
+    shared_root = Path(RuntimeConfig.from_env().shared_storage_root).expanduser().resolve()
+    source = (shared_root / "submissions" / submission_id / "outputs" / "user").resolve()
+    try:
+        source.relative_to(shared_root)
+    except ValueError:
+        return False
+    if not source.is_dir():
+        return False
+    copied = False
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for entry in source.iterdir():
+        if entry.is_symlink():
+            continue
+        destination = target_dir / entry.name
+        if entry.is_dir():
+            shutil.copytree(entry, destination, dirs_exist_ok=True)
+            copied = True
+        elif entry.is_file():
+            shutil.copy2(entry, destination)
+            copied = True
+    return copied
 
 
 def _is_vc_final_artifact(value: Any) -> bool:

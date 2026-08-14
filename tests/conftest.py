@@ -78,6 +78,7 @@ def use_cli_model_pull_for_legacy_install_tests(request, monkeypatch):
         from mn_cli.libs import model_cmds
 
         monkeypatch.setattr(model_cmds, "_endpoint_responds", lambda: False)
+        monkeypatch.setattr(model_cmds, "_model_installed", lambda _model: False)
         monkeypatch.setattr("mn_sdk.model_service.endpoint_responds", lambda: False)
 
 

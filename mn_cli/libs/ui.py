@@ -102,6 +102,18 @@ def print_confirmation(
     details: ConfirmationDetails | None = None,
     next_steps: str | Iterable[str] | None = None,
 ) -> None:
+    from mn_cli.output import json_enabled, record_result
+
+    record_result(
+        {
+            "action": action,
+            "status": status,
+            "details": dict(_confirmation_detail_items(details)),
+            "next_steps": _confirmation_next_steps(next_steps),
+        }
+    )
+    if json_enabled():
+        return
     if _is_plain_confirmation_mode():
         _print_confirmation_plain(console, action, verb=verb, status=status, details=details, next_steps=next_steps)
         return
@@ -121,18 +133,136 @@ def print_confirmation(
 
 def print_info(console, message: Any) -> None:
     """Print one concise, non-terminal progress update."""
-    console.print(f"→ [cyan]{message}[/cyan]")
+    from mn_cli.output import json_enabled
+
+    if json_enabled():
+        return
+    _status_console(console).print(f"→ [cyan]{message}[/cyan]")
 
 
 def print_warning(console, message: Any) -> None:
     """Print a concise warning with a stable visual treatment."""
-    console.print(f"! [yellow]Warning:[/yellow] {message}")
+    from mn_cli.output import json_enabled, record_warning
+
+    record_warning(message)
+    if json_enabled():
+        return
+    _status_console(console).print(f"! [yellow]Warning:[/yellow] {message}")
 
 
 def print_error(console, message: Any, *, code: str | None = None) -> None:
     """Print a concise, actionable error without a decorative panel."""
+    from mn_cli.output import json_enabled, record_error
+    from mn_sdk.errors import AppError
+
+    record_error(AppError(code or "MN_COMMAND_FAILED", str(message)))
+    if json_enabled():
+        return
     code_text = f" [dim]({code})[/dim]" if code else ""
-    console.print(f"× [bold red]Error:[/bold red]{code_text} {message}")
+    _status_console(console).print(f"× [bold red]Error:[/bold red]{code_text} {message}")
+
+
+def require_confirmation(console, *, action: str, prompt: str, yes: bool) -> None:
+    """Apply the shared destructive-action confirmation contract."""
+    from mn_cli.output import json_enabled
+    from mn_cli.terminal import is_interactive
+
+    if yes:
+        return
+    if json_enabled() or not is_interactive():
+        print_error(
+            console,
+            f"{action} requires --yes in JSON or non-interactive mode.",
+            code="MN_CONFIRMATION_REQUIRED",
+        )
+        raise typer.Exit(2)
+    if not typer.confirm(prompt, default=False):
+        print_error(console, f"{action} was not confirmed.", code="MN_CONFIRMATION_REQUIRED")
+        raise typer.Exit(2)
+
+
+def print_detail(console, title: str, data: Mapping[str, Any]) -> None:
+    """Render a resource detail without forcing raw JSON on human users."""
+    from mn_cli.output import record_result
+
+    payload = dict(data)
+    record_result(payload)
+    if not payload:
+        console.print(f"[bold]{title}[/bold]\nNo details available.")
+        return
+    console.print(f"[bold]{title}[/bold]")
+    console.print(_detail_table([(str(key).replace("_", " ").title(), value) for key, value in payload.items()]))
+
+
+def print_collection(
+    console,
+    title: str,
+    records: Iterable[Mapping[str, Any]],
+    *,
+    columns: Iterable[tuple[str, str]] = (
+        ("ID", "id"),
+        ("Kind", "kind"),
+        ("State", "state"),
+        ("Node / Owner", "node"),
+        ("Updated", "updated_at"),
+    ),
+) -> None:
+    """Render a stable collection table and preserve complete records for JSON."""
+    from mn_cli.output import record_result
+
+    if isinstance(records, Mapping):
+        values = list(records.values())
+        records = values if all(isinstance(value, Mapping) for value in values) else [records]
+    items = [dict(record) for record in records if isinstance(record, Mapping)]
+    record_result({"items": items, "count": len(items)})
+    if not items:
+        console.print(f"No {title.lower()} found.")
+        return
+    selected_columns = list(columns)
+    table = Table(
+        title=title,
+        show_header=True,
+        header_style="bold",
+        box=None if _is_plain_confirmation_mode() else box.ROUNDED,
+    )
+    for label, _key in selected_columns:
+        table.add_column(label, overflow="fold")
+    for item in items:
+        table.add_row(*[str(item.get(key) if item.get(key) is not None else "") for _label, key in selected_columns])
+    console.print(table)
+
+
+def print_doctor_checks(
+    console,
+    title: str,
+    checks: Iterable[Mapping[str, Any]],
+) -> None:
+    """Render diagnostics with the shared Check/State/Detail/Fix contract."""
+    items = [dict(check) for check in checks]
+    table = Table(
+        title=title,
+        show_header=True,
+        header_style="bold",
+        box=None if _is_plain_confirmation_mode() else box.ROUNDED,
+    )
+    for label in ("Check", "State", "Detail", "Fix"):
+        table.add_column(label, overflow="fold")
+    for check in items:
+        table.add_row(
+            str(check.get("check") or check.get("name") or ""),
+            str(check.get("state") or check.get("status") or "unknown"),
+            str(check.get("detail") or check.get("error") or ""),
+            str(check.get("fix") or check.get("help") or ""),
+        )
+    console.print(table)
+
+
+def _status_console(console):
+    if getattr(console, "_mn_shared_console", False):
+        from mn_cli.shared import error_console
+
+        return error_console
+    return console
 
 
 def _is_plain_confirmation_mode() -> bool:
@@ -889,7 +1019,7 @@ def generate_detached_panel(
     ]
     if web_ui_url:
         rows.append(("Web UI", f"[bold green]{web_ui_url}[/bold green]"))
-    rows.append(("Monitor", f"mn run monitor {job_id}"))
+    rows.append(("Watch", f"mn run watch {job_id}"))
 
     message = "Final job state reached." if status in {"completed", "failed", "cancelled"} else "Detached while job is still scheduled or running."
     return _result_panel(

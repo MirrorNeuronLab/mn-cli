@@ -57,7 +57,10 @@ def test_shared_client_omits_admin_token_for_older_sdk(monkeypatch, tmp_path):
 
     monkeypatch.setenv("MN_GRPC_ADMIN_TOKEN", "admin-secret")
 
-    _fresh_shared(monkeypatch, tmp_path, OldClient)
+    shared = _fresh_shared(monkeypatch, tmp_path, OldClient)
+
+    assert calls == []
+    shared.client._get()
 
     assert calls == [
         {
@@ -84,7 +87,10 @@ def test_shared_client_passes_admin_token_for_current_sdk(monkeypatch, tmp_path)
 
     monkeypatch.setenv("MN_GRPC_ADMIN_TOKEN", "admin-secret")
 
-    _fresh_shared(monkeypatch, tmp_path, CurrentClient)
+    shared = _fresh_shared(monkeypatch, tmp_path, CurrentClient)
+
+    assert calls == []
+    shared.client._get()
 
     assert calls == [
         {
@@ -125,7 +131,10 @@ def test_shared_client_reads_runtime_env_target_and_tokens(monkeypatch, tmp_path
                 }
             )
 
-    _fresh_shared(monkeypatch, tmp_path, CurrentClient)
+    shared = _fresh_shared(monkeypatch, tmp_path, CurrentClient)
+
+    assert calls == []
+    shared.client._get()
 
     assert calls == [
         {
@@ -163,7 +172,10 @@ def test_shared_client_prefers_runtime_endpoint_over_stale_core_target(monkeypat
                 }
             )
 
-    _fresh_shared(monkeypatch, tmp_path, CurrentClient)
+    shared = _fresh_shared(monkeypatch, tmp_path, CurrentClient)
+
+    assert calls == []
+    shared.client._get()
 
     assert calls == [
         {
@@ -194,7 +206,10 @@ def test_shared_client_reads_refreshed_token_files(monkeypatch, tmp_path):
                 }
             )
 
-    _fresh_shared(monkeypatch, tmp_path, CurrentClient)
+    shared = _fresh_shared(monkeypatch, tmp_path, CurrentClient)
+
+    assert calls == []
+    shared.client._get()
 
     assert calls == [
         {
@@ -230,7 +245,10 @@ def test_shared_client_reads_token_files_before_stale_runtime_env(monkeypatch, t
                 }
             )
 
-    _fresh_shared(monkeypatch, tmp_path, CurrentClient)
+    shared = _fresh_shared(monkeypatch, tmp_path, CurrentClient)
+
+    assert calls == []
+    shared.client._get()
 
     assert calls == [
         {

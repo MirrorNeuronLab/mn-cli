@@ -29,7 +29,7 @@ def test_cli_error_output_is_user_safe_and_preserves_code(mocker):
         handle_cli_error(
             TimeoutRpcError(),
             console,
-            "node join",
+            "node add",
             command_context={"argv": ["node", "join", "192.168.4.34", "--token", "secret-token"]},
         )
 
@@ -51,7 +51,7 @@ def test_cli_debug_output_is_sanitized(mocker):
     set_debug(True)
     try:
         with pytest.raises(typer.Exit):
-            handle_cli_error(TimeoutRpcError(), console, "node join")
+            handle_cli_error(TimeoutRpcError(), console, "node add")
     finally:
         set_debug(False)
 
@@ -75,9 +75,11 @@ def test_cli_wrapper_catches_unhandled_command_errors(monkeypatch, capsys, mocke
     with pytest.raises(SystemExit) as raised:
         main_module.cli()
 
-    output = capsys.readouterr().out
+    captured = capsys.readouterr()
+    output = captured.err
     assert raised.value.code == 1
     assert "MN_EXECUTION_FAILED" in output
+    assert captured.out == ""
     assert "raw failure" not in output
     assert "secret-token" not in output
     assert "/Users/homer" not in output

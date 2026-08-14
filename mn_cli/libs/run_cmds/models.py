@@ -292,7 +292,7 @@ def _print_runtime_model_deferred_debug_plan(
         "Runtime model prepare plan (logical alias → profile → catalog model → DMR artifact)",
     )
     if not placement_models:
-        console.print("  No Docker Model Runner models are required.", markup=False)
+        print_info(console, "No Docker Model Runner models are required.")
         return
 
     fallback_records = _workflow_placement_model_fallback_records(env_overrides)
@@ -313,7 +313,7 @@ def _print_runtime_model_deferred_debug_plan(
         if fallback is not None:
             preferred = str(entry.get("id") or item.get("requested_model") or "preferred model")
             detail += f"; fallback={preferred} is not runnable on the selected topology"
-        console.print(detail, markup=False)
+        print_info(console, detail.strip())
 
 
 def _runtime_model_plan_fallback_entry(
@@ -354,7 +354,7 @@ def _print_runtime_model_deferred_debug_response(summary: dict[str, Any]) -> Non
     print_info(console, "Deferred runtime model policies")
     models = [item for item in summary.get("models") or [] if isinstance(item, dict)]
     if not models:
-        console.print("  No Docker Model Runner models are required.", markup=False)
+        print_info(console, "No Docker Model Runner models are required.")
         return
     for item in models:
         fallback = item.get("fallback") if isinstance(item.get("fallback"), dict) else {}
@@ -366,7 +366,7 @@ def _print_runtime_model_deferred_debug_response(summary: dict[str, Any]) -> Non
         detail = f"  {model} on {node}: status={status}"
         if provider:
             detail += f", provider={provider}"
-        console.print(detail, markup=False)
+        print_info(console, detail.strip())
 
 
 def _print_runtime_model_prepare_debug_plan(
@@ -387,7 +387,7 @@ def _print_runtime_model_prepare_debug_plan(
         "Runtime model prepare plan (logical alias → profile → catalog model → DMR artifact)",
     )
     if not placement_models:
-        console.print("  No Docker Model Runner models are required.", markup=False)
+        print_info(console, "No Docker Model Runner models are required.")
         return
     fallback_records = _workflow_placement_model_fallback_records(env_overrides)
     for item in placement_models:
@@ -402,14 +402,14 @@ def _print_runtime_model_prepare_debug_plan(
         if fallback is not None:
             preferred = str(entry.get("id") or item.get("requested_model") or "preferred model")
             detail += f"; fallback={preferred} is not runnable on the selected topology"
-        console.print(detail, markup=False)
+        print_info(console, detail.strip())
 
 
 def _print_runtime_model_prepare_debug_response(summary: dict[str, Any]) -> None:
     print_info(console, "Runtime model prepare responses")
     models = [item for item in summary.get("models") or [] if isinstance(item, dict)]
     if not models:
-        console.print("  No Docker Model Runner prepare requests were sent.", markup=False)
+        print_info(console, "No Docker Model Runner prepare requests were sent.")
         return
     for item in models:
         fallback = item.get("fallback") if isinstance(item.get("fallback"), dict) else {}
@@ -421,7 +421,7 @@ def _print_runtime_model_prepare_debug_response(summary: dict[str, Any]) -> None
         detail = f"  {model} on {node}: status={status}"
         if provider:
             detail += f", provider={provider}"
-        console.print(detail, markup=False)
+        print_info(console, detail.strip())
 
 
 def _runtime_model_prepare_response_status(
