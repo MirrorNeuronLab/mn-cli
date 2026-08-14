@@ -127,6 +127,7 @@ mn job inspect vc-diligence
 mn job start vc-diligence --inputs run-input.json
 mn job runs vc-diligence
 
+mn run list vc-diligence
 mn run status <run-id>
 mn run pause <run-id>
 mn run resume <run-id>
@@ -155,15 +156,15 @@ mn job delete vc-diligence              # confirms; deletes all runs, runtime re
 ```
 
 Execution status and controls use `mn run ...`; attached blueprint progress
-uses the v2 workflow-progress stream and the same public-step contract as the
+uses the canonical workflow-progress stream and the same public-step contract as the
 launch-time monitor.
 
-## Durable bulk operations
+## Durable operations
 
-`mn job cancel-all`, `mn job clear`, `mn node reconcile`, and `mn node drain`
-start a durable Core operation and render item updates in completion order.
-`MN_CLI_OUTPUT=plain` emits stable `→`, `✓`, and `! Warning:` progress lines;
-the rich terminal shows live counters and recent results.
+`mn node reconcile` and `mn node drain` start durable Core operations and
+render item updates in completion order. `MN_CLI_OUTPUT=plain` emits stable
+`→`, `✓`, and `! Warning:` progress lines; the rich terminal shows live
+counters and recent results.
 
 If the owner of a cancelled job is offline, `cancellation_pending` means the
 request was accepted and cleanup is queued for that node's rejoin. It is not a
@@ -173,11 +174,6 @@ command failure. Ctrl+C detaches without aborting the operation; reattach with:
 mn operation status op-…
 mn operation watch op-…
 ```
-
-`mn job clear` is destructive and requires confirmation unless `--yes` is
-provided. Each terminal job is reported as cleared only after its owned runtime
-processes, sandboxes, checkpoints, services, staged storage, artifacts, leases,
-delivery state, and local prepared resources have been removed.
 
 ## Configuration
 

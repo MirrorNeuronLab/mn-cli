@@ -14,8 +14,8 @@ runtime, SDK, API, or blueprint contracts it consumes.
 The root command registers these operator-facing families:
 
 - `blueprint`: catalog, validation, installation, execution, and outputs;
-- `job`: submission, inspection, control, backup/restore, monitor, and result;
-- `run`: v2 inspection and control of one stable-job execution;
+- `job`: durable definition creation, inspection, archive, data reset, and start;
+- `run`: listing, inspection, and lifecycle control of executions;
 - `node`: cluster membership, exposure, drain, reconcile, and maintenance;
 - `operation`: durable group-operation status and reattachment;
 - `runtime`: start, stop, status, health, doctor, sidecars, and updates;
@@ -89,8 +89,9 @@ those contracts.
 
 ## Stable Job/Run Contract
 
-`mn job create/definitions/inspect/archive/reset-data/delete/start/runs` adapt
-the v2 stable-job service. `mn run status/pause/resume/cancel/delete` always
+`mn job create/list/inspect/archive/reset-data/delete/start/runs` address
+durable job definitions. `mn run list/status/pause/resume/cancel/delete` address
+executions and always
 accepts `run_id`. A stable `job_id` owns configuration, schedules, and job data;
 every intentional start gets a distinct run identity, while attempts retain
 their run. CLI output must label and persist both fields without treating them
@@ -104,9 +105,7 @@ scheduled dispatch remain source independent and reuse the stored bundle.
 Blueprint launches use the SDK run-store writer for the job/run mapping and
 sanitized source-facing monitor manifest; API launches consume the same
 contract so both surfaces render the same public workflow steps.
-Existing v1 `mn job` execution-control commands remain compatible with
-historical execution IDs and must not cause new state to be indefinitely
-dual-written.
+Historical execution-control commands are not registered under `mn job`.
 
 ## Runtime-Model Launch Contract
 

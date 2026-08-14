@@ -349,8 +349,8 @@ def _resolve_api_base_url(
     if _has_any_env(env, "MN_API_HOST", "MN_API_PORT"):
         host = _env_value(env, "MN_API_HOST") or _env_value(runtime_env, "MN_API_HOST") or "localhost"
         port = _env_value(env, "MN_API_PORT") or _env_value(runtime_env, "MN_API_PORT") or "54001"
-        return f"http://{host}:{port}/api/v2"
-    endpoint_url = _endpoint_url(runtime_endpoints, "api", "base_url", suffix="/api/v2")
+        return f"http://{host}:{port}/api/v1"
+    endpoint_url = _endpoint_url(runtime_endpoints, "api", "base_url", suffix="/api/v1")
     if endpoint_url:
         return endpoint_url.rstrip("/")
     runtime_url = _env_value(runtime_env, "MN_API_BASE_URL")
@@ -358,7 +358,7 @@ def _resolve_api_base_url(
         return runtime_url.rstrip("/")
     host = _env_value(runtime_env, "MN_API_HOST") or "localhost"
     port = _env_value(runtime_env, "MN_API_PORT") or "54001"
-    return f"http://{host}:{port}/api/v2"
+    return f"http://{host}:{port}/api/v1"
 
 
 def _resolve_web_ui_url(

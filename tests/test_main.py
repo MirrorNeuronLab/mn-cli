@@ -135,52 +135,24 @@ def test_help_supports_short_help_flag():
     result = runner.invoke(app, ["job", "-h"])
 
     assert result.exit_code == 0
-    assert "Submit, inspect, control, and recover workflow jobs." in result.stdout
-
-
-def test_cancel_all_help_documents_confirmation_bypass():
-    result = runner.invoke(app, ["job", "cancel-all", "--help"])
-
-    assert result.exit_code == 0
-    assert "Cancel all active jobs" in result.stdout
-    command = get_command(app).commands["job"].commands["cancel-all"]
-    option_names = {option for parameter in command.params for option in parameter.opts}
-    assert {"--yes", "-y"}.issubset(option_names)
+    assert "Create and manage durable job definitions." in result.stdout
 
 
 def test_command_help_includes_argument_description_and_examples():
-    result = runner.invoke(app, ["job", "submit", "--help"])
+    result = runner.invoke(app, ["job", "create", "--help"])
 
     assert result.exit_code == 0
-    assert "Path to a workflow manifest JSON file." in result.stdout
-    assert "Examples:" in result.stdout
-    assert "mn job submit ./manifest.json" in result.stdout
+    assert "Blueprint/job bundle directory or archive." in result.stdout
 
 
-def test_job_status_includes_resource_usage_when_run_data_is_available(mocker, tmp_path):
-    mocker.patch(
-        "mn_cli.libs.job_cmds.client.get_job",
-        return_value=json.dumps({"job": {"job_id": "job-1", "run_id": "run-1", "status": "running"}}),
-    )
-    mocker.patch("mn_cli.libs.job_cmds.default_runs_root", return_value=tmp_path)
-    mocker.patch(
-        "mn_cli.libs.job_cmds.load_observability_tools",
-        return_value={
-            "read_run_resources": lambda run_id, runs_root=None: {
-                "run_id": run_id,
-                "llm": {"input_tokens": 12, "output_tokens": 4, "total_tokens": 16, "calls": 1},
-                "buckets": [],
-            }
-        },
-    )
-
-    result = runner.invoke(app, ["job", "status", "job-1"])
-
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["resource_usage"]["llm"]["input_tokens"] == 12
-    assert payload["resource_usage"]["llm"]["output_tokens"] == 4
-    assert payload["resource_usage"]["llm"]["total_tokens"] == 16
+def test_job_and_run_commands_have_distinct_resource_semantics():
+    command = get_command(app)
+    assert set(command.commands["job"].commands) == {
+        "create", "list", "inspect", "archive", "reset-data", "delete", "start", "runs",
+    }
+    assert set(command.commands["run"].commands) == {
+        "list", "status", "pause", "resume", "cancel", "delete", "monitor", "result",
+    }
 
 
 def test_runtime_help_includes_sidecar_restart_command():
@@ -193,8 +165,8 @@ def test_runtime_help_includes_sidecar_restart_command():
 
 
 def test_unknown_command_suggests_close_match():
-    result = runner.invoke(app, ["job", "sumbit"])
+    result = runner.invoke(app, ["job", "inspekt"])
 
     assert result.exit_code == 2
-    assert "No such command 'sumbit'" in result.stderr
-    assert "Did you mean 'submit'?" in result.stderr
+    assert "No such command 'inspekt'" in result.stderr
+    assert "Did you mean 'inspect'?" in result.stderr

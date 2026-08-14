@@ -494,7 +494,7 @@ def _targets(snapshot: dict[str, Any], persisted: dict[str, Any]) -> dict[str, s
     grpc = merged.get("grpc") if isinstance(merged.get("grpc"), dict) else {}
     web_ui = merged.get("web_ui") if isinstance(merged.get("web_ui"), dict) else {}
     return {
-        "api": str(api.get("base_url") or f"http://{api.get('host', 'localhost')}:{api.get('port', '54001')}/api/v2").rstrip("/"),
+        "api": str(api.get("base_url") or f"http://{api.get('host', 'localhost')}:{api.get('port', '54001')}/api/v1").rstrip("/"),
         "core_grpc": str(grpc.get("target") or f"{grpc.get('host', 'localhost')}:{grpc.get('port', '55051')}"),
         "web_ui": str(web_ui.get("url") or "").rstrip("/"),
     }

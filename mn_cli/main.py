@@ -12,7 +12,7 @@ bootstrap_environment()
 
 from mn_cli import update_cmds
 from mn_cli.banner import format_banner
-from mn_cli.libs import backup_cmds, deployment_cmds, job_cmds, model_cmds, operation_cmds, resource_cmds, run_cmds, schedule_cmds, service_cmds, stable_job_cmds, sys_cmds
+from mn_cli.libs import deployment_cmds, job_cmds, model_cmds, operation_cmds, resource_cmds, run_cmds, schedule_cmds, service_cmds, stable_job_cmds, sys_cmds
 from mn_cli.libs.blueprint_cmds import blueprint_app
 from mn_cli.error_handler import handle_cli_error, set_debug
 from mn_cli.runtime_mode import local_runtime_mode
@@ -25,7 +25,8 @@ ROOT_HELP = """Run and operate MirrorNeuron workflows, blueprints, jobs, and loc
 Examples:
   mn blueprint list
   mn blueprint run <blueprint-id>
-  mn job status <job-id>
+  mn job inspect <job-id>
+  mn run status <run-id>
   mn runtime status
   mn runtime health --json
 
@@ -33,14 +34,14 @@ Notes:
   Runtime connection is read from MN_GRPC_TARGET or ~/.mn/runtime-endpoints.json.
   Set NO_COLOR=1 or MN_CLI_OUTPUT=plain for plain terminal output.
 """
-JOB_HELP = """Submit, inspect, control, and recover workflow jobs.
+JOB_HELP = """Create and manage durable job definitions.
 
 Examples:
-  mn job submit ./manifest.json
-  mn job list --running-only
-  mn job cancel-all -y
-  mn job monitor <job-id>
-  mn job result <job-id>
+  mn job create ./worker-bundle --job-id worker-daily
+  mn job list
+  mn job inspect worker-daily
+  mn job start worker-daily
+  mn job runs worker-daily
 """
 NODE_HELP = """Inspect cluster nodes and manage node membership or maintenance.
 
@@ -145,28 +146,17 @@ def _runtime_mode_line(*, capitalize: bool = True) -> str | None:
 blueprint_app.command(name="validate")(run_cmds.validate)
 
 # Job commands
-job_app.command(name="submit")(job_cmds.submit)
-job_app.command(name="status")(job_cmds.status)
-job_app.command(name="list")(job_cmds.list_jobs)
-job_app.command(name="clear")(job_cmds.clear)
-job_app.command(name="cancel")(job_cmds.cancel)
-job_app.command(name="cancel-all")(job_cmds.cancel_all)
-job_app.command(name="pause")(job_cmds.pause)
-job_app.command(name="resume")(job_cmds.resume)
-job_app.command(name="backup")(backup_cmds.backup)
-job_app.command(name="restore")(backup_cmds.restore)
-job_app.command(name="unfinished")(job_cmds.unfinished)
-job_app.command(name="monitor")(run_cmds.monitor)
-job_app.command(name="result")(run_cmds.result)
-job_app.command(name="dead-letters")(job_cmds.dead_letters)
 job_app.command(name="create")(stable_job_cmds.create)
-job_app.command(name="definitions")(stable_job_cmds.definitions)
+job_app.command(name="list")(stable_job_cmds.definitions)
 job_app.command(name="inspect")(stable_job_cmds.inspect)
 job_app.command(name="archive")(stable_job_cmds.archive)
 job_app.command(name="reset-data")(stable_job_cmds.reset_data)
 job_app.command(name="delete")(stable_job_cmds.delete)
 job_app.command(name="start")(stable_job_cmds.start)
 job_app.command(name="runs")(stable_job_cmds.runs)
+stable_job_cmds.run_app.command(name="list")(stable_job_cmds.runs)
+stable_job_cmds.run_app.command(name="monitor")(run_cmds.monitor)
+stable_job_cmds.run_app.command(name="result")(run_cmds.result)
 
 # Node commands
 node_app.command(name="list")(job_cmds.nodes)

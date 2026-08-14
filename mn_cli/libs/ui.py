@@ -889,7 +889,7 @@ def generate_detached_panel(
     ]
     if web_ui_url:
         rows.append(("Web UI", f"[bold green]{web_ui_url}[/bold green]"))
-    rows.append(("Monitor", f"mn job monitor {job_id}"))
+    rows.append(("Monitor", f"mn run monitor {job_id}"))
 
     message = "Final job state reached." if status in {"completed", "failed", "cancelled"} else "Detached while job is still scheduled or running."
     return _result_panel(

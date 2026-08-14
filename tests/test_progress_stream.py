@@ -35,14 +35,14 @@ def test_api_progress_stream_uses_v2_execution_run_route(mocker):
 
     snapshots = list(
         stream_api_workflow_progress(
-            "http://localhost:54001/api/v2",
+            "http://localhost:54001/api/v1",
             "researcher-346dab41d3",
             timeout=12,
         )
     )
 
     assert captured == {
-        "url": "http://localhost:54001/api/v2/runs/researcher-346dab41d3/workflow-progress/stream",
+        "url": "http://localhost:54001/api/v1/runs/researcher-346dab41d3/workflow-progress/stream",
         "timeout": 12,
     }
     assert snapshots[0]["version"] == 2

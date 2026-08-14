@@ -48,7 +48,7 @@ def create(
 def definitions(
     include_archived: bool = typer.Option(False, "--include-archived")
 ):
-    """List stable job definitions (v2)."""
+    """List durable job definitions."""
     try:
         console.print_json(
             data=json.loads(
@@ -149,7 +149,7 @@ def start(
 
 
 def runs(job_id: str = typer.Argument(help="Stable job ID.")):
-    """List the independent runs belonging to a job."""
+    """List the independent execution runs belonging to a job."""
     try:
         console.print_json(data=json.loads(client.list_runs(job_id)))
     except Exception as exc:

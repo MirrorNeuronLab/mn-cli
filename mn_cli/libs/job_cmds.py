@@ -39,8 +39,7 @@ def submit(
     """Submit a workflow manifest to the runtime.
 
     Examples:
-      mn job submit ./manifest.json
-      mn job submit ./examples/tax-review/manifest.json
+      mn blueprint run <blueprint-id>
     """
     try:
         with open(manifest_path, "r") as f:
@@ -57,7 +56,7 @@ def submit(
             console,
             "Job submit",
             details=[("Job ID", job_id), ("Manifest", manifest_path)],
-            next_steps=f"mn job status {job_id}",
+            next_steps=f"mn run status {job_id}",
         )
     except Exception as e:
         handle_cli_error(e, console, 'submit')
@@ -72,7 +71,7 @@ def status(
     """Print the raw job status payload as JSON.
 
     Examples:
-      mn job status job-123
+      mn run status run-123
     """
     try:
         job_json = client.get_job(job_id)
@@ -179,7 +178,7 @@ def cancel(
     """Cancel a running job.
 
     Examples:
-      mn job cancel job-123
+      mn run cancel run-123
     """
     try:
         status = client.cancel_job(job_id)
@@ -189,7 +188,7 @@ def cancel(
             "Job cancel",
             status=status,
             details={"Job ID": job_id},
-            next_steps=f"mn job status {job_id}",
+            next_steps=f"mn run status {job_id}",
         )
     except Exception as e:
         _cleanup_cancelled_job_web_ui(job_id)
@@ -207,8 +206,7 @@ def cancel_all(
     Active jobs include pending, validated, scheduled, running, and paused jobs.
 
     Examples:
-      mn job cancel-all
-      mn job cancel-all -y
+      Administrative bulk cancellation is exposed through the canonical REST API.
     """
     try:
         jobs_json = client.list_jobs(limit=_ALL_JOBS_LIMIT, include_terminal=False)
@@ -332,7 +330,7 @@ def pause(job_id: str):
             "Job pause",
             status=status,
             details={"Job ID": job_id},
-            next_steps=f"mn job status {job_id}",
+            next_steps=f"mn run status {job_id}",
         )
     except Exception as e:
         handle_cli_error(e, console, 'pause')
@@ -347,7 +345,7 @@ def resume(job_id: str):
             "Job resume",
             status=status,
             details={"Job ID": job_id},
-            next_steps=f"mn job status {job_id}",
+            next_steps=f"mn run status {job_id}",
         )
     except Exception as e:
         handle_cli_error(e, console, 'resume')
@@ -382,8 +380,8 @@ def unfinished():
                 f"{job.get('job_id', 'N/A')} recovery={recovery_label(job)} review={review}"
             )
         console.print(
-            "Use [bold]mn job status <job_id>[/bold] to inspect and "
-            "[bold]mn job resume <job_id>[/bold] to continue a paused run."
+            "Use [bold]mn run status <run_id>[/bold] to inspect and "
+            "[bold]mn run resume <run_id>[/bold] to continue a paused run."
         )
     except Exception as e:
         handle_cli_error(e, console, 'list_jobs')

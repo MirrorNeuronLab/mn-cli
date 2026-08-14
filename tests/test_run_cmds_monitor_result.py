@@ -77,7 +77,7 @@ def test_monitor_success(mocker):
     )
     mocker.patch("sys.stdin.isatty", return_value=False)
 
-    result = runner.invoke(app, ["job", "monitor", "job-123"])
+    result = runner.invoke(app, ["run", "monitor", "job-123"])
 
     assert result.exit_code == 0
     assert "Workflow Job Monitor" in result.stdout
@@ -659,7 +659,7 @@ def test_monitor_error(mocker):
     mocker.patch(
         "mn_cli.libs.run_cmds.client.get_job", side_effect=Exception("Network fail")
     )
-    result = runner.invoke(app, ["job", "monitor", "job-123"])
+    result = runner.invoke(app, ["run", "monitor", "job-123"])
     assert result.exit_code == 0
     assert "Error fetching job: Network fail" in result.stdout
 
@@ -679,7 +679,7 @@ def test_result_success(mocker, tmp_path):
         return_value=[json.dumps({"type": "custom_event", "payload": "progressive"})],
     )
 
-    result = runner.invoke(app, ["job", "result", "job-123"])
+    result = runner.invoke(app, ["run", "result", "job-123"])
 
     assert result.exit_code == 0
     assert "Job result fetch successful." in result.stdout
@@ -694,7 +694,7 @@ def test_result_not_completed(mocker, tmp_path):
     )
     mocker.patch("mn_cli.libs.run_cmds.client.stream_events", return_value=[])
 
-    result = runner.invoke(app, ["job", "result", "job-999"])
+    result = runner.invoke(app, ["run", "result", "job-999"])
 
     assert result.exit_code == 0
     assert "No final result found" in result.stdout
@@ -705,7 +705,7 @@ def test_result_error(mocker):
         "mn_cli.libs.run_cmds.fetch_and_save_results", side_effect=Exception("DB Error")
     )
 
-    result = runner.invoke(app, ["job", "result", "job-888"])
+    result = runner.invoke(app, ["run", "result", "job-888"])
 
     assert result.exit_code == 1
     assert "MN_EXECUTION_FAILED" in result.stdout

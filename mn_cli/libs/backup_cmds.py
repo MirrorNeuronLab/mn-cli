@@ -168,7 +168,7 @@ def restore(
                 ("Run ID", new_run_id),
                 ("Original job", result.get("source_job_id", "unknown")),
             ],
-            next_steps=f"mn job resume {new_job_id}",
+            next_steps=f"mn run resume {new_job_id}",
         )
     except BackupRestoreError as exc:
         console.print(f"[red]{exc}[/red]")
