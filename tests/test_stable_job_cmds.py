@@ -1,8 +1,41 @@
 import json
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import mn_cli.libs.stable_job_cmds as stable_job_cmds
 from mn_cli.libs.job_cleanup import JobResourceCleanupError
+
+
+def test_run_resume_shows_activity_while_waiting_for_runtime(monkeypatch):
+    events = []
+    rendered = []
+
+    @contextmanager
+    def fake_activity(_console, message):
+        events.append(("start", message))
+        yield
+        events.append(("end", message))
+
+    def resume(run_id):
+        assert events == [("start", "Resuming run run-1…")]
+        return json.dumps({"run_id": run_id, "status": "resumed"})
+
+    monkeypatch.setattr(stable_job_cmds, "activity", fake_activity)
+    monkeypatch.setattr(stable_job_cmds, "client", SimpleNamespace(resume_run=resume))
+    monkeypatch.setattr(
+        stable_job_cmds,
+        "print_success_confirmation",
+        lambda _console, action, **kwargs: rendered.append((action, kwargs)),
+    )
+    monkeypatch.setattr(stable_job_cmds, "record_result", lambda _result: None)
+
+    stable_job_cmds.run_resume("run-1")
+
+    assert events == [
+        ("start", "Resuming run run-1…"),
+        ("end", "Resuming run run-1…"),
+    ]
+    assert rendered == [("Run resume", {"status": "resumed", "details": {"Run ID": "run-1"}})]
 
 
 def test_create_prepares_source_bundle_before_stable_submission(monkeypatch, tmp_path):

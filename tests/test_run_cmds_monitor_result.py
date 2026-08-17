@@ -128,11 +128,32 @@ def test_job_monitor_keyboard_state_and_agent_detail():
     assert "Agent Detail" in output
     assert "a2" in output
     assert "Inspect document batch" in output
-
     assert state.handle_key("\x7f", 2) is True
     assert state.detail_mode is False
     assert state.handle_key("\x04", 2) is True
     assert state.handle_key("q", 2) is False
+
+
+def test_workflow_monitor_shows_run_and_stable_job_ids():
+    console = Console(record=True, width=160, force_terminal=False)
+    console.print(
+        generate_live_layout(
+            "run-123",
+            {
+                "workflow_progress": {
+                    "run_id": "run-123",
+                    "stable_job_id": "job-456",
+                    "workflow_id": "test-workflow",
+                    "status": "running",
+                    "steps": [],
+                }
+            },
+        )
+    )
+
+    output = console.export_text()
+    assert "Run ID: run-123" in output
+    assert "Job ID: job-456" in output
 
 
 def test_job_monitor_ignores_legacy_shortcuts_and_accepts_only_shared_keys():
@@ -296,6 +317,55 @@ def test_monitor_normalizes_flat_grpc_job_payload_and_hides_runtime_nodes(mocker
     assert [step["id"] for step in progress["steps"]] == ["detect", "research"]
     assert progress["current_step"]["id"] == "research"
     assert [agent["id"] for agent in progress["current_step"]["agents"]] == ["research"]
+
+
+def test_monitor_recovers_public_steps_from_compact_runtime_agents(mocker):
+    """Stable-job runs omit their manifest and topology from ``GetJob``."""
+
+    data = {
+        "job": {
+            "job_id": "run-compact",
+            "graph_id": "public-workflow",
+            "job_name": "Public Workflow",
+            "status": "running",
+        },
+        "summary": {"status": "running"},
+        "agents": [
+            {"agent_id": "research__start", "agent_type": "step_source"},
+            {"agent_id": "research__worker", "agent_type": "executor"},
+            {"agent_id": "detect__start", "agent_type": "step_source"},
+            {"agent_id": "detect__worker", "agent_type": "executor"},
+        ],
+    }
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor.client.stream_events",
+        return_value=[
+            json.dumps(
+                {
+                    "type": "workflow_step_completed",
+                    "agent_id": "detect__start",
+                    "step_id": "detect",
+                    "status": "completed",
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "workflow_step_attempt_started",
+                    "agent_id": "research__start",
+                    "step_id": "research",
+                    "status": "running",
+                }
+            ),
+        ],
+    )
+
+    progress = _workflow_progress_for_monitor("run-compact", data)
+
+    assert progress is not None
+    assert [step["id"] for step in progress["steps"]] == ["detect", "research"]
+    assert progress["steps"][0]["status"] == "done"
+    assert progress["steps"][1]["status"] == "running"
+    assert progress["current_step"]["id"] == "research"
 
 
 def test_monitor_prefers_source_manifest_from_local_run_store(mocker, tmp_path):

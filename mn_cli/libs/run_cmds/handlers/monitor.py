@@ -27,6 +27,7 @@ _MONITOR_JOB_FIELDS = {
     "result_ref",
     "run_id",
     "runId",
+    "stable_job_id",
     "runtime_topology",
     "started_at",
     "status",
@@ -386,12 +387,25 @@ def _workflow_progress_for_monitor(
     job_id: str, data: dict[str, Any]
 ) -> dict[str, Any] | None:
     job, summary = _job_and_summary_from_data(data)
-    manifest = _manifest_from_job_data(data)
+    events: list[dict[str, Any]] = []
+    try:
+        for event_json in client.stream_events(job_id, follow=False):
+            try:
+                event = json.loads(event_json)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict):
+                events.append(event)
+    except Exception:
+        logger.exception("Failed to load workflow events for monitor")
+    manifest = _manifest_from_job_data(data, events=events)
     if not _workflow_step_ids(manifest):
         workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
         return {
             "schema_version": 2,
             "job_id": job_id,
+            "run_id": str(job.get("run_id") or job_id),
+            "stable_job_id": str(job.get("stable_job_id") or ""),
             "workflow_id": str(
                 workflow.get("workflow_id")
                 or job.get("workflow_id")
@@ -409,33 +423,29 @@ def _workflow_progress_for_monitor(
             "edges": [],
             "layers": [],
         }
-    events: list[dict[str, Any]] = []
     try:
-        for event_json in client.stream_events(job_id, follow=False):
-            try:
-                event = json.loads(event_json)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(event, dict):
-                events.append(event)
-    except Exception:
-        logger.exception("Failed to load workflow events for monitor")
-    try:
-        return build_workflow_progress_snapshot(
+        progress = build_workflow_progress_snapshot(
             manifest,
             events,
             job=job,
             summary=summary,
             job_id=job_id,
         )
+        progress["run_id"] = str(job.get("run_id") or job_id)
+        stable_job_id = str(job.get("stable_job_id") or "").strip()
+        if stable_job_id:
+            progress["stable_job_id"] = stable_job_id
+        return progress
     except Exception:
         logger.exception("Failed to build workflow progress for monitor")
         return None
 
 
-def _manifest_from_job_data(data: dict[str, Any]) -> dict[str, Any]:
+def _manifest_from_job_data(
+    data: dict[str, Any], *, events: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
     job, summary = _job_and_summary_from_data(data)
-    workflow_manifest = _public_workflow_manifest_from_job(job, summary)
+    workflow_manifest = _public_workflow_manifest_from_job(job, summary, events=events)
 
     run_manifest = _local_run_store_manifest(data, job, summary)
     if run_manifest and _matches_public_workflow_contract(
@@ -506,7 +516,10 @@ def _manifest_from_job_data(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _public_workflow_manifest_from_job(
-    job: dict[str, Any], summary: dict[str, Any]
+    job: dict[str, Any],
+    summary: dict[str, Any],
+    *,
+    events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Rebuild the source-facing workflow contract from the runtime ledger.
 
@@ -537,6 +550,15 @@ def _public_workflow_manifest_from_job(
 
     if not step_ids:
         step_ids = _public_step_ids_from_topology(job)
+    if not step_ids:
+        # ``GetJob`` deliberately returns a compact projection for active
+        # stable-job runs.  That projection omits both ``workflow_state`` and
+        # ``runtime_topology``, but retains the live agent list.  Step-source
+        # agents are one-to-one with the source-facing workflow steps, so use
+        # them as a final read-only reconstruction path.  This keeps
+        # ``mn run watch`` useful for runs started from a stable job even when
+        # the CLI did not create a local run-store mapping.
+        step_ids = _public_step_ids_from_agents(job, events=events)
     if not step_ids:
         return None
 
@@ -651,6 +673,59 @@ def _public_step_ids_from_topology(job: dict[str, Any]) -> list[str]:
         if step_id and step_id not in step_ids:
             step_ids.append(step_id)
     return step_ids
+
+
+def _public_step_ids_from_agents(
+    job: dict[str, Any], *, events: list[dict[str, Any]] | None = None
+) -> list[str]:
+    """Return public step IDs from compact runtime agent metadata.
+
+    A lowered workflow creates a ``<step>__start`` agent with type
+    ``step_source`` for every public step.  The compact monitor response keeps
+    that metadata even though it omits the workflow manifest and topology.
+    """
+
+    raw_agents = job.get("agents") if isinstance(job.get("agents"), list) else []
+    step_ids: list[str] = []
+    for agent in raw_agents:
+        if not isinstance(agent, dict):
+            continue
+        agent_id = str(agent.get("agent_id") or agent.get("id") or "").strip()
+        if not agent_id.endswith("__start"):
+            continue
+        agent_type = str(
+            agent.get("agent_type") or agent.get("node_type") or agent.get("type") or ""
+        ).strip().lower()
+        # Older runtimes may not include a type on agent summaries.  In that
+        # case the conventional generated ``__start`` name remains the best
+        # available public-step signal.
+        if agent_type and agent_type not in {"step_source", "source"}:
+            continue
+        step_id = agent_id.removesuffix("__start")
+        if step_id and step_id not in step_ids:
+            step_ids.append(step_id)
+    if not events:
+        return step_ids
+
+    # The agent summary is stable but normally sorted by agent ID.  Put every
+    # step the runtime has dispatched first, in event order, so a compact
+    # monitor follows the real workflow rather than an alphabetical list.
+    available_steps = set(step_ids)
+    observed_steps: list[str] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        step_id = str(
+            event.get("step_id")
+            or event.get("step")
+            or payload.get("step_id")
+            or payload.get("step")
+            or ""
+        ).strip()
+        if step_id in available_steps and step_id not in observed_steps:
+            observed_steps.append(step_id)
+    return observed_steps + [step_id for step_id in step_ids if step_id not in observed_steps]
 
 
 def _public_workflow_edges(
@@ -803,7 +878,28 @@ def _monitor_api_stream_timeout_seconds() -> float:
         return _monitor_rpc_timeout_seconds()
 
 
-def _live_monitor_api_stream(job_id: str) -> bool:
+def _with_monitor_identity(
+    progress: dict[str, Any] | None,
+    *,
+    run_id: str | None = None,
+    stable_job_id: str | None = None,
+) -> dict[str, Any] | None:
+    if not isinstance(progress, dict):
+        return progress
+    identified = dict(progress)
+    if run_id:
+        identified["run_id"] = run_id
+    if stable_job_id:
+        identified["stable_job_id"] = stable_job_id
+    return identified
+
+
+def _live_monitor_api_stream(
+    job_id: str,
+    *,
+    run_id: str | None = None,
+    stable_job_id: str | None = None,
+) -> bool:
     api_base_url = str(getattr(config, "api_base_url", "") or "").strip()
     if not api_base_url or os.getenv(
         "MN_JOB_MONITOR_DISABLE_API_STREAM", ""
@@ -857,8 +953,10 @@ def _live_monitor_api_stream(job_id: str) -> bool:
                 return Panel("Connecting to workflow progress stream...", style="cyan")
             return generate_live_layout(job_id, self.data, state=self.state)
 
-    initial_progress = _local_progress_from_run_store(
-        job_id, {"job_id": job_id, "status": "running"}
+    initial_progress = _with_monitor_identity(
+        _local_progress_from_run_store(job_id, {"job_id": job_id, "status": "running"}),
+        run_id=run_id,
+        stable_job_id=stable_job_id,
     )
     monitor_state = JobMonitorState()
     view = MonitorView(monitor_state, initial_progress)
@@ -911,7 +1009,13 @@ def _live_monitor_api_stream(job_id: str) -> bool:
                     # monitor so `mn run watch` remains attached.
                     return False
                 if kind == "snapshot" and isinstance(payload, dict):
-                    progress = _public_progress_from_api_snapshot(job_id, payload)
+                    progress = _with_monitor_identity(
+                        _public_progress_from_api_snapshot(job_id, payload),
+                        run_id=run_id,
+                        stable_job_id=stable_job_id,
+                    )
+                    if progress is None:
+                        continue
                     view.data = {
                         "workflow_progress": progress,
                         "summary": {"status": progress.get("status")},
@@ -929,8 +1033,17 @@ def _live_monitor_api_stream(job_id: str) -> bool:
     return False
 
 
-def _live_monitor(job_id: str):
-    if _live_monitor_api_stream(job_id):
+def _live_monitor(
+    job_id: str,
+    *,
+    run_id: str | None = None,
+    stable_job_id: str | None = None,
+):
+    if _live_monitor_api_stream(
+        job_id,
+        run_id=run_id,
+        stable_job_id=stable_job_id,
+    ):
         return
 
     import sys
@@ -990,8 +1103,10 @@ def _live_monitor(job_id: str):
                     with _temporary_monitor_rpc_timeout():
                         job_json = _get_job_for_monitor(job_id)
                         data = json.loads(job_json)
-                        data["workflow_progress"] = _workflow_progress_for_monitor(
-                            job_id, data
+                        data["workflow_progress"] = _with_monitor_identity(
+                            _workflow_progress_for_monitor(job_id, data),
+                            run_id=run_id,
+                            stable_job_id=stable_job_id,
                         )
                     last_good_data = data
                 except Exception as exc:
@@ -1051,10 +1166,15 @@ def _live_monitor(job_id: str):
         fetch_and_save_results(job_id, data)
 
 
-def monitor(job_id: str):
+def monitor(
+    job_id: str,
+    *,
+    run_id: str | None = None,
+    stable_job_id: str | None = None,
+):
     """Stream live events for a job"""
     try:
-        _live_monitor(job_id)
+        _live_monitor(job_id, run_id=run_id, stable_job_id=stable_job_id)
     except Exception as e:
         handle_cli_error(e, console, "monitor stream")
 

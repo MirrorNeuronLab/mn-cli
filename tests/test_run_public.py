@@ -36,6 +36,24 @@ def test_run_result_resolves_runtime_job_and_uses_run_scoped_output(mocker, monk
     )
 
 
+def test_run_result_uses_the_v2_run_id_not_the_stable_job_id(mocker, monkeypatch, tmp_path):
+    monkeypatch.setenv("MN_HOME", str(tmp_path / "mn-home"))
+    mocker.patch(
+        "mn_cli.libs.run_public.client.get_run",
+        return_value=json.dumps({"run_id": "run-1", "job_id": "stable-job"}),
+    )
+    fetch = mocker.patch("mn_cli.libs.run_public.run_cmds.fetch_and_save_results")
+
+    result = runner.invoke(app, ["run", "result", "run-1", "--json"])
+
+    assert result.exit_code == 0
+    fetch.assert_called_once_with(
+        "run-1",
+        data={"run_id": "run-1", "job_id": "stable-job"},
+        output_dir=tmp_path / "mn-home" / "outputs" / "run-1",
+    )
+
+
 def test_run_watch_json_is_ndjson_and_resolves_runtime_job(mocker):
     mocker.patch(
         "mn_cli.libs.run_public.client.get_run",
@@ -60,6 +78,21 @@ def test_run_watch_json_is_ndjson_and_resolves_runtime_job(mocker):
     assert [record["type"] for record in records] == ["snapshot", "event", "complete"]
     assert all(record["schema"] == "mn.cli.stream/v1" for record in records)
     get_job.assert_called_once_with("runtime-9")
+
+
+def test_run_watch_uses_the_v2_run_id_not_the_stable_job_id(mocker):
+    mocker.patch(
+        "mn_cli.libs.run_public.client.get_run",
+        return_value=json.dumps({"run_id": "run-1", "job_id": "stable-job"}),
+    )
+    monitor = mocker.patch("mn_cli.libs.run_public.run_cmds.monitor")
+
+    result = runner.invoke(app, ["run", "watch", "run-1"])
+
+    assert result.exit_code == 0
+    monitor.assert_called_once_with(
+        "run-1", run_id="run-1", stable_job_id="stable-job"
+    )
 
 
 def test_run_logs_json_one_shot_uses_standard_envelope(mocker):

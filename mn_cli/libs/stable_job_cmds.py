@@ -12,7 +12,14 @@ from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.bundles import read_bundle
 from mn_cli.libs.job_cleanup import JobResourceCleanupError, cleanup_cleared_job_resources
 from mn_cli.libs.run_cmds.common import _stage_bundle_payloads
-from mn_cli.libs.ui import print_collection, print_detail, print_error, print_success_confirmation, require_confirmation
+from mn_cli.libs.ui import (
+    activity,
+    print_collection,
+    print_detail,
+    print_error,
+    print_success_confirmation,
+    require_confirmation,
+)
 from mn_cli.output import record_result
 from mn_cli.shared import client, console, logger
 
@@ -201,17 +208,32 @@ def run_status(run_id: str):
 
 def run_pause(run_id: str):
     """Pause one execution run."""
-    _print_run(client.pause_run, run_id, "run pause")
+    _print_run(
+        client.pause_run,
+        run_id,
+        "run pause",
+        activity_message=f"Pausing run {run_id}…",
+    )
 
 
 def run_resume(run_id: str):
     """Resume one execution run."""
-    _print_run(client.resume_run, run_id, "run resume")
+    _print_run(
+        client.resume_run,
+        run_id,
+        "run resume",
+        activity_message=f"Resuming run {run_id}…",
+    )
 
 
 def run_cancel(run_id: str):
     """Cancel one execution run without deleting job data."""
-    _print_run(client.cancel_run, run_id, "run cancel")
+    _print_run(
+        client.cancel_run,
+        run_id,
+        "run cancel",
+        activity_message=f"Cancelling run {run_id}…",
+    )
 
 
 def run_delete(
@@ -234,9 +256,19 @@ def run_delete(
         handle_cli_error(exc, console, "run delete")
 
 
-def _print_run(operation, run_id: str, label: str) -> None:
+def _print_run(
+    operation,
+    run_id: str,
+    label: str,
+    *,
+    activity_message: str | None = None,
+) -> None:
     try:
-        result = json.loads(operation(run_id))
+        if activity_message:
+            with activity(console, activity_message):
+                result = json.loads(operation(run_id))
+        else:
+            result = json.loads(operation(run_id))
         if label == "run show":
             print_detail(console, "Run", result)
         else:

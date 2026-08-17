@@ -4,6 +4,8 @@ import json
 import os
 import time
 import textwrap
+from contextlib import contextmanager
+from collections.abc import Iterator
 
 from rich import box
 from rich.console import Group
@@ -138,6 +140,30 @@ def print_info(console, message: Any) -> None:
     if json_enabled():
         return
     _status_console(console).print(f"→ [cyan]{message}[/cyan]")
+
+
+@contextmanager
+def activity(console, message: str) -> Iterator[None]:
+    """Render a transient spinner for an interactive, human-facing operation.
+
+    Progress belongs on stderr so a command's result on stdout remains usable by
+    scripts. JSON and plain output deliberately stay free of terminal control
+    sequences and transient UI.
+    """
+    from mn_cli.output import json_enabled
+    from mn_cli.terminal import use_progress
+
+    status_console = _status_console(console)
+    if (
+        json_enabled()
+        or _is_plain_confirmation_mode()
+        or not use_progress(getattr(status_console, "file", None))
+    ):
+        yield
+        return
+
+    with status_console.status(f"[cyan]{message}[/cyan]", spinner="dots"):
+        yield
 
 
 def print_warning(console, message: Any) -> None:
@@ -446,7 +472,17 @@ def generate_workflow_progress_layout(
         Text(f"{shown_steps}/{total_steps} steps  |  {elapsed_label}  |  {status}", style=f"bold {color}"),
     )
 
-    subtitle = Text(str(progress.get("description") or f"Job {job_id}"), style="dim")
+    description = str(progress.get("description") or "").strip()
+    run_id = str(progress.get("run_id") or "").strip()
+    stable_job_id = str(progress.get("stable_job_id") or "").strip()
+    if run_id:
+        subtitle = Text(f"Run ID: {run_id}", style="dim")
+        if stable_job_id:
+            subtitle.append(f"  |  Job ID: {stable_job_id}", style="dim")
+        if description:
+            subtitle.append(f"\n{description}", style="dim")
+    else:
+        subtitle = Text(description or f"Job {job_id}", style="dim")
 
     body = Table.grid(expand=True)
     body.add_column(ratio=1)

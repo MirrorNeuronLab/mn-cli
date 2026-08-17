@@ -1,8 +1,9 @@
+from contextlib import contextmanager
 from io import StringIO
 
 from rich.console import Console
 
-from mn_cli.libs.ui import print_confirmed, print_error, print_info, print_success_confirmation, print_warning
+from mn_cli.libs.ui import activity, print_confirmed, print_error, print_info, print_success_confirmation, print_warning
 
 
 def _capture_console(*, no_color: bool = True, width: int = 120) -> tuple[Console, StringIO]:
@@ -88,3 +89,42 @@ def test_status_messages_share_concise_prefixes():
         "! Warning: The optional Web UI is unavailable.",
         "× Error: (MN_RUNTIME_TIMEOUT) The runtime did not respond.",
     ]
+
+
+def test_activity_uses_a_spinner_for_an_interactive_terminal(monkeypatch):
+    events = []
+
+    class SpinnerConsole:
+        file = object()
+
+        @contextmanager
+        def status(self, message, *, spinner):
+            events.append(("start", message, spinner))
+            yield
+            events.append(("end", message, spinner))
+
+    monkeypatch.delenv("MN_CLI_OUTPUT", raising=False)
+    monkeypatch.setattr("mn_cli.terminal.use_progress", lambda _stream: True)
+
+    with activity(SpinnerConsole(), "Resuming run run-1…"):
+        events.append(("work",))
+
+    assert events == [
+        ("start", "[cyan]Resuming run run-1…[/cyan]", "dots"),
+        ("work",),
+        ("end", "[cyan]Resuming run run-1…[/cyan]", "dots"),
+    ]
+
+
+def test_activity_skips_transient_output_in_plain_mode(monkeypatch):
+    class SpinnerConsole:
+        file = object()
+
+        def status(self, *_args, **_kwargs):
+            raise AssertionError("plain output must not start a spinner")
+
+    monkeypatch.setenv("MN_CLI_OUTPUT", "plain")
+    monkeypatch.setattr("mn_cli.terminal.use_progress", lambda _stream: True)
+
+    with activity(SpinnerConsole(), "Resuming run run-1…"):
+        pass

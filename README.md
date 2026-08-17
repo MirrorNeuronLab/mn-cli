@@ -134,6 +134,10 @@ mn run resume <run-id>
 mn run cancel <run-id>
 ```
 
+In an interactive terminal, run pause, resume, and cancel display a spinner
+while Core processes the request. JSON and `MN_CLI_OUTPUT=plain` output remain
+free of transient progress so they are safe for automation.
+
 `job_id` is the stable configuration and data owner. `run_id` is one
 execution and the identity used for control, logs, output, retention, and run
 deletion. Starting the same job again creates another run; retrying a run does

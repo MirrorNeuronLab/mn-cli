@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from mn_sdk.errors import AppError
 from mn_sdk.runtime_config import resolve_mn_home
 
 from mn_cli.libs import blueprint_cmds, run_cmds, stable_job_cmds
@@ -176,9 +175,14 @@ def show_run(run_id: str = typer.Argument(help="Execution run ID.")) -> None:
 
 def watch_run(run_id: str = typer.Argument(help="Execution run ID.")) -> None:
     """Watch live workflow progress for one execution run."""
-    runtime_job_id = _runtime_job_id(run_id)
+    run_record = json.loads(client.get_run(run_id))
+    runtime_job_id = _runtime_job_id(run_id, run_record=run_record)
     if not json_enabled():
-        run_cmds.monitor(runtime_job_id)
+        run_cmds.monitor(
+            runtime_job_id,
+            run_id=run_id,
+            stable_job_id=str(run_record.get("job_id") or ""),
+        )
         return
     try:
         snapshot = json.loads(client.get_job(runtime_job_id))
@@ -370,14 +374,12 @@ def human_ack(*args, **kwargs) -> None:
 
 def _runtime_job_id(run_id: str, *, run_record: dict | None = None) -> str:
     payload = run_record if isinstance(run_record, dict) else json.loads(client.get_run(run_id))
-    for key in ("runtime_job_id", "job_id", "execution_id"):
+    for key in ("runtime_job_id", "runtime_run_id", "execution_id"):
         value = payload.get(key) if isinstance(payload, dict) else None
         if value:
             return str(value)
-    raise AppError(
-        "MN_NOT_FOUND",
-        f"Run {run_id!r} does not identify a runtime job.",
-        hint=f"Use 'mn run show {run_id}' to inspect the stored run record.",
-        exit_code=2,
-        http_status=404,
-    )
+
+    # V2 executes a stable job under its run ID. Its ``job_id`` is the durable
+    # definition and has no coordinator or workflow ledger to monitor.
+    resolved_run_id = payload.get("run_id") if isinstance(payload, dict) else None
+    return str(resolved_run_id or run_id)

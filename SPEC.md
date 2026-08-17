@@ -78,6 +78,9 @@ those contracts.
   NDJSON records.
 - Default output is concise, human readable, and action oriented. Results use
   stdout while progress, warnings, and errors use stderr.
+- Interactive Rich sessions show a transient spinner while a run pause, resume,
+  or cancel request is in flight. JSON and plain output omit transient progress
+  so their output remains automation-safe.
 - `MN_CLI_OUTPUT=plain` removes terminal decoration and stays stable enough for
   automation. `NO_COLOR` removes color without removing meaning.
 - Rich result panels are reserved for lifecycle results; routine mutations use
