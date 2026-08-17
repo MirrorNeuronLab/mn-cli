@@ -114,3 +114,64 @@ def test_run_list_for_job_accepts_v2_items_response(mocker):
         ],
         "count": 1,
     }
+
+
+def test_run_list_enriches_local_mapping_with_runtime_status(mocker):
+    mocker.patch(
+        "mn_cli.libs.run_public.blueprint_cmds._load_observability_api",
+        return_value=(
+            lambda **_kwargs: [
+                {
+                    "run_id": "run-1",
+                    "job_id": "stable-job",
+                    "blueprint_id": "blueprint-1",
+                    "submitted_at": "2026-08-17T16:00:00Z",
+                }
+            ],
+            None,
+            None,
+        ),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_public.client.list_stable_jobs",
+        return_value=json.dumps(
+            {
+                "items": [
+                    {"job_id": "stable-job", "blueprint_id": "blueprint-1"}
+                ]
+            }
+        ),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_public.client.list_runs",
+        return_value=json.dumps(
+            {
+                "items": [
+                    {
+                        "run_id": "run-1",
+                        "job_id": "stable-job",
+                        "status": "running",
+                        "updated_at": "2026-08-17T17:00:00Z",
+                    }
+                ]
+            }
+        ),
+    )
+
+    result = runner.invoke(app, ["run", "list", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["data"] == {
+        "items": [
+            {
+                "run_id": "run-1",
+                "job_id": "stable-job",
+                "blueprint_id": "blueprint-1",
+                "submitted_at": "2026-08-17T16:00:00Z",
+                "status": "running",
+                "updated_at": "2026-08-17T17:00:00Z",
+            }
+        ],
+        "count": 1,
+    }

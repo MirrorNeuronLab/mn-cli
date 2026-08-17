@@ -874,7 +874,6 @@ def _live_monitor_api_stream(job_id: str) -> bool:
         old_settings = termios.tcgetattr(fd)
         tty.setcbreak(fd)
 
-    saw_snapshot = initial_progress is not None
     try:
         with Live(
             view,
@@ -899,14 +898,19 @@ def _live_monitor_api_stream(job_id: str) -> bool:
                 except queue.Empty:
                     continue
                 if kind == "error":
-                    if not saw_snapshot:
-                        return False
+                    # A local run-store snapshot is useful while connecting,
+                    # but it does not prove that the API stream attached.  If
+                    # the stream cannot stay open, fall back to the gRPC
+                    # monitor instead of treating that initial snapshot as a
+                    # successful watch and returning immediately.
                     logger.warning("Workflow progress stream ended: %s", payload)
-                    break
+                    return False
                 if kind == "done":
-                    break
+                    # Streams only complete normally after a terminal update.
+                    # A non-terminal close must continue through the polling
+                    # monitor so `mn run watch` remains attached.
+                    return False
                 if kind == "snapshot" and isinstance(payload, dict):
-                    saw_snapshot = True
                     progress = _public_progress_from_api_snapshot(job_id, payload)
                     view.data = {
                         "workflow_progress": progress,
@@ -914,7 +918,7 @@ def _live_monitor_api_stream(job_id: str) -> bool:
                         "job": {"job_id": job_id, "status": progress.get("status")},
                     }
                     if str(progress.get("status") or "").lower() in FINAL_STATUSES:
-                        break
+                        return True
     except KeyboardInterrupt:
         return True
     finally:
@@ -922,7 +926,7 @@ def _live_monitor_api_stream(job_id: str) -> bool:
             import termios
 
             termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
-    return saw_snapshot
+    return False
 
 
 def _live_monitor(job_id: str):

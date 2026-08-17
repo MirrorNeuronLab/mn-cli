@@ -22,6 +22,7 @@ from mn_cli.libs.ui import (
 )
 from mn_cli.libs.run_cmds.handlers.monitor import (
     _get_job_for_monitor,
+    _live_monitor_api_stream,
     _manifest_from_job_data,
     _monitor_api_stream_timeout_seconds,
     _public_progress_from_api_snapshot,
@@ -644,6 +645,77 @@ def test_monitor_stream_timeout_covers_transient_deadlines(monkeypatch):
     monkeypatch.delenv("MN_JOB_MONITOR_API_STREAM_TIMEOUT", raising=False)
 
     assert _monitor_api_stream_timeout_seconds() >= 30
+
+
+def test_monitor_falls_back_when_api_stream_fails_after_local_snapshot(mocker, monkeypatch):
+    class StaticLive:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.delenv("MN_JOB_MONITOR_DISABLE_API_STREAM", raising=False)
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor.config",
+        SimpleNamespace(api_base_url="http://api.example.test", api_token=""),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor._local_progress_from_run_store",
+        return_value={"status": "running"},
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor.stream_api_workflow_progress",
+        side_effect=RuntimeError("stream unavailable"),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor._interactive_live_output",
+        return_value=False,
+    )
+    mocker.patch("mn_cli.libs.run_cmds.handlers.monitor.Live", StaticLive)
+
+    assert _live_monitor_api_stream("job-stream") is False
+
+
+def test_monitor_accepts_terminal_api_stream_snapshot(mocker, monkeypatch):
+    class StaticLive:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.delenv("MN_JOB_MONITOR_DISABLE_API_STREAM", raising=False)
+    terminal_snapshot = {"job_id": "job-stream", "status": "completed"}
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor.config",
+        SimpleNamespace(api_base_url="http://api.example.test", api_token=""),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor._local_progress_from_run_store",
+        return_value=None,
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor.stream_api_workflow_progress",
+        return_value=iter([terminal_snapshot]),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor._public_progress_from_api_snapshot",
+        return_value=terminal_snapshot,
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor._interactive_live_output",
+        return_value=False,
+    )
+    mocker.patch("mn_cli.libs.run_cmds.handlers.monitor.Live", StaticLive)
+
+    assert _live_monitor_api_stream("job-stream") is True
 
 
 def test_agent_selection_has_no_reverse_background():

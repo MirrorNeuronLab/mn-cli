@@ -11,7 +11,7 @@ from mn_sdk.runtime_config import resolve_mn_home
 from mn_cli.libs import blueprint_cmds, run_cmds, stable_job_cmds
 from mn_cli.libs.ui import print_collection
 from mn_cli.output import emit_stream_record, json_enabled, record_result
-from mn_cli.shared import client, console
+from mn_cli.shared import client, console, logger
 
 
 def list_runs(
@@ -61,13 +61,112 @@ def list_runs(
         )
         return
     list_from_store, _, _ = blueprint_cmds._load_observability_api()
-    items = list_from_store(runs_root=runs_root, blueprint_id=blueprint, limit=limit)
+    local_items = list_from_store(
+        runs_root=runs_root, blueprint_id=blueprint, limit=limit
+    )
+    items = _merge_run_items(
+        local_items,
+        _runtime_run_items(blueprint_id=blueprint, limit=limit),
+        limit=limit,
+    )
     print_collection(
         console,
         "Runs",
         items,
         columns=(("ID", "run_id"), ("Kind", "blueprint_id"), ("State", "status"), ("Node / Owner", "job_id"), ("Updated", "updated_at")),
     )
+
+
+def _runtime_run_items(*, blueprint_id: str | None, limit: int) -> list[dict]:
+    """Read all visible stable-job runs when Core is reachable.
+
+    The local run store receives the submission mapping before terminal
+    artifacts arrive, so it cannot provide an authoritative lifecycle state
+    for an active run.  Core owns that state.
+    """
+
+    try:
+        jobs_payload = json.loads(client.list_stable_jobs(page_size=max(limit, 50)))
+    except Exception:
+        logger.debug("Unable to list runtime jobs for run listing", exc_info=True)
+        return []
+
+    jobs = (
+        jobs_payload.get("data")
+        or jobs_payload.get("jobs")
+        or jobs_payload.get("items")
+        or []
+        if isinstance(jobs_payload, dict)
+        else []
+    )
+    if not isinstance(jobs, list):
+        return []
+
+    items: list[dict] = []
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        job_id = str(job.get("job_id") or "").strip()
+        job_blueprint_id = str(job.get("blueprint_id") or "").strip()
+        if not job_id or (blueprint_id and job_blueprint_id != blueprint_id):
+            continue
+        try:
+            runs_payload = json.loads(
+                client.list_runs(job_id, page_size=max(limit, 50))
+            )
+        except Exception:
+            logger.debug("Unable to list runs for stable job %s", job_id, exc_info=True)
+            continue
+        runs = (
+            runs_payload.get("data")
+            or runs_payload.get("runs")
+            or runs_payload.get("items")
+            or []
+            if isinstance(runs_payload, dict)
+            else []
+        )
+        if not isinstance(runs, list):
+            continue
+        for run in runs:
+            if not isinstance(run, dict):
+                continue
+            item = dict(run)
+            item.setdefault("job_id", job_id)
+            if job_blueprint_id:
+                item.setdefault("blueprint_id", job_blueprint_id)
+            items.append(item)
+    return items
+
+
+def _merge_run_items(
+    local_items: list[dict], runtime_items: list[dict], *, limit: int
+) -> list[dict]:
+    """Combine local metadata with Core's authoritative lifecycle records."""
+
+    merged: dict[str, dict] = {}
+    for item in local_items:
+        if not isinstance(item, dict):
+            continue
+        run_id = str(item.get("run_id") or "").strip()
+        if run_id:
+            merged[run_id] = dict(item)
+    for item in runtime_items:
+        run_id = str(item.get("run_id") or "").strip()
+        if not run_id:
+            continue
+        combined = dict(merged.get(run_id) or {})
+        combined.update(item)
+        merged[run_id] = combined
+
+    return sorted(
+        merged.values(),
+        key=lambda item: item.get("updated_at")
+        or item.get("ended_at")
+        or item.get("started_at")
+        or item.get("submitted_at")
+        or "",
+        reverse=True,
+    )[:limit]
 
 
 def show_run(run_id: str = typer.Argument(help="Execution run ID.")) -> None:
