@@ -228,6 +228,11 @@ aliases to Gemma. `run_cluster_model_monitor` remains the single dynamic route
 lifecycle: complete joined-node inventories add routes, complete membership
 after departure removes routes, and incomplete snapshots do not destructively
 replace the last known route set.
+When a local node's dynamic address changes, the monitor rehomes only a local
+DMR registration whose former owner is absent and whose artifact is confirmed
+locally installed, then rebuilds its gateway route from the live endpoint. It
+does not use a hostname unless that hostname is independently resolvable by
+the participating nodes.
 
 Owner-gateway model names are resolved from each merged SDK catalog entry:
 `route_aliases` takes precedence over the canonical entry ID. The normal SDK

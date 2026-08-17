@@ -264,7 +264,11 @@ def _stable_job_run_ids(job_id: str) -> list[str]:
         )
         return []
 
-    data = result.get("data") if isinstance(result, dict) else None
+    data = (
+        result.get("data") or result.get("runs") or result.get("items")
+        if isinstance(result, dict)
+        else None
+    )
     if not isinstance(data, list):
         return []
 

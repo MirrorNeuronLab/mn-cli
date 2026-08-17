@@ -368,6 +368,44 @@ def test_cluster_model_reconcile_prunes_departed_runtime_status_snapshots(mocker
     ]
 
 
+def test_cluster_model_reconcile_rehomes_local_dmr_registration_after_address_change():
+    entry = resolve_model_entry("gemma4:e2b")
+    add_registered_models(
+        [dmr_registration(entry, selected_node="mirror_neuron@10.0.4.38")]
+    )
+
+    reconciled = model_cmds._reconcile_stale_local_model_registrations(
+        local_node="mirror_neuron@172.20.10.8",
+        live_nodes={"mirror_neuron@172.20.10.8"},
+        installed_models={"docker.io/ai/gemma4:E2B"},
+    )
+
+    assert reconciled == [
+        {
+            "id": "gemma4:e2b",
+            "previous_node": "mirror_neuron@10.0.4.38",
+            "node": "mirror_neuron@172.20.10.8",
+        }
+    ]
+    assert get_registered_model("gemma4:e2b")["selected_node"] == "mirror_neuron@172.20.10.8"
+
+
+def test_cluster_model_reconcile_does_not_rehome_a_live_remote_owner():
+    entry = resolve_model_entry("gemma4:e2b")
+    add_registered_models(
+        [dmr_registration(entry, selected_node="mirror_neuron@worker")]
+    )
+
+    reconciled = model_cmds._reconcile_stale_local_model_registrations(
+        local_node="mirror_neuron@local",
+        live_nodes={"mirror_neuron@local", "mirror_neuron@worker"},
+        installed_models={"docker.io/ai/gemma4:E2B"},
+    )
+
+    assert reconciled == []
+    assert get_registered_model("gemma4:e2b")["selected_node"] == "mirror_neuron@worker"
+
+
 def test_cluster_model_reconcile_requires_matching_publish_ack(mocker):
     local = _cluster_node("mirror_neuron@local", "10.0.0.1", self_node=True)
     mocker.patch(

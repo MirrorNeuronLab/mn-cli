@@ -25,7 +25,11 @@ def list_runs(
     """List execution runs, optionally filtered by job or blueprint."""
     if job:
         payload = json.loads(client.list_runs(job))
-        items = (payload.get("data") or payload.get("runs") or []) if isinstance(payload, dict) else []
+        items = (
+            payload.get("data") or payload.get("runs") or payload.get("items") or []
+            if isinstance(payload, dict)
+            else []
+        )
         if not isinstance(items, list):
             items = []
         print_collection(

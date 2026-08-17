@@ -140,3 +140,29 @@ def test_delete_attempts_all_local_cleanup_before_reporting_failure(monkeypatch)
             "job delete",
         )
     ]
+
+
+def test_delete_cleans_historical_runs_from_v2_items_response(monkeypatch):
+    cleaned = []
+    printed = []
+    monkeypatch.setattr(
+        stable_job_cmds,
+        "client",
+        SimpleNamespace(
+            list_runs=lambda _job_id: json.dumps({"items": [{"run_id": "run-1"}]}),
+            delete_stable_job=lambda job_id, confirmed: json.dumps(
+                {"job_id": job_id, "status": "deleted", "confirmed": confirmed}
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        stable_job_cmds,
+        "cleanup_cleared_job_resources",
+        lambda job_id, **_kwargs: cleaned.append(job_id),
+    )
+    monkeypatch.setattr(stable_job_cmds, "record_result", printed.append)
+
+    stable_job_cmds.delete("stable-job", yes=True)
+
+    assert cleaned == ["run-1", "stable-job"]
+    assert printed == [{"job_id": "stable-job", "status": "deleted", "confirmed": True}]

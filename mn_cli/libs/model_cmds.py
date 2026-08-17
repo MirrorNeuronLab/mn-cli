@@ -9,6 +9,7 @@ import subprocess
 import urllib.parse
 import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any
@@ -1755,12 +1756,10 @@ def reconcile_cluster_model_routes(
         (endpoint for endpoint in node_endpoints if _cluster_node_is_local(endpoint)),
         None,
     )
-    local_entries = (
-        _model_entries_for_installed_names(_installed_model_names())
-        if local_endpoint is not None
-        else []
-    )
+    local_installed_models = _installed_model_names() if local_endpoint is not None else set()
+    local_entries = _model_entries_for_installed_names(local_installed_models)
     local_revision = _runtime_model_inventory_revision(local_entries)
+    reconciled_registry_models: list[dict[str, str]] = []
     if local_endpoint is None:
         errors.append(
             {
@@ -1771,6 +1770,16 @@ def reconcile_cluster_model_routes(
         )
     else:
         local_node = str(local_endpoint.get("node_name") or "")
+        try:
+            reconciled_registry_models = _reconcile_stale_local_model_registrations(
+                local_node=local_node,
+                live_nodes=observed_nodes,
+                installed_models=local_installed_models,
+            )
+        except Exception as exc:
+            errors.append({"node": local_node, "stage": "registry", "error": str(exc)})
+            if not quiet:
+                print_warning(console, f"Could not reconcile local model registry ownership: {exc}")
         try:
             publish_ack = _publish_local_runtime_model_inventory(
                 local_entries,
@@ -1848,11 +1857,11 @@ def reconcile_cluster_model_routes(
             local_routes = _runtime_endpoints_for_local_gateway(
                 routes,
                 local_endpoint,
-                local_installed_models=_installed_model_names(),
+                local_installed_models=local_installed_models,
             )
             remotes = reconcile_cluster_model_remotes(
                 local_routes,
-                local_installed_models=_installed_model_names(),
+                local_installed_models=local_installed_models,
                 local_node=local_node,
                 replace=inventory_complete,
             )
@@ -1927,9 +1936,67 @@ def reconcile_cluster_model_routes(
         "nodes": node_results,
         "errors": errors,
         "inventory_complete": inventory_complete,
+        "reconciled_registry_models": reconciled_registry_models,
         "sync_id": sync_id,
         "route_version": route_version,
     }
+
+
+def _reconcile_stale_local_model_registrations(
+    *,
+    local_node: str,
+    live_nodes: set[str],
+    installed_models: set[str],
+) -> list[dict[str, str]]:
+    """Rehome local DMR records when a laptop's advertised address changes.
+
+    The registry is local to the CLI host, while a Core node name can contain a
+    DHCP address. Only registrations whose old owner is absent from live Core
+    membership and whose DMR artifact is confirmed locally installed are moved.
+    Remote owners and absent artifacts remain untouched.
+    """
+    if not local_node or not installed_models:
+        return []
+
+    installed_keys = {
+        key
+        for model in installed_models
+        for key in docker_model_match_keys(model)
+    }
+    if not installed_keys:
+        return []
+
+    registry = load_model_registry()
+    records = registry.get("models") if isinstance(registry, dict) else None
+    if not isinstance(records, dict):
+        return []
+
+    reconciled: list[dict[str, str]] = []
+    for model_id, record in records.items():
+        if not isinstance(record, dict) or record.get("kind") != "dmr":
+            continue
+        previous_node = str(record.get("selected_node") or "").strip()
+        if not previous_node or previous_node == local_node or previous_node in live_nodes:
+            continue
+        if not (_model_payload_match_keys(record) & installed_keys):
+            continue
+        record["selected_node"] = local_node
+        record["updated_at"] = datetime.now(UTC).isoformat()
+        reconciled.append(
+            {
+                "id": str(record.get("id") or model_id),
+                "previous_node": previous_node,
+                "node": local_node,
+            }
+        )
+
+    if reconciled:
+        save_model_registry(registry)
+        logger.info(
+            "Rehomed %d local DMR registry record(s) after node-address change",
+            len(reconciled),
+        )
+    return reconciled
 
 
 def _validated_runtime_status_ack(

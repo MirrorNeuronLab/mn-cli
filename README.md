@@ -272,6 +272,11 @@ snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
   snapshots retain the last safe routes until departure is confirmed.
   Gateway route names and `fallback_model` are read from the SDK's merged model
   catalog, including `~/.mn/models/catalog.json` (or `$MN_HOME`) and the
-  highest-priority `MN_MODEL_CATALOG_PATH` override.
+  highest-priority `MN_MODEL_CATALOG_PATH` override. When a local runtime's DHCP
+  address changes, the monitor rehomes only DMR registrations whose artifact is
+  confirmed on the local host and whose former owner is absent from live
+  membership. It then rebuilds gateway routes from the current live node
+  address; this avoids treating an unverified `.local` name as a cluster
+  endpoint.
 - `--debug` retains complete Docker build diagnostics and prints deferred model
   policies. Actual model/node selection appears later in runtime events.
