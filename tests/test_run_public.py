@@ -36,7 +36,7 @@ def test_run_result_resolves_runtime_job_and_uses_run_scoped_output(mocker, monk
     )
 
 
-def test_run_result_uses_the_v2_run_id_not_the_stable_job_id(mocker, monkeypatch, tmp_path):
+def test_run_result_uses_the_v1_run_id_not_the_job_id(mocker, monkeypatch, tmp_path):
     monkeypatch.setenv("MN_HOME", str(tmp_path / "mn-home"))
     mocker.patch(
         "mn_cli.libs.run_public.client.get_run",
@@ -55,13 +55,11 @@ def test_run_result_uses_the_v2_run_id_not_the_stable_job_id(mocker, monkeypatch
 
 
 def test_run_watch_json_is_ndjson_and_resolves_runtime_job(mocker):
-    mocker.patch(
+    get_run = mocker.patch(
         "mn_cli.libs.run_public.client.get_run",
-        return_value=json.dumps({"run_id": "run-1", "runtime_job_id": "runtime-9"}),
-    )
-    get_job = mocker.patch(
-        "mn_cli.libs.run_public.client.get_job",
-        return_value=json.dumps({"job_id": "runtime-9", "status": "running"}),
+        return_value=json.dumps(
+            {"run_id": "run-1", "runtime_job_id": "runtime-9", "status": "running"}
+        ),
     )
     mocker.patch(
         "mn_cli.libs.run_public.client.stream_events",
@@ -77,10 +75,11 @@ def test_run_watch_json_is_ndjson_and_resolves_runtime_job(mocker):
     records = _documents(result.stdout)
     assert [record["type"] for record in records] == ["snapshot", "event", "complete"]
     assert all(record["schema"] == "mn.cli.stream/v1" for record in records)
-    get_job.assert_called_once_with("runtime-9")
+    assert get_run.call_count == 2
+    get_run.assert_called_with("run-1")
 
 
-def test_run_watch_uses_the_v2_run_id_not_the_stable_job_id(mocker):
+def test_run_watch_uses_the_v1_run_id_not_the_job_id(mocker):
     mocker.patch(
         "mn_cli.libs.run_public.client.get_run",
         return_value=json.dumps({"run_id": "run-1", "job_id": "stable-job"}),

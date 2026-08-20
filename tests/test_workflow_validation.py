@@ -5,7 +5,7 @@ from mn_cli.libs import workflow_validation
 
 def _workflow_manifest() -> dict:
     return {
-        "apiVersion": "mn.workflow/v2",
+        "apiVersion": "mn.workflow/v1",
         "kind": "Workflow",
         "id": "sample_flow",
         "name": "Sample Flow",

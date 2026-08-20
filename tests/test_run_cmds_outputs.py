@@ -5,26 +5,29 @@ import re
 import subprocess
 import sys
 import uuid
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import SimpleNamespace
+
 import pytest
-from logging.handlers import RotatingFileHandler
-from typer.testing import CliRunner
-from rich.console import Console
-from mn_cli.main import app
-from mn_cli.libs import model_cmds, run_cmds
-from mn_cli.libs.ui import JobMonitorState, generate_live_layout
-from mn_cli.libs.workflow_progress import (
-    BlueprintWorkflowProgress,
-    _agent_progress_detail,
-)
-from mn_cli.libs.run_manifest import prepare_manifest_for_submission
 from mn_sdk import (
     AgentProgress,
     load_model_ownership,
     load_model_remotes,
     upsert_model_remote,
 )
+from rich.console import Console
+from typer.testing import CliRunner
+from v1_manifests import workflow_manifest
+
+from mn_cli.libs import model_cmds, run_cmds
+from mn_cli.libs.run_manifest import prepare_manifest_for_submission
+from mn_cli.libs.ui import JobMonitorState, generate_live_layout
+from mn_cli.libs.workflow_progress import (
+    BlueprintWorkflowProgress,
+    _agent_progress_detail,
+)
+from mn_cli.main import app
 
 runner = CliRunner()
 
@@ -69,7 +72,7 @@ def test_run_injects_user_home_output_environment(mocker, tmp_path, monkeypatch)
     monkeypatch.setenv("HOME", str(home_dir))
     monkeypatch.setenv("MN_OUTPUT_HOME", str(output_home))
     mock_submit = mocker.patch(
-        "mn_cli.libs.run_cmds.client.submit_job", return_value="job-123"
+        "mn_cli.libs.run_cmds.client.create_job", return_value=json.dumps({"job_id": "job-123"})
     )
     mocker.patch(
         "mn_cli.libs.run_cmds.client.stream_events",
@@ -80,14 +83,14 @@ def test_run_injects_user_home_output_environment(mocker, tmp_path, monkeypatch)
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text(
         json.dumps(
-            {
+            workflow_manifest({
                 "nodes": [
                     {
                         "node_id": "worker",
                         "config": {"environment": {}},
                     }
                 ]
-            }
+            })
         )
     )
 
@@ -95,7 +98,7 @@ def test_run_injects_user_home_output_environment(mocker, tmp_path, monkeypatch)
 
     assert result.exit_code == 0
     manifest = json.loads(mock_submit.call_args.args[0])
-    env = manifest["nodes"][0]["config"]["environment"]
+    env = manifest["agents"]["nodes"][0]["config"]["environment"]
     assert env["MN_OUTPUT_HOME"] == str(output_home)
     assert env["MN_USER_HOME"] == str(home_dir)
     assert env["OTTERDESK_USER_HOME"] == str(home_dir)
@@ -104,7 +107,7 @@ def test_run_injects_user_home_output_environment(mocker, tmp_path, monkeypatch)
 def test_run_materializes_vc_final_artifact_outputs(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     output_dir = tmp_path / "vc-output"
-    mocker.patch("mn_cli.libs.run_cmds.client.submit_job", return_value="job-123")
+    mocker.patch("mn_cli.libs.run_cmds.client.create_job", return_value=json.dumps({"job_id": "job-123"}))
     mocker.patch(
         "mn_cli.libs.run_cmds.client.stream_events",
         return_value=[
@@ -160,25 +163,25 @@ def test_run_materializes_vc_final_artifact_outputs(mocker, tmp_path, monkeypatc
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text(
         json.dumps(
-            {
+            workflow_manifest({
                 "nodes": [
                     {
                         "node_id": "worker",
                         "config": {"environment": {}},
                     }
                 ]
-            }
+            })
         )
     )
     config_dir = bundle_dir / "config"
     config_dir.mkdir()
     (config_dir / "default.json").write_text(
         json.dumps(
-            {
+            workflow_manifest({
                 "identity": {"blueprint_id": "vc_assistant", "name": "VC Assistant"},
                 "inputs": {"payload": {"output_folder": str(output_dir)}},
                 "outputs": {"folder_path": str(output_dir)},
-            }
+            })
         )
     )
 
@@ -253,7 +256,7 @@ def test_run_materializes_deeply_nested_hostlocal_vc_artifact(
             "sandbox": {"logs": json.dumps({"status": "completed"})},
         }
 
-    mocker.patch("mn_cli.libs.run_cmds.client.submit_job", return_value="job-123")
+    mocker.patch("mn_cli.libs.run_cmds.client.create_job", return_value=json.dumps({"job_id": "job-123"}))
     mocker.patch(
         "mn_cli.libs.run_cmds.client.stream_events",
         return_value=[
@@ -270,14 +273,14 @@ def test_run_materializes_deeply_nested_hostlocal_vc_artifact(
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text(
         json.dumps(
-            {
+            workflow_manifest({
                 "nodes": [
                     {
                         "node_id": "worker",
                         "config": {"environment": {}},
                     }
                 ]
-            }
+            })
         )
     )
     config_dir = bundle_dir / "config"
@@ -380,7 +383,7 @@ def test_fetch_and_save_results_preserves_failed_worker_payload(
 
     run_cmds.fetch_and_save_results(
         "job-failed",
-        data={"job": {"status": "failed", "result_ref": {"kind": "job_result"}}},
+        data={"status": "failed", "result_ref": {"kind": "job_result"}},
         output_dir=output,
     )
 
@@ -492,7 +495,7 @@ def test_detached_batch_run_starts_output_event_relay_for_shared_storage(
         "mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="batch-output-run"
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds.client.submit_job", return_value="job-batch-output"
+        "mn_cli.libs.run_cmds.client.create_job", return_value=json.dumps({"job_id": "job-batch-output"})
     )
     mocker.patch(
         "mn_cli.libs.run_cmds.client.stream_events",
@@ -502,12 +505,11 @@ def test_detached_batch_run_starts_output_event_relay_for_shared_storage(
         ],
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds.client.get_job",
+        "mn_cli.libs.run_cmds.client.get_run",
         return_value=json.dumps(
             {
-                "summary": {"status": "running"},
-                "job": {"status": "running"},
-                "recent_events": [],
+                "run_id": "batch-output-run",
+                "status": "running",
             }
         ),
     )
@@ -525,7 +527,7 @@ def test_detached_batch_run_starts_output_event_relay_for_shared_storage(
     }
     (bundle_dir / "manifest.json").write_text(
         json.dumps(
-            {
+            workflow_manifest({
                 "nodes": [
                     {
                         "node_id": "worker",
@@ -542,7 +544,7 @@ def test_detached_batch_run_starts_output_event_relay_for_shared_storage(
                         "output_folder": str(target_path),
                     }
                 },
-            }
+            })
         )
     )
     config_dir = bundle_dir / "config"

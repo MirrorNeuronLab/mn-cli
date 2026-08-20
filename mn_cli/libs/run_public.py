@@ -7,14 +7,14 @@ from typing import Annotated
 import typer
 from mn_sdk.runtime_config import resolve_mn_home
 
-from mn_cli.libs import blueprint_cmds, run_cmds, stable_job_cmds
+from mn_cli.libs import blueprint_cmds, job_definition_cmds, run_cmds
 from mn_cli.libs.ui import print_collection
 from mn_cli.output import emit_stream_record, json_enabled, record_result
 from mn_cli.shared import client, console, logger
 
 
 def list_runs(
-    job: str | None = typer.Option(None, "--job", help="Only show runs belonging to this stable job."),
+    job: str | None = typer.Option(None, "--job", help="Only show runs belonging to this durable job."),
     blueprint: str | None = typer.Option(None, "--blueprint", help="Only show runs for this blueprint ID."),
     follow: bool = typer.Option(False, "--follow", "-f", help="Refresh until interrupted."),
     limit: int = typer.Option(20, "--limit", min=1, help="Maximum runs to show."),
@@ -77,7 +77,7 @@ def list_runs(
 
 
 def _runtime_run_items(*, blueprint_id: str | None, limit: int) -> list[dict]:
-    """Read all visible stable-job runs when Core is reachable.
+    """Read all visible durable-job runs when Core is reachable.
 
     The local run store receives the submission mapping before terminal
     artifacts arrive, so it cannot provide an authoritative lifecycle state
@@ -114,7 +114,7 @@ def _runtime_run_items(*, blueprint_id: str | None, limit: int) -> list[dict]:
                 client.list_runs(job_id, page_size=max(limit, 50))
             )
         except Exception:
-            logger.debug("Unable to list runs for stable job %s", job_id, exc_info=True)
+            logger.debug("Unable to list runs for durable job %s", job_id, exc_info=True)
             continue
         runs = (
             runs_payload.get("data")
@@ -170,7 +170,7 @@ def _merge_run_items(
 
 def show_run(run_id: str = typer.Argument(help="Execution run ID.")) -> None:
     """Show one execution run."""
-    stable_job_cmds.run_status(run_id)
+    job_definition_cmds.run_status(run_id)
 
 
 def watch_run(run_id: str = typer.Argument(help="Execution run ID.")) -> None:
@@ -185,7 +185,7 @@ def watch_run(run_id: str = typer.Argument(help="Execution run ID.")) -> None:
         )
         return
     try:
-        snapshot = json.loads(client.get_job(runtime_job_id))
+        snapshot = json.loads(client.get_run(run_id))
         emit_stream_record("snapshot", data=snapshot)
         for event_json in client.stream_events(
             runtime_job_id,
@@ -379,7 +379,7 @@ def _runtime_job_id(run_id: str, *, run_record: dict | None = None) -> str:
         if value:
             return str(value)
 
-    # V2 executes a stable job under its run ID. Its ``job_id`` is the durable
+    # v1 executes a durable job under its run ID. Its ``job_id`` is the durable
     # definition and has no coordinator or workflow ledger to monitor.
     resolved_run_id = payload.get("run_id") if isinstance(payload, dict) else None
     return str(resolved_run_id or run_id)

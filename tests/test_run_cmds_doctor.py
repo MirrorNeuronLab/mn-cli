@@ -5,18 +5,28 @@ import re
 import subprocess
 import sys
 import uuid
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import SimpleNamespace
+
 import pytest
-from logging.handlers import RotatingFileHandler
-from typer.testing import CliRunner
+from mn_sdk import (
+    AgentProgress,
+    load_model_ownership,
+    load_model_remotes,
+    upsert_model_remote,
+)
 from rich.console import Console
-from mn_cli.main import app
+from typer.testing import CliRunner
+
 from mn_cli.libs import model_cmds, run_cmds
-from mn_cli.libs.ui import JobMonitorState, generate_live_layout
-from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress, _agent_progress_detail
 from mn_cli.libs.run_manifest import prepare_manifest_for_submission
-from mn_sdk import AgentProgress, load_model_ownership, load_model_remotes, upsert_model_remote
+from mn_cli.libs.ui import JobMonitorState, generate_live_layout
+from mn_cli.libs.workflow_progress import (
+    BlueprintWorkflowProgress,
+    _agent_progress_detail,
+)
+from mn_cli.main import app
 
 runner = CliRunner()
 
@@ -68,7 +78,7 @@ def test_doctor_bundle_prepares_without_submitting_job(mocker, tmp_path):
             metadata={"submission_id": "doctor-submission"},
         ),
     )
-    mock_submit = mocker.patch("mn_cli.libs.run_cmds.client.submit_job")
+    mock_submit = mocker.patch("mn_cli.libs.run_cmds.client.create_job")
     mocker.patch("mn_cli.libs.run_cmds._doctor_print_report")
 
     report = run_cmds.doctor_bundle(str(bundle_dir), no_llm_call=True)

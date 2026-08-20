@@ -5,18 +5,29 @@ import re
 import subprocess
 import sys
 import uuid
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import SimpleNamespace
+
 import pytest
-from logging.handlers import RotatingFileHandler
-from typer.testing import CliRunner
+from mn_sdk import (
+    AgentProgress,
+    load_model_ownership,
+    load_model_remotes,
+    upsert_model_remote,
+)
 from rich.console import Console
-from mn_cli.main import app
+from typer.testing import CliRunner
+from v1_manifests import workflow_manifest
+
 from mn_cli.libs import model_cmds, run_cmds
-from mn_cli.libs.ui import JobMonitorState, generate_live_layout
-from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress, _agent_progress_detail
 from mn_cli.libs.run_manifest import prepare_manifest_for_submission
-from mn_sdk import AgentProgress, load_model_ownership, load_model_remotes, upsert_model_remote
+from mn_cli.libs.ui import JobMonitorState, generate_live_layout
+from mn_cli.libs.workflow_progress import (
+    BlueprintWorkflowProgress,
+    _agent_progress_detail,
+)
+from mn_cli.main import app
 
 runner = CliRunner()
 
@@ -37,7 +48,7 @@ def isolated_mn_home(tmp_path, monkeypatch):
 def test_run_ensures_context_engine_when_blueprint_memory_enabled(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="context-run")
-    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-context")
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-context"}))
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_completed"})
     ])
@@ -48,7 +59,9 @@ def test_run_ensures_context_engine_when_blueprint_memory_enabled(mocker, tmp_pa
 
     bundle_dir = tmp_path / "context_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps({"nodes": []}))
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(workflow_manifest({"nodes": []}))
+    )
     (bundle_dir / "payloads").mkdir()
     config_dir = bundle_dir / "config"
     config_dir.mkdir()
@@ -213,7 +226,7 @@ def test_run_does_not_ensure_context_engine_when_memory_disabled_by_env(mocker, 
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     monkeypatch.setenv("MN_CONTEXT_MEMORY_ENABLED", "0")
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="context-disabled-run")
-    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-context-disabled")
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-context-disabled"}))
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_completed"})
     ])
@@ -221,7 +234,9 @@ def test_run_does_not_ensure_context_engine_when_memory_disabled_by_env(mocker, 
 
     bundle_dir = tmp_path / "context_disabled_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps({"nodes": []}))
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(workflow_manifest({"nodes": []}))
+    )
     (bundle_dir / "payloads").mkdir()
     config_dir = bundle_dir / "config"
     config_dir.mkdir()

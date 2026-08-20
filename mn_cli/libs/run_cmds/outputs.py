@@ -7,14 +7,13 @@ def fetch_and_save_results(job_id: str, data: dict = None, output_dir: Path | st
 
     if data is None:
         try:
-            job_json = client.get_job(job_id)
-            data = json.loads(job_json)
+            run_json = client.get_run(job_id)
+            data = json.loads(run_json)
         except Exception:
             logger.exception("Failed to fetch job result for %s", job_id)
             return
 
-    job = data.get("job") if isinstance(data.get("job"), dict) else data
-    job = job if isinstance(job, dict) else {}
+    job = data if isinstance(data, dict) else {}
     status = job.get("status")
 
     # Preserve the terminal payload for both successful output and failure
@@ -40,7 +39,6 @@ def fetch_and_save_results(job_id: str, data: dict = None, output_dir: Path | st
                 logger.exception(
                     "Failed to decode event while saving results for %s", job_id
                 )
-                pass
 
         for ev in full_events:
             ev_type = ev.get("type")
@@ -48,12 +46,10 @@ def fetch_and_save_results(job_id: str, data: dict = None, output_dir: Path | st
                 stream_events.append(ev.get("payload", ev))
     except Exception:
         logger.exception("Failed to stream events while saving results for %s", job_id)
-        pass
 
     if stream_events:
         with open(log_dir / "result_stream.txt", "w") as f:
-            for se in stream_events:
-                f.write(json.dumps(se) + "\n")
+            f.writelines(json.dumps(se) + "\n" for se in stream_events)
 
 
 def _resolve_job_result(job: dict[str, Any]) -> Any:

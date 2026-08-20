@@ -1,23 +1,55 @@
+import copy
 import json
 import uuid
 from pathlib import Path
 
 import pytest
 
-from mn_cli.libs.run_logs import JobLogWriter, materialize_sent_email_copy
 from mn_cli.libs.artifacts import promote_large_payloads_to_blob_refs
+from mn_cli.libs.run_logs import JobLogWriter, materialize_sent_email_copy
 from mn_cli.libs.run_manifest import (
     apply_manifest_config_bindings,
     ensure_blueprint_support_sdk_build_context_uploads,
     load_blueprint_config,
-    prepare_manifest_for_submission,
     stage_blueprint_support_payloads_for_manifest,
+    stage_local_input_payloads_for_manifest,
     stage_skill_dependency_payloads_for_manifest,
     stage_skill_runtime_support_payloads_for_manifest,
-    stage_local_input_payloads_for_manifest,
     stage_upload_path_payloads_for_manifest,
     workspace_root,
 )
+from mn_cli.libs.run_manifest import (
+    prepare_manifest_for_submission as _prepare_manifest_for_submission,
+)
+
+
+def prepare_manifest_for_submission(bundle_dir, manifest, **kwargs):
+    """Add the executable-v1 envelope around legacy runtime fixtures.
+
+    These tests exercise payload staging and runtime lowering, whose legacy
+    ``nodes`` layout remains relevant internally.  Production callers must
+    already supply one of the public v1 forms.
+    """
+
+    if manifest.get("kind") != "WorkflowSource":
+        manifest = copy.deepcopy(manifest)
+        manifest.update(
+            {
+            "apiVersion": "mn.workflow/v1",
+            "kind": "Workflow",
+            "id": (
+                manifest.get("id")
+                or manifest.get("graph_id")
+                or manifest.get("workflow_id")
+                or "runtime-fixture"
+            ),
+            "contract": manifest.get("contract", {}),
+            "agents": manifest.get("agents") or {"nodes": manifest.get("nodes", [])},
+            "runtime": manifest.get("runtime", {}),
+            }
+        )
+        manifest.pop("nodes", None)
+    return _prepare_manifest_for_submission(bundle_dir, manifest, **kwargs)
 
 def _write_skill_pyproject(
     skills_root: Path,
@@ -114,7 +146,7 @@ def test_prepare_manifest_for_submission_merges_runtime_env_and_metadata(tmp_pat
         config_overrides={"vl_model": {"base_url": "http://local"}},
     )
 
-    env = prepared["nodes"][0]["config"]["environment"]
+    env = prepared["agents"]["nodes"][0]["config"]["environment"]
     injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
     assert injected_config["identity"]["blueprint_id"] == "bp"
     assert injected_config["vl_model"] == {"model": "overwrite", "base_url": "http://local"}
@@ -201,7 +233,7 @@ def test_prepare_manifest_auto_patches_skill_binary_deps_to_dockerworker(tmp_pat
 
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
 
-    node_config = prepared["nodes"][0]["config"]
+    node_config = prepared["agents"]["nodes"][0]["config"]
     runtime = prepared["metadata"]["mn_skill_runtime"]
     assert node_config["runner_module"] == "MirrorNeuron.Runner.DockerWorker"
     assert node_config["workdir"] == "/mn/job/worker"
@@ -272,7 +304,7 @@ def test_prepare_manifest_injects_gar_skill_dependencies_for_hostlocal(tmp_path,
 
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
 
-    node_config = prepared["nodes"][0]["config"]
+    node_config = prepared["agents"]["nodes"][0]["config"]
     packages = node_config["python_environment"]["packages"]
     assert packages[:5] == [
         "--index-url",
@@ -606,7 +638,7 @@ def test_prepare_manifest_keeps_gar_skill_dependencies_for_hostlocal_dev(tmp_pat
 
     assert prepared["skill_dependencies"] == manifest["skill_dependencies"]
     assert "mn_local_skill_dependencies" not in prepared.get("metadata", {})
-    packages = prepared["nodes"][0]["config"]["python_environment"]["packages"]
+    packages = prepared["agents"]["nodes"][0]["config"]["python_environment"]["packages"]
     assert "mirrorneuron-evidence-engine-skill==1.2.7" in packages
 
 
@@ -669,7 +701,7 @@ def test_prepare_manifest_gar_skill_runtime_uses_pinned_requirements_not_local_s
     }
 
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
-    node_config = prepared["nodes"][0]["config"]
+    node_config = prepared["agents"]["nodes"][0]["config"]
     runtime = prepared["metadata"]["mn_skill_runtime"]
 
     assert node_config["runner_module"] == "MirrorNeuron.Runner.DockerWorker"
@@ -892,7 +924,7 @@ def test_prepare_manifest_adds_sdk_upload_for_manual_blueprint_support_worker(tm
     }
 
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
-    uploads = prepared["nodes"][0]["config"]["build_context_upload_paths"]
+    uploads = prepared["agents"]["nodes"][0]["config"]["build_context_upload_paths"]
 
     assert {
         "base": "workspace_root",
@@ -1134,7 +1166,7 @@ def test_prepare_manifest_leaves_manual_docker_worker_skill_policy_alone(tmp_pat
 
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
 
-    assert prepared["nodes"][0]["config"]["runner_module"] == "MirrorNeuron.Runner.HostLocal"
+    assert prepared["agents"]["nodes"][0]["config"]["runner_module"] == "MirrorNeuron.Runner.HostLocal"
     assert "mn_skill_runtime" not in prepared.get("metadata", {})
 
 
@@ -1147,7 +1179,7 @@ def test_prepare_manifest_for_submission_lowers_workflow_manifest_for_core_runti
     )
 
     manifest = {
-        "apiVersion": "mn.workflow/v2",
+        "apiVersion": "mn.workflow/v1",
         "kind": "Workflow",
         "id": "workflow_bp",
         "name": "Workflow BP",
@@ -1404,8 +1436,8 @@ def test_prepare_manifest_injects_docker_model_runner_llm_env_by_node_runtime(tm
 
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
 
-    host_env = prepared["nodes"][0]["config"]["environment"]
-    sandbox_env = prepared["nodes"][1]["config"]["environment"]
+    host_env = prepared["agents"]["nodes"][0]["config"]["environment"]
+    sandbox_env = prepared["agents"]["nodes"][1]["config"]["environment"]
     assert host_env["MN_LLM_PROVIDER"] == "litellm"
     assert sandbox_env["MN_LLM_PROVIDER"] == "litellm"
     assert host_env["MN_LLM_MODEL"] == "docker.io/ai/gemma4:E2B"
@@ -1494,8 +1526,8 @@ def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_h
     assert prepared["required_services"] == [{"name": "vector-db"}]
     assert prepared["runtime"]["models"] == {"service_model": {"provider": "nvidia_service", "model": "remote/model"}}
     assert "model" not in prepared["runtime"]["bindings"]["startup_folder_watcher"]["workers"][0]
-    assert prepared["nodes"][0]["requires_services"] == [{"name": "redis"}]
-    assert prepared["nodes"][0]["placement_requirements"] == {
+    assert prepared["agents"]["nodes"][0]["requires_services"] == [{"name": "redis"}]
+    assert prepared["agents"]["nodes"][0]["placement_requirements"] == {
         "models": [
             {
                 "id": "remote-service-model",
@@ -1504,7 +1536,7 @@ def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_h
             }
         ]
     }
-    env = prepared["nodes"][0]["config"]["environment"]
+    env = prepared["agents"]["nodes"][0]["config"]["environment"]
     assert env["MN_LLM_PROVIDER"] == "litellm"
     assert env["MN_LLM_API_BASE"] == "http://mn-litellm-proxy:4000/v1"
 
@@ -1568,9 +1600,9 @@ def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_f
     assert prepared["required_services"] == [{"name": "redis"}]
     assert "models" not in prepared["runtime"]
     assert "model" not in prepared["runtime"]["bindings"]["worker"]["workers"][0]
-    assert "requires_services" not in prepared["nodes"][0]
-    assert "placement_requirements" not in prepared["nodes"][0]
-    assert prepared["nodes"][0]["config"]["environment"]["MN_LLM_PROVIDER"] == "fake"
+    assert "requires_services" not in prepared["agents"]["nodes"][0]
+    assert "placement_requirements" not in prepared["agents"]["nodes"][0]
+    assert prepared["agents"]["nodes"][0]["config"]["environment"]["MN_LLM_PROVIDER"] == "fake"
 
 
 def test_prepare_manifest_model_only_llm_config_does_not_request_scheduler_model(tmp_path):
@@ -1595,7 +1627,7 @@ def test_prepare_manifest_model_only_llm_config_does_not_request_scheduler_model
 
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
 
-    env = prepared["nodes"][0]["config"]["environment"]
+    env = prepared["agents"]["nodes"][0]["config"]["environment"]
     assert env["MN_LLM_PROVIDER"] == "litellm"
     assert env["MN_LLM_MODEL"] == "default"
     assert "MN_LLM_RUNTIME_MODEL" not in env
@@ -1775,7 +1807,7 @@ def test_stage_local_input_payloads_after_manifest_preparation(tmp_path):
 
     summary = stage_local_input_payloads_for_manifest(prepared, payloads, bundle_dir=bundle_dir)
 
-    env = prepared["nodes"][0]["config"]["environment"]
+    env = prepared["agents"]["nodes"][0]["config"]["environment"]
     injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
     assert injected_config["tax_documents"]["folder_path"] == "mn_local_inputs/tax_documents"
     assert injected_config["inputs"]["payload"]["document_folder"] == "mn_local_inputs/tax_documents"
@@ -1830,7 +1862,7 @@ def test_prepare_manifest_for_submission_renders_agent_templates(tmp_path, monke
         env_overrides={"MN_RUN_ID": "run-template"},
     )
 
-    node = prepared["nodes"][0]
+    node = prepared["agents"]["nodes"][0]
     assert node["agent_type"] == "router"
     assert node["type"] == "map"
     assert "uses" not in node

@@ -1,15 +1,15 @@
-from importlib import metadata
 import json
+from importlib import metadata
 
 import pytest
 import typer
+from mn_sdk.errors import AppError
 from typer.main import get_command
 from typer.testing import CliRunner
 
 from mn_cli.banner import format_banner
 from mn_cli.main import app
 from mn_cli.output import emit_stream_record, instrument_typer, record_result
-from mn_sdk.errors import AppError
 
 runner = CliRunner()
 
@@ -150,6 +150,7 @@ def test_command_help_includes_argument_description_and_examples():
 
 def test_job_and_run_commands_have_distinct_resource_semantics():
     command = get_command(app)
+    assert {"deployment", "schedule", "event"}.isdisjoint(command.commands)
     assert list(command.commands["job"].commands) == [
         "list", "create", "show", "start", "archive", "reset-data", "delete",
     ]
@@ -186,7 +187,6 @@ def test_unknown_command_suggests_close_match():
         (["job", "inspect"], "mn job show"),
         (["run", "status"], "mn run show"),
         (["blueprint", "install"], "mn blueprint add"),
-        (["trigger", "list"], "mn schedule add --event"),
     ],
 )
 def test_removed_paths_return_replacement_without_execution(args, replacement):

@@ -52,16 +52,9 @@ REMOVED_COMMANDS: dict[tuple[str, ...], str] = {
     ("resource", "ports"): "mn runtime status",
     ("service", "resolve"): "mn service show",
     ("service", "check"): "mn blueprint doctor",
-    ("deployment", "status"): "mn deployment show",
-    ("schedule", "create"): "mn schedule add --cron ...",
-    ("schedule", "delay"): "mn schedule add --at ... (or --in ...)",
-    ("schedule", "status"): "mn schedule show",
-    ("schedule", "run-now"): "mn schedule run",
-    ("schedule", "delete"): "mn schedule remove",
     ("model", "install"): "mn model add",
     ("model", "proxy"): "mn model add --file DEFINITION.json",
     ("model", "remote"): "mn model add --file DEFINITION.json",
-    ("trigger",): "mn schedule add --event EVENT (or mn schedule list --kind event)",
 }
 REMOVED_OPTIONS: dict[str, str] = {
     "--verbose": "use '--debug' instead",

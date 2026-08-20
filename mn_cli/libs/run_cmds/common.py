@@ -1,4 +1,3 @@
-import typer
 import hashlib
 import importlib.util
 import json
@@ -16,6 +15,102 @@ import urllib.request
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, Optional
+
+import typer
+from mn_sdk import (
+    CUSTOM_MODEL_WARNING,
+    DEFAULT_RUNTIME_MODEL_PREPARE_TIMEOUT_SECONDS,
+    LITELLM_GATEWAY_HOST_API_BASE,
+    BlueprintModelOps,
+    Client,
+    ModelEndpointMap,
+    ModelPrepareError,
+    blueprint_model_dependency_summary,
+    build_prepare_runtime_model_request,
+    call_prepare_runtime_model,
+    cleanup_docker_worker_services,
+    cleanup_job_definition_resources,
+    cluster_provided_model,
+    docker_api_model_name,
+    docker_model_match_keys,
+    docker_model_name,
+    docker_model_runner_endpoint,
+    expand_manifest_source,
+    gateway_endpoint_map,
+    generate_job_definition_submission_id,
+    generate_stable_job_id,
+    installed_model_names,
+    is_custom_model_requirement,
+    is_manifest_source,
+    load_model_catalog,
+    load_model_ownership,
+    load_model_remotes,
+    make_validation_report,
+    model_service_tags,
+    prepare_job_submission,
+    reconcile_cluster_model_remotes,
+    record_model_owner,
+    remote_runtime_model_endpoint,
+    required_blueprint_models,
+    resolve_cluster_model_placement,
+    resolve_custom_model_placement,
+    resolve_model_endpoint,
+    resolve_model_entry,
+    resolve_requirement_entry,
+    run_hardware_requirements_validation,
+    run_input_validation,
+    run_model_validation,
+    run_service_validation,
+    runtime_model_prepare_timeout_seconds,
+    save_model_remotes,
+    sync_litellm_gateway,
+    validate_input_validation_spec_issues,
+    validate_requirements_spec_issues,
+    validate_resource_spec_issues,
+    validate_service_spec_issues,
+    workflow_progress_snapshot,
+)
+from mn_sdk.blueprint_support.shared_outputs import (
+    materialize_shared_storage_outputs as _sdk_materialize_shared_storage_outputs,
+)
+from mn_sdk.context_engine import blueprint_requires_context_engine
+from mn_sdk.run_store import (
+    write_blueprint_job_mapping as _sdk_write_blueprint_job_mapping,
+)
+from mn_sdk.runtime_config import RuntimeConfig, default_runs_root
+from mn_sdk.skill_dependencies import gar_requirements_text, skill_dependency_records
+from mn_sdk.skill_runtime import validate_skill_runtime_requirements
+from mn_sdk.staged_artifacts import (
+    StagedArtifactError,
+    is_staged_artifact_ref,
+    resolve_json_reference,
+)
+from mn_sdk.submission_preparation import (
+    add_mn_llm_aliases as _add_mn_llm_aliases,
+)
+from mn_sdk.submission_preparation import (
+    blueprint_runtime_environment as _blueprint_runtime_environment,
+)
+from mn_sdk.submission_preparation import (
+    inject_node_environment as _inject_node_environment,
+)
+from mn_sdk.submission_preparation import (
+    load_blueprint_config,
+    manifest_nodes,
+    prepare_manifest_for_submission,
+    stage_blueprint_support_payloads_for_manifest,
+    stage_local_input_payloads_for_manifest,
+    stage_skill_dependency_payloads_for_manifest,
+    stage_skill_runtime_support_payloads_for_manifest,
+    stage_upload_path_payloads_for_manifest,
+)
+from mn_sdk.submission_preparation import (
+    run_mode_label as _run_mode_label,
+)
+from mn_sdk.submission_preparation import (
+    with_shared_run_store_config as _with_shared_run_store_config,
+)
+from rich.live import Live
 from rich.progress import (
     BarColumn,
     Progress,
@@ -23,8 +118,43 @@ from rich.progress import (
     TextColumn,
     TimeElapsedColumn,
 )
-from rich.live import Live
 from rich.table import Table
+
+from mn_cli.error_handler import debug_enabled, handle_cli_error
+from mn_cli.libs.airgap import (
+    hydrate_extracted_airgap,
+    hydrate_payload_models,
+    offline_environment,
+)
+from mn_cli.libs.artifacts import (
+    promote_large_payloads_to_blob_refs,
+    stage_bundle_payload_assets,
+)
+from mn_cli.libs.blueprint_observability import (
+    load_observability_tools,
+)
+from mn_cli.libs.blueprint_observability import (
+    make_blueprint_run_id as _make_blueprint_run_id,
+)
+from mn_cli.libs.blueprint_resources import cleanup_blueprint_host_hooks
+from mn_cli.libs.model_cmds import install_model_entry, model_installed
+from mn_cli.libs.progress_stream import (
+    ProgressSnapshotStream,
+    stream_api_workflow_progress,
+)
+from mn_cli.libs.run_logs import (
+    STANDARD_EVENTS,
+    JobLogWriter,
+)
+from mn_cli.libs.run_logs import (
+    extract_web_ui_url as _extract_web_ui_url,
+)
+from mn_cli.libs.run_logs import (
+    materialize_sent_email_copy as _materialize_sent_email_copy,
+)
+from mn_cli.libs.run_logs import (
+    write_result_stream_event as _write_result_stream_event,
+)
 from mn_cli.libs.ui import (
     JobMonitorState,
     generate_detached_panel,
@@ -38,124 +168,15 @@ from mn_cli.libs.ui import (
     print_warning,
 )
 from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress
-from mn_cli.libs.progress_stream import (
-    ProgressSnapshotStream,
-    stream_api_workflow_progress,
-)
-from mn_cli.libs.run_logs import (
-    JobLogWriter,
-    STANDARD_EVENTS,
-    extract_web_ui_url as _extract_web_ui_url,
-    materialize_sent_email_copy as _materialize_sent_email_copy,
-    write_result_stream_event as _write_result_stream_event,
-)
-from mn_cli.libs.artifacts import (
-    promote_large_payloads_to_blob_refs,
-    stage_bundle_payload_assets,
-)
-from mn_cli.libs.airgap import (
-    hydrate_extracted_airgap,
-    hydrate_payload_models,
-    offline_environment,
-)
-from mn_sdk.submission_preparation import (
-    add_mn_llm_aliases as _add_mn_llm_aliases,
-    blueprint_runtime_environment as _blueprint_runtime_environment,
-    inject_node_environment as _inject_node_environment,
-    load_blueprint_config,
-    manifest_nodes,
-    prepare_manifest_for_submission,
-    run_mode_label as _run_mode_label,
-    stage_blueprint_support_payloads_for_manifest,
-    stage_skill_dependency_payloads_for_manifest,
-    stage_skill_runtime_support_payloads_for_manifest,
-    stage_local_input_payloads_for_manifest,
-    stage_upload_path_payloads_for_manifest,
-    with_shared_run_store_config as _with_shared_run_store_config,
-)
-from mn_sdk.skill_runtime import validate_skill_runtime_requirements
-from mn_sdk.skill_dependencies import gar_requirements_text, skill_dependency_records
-from mn_sdk.runtime_config import RuntimeConfig
-from mn_sdk.run_store import write_blueprint_job_mapping as _sdk_write_blueprint_job_mapping
-from mn_sdk.staged_artifacts import (
-    StagedArtifactError,
-    is_staged_artifact_ref,
-    resolve_json_reference,
-)
 from mn_cli.libs.workflow_validation import (
     _is_workflow_manifest,
     _manifest_workflow_id,
     _validate_workflow_manifest_issues,
     _validate_workflow_schema_issues,
 )
-from mn_cli.libs.blueprint_observability import (
-    load_observability_tools,
-    make_blueprint_run_id as _make_blueprint_run_id,
-)
-from mn_cli.libs.model_cmds import install_model_entry, model_installed
-from mn_cli.libs.blueprint_resources import cleanup_blueprint_host_hooks
 from mn_cli.server_cmds import ensure_context_engine_runtime
-from mn_cli.shared import console, client, config, logger
+from mn_cli.shared import client, config, console, logger
 from mn_cli.terminal import use_progress
-from mn_cli.error_handler import debug_enabled, handle_cli_error
-from mn_sdk import (
-    Client,
-    BlueprintModelOps,
-    CUSTOM_MODEL_WARNING,
-    DEFAULT_RUNTIME_MODEL_PREPARE_TIMEOUT_SECONDS,
-    LITELLM_GATEWAY_HOST_API_BASE,
-    ModelEndpointMap,
-    ModelPrepareError,
-    cluster_provided_model,
-    cleanup_docker_worker_services,
-    cleanup_job_definition_resources,
-    docker_model_match_keys,
-    docker_api_model_name,
-    docker_model_runner_endpoint,
-    docker_model_name,
-    expand_manifest_source,
-    gateway_endpoint_map,
-    generate_job_definition_submission_id,
-    generate_stable_job_id,
-    is_manifest_source,
-    installed_model_names,
-    load_model_remotes,
-    load_model_catalog,
-    load_model_ownership,
-    make_validation_report,
-    model_service_tags,
-    prepare_job_submission,
-    record_model_owner,
-    reconcile_cluster_model_remotes,
-    required_blueprint_models,
-    resolve_cluster_model_placement,
-    resolve_custom_model_placement,
-    is_custom_model_requirement,
-    resolve_model_endpoint,
-    resolve_model_entry,
-    resolve_requirement_entry,
-    run_hardware_requirements_validation,
-    run_input_validation,
-    run_model_validation,
-    run_service_validation,
-    save_model_remotes,
-    validate_input_validation_spec_issues,
-    validate_requirements_spec_issues,
-    validate_resource_spec_issues,
-    validate_service_spec_issues,
-    sync_litellm_gateway,
-    workflow_progress_snapshot,
-    blueprint_model_dependency_summary,
-    build_prepare_runtime_model_request,
-    call_prepare_runtime_model,
-    remote_runtime_model_endpoint,
-    runtime_model_prepare_timeout_seconds,
-)
-from mn_sdk.blueprint_support.shared_outputs import (
-    materialize_shared_storage_outputs as _sdk_materialize_shared_storage_outputs,
-)
-from mn_sdk.context_engine import blueprint_requires_context_engine
-from mn_sdk.runtime_config import default_runs_root
 
 FINAL_STATUSES = {"completed", "failed", "cancelled"}
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -234,8 +255,8 @@ def _is_safe_payload_relative_path(path: str) -> bool:
 
 
 def _run_schedule_attrs(
-    *, auto_schedule: bool, schedule: Optional[str]
-) -> Optional[dict[str, Any]]:
+    *, auto_schedule: bool, schedule: str | None
+) -> dict[str, Any] | None:
     if auto_schedule and schedule:
         print_error(console, "Pass either --auto-schedule or --schedule, not both.")
         raise typer.Exit(1)
@@ -352,35 +373,5 @@ def _stage_bundle_payloads(
     return payloads
 
 
-def _create_schedule_for_bundle(
-    bundle_dir: Path,
-    manifest_dict: dict[str, Any],
-    payloads: dict[str, bytes],
-    schedule_attrs: dict[str, Any],
-) -> None:
-    stage_local_input_payloads_for_manifest(
-        manifest_dict, payloads, bundle_dir=bundle_dir
-    )
-    promote_large_payloads_to_blob_refs(manifest_dict, payloads)
-    manifest = json.dumps(manifest_dict)
-    result_json = client.create_schedule(
-        manifest,
-        payloads,
-        schedule=schedule_attrs,
-        source={"cli": "run", "bundle": bundle_dir.name},
-    )
-    result = json.loads(result_json)
-    print_success_confirmation(
-        console,
-        "Schedule create",
-        status=result.get("status"),
-        details=[
-            ("Schedule ID", result.get("schedule_id") or result.get("id")),
-            ("Kind", result.get("kind") or schedule_attrs.get("kind")),
-            ("Bundle", bundle_dir),
-        ],
-        next_steps="mn schedule list",
-    )
-
-
 __all__ = [name for name in globals() if not name.startswith("__")]
+

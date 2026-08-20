@@ -1,6 +1,7 @@
 from .common import *
 from .live import *
 
+
 def _stream_and_format_events(
     job_id: str,
     log_writer: Optional[JobLogWriter] = None,
@@ -455,7 +456,7 @@ def _runtime_model_event_message(event: dict[str, Any]) -> str:
         return message
     model = str(payload.get("model") or "runtime model").strip()
     node = str(payload.get("node") or "the selected node").strip()
-    return f"{model} on {node}: {str(event.get('type') or 'update')}"
+    return f"{model} on {node}: {event.get('type') or 'update'!s}"
 
 
 def _follow_workflow_job_events(
@@ -533,8 +534,8 @@ def _read_workflow_resource_tokens(run_id: str) -> int | None:
 
 def _attach_workflow_resource_tokens(view: BlueprintWorkflowProgress, job_id: str) -> None:
     try:
-        job_json = client.get_job(job_id)
-        payload = json.loads(job_json)
+        run_json = client.get_run(job_id)
+        payload = json.loads(run_json)
         run_id = _run_id_from_payload(payload)
     except Exception:
         run_id = None
@@ -557,17 +558,16 @@ def _follow_job_events(
 
     while True:
         try:
-            data = json.loads(client.get_job(job_id))
+            data = json.loads(client.get_run(job_id))
             log_writer.write_snapshot(data)
         except Exception:
             log_writer.run_logger.exception("Failed to poll job status")
             break
 
-        job = data.get("job", {})
-        summary = data.get("summary", {})
-        last_status = summary.get("status") or job.get("status") or last_status
+        job = data
+        last_status = job.get("status") or last_status
 
-        recent_events = data.get("recent_events", [])
+        recent_events: list[dict[str, Any]] = []
         for event in reversed(recent_events):
             if log_writer.write_event(event):
                 _write_result_stream_event(log_writer.log_dir, event)

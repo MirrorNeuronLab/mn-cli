@@ -58,7 +58,7 @@ def cleanup_cancelled_job_resources(
     return summary
 
 
-def cleanup_cleared_job_resources(
+def cleanup_job_resources(
     job_id: str, *, runtime_client: Any, log: Any
 ) -> None:
     original_job_id = job_id

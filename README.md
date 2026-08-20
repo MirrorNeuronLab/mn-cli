@@ -138,11 +138,11 @@ In an interactive terminal, run pause, resume, and cancel display a spinner
 while Core processes the request. JSON and `MN_CLI_OUTPUT=plain` output remain
 free of transient progress so they are safe for automation.
 
-`job_id` is the stable configuration and data owner. `run_id` is one
+`job_id` is the durable configuration and data owner. `run_id` is one
 execution and the identity used for control, logs, output, retention, and run
 deletion. Starting the same job again creates another run; retrying a run does
 not. Use `mn blueprint run --job-id <job-id>` to run an existing definition.
-Without that option, blueprint run creates an ephemeral stable job and starts
+Without that option, blueprint run creates a durable job and starts
 its first run.
 With `--job-id`, the CLI prepares the currently installed blueprint revision
 and atomically replaces the inactive job's executable bundle before starting

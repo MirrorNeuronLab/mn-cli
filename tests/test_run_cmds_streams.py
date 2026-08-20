@@ -5,18 +5,29 @@ import re
 import subprocess
 import sys
 import uuid
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import SimpleNamespace
+
 import pytest
-from logging.handlers import RotatingFileHandler
-from typer.testing import CliRunner
+from mn_sdk import (
+    AgentProgress,
+    load_model_ownership,
+    load_model_remotes,
+    upsert_model_remote,
+)
 from rich.console import Console
-from mn_cli.main import app
+from typer.testing import CliRunner
+from v1_manifests import workflow_manifest
+
 from mn_cli.libs import model_cmds, run_cmds
-from mn_cli.libs.ui import JobMonitorState, generate_live_layout
-from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress, _agent_progress_detail
 from mn_cli.libs.run_manifest import prepare_manifest_for_submission
-from mn_sdk import AgentProgress, load_model_ownership, load_model_remotes, upsert_model_remote
+from mn_cli.libs.ui import JobMonitorState, generate_live_layout
+from mn_cli.libs.workflow_progress import (
+    BlueprintWorkflowProgress,
+    _agent_progress_detail,
+)
+from mn_cli.main import app
 
 runner = CliRunner()
 
@@ -81,11 +92,11 @@ def test_stream_bad_json(mocker, tmp_path):
         json.dumps({"type": "job_failed"})
     ])
     
-    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-123"}))
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
     manifest_file = bundle_dir / "manifest.json"
-    manifest_file.write_text('{"nodes": []}')
+    manifest_file.write_text(json.dumps(workflow_manifest({"nodes": []})))
     
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
     assert result.exit_code == 0
@@ -101,12 +112,12 @@ def test_stream_all_events(mocker, tmp_path):
         json.dumps({"type": "job_completed", "result": {"foo": "bar"}})
     ]
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=events)
-    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-123"}))
     
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
     manifest_file = bundle_dir / "manifest.json"
-    manifest_file.write_text('{"nodes": []}')
+    manifest_file.write_text(json.dumps(workflow_manifest({"nodes": []})))
     
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
     assert result.exit_code == 0
@@ -120,19 +131,19 @@ def test_stream_cancelled_event_is_terminal(mocker, tmp_path, monkeypatch):
         json.dumps({"type": "job_running"}),
         json.dumps({"type": "job_cancelled"}),
     ])
-    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
-    mock_get = mocker.patch('mn_cli.libs.run_cmds.client.get_job')
+    mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-123"}))
+    mock_get = mocker.patch('mn_cli.libs.run_cmds.client.get_run')
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
     manifest_file = bundle_dir / "manifest.json"
-    manifest_file.write_text('{"nodes": []}')
+    manifest_file.write_text(json.dumps(workflow_manifest({"nodes": []})))
 
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
 
     assert result.exit_code == 0
     assert "Status: Cancelled" in result.stdout
-    mock_get.assert_not_called()
+    mock_get.assert_called_once()
 
 def test_stream_helper_cancelled_event_is_terminal_without_follow(mocker, tmp_path):
     job_id = f"job-cancelled-{uuid.uuid4().hex}"
@@ -141,7 +152,7 @@ def test_stream_helper_cancelled_event_is_terminal_without_follow(mocker, tmp_pa
         json.dumps({"type": "job_running"}),
         json.dumps({"type": "job_cancelled"}),
     ])
-    mock_get = mocker.patch('mn_cli.libs.run_cmds.client.get_job')
+    mock_get = mocker.patch('mn_cli.libs.run_cmds.client.get_run')
 
     status = run_cmds._stream_and_format_events(job_id, log_writer=log_writer, follow_seconds=0)
 
@@ -151,35 +162,36 @@ def test_stream_helper_cancelled_event_is_terminal_without_follow(mocker, tmp_pa
 
 def test_stream_keyboard_interrupt(mocker, tmp_path):
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', side_effect=KeyboardInterrupt)
-    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-123"}))
     
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
     manifest_file = bundle_dir / "manifest.json"
-    manifest_file.write_text('{"nodes": []}')
+    manifest_file.write_text(json.dumps(workflow_manifest({"nodes": []})))
     
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
     assert result.exit_code == 0
     assert "Detached from workflow UI. Job is still running." in result.stdout
 
 def test_post_submit_keyboard_interrupt_detaches_without_stopping_job(mocker, tmp_path):
-    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-started")
+    mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-started"}))
     mocker.patch(
         'mn_cli.libs.run_cmds._stream_and_format_events',
         side_effect=KeyboardInterrupt,
     )
     mocker.patch(
-        'mn_cli.libs.run_cmds.client.get_job',
+        'mn_cli.libs.run_cmds.client.get_run',
         return_value=json.dumps({
-            "summary": {"status": "running"},
-            "job": {"status": "running"},
-            "recent_events": [],
+            "run_id": "job-started-run",
+            "status": "running",
         }),
     )
 
     bundle_dir = tmp_path / "started_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps({"nodes": []}))
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(workflow_manifest({"nodes": []}))
+    )
 
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
 

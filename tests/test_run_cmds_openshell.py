@@ -5,18 +5,29 @@ import re
 import subprocess
 import sys
 import uuid
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import SimpleNamespace
+
 import pytest
-from logging.handlers import RotatingFileHandler
-from typer.testing import CliRunner
+from mn_sdk import (
+    AgentProgress,
+    load_model_ownership,
+    load_model_remotes,
+    upsert_model_remote,
+)
 from rich.console import Console
-from mn_cli.main import app
+from typer.testing import CliRunner
+from v1_manifests import workflow_manifest
+
 from mn_cli.libs import model_cmds, run_cmds
-from mn_cli.libs.ui import JobMonitorState, generate_live_layout
-from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress, _agent_progress_detail
 from mn_cli.libs.run_manifest import prepare_manifest_for_submission
-from mn_sdk import AgentProgress, load_model_ownership, load_model_remotes, upsert_model_remote
+from mn_cli.libs.ui import JobMonitorState, generate_live_layout
+from mn_cli.libs.workflow_progress import (
+    BlueprintWorkflowProgress,
+    _agent_progress_detail,
+)
+from mn_cli.main import app
 
 runner = CliRunner()
 
@@ -119,7 +130,7 @@ def test_run_prebuilds_custom_openshell_image_from_payload_directory(mocker, tmp
     monkeypatch.delenv("OPENSHELL_GATEWAY", raising=False)
     monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="openshell-from-run")
-    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-123"}))
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_completed"})
     ])
@@ -134,8 +145,8 @@ def test_run_prebuilds_custom_openshell_image_from_payload_directory(mocker, tmp
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps({
-        "apiVersion": "mn.workflow/v2",
+    (bundle_dir / "manifest.json").write_text(json.dumps(workflow_manifest({
+        "apiVersion": "mn.workflow/v1",
         "kind": "Workflow",
         "id": "openshell-workflow",
         "flow": {
@@ -149,7 +160,7 @@ def test_run_prebuilds_custom_openshell_image_from_payload_directory(mocker, tmp
                 }
             ]
         },
-    }))
+    })))
     sandbox_dir = bundle_dir / "payloads" / "detector" / "openshell_sandbox"
     sandbox_dir.mkdir(parents=True)
     (sandbox_dir / "Dockerfile").write_text("FROM base\n")
@@ -170,7 +181,7 @@ def test_run_prebuilds_legacy_openshell_from_directory(mocker, tmp_path, monkeyp
     monkeypatch.delenv("OPENSHELL_GATEWAY", raising=False)
     monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="openshell-from-run")
-    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-123"}))
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_completed"})
     ])
@@ -185,7 +196,7 @@ def test_run_prebuilds_legacy_openshell_from_directory(mocker, tmp_path, monkeyp
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps({
+    (bundle_dir / "manifest.json").write_text(json.dumps(workflow_manifest({
         "nodes": [
             {
                 "node_id": "detector",
@@ -195,7 +206,7 @@ def test_run_prebuilds_legacy_openshell_from_directory(mocker, tmp_path, monkeyp
                 },
             }
         ]
-    }))
+    })))
     sandbox_dir = bundle_dir / "payloads" / "detector" / "openshell_sandbox"
     sandbox_dir.mkdir(parents=True)
     (sandbox_dir / "Dockerfile").write_text("FROM base\n")
@@ -204,7 +215,7 @@ def test_run_prebuilds_legacy_openshell_from_directory(mocker, tmp_path, monkeyp
 
     assert result.exit_code == 0
     manifest = json.loads(mock_submit.call_args.args[0])
-    assert manifest["nodes"][0]["config"]["from"] == "openshell/sandbox-from:456"
+    assert manifest["agents"]["nodes"][0]["config"]["from"] == "openshell/sandbox-from:456"
 
 def test_prepare_openshell_shared_sandbox_injects_prepared_runtime_config(
     mocker, tmp_path, monkeypatch

@@ -1,3 +1,5 @@
+from mn_cli.output import record_result
+
 from ..common import *
 from ..context import *
 from ..events import *
@@ -10,9 +12,8 @@ from ..web_ui import (
     _console_web_ui_url,
     _start_background_event_relay_if_needed,
 )
-from .validate import *
 from .doctor import _doctor_prepare_hostlocal_python_envs
-from mn_cli.output import record_result
+from .validate import *
 
 
 def _record_prevalidated_command_rules(
@@ -542,7 +543,7 @@ def run_bundle(
                     ("Kind", result.get("kind") or schedule_attrs.get("kind")),
                     ("Job", stable_job_id),
                 ],
-                next_steps="mn schedule list",
+                next_steps=f"mn job show {stable_job_id}",
             )
             record_result(result)
             return

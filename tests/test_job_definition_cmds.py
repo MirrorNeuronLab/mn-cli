@@ -2,7 +2,7 @@ import json
 from contextlib import contextmanager
 from types import SimpleNamespace
 
-import mn_cli.libs.stable_job_cmds as stable_job_cmds
+from mn_cli.libs import job_definition_cmds
 from mn_cli.libs.job_cleanup import JobResourceCleanupError
 
 
@@ -20,16 +20,16 @@ def test_run_resume_shows_activity_while_waiting_for_runtime(monkeypatch):
         assert events == [("start", "Resuming run run-1…")]
         return json.dumps({"run_id": run_id, "status": "resumed"})
 
-    monkeypatch.setattr(stable_job_cmds, "activity", fake_activity)
-    monkeypatch.setattr(stable_job_cmds, "client", SimpleNamespace(resume_run=resume))
+    monkeypatch.setattr(job_definition_cmds, "activity", fake_activity)
+    monkeypatch.setattr(job_definition_cmds, "client", SimpleNamespace(resume_run=resume))
     monkeypatch.setattr(
-        stable_job_cmds,
+        job_definition_cmds,
         "print_success_confirmation",
         lambda _console, action, **kwargs: rendered.append((action, kwargs)),
     )
-    monkeypatch.setattr(stable_job_cmds, "record_result", lambda _result: None)
+    monkeypatch.setattr(job_definition_cmds, "record_result", lambda _result: None)
 
-    stable_job_cmds.run_resume("run-1")
+    job_definition_cmds.run_resume("run-1")
 
     assert events == [
         ("start", "Resuming run run-1…"),
@@ -48,12 +48,12 @@ def test_create_prepares_source_bundle_before_stable_submission(monkeypatch, tmp
     calls = {}
 
     monkeypatch.setattr(
-        stable_job_cmds,
+        job_definition_cmds,
         "read_bundle",
         lambda _bundle: ('{"apiVersion":"mn.workflow.source/v2"}', {"source.py": b"raw"}),
     )
     monkeypatch.setattr(
-        stable_job_cmds,
+        job_definition_cmds,
         "prepare_manifest_for_submission",
         lambda bundle_dir, manifest, **kwargs: {
             "graph_id": "prepared",
@@ -61,7 +61,7 @@ def test_create_prepares_source_bundle_before_stable_submission(monkeypatch, tmp
         },
     )
     monkeypatch.setattr(
-        stable_job_cmds,
+        job_definition_cmds,
         "_stage_bundle_payloads",
         lambda _bundle_dir, _manifest: {"runtime.py": b"staged"},
     )
@@ -70,9 +70,9 @@ def test_create_prepares_source_bundle_before_stable_submission(monkeypatch, tmp
         calls["prepare"] = (manifest_json, payloads, kwargs)
         return prepared
 
-    monkeypatch.setattr(stable_job_cmds, "prepare_job_submission", prepare)
+    monkeypatch.setattr(job_definition_cmds, "prepare_job_submission", prepare)
     monkeypatch.setattr(
-        stable_job_cmds,
+        job_definition_cmds,
         "client",
         SimpleNamespace(
             create_job=lambda manifest_json, payloads, **kwargs: json.dumps(
@@ -86,9 +86,9 @@ def test_create_prepares_source_bundle_before_stable_submission(monkeypatch, tmp
         ),
     )
     printed = []
-    monkeypatch.setattr(stable_job_cmds, "record_result", printed.append)
+    monkeypatch.setattr(job_definition_cmds, "record_result", printed.append)
 
-    stable_job_cmds.create(str(bundle), job_id="stable-job", config=None)
+    job_definition_cmds.create(str(bundle), job_id="stable-job", config=None)
 
     assert calls["prepare"][2]["bundle_dir"] == str(bundle.resolve())
     assert calls["prepare"][2]["job_id"] == "stable-job"
@@ -102,7 +102,7 @@ def test_delete_cleans_every_historical_run_and_definition_resources(monkeypatch
     cleaned = []
     printed = []
     monkeypatch.setattr(
-        stable_job_cmds,
+        job_definition_cmds,
         "client",
         SimpleNamespace(
             list_runs=lambda job_id: json.dumps(
@@ -120,13 +120,13 @@ def test_delete_cleans_every_historical_run_and_definition_resources(monkeypatch
         ),
     )
     monkeypatch.setattr(
-        stable_job_cmds,
-        "cleanup_cleared_job_resources",
+        job_definition_cmds,
+        "cleanup_job_resources",
         lambda job_id, **_kwargs: cleaned.append(job_id),
     )
-    monkeypatch.setattr(stable_job_cmds, "record_result", printed.append)
+    monkeypatch.setattr(job_definition_cmds, "record_result", printed.append)
 
-    stable_job_cmds.delete("stable-job", yes=True)
+    job_definition_cmds.delete("stable-job", yes=True)
 
     assert cleaned == ["run-1", "run-2", "stable-job"]
     assert printed == [
@@ -138,7 +138,7 @@ def test_delete_attempts_all_local_cleanup_before_reporting_failure(monkeypatch)
     cleaned = []
     handled_errors = []
     monkeypatch.setattr(
-        stable_job_cmds,
+        job_definition_cmds,
         "client",
         SimpleNamespace(
             list_runs=lambda _job_id: json.dumps(
@@ -156,15 +156,15 @@ def test_delete_attempts_all_local_cleanup_before_reporting_failure(monkeypatch)
             raise JobResourceCleanupError("OpenShell sandbox is busy")
 
     monkeypatch.setattr(
-        stable_job_cmds, "cleanup_cleared_job_resources", cleanup
+        job_definition_cmds, "cleanup_job_resources", cleanup
     )
     monkeypatch.setattr(
-        stable_job_cmds,
+        job_definition_cmds,
         "handle_cli_error",
         lambda error, _console, action: handled_errors.append((str(error), action)),
     )
 
-    stable_job_cmds.delete("stable-job", yes=True)
+    job_definition_cmds.delete("stable-job", yes=True)
 
     assert cleaned == ["run-1", "run-2", "stable-job"]
     assert handled_errors == [
@@ -179,7 +179,7 @@ def test_delete_cleans_historical_runs_from_v2_items_response(monkeypatch):
     cleaned = []
     printed = []
     monkeypatch.setattr(
-        stable_job_cmds,
+        job_definition_cmds,
         "client",
         SimpleNamespace(
             list_runs=lambda _job_id: json.dumps({"items": [{"run_id": "run-1"}]}),
@@ -189,13 +189,13 @@ def test_delete_cleans_historical_runs_from_v2_items_response(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        stable_job_cmds,
-        "cleanup_cleared_job_resources",
+        job_definition_cmds,
+        "cleanup_job_resources",
         lambda job_id, **_kwargs: cleaned.append(job_id),
     )
-    monkeypatch.setattr(stable_job_cmds, "record_result", printed.append)
+    monkeypatch.setattr(job_definition_cmds, "record_result", printed.append)
 
-    stable_job_cmds.delete("stable-job", yes=True)
+    job_definition_cmds.delete("stable-job", yes=True)
 
     assert cleaned == ["run-1", "stable-job"]
     assert printed == [{"job_id": "stable-job", "status": "deleted", "confirmed": True}]

@@ -5,18 +5,28 @@ import re
 import subprocess
 import sys
 import uuid
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import SimpleNamespace
+
 import pytest
-from logging.handlers import RotatingFileHandler
-from typer.testing import CliRunner
+from mn_sdk import (
+    AgentProgress,
+    load_model_ownership,
+    load_model_remotes,
+    upsert_model_remote,
+)
 from rich.console import Console
-from mn_cli.main import app
+from typer.testing import CliRunner
+
 from mn_cli.libs import model_cmds, run_cmds
-from mn_cli.libs.ui import JobMonitorState, generate_live_layout
-from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress, _agent_progress_detail
 from mn_cli.libs.run_manifest import prepare_manifest_for_submission
-from mn_sdk import AgentProgress, load_model_ownership, load_model_remotes, upsert_model_remote
+from mn_cli.libs.ui import JobMonitorState, generate_live_layout
+from mn_cli.libs.workflow_progress import (
+    BlueprintWorkflowProgress,
+    _agent_progress_detail,
+)
+from mn_cli.main import app
 
 runner = CliRunner()
 
@@ -42,7 +52,7 @@ def isolated_mn_home(tmp_path, monkeypatch):
 
 def _workflow_manifest_fixture():
     return {
-        "apiVersion": "mn.workflow/v2",
+        "apiVersion": "mn.workflow/v1",
         "kind": "Workflow",
         "id": "tax_flow",
         "name": "Tax Flow",
@@ -85,13 +95,7 @@ def test_validate_success(tmp_path):
     bundle_dir = tmp_path / "valid_bundle"
     bundle_dir.mkdir()
     manifest_file = bundle_dir / "manifest.json"
-    manifest_data = {
-        "manifest_version": "1.0",
-        "graph_id": "test_graph",
-        "job_name": "test_job",
-        "entrypoints": ["e1"],
-        "nodes": [{"node_id": "n1"}]
-    }
+    manifest_data = _workflow_manifest_fixture()
     manifest_file.write_text(json.dumps(manifest_data))
     
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
@@ -189,7 +193,7 @@ def test_validate_accepts_source_manifest_after_expansion(monkeypatch, tmp_path)
     )
     monkeypatch.setenv("MN_AGENTS_ROOT", str(agent_root))
     manifest = {
-        "apiVersion": "mn.workflow.source/v2",
+        "apiVersion": "mn.workflow/v1",
         "kind": "WorkflowSource",
         "identity": {"id": "source_flow", "name": "Source Flow"},
         "defaults": {"worker": {"with": {"image": "source-flow:test"}}},
@@ -330,50 +334,41 @@ def test_validate_bad_json(tmp_path):
     assert result.exit_code == 2
     assert "is not valid JSON" in result.stderr
 
-def test_validate_missing_keys(tmp_path):
+def test_validate_rejects_unversioned_manifest(tmp_path):
     bundle_dir = tmp_path / "missing_keys"
     bundle_dir.mkdir()
     manifest_file = bundle_dir / "manifest.json"
     manifest_file.write_text('{"manifest_version": "1.0"}')
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
     assert result.exit_code == 2
-    assert "missing required keys" in result.stderr
+    assert "apiVersion must be mn.workflow/v1" in result.stderr
 
 def test_validate_nodes_not_list(tmp_path):
     bundle_dir = tmp_path / "nodes_not_list"
     bundle_dir.mkdir()
     manifest_file = bundle_dir / "manifest.json"
-    manifest_data = {
-        "manifest_version": "1.0",
-        "graph_id": "test_graph",
-        "job_name": "test_job",
-        "entrypoints": ["e1"],
-        "nodes": "not_a_list"
-    }
+    manifest_data = _workflow_manifest_fixture()
+    manifest_data["agents"]["nodes"] = "not_a_list"
     manifest_file.write_text(json.dumps(manifest_data))
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
     assert result.exit_code == 2
-    assert "'nodes' must be a list" in result.stderr
+    assert "agents.nodes" in result.stdout
 
 def test_validate_rejects_bad_resource_specs(tmp_path):
     bundle_dir = tmp_path / "bad_resources"
     bundle_dir.mkdir()
     manifest_file = bundle_dir / "manifest.json"
-    manifest_file.write_text(json.dumps({
-        "manifest_version": "1.0",
-        "graph_id": "test_graph",
-        "job_name": "test_job",
-        "entrypoints": ["worker"],
-        "nodes": [
-            {
-                "node_id": "worker",
-                "resources": {
-                    "ports": [{"label": "api", "port": 70000}],
-                    "volumes": [{"name": "models", "source": "relative", "target": "models"}],
-                },
-            }
-        ],
-    }))
+    manifest = _workflow_manifest_fixture()
+    manifest["agents"]["nodes"] = [
+        {
+            "node_id": "worker",
+            "resources": {
+                "ports": [{"label": "api", "port": 70000}],
+                "volumes": [{"name": "models", "source": "relative", "target": "models"}],
+            },
+        }
+    ]
+    manifest_file.write_text(json.dumps(manifest))
 
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--json"])
 
@@ -388,12 +383,8 @@ def test_validate_accepts_host_local_python_environment(tmp_path):
     requirements = bundle_dir / "payloads" / "worker" / "requirements.txt"
     requirements.parent.mkdir(parents=True)
     requirements.write_text("opencv-python-headless>=4.10,<5\n")
-    (bundle_dir / "manifest.json").write_text(json.dumps({
-        "manifest_version": "1.0",
-        "graph_id": "test_graph",
-        "job_name": "test_job",
-        "entrypoints": ["worker"],
-        "nodes": [
+    manifest = _workflow_manifest_fixture()
+    manifest["agents"]["nodes"] = [
             {
                 "node_id": "worker",
                 "config": {
@@ -404,8 +395,8 @@ def test_validate_accepts_host_local_python_environment(tmp_path):
                     },
                 },
             }
-        ],
-    }))
+    ]
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
 
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
 
@@ -416,12 +407,8 @@ def test_validate_accepts_host_local_python_environment(tmp_path):
 def test_validate_rejects_invalid_python_environment(tmp_path):
     bundle_dir = tmp_path / "bad_python_env_bundle"
     (bundle_dir / "payloads").mkdir(parents=True)
-    (bundle_dir / "manifest.json").write_text(json.dumps({
-        "manifest_version": "1.0",
-        "graph_id": "test_graph",
-        "job_name": "test_job",
-        "entrypoints": ["worker"],
-        "nodes": [
+    manifest = _workflow_manifest_fixture()
+    manifest["agents"]["nodes"] = [
             {
                 "node_id": "worker",
                 "config": {
@@ -432,8 +419,8 @@ def test_validate_rejects_invalid_python_environment(tmp_path):
                     },
                 },
             }
-        ],
-    }))
+    ]
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
 
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
 
@@ -445,20 +432,16 @@ def test_validate_rejects_invalid_python_environment(tmp_path):
 def test_validate_rejects_missing_explicit_skill_runtime_dockerfile(tmp_path):
     bundle_dir = tmp_path / "bad_skill_runtime_bundle"
     (bundle_dir / "payloads").mkdir(parents=True)
-    (bundle_dir / "manifest.json").write_text(json.dumps({
-        "manifest_version": "1.0",
-        "graph_id": "test_graph",
-        "job_name": "test_job",
-        "entrypoints": ["worker"],
-        "metadata": {
+    manifest = _workflow_manifest_fixture()
+    manifest["metadata"] = {
             "mn_skill_runtime": {
                 "enabled": True,
                 "driver": "docker_worker",
                 "build_context": "worker/docker_worker",
                 "generated": False,
             }
-        },
-        "nodes": [
+    }
+    manifest["agents"]["nodes"] = [
             {
                 "node_id": "worker",
                 "config": {
@@ -467,8 +450,8 @@ def test_validate_rejects_missing_explicit_skill_runtime_dockerfile(tmp_path):
                     "image": "example/worker:local",
                 },
             }
-        ],
-    }))
+    ]
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
 
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
 
@@ -482,13 +465,8 @@ def test_validate_runs_manifest_input_validation(tmp_path):
     (bundle_dir / "config" / "default.json").write_text(json.dumps({
         "video_source": {"uri": "ftp://camera.local/live"}
     }))
-    (bundle_dir / "manifest.json").write_text(json.dumps({
-        "manifest_version": "1.0",
-        "graph_id": "test_graph",
-        "job_name": "test_job",
-        "entrypoints": ["worker"],
-        "nodes": [{"node_id": "worker"}],
-        "input_validation": {
+    manifest = _workflow_manifest_fixture()
+    manifest["input_validation"] = {
             "rules": [
                 {
                     "name": "camera_url",
@@ -497,8 +475,8 @@ def test_validate_runs_manifest_input_validation(tmp_path):
                     "pattern": "^https?://",
                 }
             ]
-        },
-    }))
+    }
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
 
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
 
@@ -515,13 +493,8 @@ def test_validate_does_not_run_required_service_probes(tmp_path):
     (bundle_dir / "config" / "default.json").write_text(json.dumps({
         "video_source": {"uri": "ftp://camera.local/live"}
     }))
-    (bundle_dir / "manifest.json").write_text(json.dumps({
-        "manifest_version": "1.0",
-        "graph_id": "test_graph",
-        "job_name": "test_job",
-        "entrypoints": ["worker"],
-        "nodes": [{"node_id": "worker"}],
-        "required_services": [
+    manifest = _workflow_manifest_fixture()
+    manifest["required_services"] = [
             {
                 "name": "external-probe",
                 "origin": "external",
@@ -533,8 +506,8 @@ def test_validate_does_not_run_required_service_probes(tmp_path):
                     }
                 ],
             }
-        ],
-        "input_validation": {
+    ]
+    manifest["input_validation"] = {
             "rules": [
                 {
                     "name": "camera_url",
@@ -543,8 +516,8 @@ def test_validate_does_not_run_required_service_probes(tmp_path):
                     "pattern": "^https?://",
                 }
             ]
-        },
-    }))
+    }
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
 
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
 
@@ -559,13 +532,8 @@ def test_validate_outputs_json_report(tmp_path):
     (bundle_dir / "config" / "default.json").write_text(json.dumps({
         "video_source": {"uri": "ftp://camera.local/live"}
     }))
-    (bundle_dir / "manifest.json").write_text(json.dumps({
-        "manifest_version": "1.0",
-        "graph_id": "test_graph",
-        "job_name": "test_job",
-        "entrypoints": ["worker"],
-        "nodes": [{"node_id": "worker"}],
-        "input_validation": {
+    manifest = _workflow_manifest_fixture()
+    manifest["input_validation"] = {
             "rules": [
                 {
                     "name": "camera_url",
@@ -575,8 +543,8 @@ def test_validate_outputs_json_report(tmp_path):
                     "help": "Use an http:// or https:// URL.",
                 }
             ]
-        },
-    }))
+    }
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
 
     result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--json"])
 

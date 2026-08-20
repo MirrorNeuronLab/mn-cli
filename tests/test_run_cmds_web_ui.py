@@ -1,10 +1,12 @@
 import json
 
+from mn_sdk.submission_preparation import prepare_manifest_for_submission
+from v1_manifests import workflow_manifest
+
 from mn_cli.libs.run_cmds.web_ui import (
     _console_web_ui_url_from_manifest,
     _console_web_ui_url_from_run_dir,
 )
-from mn_sdk.submission_preparation import prepare_manifest_for_submission
 
 
 def test_console_web_ui_url_comes_from_blueprint_declared_service():
@@ -38,13 +40,13 @@ def test_console_web_ui_url_reads_blueprint_written_handle(tmp_path):
 
 
 def test_submission_does_not_inject_dashboard_service(tmp_path):
-    manifest = {
+    manifest = workflow_manifest({
         "graph_id": "plain-service",
         "type": "service",
         "nodes": [{"node_id": "worker", "config": {"environment": {}}}],
         "entrypoints": ["worker"],
-    }
+    })
 
     prepared = prepare_manifest_for_submission(tmp_path, manifest)
 
-    assert [node["node_id"] for node in prepared["nodes"]] == ["worker"]
+    assert [node["node_id"] for node in prepared["agents"]["nodes"]] == ["worker"]

@@ -1,92 +1,185 @@
-import os
 import copy
 import json
+import os
 import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any
 
 import typer
+from mn_sdk import (
+    BlueprintModelOps,
+    blueprint_model_dependency_summary,
+)
+from mn_sdk import (
+    cluster_provided_model as _cluster_provided_model,
+)
+from mn_sdk import (
+    docker_model_name as _docker_model_name,
+)
+from mn_sdk import (
+    expand_manifest_source as _expand_manifest_source,
+)
+from mn_sdk import (
+    is_manifest_source as _is_manifest_source,
+)
+from mn_sdk import (
+    load_model_catalog as _load_model_catalog,
+)
+from mn_sdk import (
+    load_model_ownership as _load_model_ownership,
+)
+from mn_sdk import (
+    record_model_owner as _record_model_owner,
+)
+from mn_sdk import (
+    remove_model_owner as _remove_model_owner,
+)
+from mn_sdk import (
+    remove_model_record as _remove_model_record,
+)
+from mn_sdk import (
+    required_blueprint_models as _required_blueprint_models,
+)
+from mn_sdk import (
+    resolve_model_entry as _resolve_model_entry,
+)
+from mn_sdk.blueprint_support.python_workflow_bundle import (
+    generate_python_workflow_bundle_from_blueprint_dir,
+)
+from mn_sdk.runtime_config import resolve_mn_home
+from mn_sdk.submission_preparation import (
+    load_blueprint_config as _load_blueprint_config,
+)
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
+
 from mn_cli.libs.blueprint_observability import (
     artifact_headline as _artifact_headline,
+)
+from mn_cli.libs.blueprint_observability import (
     display as _display,
+)
+from mn_cli.libs.blueprint_observability import (
     final_artifact as _final_artifact,
+)
+from mn_cli.libs.blueprint_observability import (
     job_id_from_record as _job_id,
+)
+from mn_cli.libs.blueprint_observability import (
     load_observability_api as _load_observability_api,
+)
+from mn_cli.libs.blueprint_observability import (
     load_observability_tools as _load_observability_tools,
+)
+from mn_cli.libs.blueprint_observability import (
     load_run_or_exit as _load_run_or_exit,
+)
+from mn_cli.libs.blueprint_observability import (
     load_web_ui_api as _load_web_ui_api,
+)
+from mn_cli.libs.blueprint_observability import (
     make_blueprint_run_id as _make_blueprint_run_id,
+)
+from mn_cli.libs.blueprint_observability import (
     print_events as _print_events,
+)
+from mn_cli.libs.blueprint_observability import (
     render_markdown_export as _render_markdown_export,
+)
+from mn_cli.libs.blueprint_observability import (
     run_summary as _run_summary,
+)
+from mn_cli.libs.blueprint_observability import (
     web_ui_url as _web_ui_url,
 )
 from mn_cli.libs.blueprint_repository import (
     BLUEPRINT_REPO_CONTEXT_KEY,
     BlueprintIndexError,
+)
+from mn_cli.libs.blueprint_repository import (
     blueprint_cache_dir_for_repo as _blueprint_cache_dir_for_repo,
+)
+from mn_cli.libs.blueprint_repository import (
     blueprint_storage_dir_for_source as _blueprint_storage_dir_for_source,
+)
+from mn_cli.libs.blueprint_repository import (
     clone_blueprint_repo as _clone_blueprint_repo,
+)
+from mn_cli.libs.blueprint_repository import (
     context_blueprint_repo as _context_blueprint_repo,
+)
+from mn_cli.libs.blueprint_repository import (
     default_blueprint_storage_dir as _default_blueprint_storage_dir,
+)
+from mn_cli.libs.blueprint_repository import (
     ensure_blueprint_source as _ensure_blueprint_source,
+)
+from mn_cli.libs.blueprint_repository import (
     git_checkout as _git_checkout,
+)
+from mn_cli.libs.blueprint_repository import (
     git_fetch as _git_fetch,
+)
+from mn_cli.libs.blueprint_repository import (
     git_pull as _git_pull,
+)
+from mn_cli.libs.blueprint_repository import (
     git_revision as _git_revision,
+)
+from mn_cli.libs.blueprint_repository import (
     load_blueprint_index as _load_blueprint_index,
+)
+from mn_cli.libs.blueprint_repository import (
     resolved_blueprint_source as _resolved_blueprint_source,
 )
 from mn_cli.libs.blueprint_resources import (
     cleanup_blueprint_resources as _cleanup_blueprint_resources,
+)
+from mn_cli.libs.blueprint_resources import (
     default_bundle_cache_dir as _default_bundle_cache_dir,
+)
+from mn_cli.libs.blueprint_resources import (
     default_generated_bundles_dir as _default_generated_bundles_dir,
+)
+from mn_cli.libs.blueprint_resources import (
     default_python_envs_dir as _default_python_envs_dir,
+)
+from mn_cli.libs.blueprint_resources import (
     default_runs_root as _default_runs_root,
 )
-from mn_cli.libs.ui import print_confirmed, print_detail, print_error, print_info, print_success_confirmation, print_warning, require_confirmation
+from mn_cli.libs.model_cmds import (
+    install_model_entry as _install_model_entry,
+)
+from mn_cli.libs.model_cmds import (
+    model_installed as _model_installed,
+)
+from mn_cli.libs.model_cmds import (
+    remove_model_ref as _remove_model_ref,
+)
+from mn_cli.libs.run_cmds import doctor_bundle as _doctor_bundle
+from mn_cli.libs.run_cmds import run_bundle as _run_bundle
+from mn_cli.libs.ui import (
+    print_confirmed,
+    print_detail,
+    print_error,
+    print_info,
+    print_success_confirmation,
+    print_warning,
+    require_confirmation,
+)
 from mn_cli.output import emit_stream_record, json_enabled, record_result
 from mn_cli.shared import console, logger
 from mn_cli.terminal import use_progress
-from mn_cli.libs.run_cmds import doctor_bundle as _doctor_bundle
-from mn_cli.libs.run_cmds import run_bundle as _run_bundle
-from mn_sdk.submission_preparation import load_blueprint_config as _load_blueprint_config
-from mn_cli.libs.model_cmds import (
-    install_model_entry as _install_model_entry,
-    model_installed as _model_installed,
-    remove_model_ref as _remove_model_ref,
-)
-from mn_sdk.runtime_config import resolve_mn_home
-from mn_sdk.blueprint_support.python_workflow_bundle import (
-    generate_python_workflow_bundle_from_blueprint_dir,
-)
-from mn_sdk import (
-    BlueprintModelOps,
-    blueprint_model_dependency_summary,
-    cluster_provided_model as _cluster_provided_model,
-    docker_model_name as _docker_model_name,
-    expand_manifest_source as _expand_manifest_source,
-    is_manifest_source as _is_manifest_source,
-    load_model_catalog as _load_model_catalog,
-    load_model_ownership as _load_model_ownership,
-    record_model_owner as _record_model_owner,
-    remove_model_owner as _remove_model_owner,
-    remove_model_record as _remove_model_record,
-    required_blueprint_models as _required_blueprint_models,
-    resolve_model_entry as _resolve_model_entry,
-)
 
 _PATCH_COMPAT = (subprocess, _git_checkout, _git_fetch)
 
 
 def blueprint_callback(
     ctx: typer.Context,
-    blueprint_repo: Optional[str] = typer.Option(
+    blueprint_repo: str | None = typer.Option(
         None,
         "--blueprint-repo",
         help="Use this blueprint repository URL/path instead of the default catalog.",
@@ -157,21 +250,21 @@ def _run_resolved_blueprint(
     manifest: dict[str, Any],
     display_name: str,
     blueprint_id: str,
-    run_id: Optional[str],
-    revision: Optional[str],
+    run_id: str | None,
+    revision: str | None,
     source_label: str,
-    follow_seconds: Optional[float],
+    follow_seconds: float | None,
     force: bool,
-    config_overrides: Optional[dict[str, Any]] = None,
+    config_overrides: dict[str, Any] | None = None,
     detached: bool = False,
     web_ui: bool = False,
     auto_schedule: bool = False,
-    schedule: Optional[str] = None,
+    schedule: str | None = None,
     fake_llm: bool = False,
     fake_skills: bool = False,
     benchmark: bool = False,
     debug: bool = False,
-    job_id: Optional[str] = None,
+    job_id: str | None = None,
 ) -> None:
     shared_run_id = run_id or _make_blueprint_run_id(blueprint_id)
     _print_blueprint_run_phase(1, 3, "Prepare blueprint bundle")
@@ -613,7 +706,7 @@ def blueprint_list(ctx: typer.Context):
 def blueprint_show(
     ctx: typer.Context,
     blueprint_id: str = typer.Argument(help="Catalog blueprint ID."),
-    source: Optional[str] = typer.Option(None, "--source", help="Blueprint repository URL or local path."),
+    source: str | None = typer.Option(None, "--source", help="Blueprint repository URL or local path."),
 ) -> None:
     """Show one catalog blueprint without preparing or running it."""
     blueprint_repo = _context_blueprint_repo(ctx)
@@ -654,8 +747,8 @@ def blueprint_show(
 def blueprint_add(
     ctx: typer.Context,
     blueprint_id: str = typer.Argument(help="Catalog blueprint ID to add."),
-    source: Optional[str] = typer.Option(None, "--source", help="Blueprint repository URL or local path."),
-    revision: Optional[str] = typer.Option(None, "--revision", help="Git revision to add."),
+    source: str | None = typer.Option(None, "--source", help="Blueprint repository URL or local path."),
+    revision: str | None = typer.Option(None, "--revision", help="Git revision to add."),
     force: bool = typer.Option(False, "--force", help="Override compatibility checks; does not replace confirmation."),
 ) -> None:
     """Add one catalog blueprint and its required runtime models."""
@@ -664,9 +757,9 @@ def blueprint_add(
 
 def blueprint_remove(
     ctx: typer.Context,
-    blueprint_id: Optional[str] = typer.Argument(None, help="Blueprint ID to remove; omit only with --all."),
+    blueprint_id: str | None = typer.Argument(None, help="Blueprint ID to remove; omit only with --all."),
     all_: bool = typer.Option(False, "--all", help="Remove the complete cached blueprint catalog."),
-    source: Optional[str] = typer.Option(None, "--source", help="Cached blueprint storage path."),
+    source: str | None = typer.Option(None, "--source", help="Cached blueprint storage path."),
     keep_resources: bool = typer.Option(False, "--keep-resources", help="Keep blueprint-owned cached runtime resources."),
     keep_models: bool = typer.Option(False, "--keep-models", help="Keep orphaned runtime models."),
     remove_models: bool = typer.Option(False, "--remove-models", help="Remove orphaned models without a second prompt."),
@@ -698,24 +791,24 @@ def blueprint_remove(
 def run_catalog_blueprint(
     blueprint_name: str,
     *,
-    run_id: Optional[str] = None,
-    blueprint_repo: Optional[str] = None,
-    source: Optional[str] = None,
+    run_id: str | None = None,
+    blueprint_repo: str | None = None,
+    source: str | None = None,
     update: bool = False,
     offline: bool = False,
-    revision: Optional[str] = None,
-    follow_seconds: Optional[float] = None,
+    revision: str | None = None,
+    follow_seconds: float | None = None,
     force: bool = False,
-    config_overrides: Optional[dict[str, Any]] = None,
+    config_overrides: dict[str, Any] | None = None,
     detached: bool = False,
     web_ui: bool = False,
     auto_schedule: bool = False,
-    schedule: Optional[str] = None,
+    schedule: str | None = None,
     fake_llm: bool = False,
     fake_skills: bool = False,
     benchmark: bool = False,
     debug: bool = False,
-    job_id: Optional[str] = None,
+    job_id: str | None = None,
 ) -> None:
     """Run a catalog blueprint by name through the shared blueprint runner."""
     _reject_local_blueprint_path(blueprint_name)
@@ -780,26 +873,26 @@ def run_catalog_blueprint(
 def run_local_blueprint_folder(
     folder: str,
     *,
-    run_id: Optional[str] = None,
-    follow_seconds: Optional[float] = None,
+    run_id: str | None = None,
+    follow_seconds: float | None = None,
     force: bool = False,
-    config_overrides: Optional[dict[str, Any]] = None,
+    config_overrides: dict[str, Any] | None = None,
     detached: bool = False,
     web_ui: bool = False,
     auto_schedule: bool = False,
-    schedule: Optional[str] = None,
+    schedule: str | None = None,
     fake_llm: bool = False,
     fake_skills: bool = False,
     benchmark: bool = False,
     debug: bool = False,
-    job_id: Optional[str] = None,
+    job_id: str | None = None,
 ) -> None:
     """Run a local Python source blueprint folder through the shared blueprint runner."""
     blueprint_dir = Path(folder).expanduser()
     manifest = _load_blueprint_manifest(blueprint_dir, str(blueprint_dir))
     metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
     workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
-    workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v2" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
+    workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v1" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
     blueprint_id = str(
         metadata.get("blueprint_id")
         or manifest.get("id")
@@ -835,19 +928,19 @@ def run_local_blueprint_folder(
 def _run_local_folder(
     folder: str,
     *,
-    run_id: Optional[str],
-    follow_seconds: Optional[float],
+    run_id: str | None,
+    follow_seconds: float | None,
     force: bool,
-    config_overrides: Optional[dict[str, Any]] = None,
+    config_overrides: dict[str, Any] | None = None,
     detached: bool = False,
     web_ui: bool = False,
     auto_schedule: bool = False,
-    schedule: Optional[str] = None,
+    schedule: str | None = None,
     fake_llm: bool = False,
     fake_skills: bool = False,
     benchmark: bool = False,
     debug: bool = False,
-    job_id: Optional[str] = None,
+    job_id: str | None = None,
 ) -> None:
     bundle_dir = Path(folder).expanduser()
     manifest = _load_blueprint_manifest(bundle_dir, str(bundle_dir))
@@ -913,11 +1006,11 @@ def _run_local_folder(
 def doctor_catalog_blueprint(
     blueprint_name: str,
     *,
-    blueprint_repo: Optional[str] = None,
-    source: Optional[str] = None,
+    blueprint_repo: str | None = None,
+    source: str | None = None,
     update: bool = False,
     offline: bool = False,
-    revision: Optional[str] = None,
+    revision: str | None = None,
     json_output: bool = False,
     timeout: float = 3.0,
     check_only: bool = False,
@@ -1018,7 +1111,7 @@ def _doctor_resolved_blueprint(
     blueprint_dir: Path,
     manifest: dict[str, Any],
     blueprint_id: str,
-    revision: Optional[str],
+    revision: str | None,
     source_label: str,
     json_output: bool,
     timeout: float,
@@ -1121,7 +1214,7 @@ def _blueprint_id_from_manifest(
 ) -> str:
     metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
     workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
-    workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v2" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
+    workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v1" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
     return str(
         metadata.get("blueprint_id")
         or catalog_id
@@ -1143,7 +1236,7 @@ def blueprint_doctor(
         ),
     ],
     blueprint_repo: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--blueprint-repo",
             help="Use this blueprint repository URL/path instead of the default catalog.",
@@ -1164,7 +1257,7 @@ def blueprint_doctor(
         ),
     ] = False,
     revision: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--revision", help="Checkout a specific git revision before diagnosing."),
     ] = None,
     json_output: Annotated[
@@ -1235,18 +1328,18 @@ def blueprint_run(
         ),
     ],
     run_id: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--run-id", help="Use a specific shared blueprint run ID."),
     ] = None,
     job_id: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--job-id",
-            help="Run an existing stable job instead of creating a new job.",
+            help="Run an existing durable job instead of creating a new job.",
         ),
     ] = None,
     blueprint_repo: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--blueprint-repo",
             help="Use this blueprint repository URL/path instead of the default catalog.",
@@ -1267,18 +1360,18 @@ def blueprint_run(
         ),
     ] = False,
     revision: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--revision", help="Checkout a specific git revision before running."),
     ] = None,
     follow_seconds: Annotated[
-        Optional[float],
+        float | None,
         typer.Option(
             "--follow-seconds",
             help="Seconds to keep polling job events after the submit stream detaches. Defaults to MN_RUN_DETACH_LOG_SECONDS or 30.",
         ),
     ] = None,
     set_values: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         typer.Option(
             "--set",
             metavar="PATH=VALUE",
@@ -1308,14 +1401,14 @@ def blueprint_run(
         ),
     ] = False,
     web_ui_host: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--web-ui-host",
             help="Override the blueprint Web UI listener host for this run.",
         ),
     ] = None,
     web_ui_port: Annotated[
-        Optional[int],
+        int | None,
         typer.Option(
             "--web-ui-port",
             min=1,
@@ -1331,7 +1424,7 @@ def blueprint_run(
         ),
     ] = False,
     schedule: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--schedule",
             help="Create a schedule instead of running now. Accepts JSON, a delay like 30m, or an ISO run_at timestamp.",
@@ -1435,9 +1528,9 @@ def blueprint_run(
 
 def blueprint_install(
     ctx: typer.Context,
-    blueprint_id: Optional[str] = typer.Argument(None, help="Blueprint ID to install. Omit to install the blueprint library."),
-    source: Optional[str] = typer.Option(None, "--source", help="Blueprint repository URL or local path."),
-    revision: Optional[str] = typer.Option(None, "--revision", help="Git revision to use when installing a blueprint by ID."),
+    blueprint_id: str | None = typer.Argument(None, help="Blueprint ID to install. Omit to install the blueprint library."),
+    source: str | None = typer.Option(None, "--source", help="Blueprint repository URL or local path."),
+    revision: str | None = typer.Option(None, "--revision", help="Git revision to use when installing a blueprint by ID."),
     force: bool = typer.Option(False, "--force", help="Replace cached library storage, or force model install compatibility for a blueprint."),
 ):
     """Install the blueprint library or one blueprint plus its required runtime models."""
@@ -1489,8 +1582,8 @@ def _install_catalog_blueprint_with_models(
     ctx: typer.Context,
     *,
     blueprint_id: str,
-    source: Optional[str],
-    revision: Optional[str],
+    source: str | None,
+    revision: str | None,
     force: bool,
 ) -> None:
     blueprint_repo = _context_blueprint_repo(ctx)
@@ -1659,7 +1752,7 @@ def _uninstall_catalog_blueprint(
     ctx: typer.Context,
     *,
     blueprint_id: str,
-    source: Optional[str],
+    source: str | None,
     keep_resources: bool,
     keep_models: bool,
     remove_models: bool,
@@ -1887,9 +1980,9 @@ def _remove_or_prompt_for_orphaned_models(
 
 def blueprint_update(
     ctx: typer.Context,
-    blueprint_id: Optional[str] = typer.Argument(None, help="Blueprint ID to refresh; omit only with --all."),
+    blueprint_id: str | None = typer.Argument(None, help="Blueprint ID to refresh; omit only with --all."),
     all_: bool = typer.Option(False, "--all", help="Refresh the complete blueprint catalog."),
-    source: Optional[str] = typer.Option(None, "--source", help="Cached blueprint repo/path to update."),
+    source: str | None = typer.Option(None, "--source", help="Cached blueprint repo/path to update."),
 ):
     """Refresh one blueprint or the complete catalog and its dependencies."""
     if bool(blueprint_id) == bool(all_):
@@ -1959,12 +2052,12 @@ def blueprint_update(
 
 def blueprint_cleanup(
     ctx: typer.Context,
-    blueprint_id: Optional[str] = typer.Option(None, "--blueprint-id", help="Clean resources for one blueprint ID."),
-    source: Optional[str] = typer.Option(None, "--source", help="Blueprint storage path used to decide which resources are dead."),
-    python_envs_dir: Optional[str] = typer.Option(None, "--python-envs-dir", help="Override the blueprint Python environment cache root."),
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the shared blueprint run store root."),
-    generated_bundles_dir: Optional[str] = typer.Option(None, "--generated-bundles-dir", help="Override the generated Python workflow bundle cache root."),
-    bundle_cache_dir: Optional[str] = typer.Option(None, "--bundle-cache-dir", help="Override the MirrorNeuron local bundle cache root."),
+    blueprint_id: str | None = typer.Option(None, "--blueprint-id", help="Clean resources for one blueprint ID."),
+    source: str | None = typer.Option(None, "--source", help="Blueprint storage path used to decide which resources are dead."),
+    python_envs_dir: str | None = typer.Option(None, "--python-envs-dir", help="Override the blueprint Python environment cache root."),
+    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the shared blueprint run store root."),
+    generated_bundles_dir: str | None = typer.Option(None, "--generated-bundles-dir", help="Override the generated Python workflow bundle cache root."),
+    bundle_cache_dir: str | None = typer.Option(None, "--bundle-cache-dir", help="Override the MirrorNeuron local bundle cache root."),
     include_files: bool = typer.Option(True, "--files/--no-files", help="Also remove blueprint-owned run records, generated bundles, and local bundle cache entries."),
     include_docker: bool = typer.Option(True, "--docker/--no-docker", help="Also remove Docker resources labelled for removed blueprints."),
     include_dead: bool = typer.Option(True, "--dead/--no-dead", help="Remove stale incomplete resources and resources for blueprints no longer in storage."),
@@ -2004,8 +2097,8 @@ def blueprint_cleanup(
 
 def blueprint_uninstall(
     ctx: typer.Context,
-    blueprint_id: Optional[str] = typer.Argument(None, help="Blueprint ID to uninstall. Omit to remove cached blueprint storage."),
-    source: Optional[str] = typer.Option(None, "--source", help="Cached blueprint storage path to remove."),
+    blueprint_id: str | None = typer.Argument(None, help="Blueprint ID to uninstall. Omit to remove cached blueprint storage."),
+    source: str | None = typer.Option(None, "--source", help="Cached blueprint storage path to remove."),
     keep_resources: bool = typer.Option(False, "--keep-resources", help="Remove blueprint files but keep cached runtime resources."),
     keep_models: bool = typer.Option(False, "--keep-models", help="Keep orphaned models after removing this blueprint."),
     remove_models: bool = typer.Option(False, "--remove-models", help="Remove orphaned models without prompting."),
@@ -2060,7 +2153,7 @@ def blueprint_uninstall(
     _print_cleanup_summary(summary)
 
 
-def _resolve_blueprint_storage_for_cleanup(ctx: typer.Context, source: Optional[str]) -> Path:
+def _resolve_blueprint_storage_for_cleanup(ctx: typer.Context, source: str | None) -> Path:
     if source:
         return Path(source).expanduser()
     blueprint_repo = _context_blueprint_repo(ctx)
@@ -2160,9 +2253,9 @@ def _print_cleanup_summary(summary: dict[str, Any] | None) -> None:
 
 def blueprint_monitor(
     follow: bool = typer.Option(False, "--follow", "-f", help="Refresh the run table until interrupted."),
-    blueprint_id: Optional[str] = typer.Option(None, "--blueprint-id", help="Only show runs for one blueprint ID."),
+    blueprint_id: str | None = typer.Option(None, "--blueprint-id", help="Only show runs for one blueprint ID."),
     max_runs: int = typer.Option(20, "--max-runs", help="Maximum number of runs to display."),
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
+    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
     interval: float = typer.Option(2.0, "--interval", help="Refresh interval in seconds when --follow is enabled."),
 ):
     """Show recent blueprint runs from the shared run store."""
@@ -2183,7 +2276,7 @@ def blueprint_tail(
     run_id: str,
     lines: int = typer.Option(20, "--lines", "-n", help="Number of events to show."),
     follow: bool = typer.Option(False, "--follow", "-f", help="Continue printing new events until interrupted."),
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
+    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
     interval: float = typer.Option(1.0, "--interval", help="Polling interval in seconds when --follow is enabled."),
 ):
     """Print the event stream for one blueprint run."""
@@ -2225,9 +2318,9 @@ def blueprint_tail(
 def blueprint_logs(
     run_id: str,
     lines: int = typer.Option(50, "--lines", "-n", help="Number of log records to show."),
-    level: Optional[str] = typer.Option(None, "--level", help="Minimum log level to show."),
+    level: str | None = typer.Option(None, "--level", help="Minimum log level to show."),
     follow: bool = typer.Option(False, "--follow", "-f", help="Continue printing new logs until interrupted."),
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
+    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
     interval: float = typer.Option(1.0, "--interval", help="Polling interval in seconds when --follow is enabled."),
 ):
     """Print structured logs for one blueprint run."""
@@ -2266,9 +2359,9 @@ def blueprint_stream(
     run_id: str,
     channels: str = typer.Option("events,logs,human,resources", "--channels", help="Comma-separated channels to print."),
     lines: int = typer.Option(100, "--lines", "-n", help="Number of stream records to show."),
-    level: Optional[str] = typer.Option(None, "--level", help="Minimum log level when logs are included."),
+    level: str | None = typer.Option(None, "--level", help="Minimum log level when logs are included."),
     follow: bool = typer.Option(False, "--follow", "-f", help="Continue printing new stream records until interrupted."),
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
+    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
     interval: float = typer.Option(1.0, "--interval", help="Polling interval in seconds when --follow is enabled."),
 ):
     """Print merged blueprint events, logs, human events, and resource samples."""
@@ -2312,7 +2405,7 @@ def blueprint_resources(
     bucket: str = typer.Option("1h", "--bucket", help="Aggregation bucket, for example 1h."),
     live: bool = typer.Option(False, "--live", help="Refresh resource usage until interrupted."),
     interval: float = typer.Option(5.0, "--interval", help="Live refresh interval in seconds."),
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
+    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
 ):
     """Show CPU, GPU, memory, and LLM token usage for one blueprint run."""
     _load_run_or_exit(run_id, runs_root)
@@ -2342,10 +2435,10 @@ def blueprint_resources(
 def blueprint_human_command(
     args: list[str] = typer.Argument(None, help="Run ID, or respond/ack subcommand arguments."),
     pending: bool = typer.Option(False, "--pending", help="Show only pending human input requests."),
-    decision: Optional[str] = typer.Option(None, "--decision", help="Decision for respond."),
+    decision: str | None = typer.Option(None, "--decision", help="Decision for respond."),
     notes: str = typer.Option("", "--notes", help="Optional reviewer notes."),
     reviewer: str = typer.Option("cli", "--reviewer", help="Reviewer identity label."),
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
+    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
 ):
     """Inspect and respond to human collaboration events."""
     args = args or []
@@ -2381,9 +2474,9 @@ def blueprint_human_command(
 
 def blueprint_human(
     ctx: typer.Context,
-    run_id: Optional[str] = typer.Argument(None, help="Blueprint run ID."),
+    run_id: str | None = typer.Argument(None, help="Blueprint run ID."),
     pending: bool = typer.Option(False, "--pending", help="Show only pending human input requests."),
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
+    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
 ):
     """Show human collaboration events for one blueprint run."""
     if ctx.invoked_subcommand is not None:
@@ -2410,7 +2503,7 @@ def blueprint_human_respond(
     decision: str = typer.Option(..., "--decision", help="Decision value, such as approve, revise, or reject."),
     notes: str = typer.Option("", "--notes", help="Optional reviewer notes."),
     reviewer: str = typer.Option("cli", "--reviewer", help="Reviewer identity label."),
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
+    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
 ):
     """Record a response to a human input request."""
     _load_run_or_exit(run_id, runs_root)
@@ -2438,7 +2531,7 @@ def blueprint_human_ack(
     run_id: str,
     notice_id: str,
     reviewer: str = typer.Option("cli", "--reviewer", help="Reviewer identity label."),
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
+    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
 ):
     """Acknowledge a human notice."""
     _load_run_or_exit(run_id, runs_root)
@@ -2454,7 +2547,7 @@ def blueprint_human_ack(
 def blueprint_compare(
     run_a: str,
     run_b: str,
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
+    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
 ):
     """Compare two blueprint runs from the shared run store."""
     record_a = _load_run_or_exit(run_a, runs_root, include_observability=True)
@@ -2501,8 +2594,8 @@ def blueprint_compare(
 def blueprint_export(
     run_id: str,
     output_format: str = typer.Option("json", "--format", "-f", help="Export format: json, markdown, or html."),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Write the export to this path instead of stdout."),
-    runs_root: Optional[str] = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
+    output: str | None = typer.Option(None, "--output", "-o", help="Write the export to this path instead of stdout."),
+    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
 ):
     """Export one blueprint run as JSON, Markdown, or static HTML."""
     from mn_cli.output import json_enabled, record_result

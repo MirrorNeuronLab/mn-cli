@@ -18,7 +18,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "mn.workflow/v2"
+      "const": "mn.workflow/v1"
     },
     "kind": {
       "const": "Workflow"

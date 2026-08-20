@@ -1,16 +1,14 @@
-from io import StringIO
 import json
 import subprocess
+from io import StringIO
 from types import SimpleNamespace
 
 import grpc
 import pytest
-from rich.console import Console
 import typer
+from rich.console import Console
 
-import mn_cli.libs.job_cmds as job_cmds
-import mn_cli.libs.job_cleanup as job_cleanup
-import mn_cli.libs.operation_cmds as operation_cmds
+from mn_cli.libs import job_cleanup, job_cmds, operation_cmds
 
 
 class StubRpcError(grpc.RpcError):
@@ -48,198 +46,12 @@ def _operation_client(final_operation, events=(), **methods):
     )
 
 
-def test_clear_runs_without_local_admin_token_preflight(monkeypatch):
-    output = _capture_console(monkeypatch)
-    client = _operation_client(
-        {"operation_id": "op-test", "status": "completed", "counters": {"total": 1, "finished": 1}},
-        admin_token="",
-    )
-    monkeypatch.setattr(job_cmds, "client", client)
-    monkeypatch.setattr(job_cmds, "config", SimpleNamespace(grpc_admin_token=""))
-
-    job_cmds.clear(yes=True)
-
-    rendered = output.getvalue()
-    assert "Job clear successful" in rendered
-    assert "Operation ID:" in rendered
 
 
-@pytest.mark.parametrize("plain_output", [False, True])
-def test_clear_with_no_jobs_ignores_operation_completion_event(
-    monkeypatch, plain_output
-):
-    output = _capture_console(monkeypatch)
-    if plain_output:
-        monkeypatch.setenv("MN_CLI_OUTPUT", "plain")
-    else:
-        monkeypatch.delenv("MN_CLI_OUTPUT", raising=False)
-
-    cleaned_up = []
-    monkeypatch.setattr(job_cmds, "_cleanup_cleared_job_resources", cleaned_up.append)
-    monkeypatch.setattr(
-        job_cmds,
-        "client",
-        _operation_client(
-            {
-                "operation_id": "op-empty",
-                "status": "completed",
-                "counters": {
-                    "total": 0,
-                    "finished": 0,
-                    "succeeded": 0,
-                    "failed": 0,
-                    "deferred": 0,
-                },
-            },
-            [
-                json.dumps(
-                    {
-                        "type": "operation_completed",
-                        "status": "completed",
-                        "counters": {
-                            "total": 0,
-                            "finished": 0,
-                            "succeeded": 0,
-                            "failed": 0,
-                            "deferred": 0,
-                        },
-                    }
-                )
-            ],
-        ),
-    )
-
-    job_cmds.clear(yes=True)
-
-    assert cleaned_up == []
-    assert "Job clear successful" in output.getvalue()
 
 
-def test_clear_cleans_local_resources_for_each_cleared_job(monkeypatch):
-    _capture_console(monkeypatch)
-    cleaned_up = []
-    monkeypatch.setattr(job_cmds, "_cleanup_cleared_job_resources", cleaned_up.append)
-    monkeypatch.setattr(
-        job_cmds,
-        "client",
-        _operation_client(
-            {
-                "operation_id": "op-test",
-                "status": "completed",
-                "counters": {
-                    "total": 1,
-                    "finished": 1,
-                    "succeeded": 1,
-                    "failed": 0,
-                    "deferred": 0,
-                },
-            },
-            [
-                json.dumps(
-                    {
-                        "type": "item_completed",
-                        "item_id": "run-1",
-                        "status": "cleared",
-                    }
-                )
-            ],
-        ),
-    )
 
-    job_cmds.clear(yes=True)
-
-    assert cleaned_up == ["run-1"]
-
-
-def test_clear_attempts_every_local_cleanup_before_reporting_failure(monkeypatch):
-    _capture_console(monkeypatch)
-    cleaned_up = []
-    handled_errors = []
-
-    def cleanup(job_id):
-        cleaned_up.append(job_id)
-        if job_id == "run-1":
-            raise job_cleanup.JobResourceCleanupError("sandbox is busy")
-
-    monkeypatch.setattr(job_cmds, "_cleanup_cleared_job_resources", cleanup)
-    monkeypatch.setattr(
-        job_cmds,
-        "handle_cli_error",
-        lambda error, _console, action: handled_errors.append((str(error), action)),
-    )
-    monkeypatch.setattr(
-        job_cmds,
-        "client",
-        _operation_client(
-            {
-                "operation_id": "op-test",
-                "status": "completed",
-                "counters": {
-                    "total": 2,
-                    "finished": 2,
-                    "succeeded": 2,
-                    "failed": 0,
-                    "deferred": 0,
-                },
-            },
-            [
-                json.dumps(
-                    {
-                        "type": "item_completed",
-                        "item_id": run_id,
-                        "status": "cleared",
-                    }
-                )
-                for run_id in ("run-1", "run-2")
-            ],
-        ),
-    )
-
-    job_cmds.clear(yes=True)
-
-    assert cleaned_up == ["run-1", "run-2"]
-    assert handled_errors == [("sandbox is busy", "clear")]
-
-
-def test_clear_does_not_delete_records_when_precleanup_fails(monkeypatch):
-    cleaned_up = []
-    handled_errors = []
-
-    def cleanup(job_id):
-        cleaned_up.append(job_id)
-        raise job_cleanup.JobResourceCleanupError("checkpoint is busy")
-
-    monkeypatch.setattr(job_cmds, "_cleanup_cleared_job_resources", cleanup)
-    monkeypatch.setattr(
-        job_cmds,
-        "handle_cli_error",
-        lambda error, _console, action: handled_errors.append((str(error), action)),
-    )
-    monkeypatch.setattr(
-        job_cmds,
-        "client",
-        SimpleNamespace(
-            list_jobs=lambda **_kwargs: json.dumps(
-                {
-                    "data": [
-                        {"job_id": "run-1", "status": "completed"},
-                        {"job_id": "run-active", "status": "running"},
-                    ]
-                }
-            ),
-            start_operation=lambda *_args, **_kwargs: pytest.fail(
-                "Core deletion must not start after local cleanup fails"
-            ),
-        ),
-    )
-
-    job_cmds.clear(yes=True)
-
-    assert cleaned_up == ["run-1"]
-    assert handled_errors == [("checkpoint is busy", "clear")]
-
-
-def test_clear_resource_cleanup_deletes_prepared_openshell_sandbox(monkeypatch):
+def test_job_resource_cleanup_deletes_prepared_openshell_sandbox(monkeypatch):
     calls = []
 
     def run(command, **_kwargs):
@@ -256,7 +68,7 @@ def test_clear_resource_cleanup_deletes_prepared_openshell_sandbox(monkeypatch):
         lambda _job_id, **_kwargs: None,
     )
 
-    job_cleanup.cleanup_cleared_job_resources(
+    job_cleanup.cleanup_job_resources(
         "run-1",
         runtime_client=SimpleNamespace(),
         log=SimpleNamespace(warning=lambda *_args, **_kwargs: None),
@@ -268,7 +80,7 @@ def test_clear_resource_cleanup_deletes_prepared_openshell_sandbox(monkeypatch):
     assert calls[2][0:3] == ["docker", "ps", "-a"]
 
 
-def test_clear_resource_cleanup_removes_run_and_generated_bundle_files(
+def test_job_resource_cleanup_removes_run_and_generated_bundle_files(
     monkeypatch, tmp_path
 ):
     runs_root = tmp_path / "runs"
@@ -296,7 +108,7 @@ def test_clear_resource_cleanup_removes_run_and_generated_bundle_files(
         job_cleanup, "cleanup_docker_worker_services", lambda **_kwargs: None
     )
 
-    job_cleanup.cleanup_cleared_job_resources(
+    job_cleanup.cleanup_job_resources(
         "run-1",
         runtime_client=SimpleNamespace(),
         log=SimpleNamespace(warning=lambda *_args, **_kwargs: None),
@@ -306,7 +118,7 @@ def test_clear_resource_cleanup_removes_run_and_generated_bundle_files(
     assert not generated_dir.exists()
 
 
-def test_clear_resource_cleanup_rejects_unsafe_job_id(monkeypatch):
+def test_job_resource_cleanup_rejects_unsafe_job_id(monkeypatch):
     warnings = []
     monkeypatch.setattr(
         job_cleanup.shutil,
@@ -325,7 +137,7 @@ def test_clear_resource_cleanup_rejects_unsafe_job_id(monkeypatch):
     )
 
     with pytest.raises(job_cleanup.JobResourceCleanupError, match="invalid job ID"):
-        job_cleanup.cleanup_cleared_job_resources(
+        job_cleanup.cleanup_job_resources(
             "../../escape",
             runtime_client=SimpleNamespace(),
             log=SimpleNamespace(
@@ -338,7 +150,7 @@ def test_clear_resource_cleanup_rejects_unsafe_job_id(monkeypatch):
     assert warnings == ["Refusing local cleanup for invalid job ID: '../../escape'"]
 
 
-def test_clear_resource_cleanup_fails_when_local_resources_remain(monkeypatch):
+def test_job_resource_cleanup_fails_when_local_resources_remain(monkeypatch):
     docker_cleanup = []
     removed_paths = []
     monkeypatch.setattr(
@@ -365,7 +177,7 @@ def test_clear_resource_cleanup_fails_when_local_resources_remain(monkeypatch):
     with pytest.raises(
         job_cleanup.JobResourceCleanupError, match="OpenShell sandbox is busy"
     ):
-        job_cleanup.cleanup_cleared_job_resources(
+        job_cleanup.cleanup_job_resources(
             "run-1",
             runtime_client=SimpleNamespace(),
             log=SimpleNamespace(warning=lambda *_args, **_kwargs: None),
@@ -387,252 +199,12 @@ def test_openshell_cleanup_name_matches_long_prepared_sandbox_name():
     assert len(sandbox_name) <= 63
 
 
-def test_clear_reports_admin_token_mismatch(monkeypatch):
-    output = _capture_console(monkeypatch)
-
-    def start_operation(_kind, _options):
-        raise StubRpcError(
-            grpc.StatusCode.PERMISSION_DENIED,
-            "StartOperation requires MN_GRPC_ADMIN_TOKEN",
-        )
-
-    monkeypatch.setattr(
-        job_cmds,
-        "client",
-        SimpleNamespace(
-            admin_token="local-admin-token",
-            list_jobs=lambda **_kwargs: json.dumps({"data": []}),
-            start_operation=start_operation,
-        ),
-    )
-    monkeypatch.setattr(job_cmds, "config", SimpleNamespace(grpc_admin_token="local-admin-token"))
-
-    job_cmds.clear(yes=True)
-
-    rendered = output.getvalue()
-    assert "ClearJobs admin authorization failed" in rendered
-    assert "fixed gRPC admin token" in rendered
-    assert "mn runtime start to reconcile and recreate stale-token runtime containers" in rendered
-    assert "Retry after: mn runtime start; mn job clear" in rendered
 
 
-def test_clear_reports_missing_local_admin_token(monkeypatch):
-    output = _capture_console(monkeypatch)
-
-    def start_operation(_kind, _options):
-        raise StubRpcError(
-            grpc.StatusCode.PERMISSION_DENIED,
-            "StartOperation requires MN_GRPC_ADMIN_TOKEN",
-        )
-
-    monkeypatch.setattr(
-        job_cmds,
-        "client",
-        SimpleNamespace(
-            admin_token="",
-            list_jobs=lambda **_kwargs: json.dumps({"data": []}),
-            start_operation=start_operation,
-        ),
-    )
-    monkeypatch.setattr(job_cmds, "config", SimpleNamespace(grpc_admin_token=""))
-
-    job_cmds.clear(yes=True)
-
-    rendered = output.getvalue()
-    assert "ClearJobs admin authorization failed" in rendered
-    assert "did not load a gRPC admin token from runtime state" in rendered
-    assert "fixed gRPC admin token" not in rendered
-    assert "Retry after: mn runtime start; mn job clear" in rendered
 
 
-def test_cancel_all_cancels_every_active_job_without_prompt(monkeypatch):
-    output = _capture_console(monkeypatch)
-    list_calls = []
-    cleaned_up = []
-    jobs = [
-        {"job_id": "job-pending", "status": "pending"},
-        {"job_id": "job-validated", "status": "validated"},
-        {"job_id": "job-scheduled", "status": "scheduled"},
-        {"job_id": "job-running", "status": "running"},
-        {"job_id": "job-paused", "status": "paused"},
-        {"job_id": "job-completed", "status": "completed"},
-    ]
-
-    def list_jobs(*, limit, include_terminal):
-        list_calls.append((limit, include_terminal))
-        return json.dumps({"data": jobs})
-
-    monkeypatch.setattr(
-        job_cmds,
-        "client",
-        _operation_client(
-            {
-                "operation_id": "op-test",
-                "status": "completed",
-                "counters": {"total": 5, "finished": 5, "succeeded": 5, "failed": 0, "deferred": 0},
-            },
-            [
-                json.dumps({"type": "item_completed", "item_id": job["job_id"], "status": "cancelled"})
-                for job in jobs[:-1]
-            ],
-            list_jobs=list_jobs,
-        ),
-    )
-    monkeypatch.setattr(job_cmds, "_cleanup_cancelled_job_web_ui", cleaned_up.append)
-    monkeypatch.setattr(
-        job_cmds.typer,
-        "confirm",
-        lambda *_args, **_kwargs: pytest.fail("confirmation should be skipped"),
-    )
-
-    job_cmds.cancel_all(yes=True)
-
-    active_job_ids = [job["job_id"] for job in jobs[:-1]]
-    assert list_calls == [(2_147_483_647, False)]
-    assert cleaned_up == active_job_ids
-    rendered = output.getvalue()
-    assert "Job cancel-all successful" in rendered
-    assert "Completed" in rendered
-    assert "5" in rendered
 
 
-def test_cancel_all_reports_when_no_active_jobs(monkeypatch):
-    output = _capture_console(monkeypatch)
-    monkeypatch.setattr(
-        job_cmds,
-        "client",
-        SimpleNamespace(
-            list_jobs=lambda **_kwargs: json.dumps(
-                {"data": [{"job_id": "job-completed", "status": "completed"}]}
-            ),
-            cancel_job=lambda _job_id: pytest.fail("no job should be cancelled"),
-        ),
-    )
-    monkeypatch.setattr(
-        job_cmds.typer,
-        "confirm",
-        lambda *_args, **_kwargs: pytest.fail("confirmation should not be shown"),
-    )
-
-    job_cmds.cancel_all(yes=False)
-
-    assert "no active jobs" in output.getvalue()
-
-
-def test_cancel_all_aborts_when_confirmation_is_declined(monkeypatch):
-    output = _capture_console(monkeypatch)
-    monkeypatch.setattr(
-        job_cmds,
-        "client",
-        SimpleNamespace(
-            list_jobs=lambda **_kwargs: json.dumps(
-                {"data": [{"job_id": "job-running", "status": "running"}]}
-            ),
-            cancel_job=lambda _job_id: pytest.fail("no job should be cancelled"),
-        ),
-    )
-    monkeypatch.setattr(job_cmds.typer, "confirm", lambda *_args, **_kwargs: False)
-
-    job_cmds.cancel_all(yes=False)
-
-    rendered = output.getvalue()
-    assert "Job cancel-all confirmed" in rendered
-    assert "aborted" in rendered
-
-
-def test_cancel_all_reports_every_failure(monkeypatch):
-    output = _capture_console(monkeypatch)
-    cleaned_up = []
-    jobs = [
-        {"job_id": "job-1", "status": "running"},
-        {"job_id": "job-2", "status": "paused"},
-        {"job_id": "job-3", "status": "pending"},
-    ]
-
-    monkeypatch.setattr(
-        job_cmds,
-        "client",
-        _operation_client(
-            {
-                "operation_id": "op-test",
-                "status": "completed_with_failures",
-                "counters": {"total": 3, "finished": 3, "succeeded": 2, "failed": 1, "deferred": 0},
-            },
-            [
-                json.dumps({"type": "item_completed", "item_id": "job-1", "status": "cancelled"}),
-                json.dumps({"type": "item_completed", "item_id": "job-2", "status": "failed", "error": "remote node unavailable"}),
-                json.dumps({"type": "item_completed", "item_id": "job-3", "status": "cancelled"}),
-            ],
-            list_jobs=lambda **_kwargs: json.dumps({"data": jobs}),
-        ),
-    )
-    monkeypatch.setattr(job_cmds, "_cleanup_cancelled_job_web_ui", cleaned_up.append)
-
-    with pytest.raises(typer.Exit) as exc_info:
-        job_cmds.cancel_all(yes=True)
-
-    assert exc_info.value.exit_code == 1
-    assert cleaned_up == ["job-1", "job-3"]
-    rendered = output.getvalue()
-    assert "Job cancel-all completed with failures" in rendered
-    assert "Operation ID: op-test" in rendered
-
-
-def test_cancel_all_accepts_a_deferred_cluster_cancellation(monkeypatch):
-    output = _capture_console(monkeypatch)
-    monkeypatch.setattr(
-        job_cmds,
-        "client",
-        _operation_client(
-            {
-                "operation_id": "op-test",
-                "status": "completed",
-                "counters": {"total": 1, "finished": 1, "succeeded": 0, "failed": 0, "deferred": 1},
-            },
-            [
-                json.dumps(
-                    {"type": "item_deferred", "item_id": "job-1", "status": "cancellation_pending"}
-                )
-            ],
-            list_jobs=lambda **_kwargs: json.dumps({"data": [{"job_id": "job-1", "status": "running"}]}),
-        ),
-    )
-
-    job_cmds.cancel_all(yes=True)
-
-    assert "queued cleanup continues" in output.getvalue()
-
-
-def test_cancel_all_plain_output_reports_deferred_progress_in_arrival_order(monkeypatch):
-    output = _capture_console(monkeypatch)
-    monkeypatch.setenv("MN_CLI_OUTPUT", "plain")
-    monkeypatch.setattr(
-        job_cmds,
-        "client",
-        _operation_client(
-            {
-                "operation_id": "op-test",
-                "status": "completed",
-                "counters": {"total": 2, "finished": 2, "succeeded": 1, "failed": 0, "deferred": 1},
-            },
-            [
-                json.dumps({"type": "item_started", "item_id": "job-b", "status": "running"}),
-                json.dumps({"type": "item_completed", "item_id": "job-b", "status": "cancelled"}),
-                json.dumps({"type": "item_deferred", "item_id": "job-a", "status": "cancellation_pending"}),
-            ],
-            list_jobs=lambda **_kwargs: json.dumps(
-                {"data": [{"job_id": "job-a", "status": "running"}, {"job_id": "job-b", "status": "running"}]}
-            ),
-        ),
-    )
-
-    job_cmds.cancel_all(yes=True)
-
-    rendered = output.getvalue()
-    assert "→ job-b: started" in rendered
-    assert "✓ job-b: cancelled" in rendered
-    assert "→ job-a: cancellation accepted; cleanup queued on owner node" in rendered
-    assert rendered.index("job-b: cancelled") < rendered.index("job-a: cancellation accepted")
 
 
 def test_node_list_strips_restart_history_and_reasons(monkeypatch):

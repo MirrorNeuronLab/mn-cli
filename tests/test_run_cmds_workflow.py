@@ -5,18 +5,29 @@ import re
 import subprocess
 import sys
 import uuid
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import SimpleNamespace
+
 import pytest
-from logging.handlers import RotatingFileHandler
-from typer.testing import CliRunner
+from mn_sdk import (
+    AgentProgress,
+    load_model_ownership,
+    load_model_remotes,
+    upsert_model_remote,
+)
 from rich.console import Console
-from mn_cli.main import app
+from typer.testing import CliRunner
+from v1_manifests import workflow_manifest
+
 from mn_cli.libs import model_cmds, run_cmds
-from mn_cli.libs.ui import JobMonitorState, generate_live_layout
-from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress, _agent_progress_detail
 from mn_cli.libs.run_manifest import prepare_manifest_for_submission
-from mn_sdk import AgentProgress, load_model_ownership, load_model_remotes, upsert_model_remote
+from mn_cli.libs.ui import JobMonitorState, generate_live_layout
+from mn_cli.libs.workflow_progress import (
+    BlueprintWorkflowProgress,
+    _agent_progress_detail,
+)
+from mn_cli.main import app
 
 runner = CliRunner()
 
@@ -60,26 +71,25 @@ def test_cli_agent_progress_detail_marks_estimates_and_token_budgets():
 def test_run_displays_live_job_type_and_follow_status(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     monkeypatch.setenv("MN_RUN_BACKGROUND_EVENT_RELAY", "0")
-    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-live")
+    mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-live"}))
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_pending"}),
         json.dumps({"type": "job_scheduled"}),
     ])
     mocker.patch(
-        'mn_cli.libs.run_cmds.client.get_job',
+        'mn_cli.libs.run_cmds.client.get_run',
         return_value=json.dumps({
-            "summary": {"status": "running"},
-            "job": {"status": "running"},
-            "recent_events": [],
+            "run_id": "job-live-run",
+            "status": "running",
         }),
     )
 
     bundle_dir = tmp_path / "live_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps({
+    (bundle_dir / "manifest.json").write_text(json.dumps(workflow_manifest({
         "policies": {"job_type": "service", "stream_mode": "live"},
         "nodes": [],
-    }))
+    })))
 
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir), "--follow-seconds", "0", "--web-ui"])
 
@@ -89,7 +99,7 @@ def test_run_displays_live_job_type_and_follow_status(mocker, tmp_path, monkeypa
     assert "75%" not in result.stdout
 
 def test_run_displays_workflow_steps_and_agents(mocker, tmp_path):
-    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-workflow")
+    mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-workflow"}))
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_pending"}),
         json.dumps({"type": "job_scheduled"}),
@@ -123,8 +133,8 @@ def test_run_displays_workflow_steps_and_agents(mocker, tmp_path):
 
     bundle_dir = tmp_path / "workflow_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps({
-        "apiVersion": "mn.workflow/v2",
+    (bundle_dir / "manifest.json").write_text(json.dumps(workflow_manifest({
+        "apiVersion": "mn.workflow/v1",
         "kind": "Workflow",
         "id": "workflow-blueprint",
         "name": "Workflow Blueprint",
@@ -172,7 +182,7 @@ def test_run_displays_workflow_steps_and_agents(mocker, tmp_path):
                 }
             }
         },
-    }))
+    })))
 
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
 
@@ -187,7 +197,7 @@ def test_run_displays_workflow_steps_and_agents(mocker, tmp_path):
 
 def test_workflow_progress_resolves_lowered_start_node_to_public_binding():
     manifest = {
-        "apiVersion": "mn.workflow/v2",
+        "apiVersion": "mn.workflow/v1",
         "kind": "Workflow",
         "workflow": {
             "steps": [
@@ -334,7 +344,7 @@ def test_workflow_monitor_renders_graph_layers_and_multiple_active_steps():
 
 def test_workflow_renderer_shared_between_live_monitor_and_blueprint_run_paths():
     manifest = {
-        "apiVersion": "mn.workflow/v2",
+        "apiVersion": "mn.workflow/v1",
         "kind": "Workflow",
         "id": "workflow-shared-blueprint",
         "name": "Workflow Shared Blueprint",
@@ -439,7 +449,7 @@ def test_blueprint_workflow_monitor_uses_shared_detach_keys():
 
 def test_workflow_token_tracking_prefers_usage_fields_and_ignores_budget_only_payloads():
     manifest = {
-        "apiVersion": "mn.workflow/v2",
+        "apiVersion": "mn.workflow/v1",
         "kind": "Workflow",
         "id": "workflow-token-blueprint",
         "name": "Workflow Token Blueprint",

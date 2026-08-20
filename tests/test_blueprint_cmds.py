@@ -1,17 +1,24 @@
-import pytest
 import json
-from pathlib import Path
 from io import StringIO
-from rich.console import Console
+from pathlib import Path
+
+import pytest
 import typer
-from typer.main import get_command
-from typer.testing import CliRunner
-from mn_cli.main import app
-from mn_cli.libs import blueprint_cmds
 from mn_sdk import load_model_ownership
 from mn_sdk.blueprint_support.local_inputs import stage_local_input_payloads
+from rich.console import Console
+from typer.main import get_command
+from typer.testing import CliRunner
+from v1_manifests import workflow_manifest
+
+from mn_cli.libs import blueprint_cmds
+from mn_cli.main import app
 
 runner = CliRunner()
+
+
+def _manifest_text(fields: dict | None = None) -> str:
+    return json.dumps(workflow_manifest(fields))
 
 
 def cli_data(result):
@@ -63,7 +70,7 @@ def _write_python_resource(path: Path, blueprint_id: str) -> None:
 def _write_generated_bundle(path: Path, blueprint_id: str) -> None:
     path.mkdir(parents=True, exist_ok=True)
     (path / "manifest.json").write_text(
-        json.dumps({"metadata": {"blueprint_id": blueprint_id}, "nodes": []})
+        _manifest_text({"metadata": {"blueprint_id": blueprint_id}, "nodes": []})
     )
 
 
@@ -625,7 +632,7 @@ def test_blueprint_run_init_success(mocker, tmp_path):
         index_file.write_text(json.dumps([{"id": "bp-1", "path": "bp-1-dir"}]))
         bp_dir = storage_dir / "bp-1-dir"
         bp_dir.mkdir(parents=True, exist_ok=True)
-        (bp_dir / "manifest.json").write_text("{}")
+        (bp_dir / "manifest.json").write_text(_manifest_text())
         return mock_run.return_value
     
     mock_run.side_effect = create_files
@@ -651,7 +658,7 @@ def test_blueprint_run_detached_catalog_name_passes_through(mocker, tmp_path):
     (storage_dir / "index.json").write_text(json.dumps([{"id": "bp-1", "path": "bp-1-dir"}]))
     bp_dir = storage_dir / "bp-1-dir"
     bp_dir.mkdir()
-    (bp_dir / "manifest.json").write_text("{}")
+    (bp_dir / "manifest.json").write_text(_manifest_text())
     mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
 
     result = runner.invoke(app, ["blueprint", "run", "bp-1", "--detached"])
@@ -675,7 +682,7 @@ def test_blueprint_run_update_success(mocker, tmp_path):
     index_file.write_text(json.dumps([{"id": "bp-1", "path": "bp-1-dir"}]))
     bp_dir = storage_dir / "bp-1-dir"
     bp_dir.mkdir()
-    (bp_dir / "manifest.json").write_text("{}")
+    (bp_dir / "manifest.json").write_text(_manifest_text())
     
     mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
     mocker.patch('mn_cli.libs.blueprint_cmds._git_revision', return_value="abc123")
@@ -699,7 +706,7 @@ def test_blueprint_run_update_flag_pulls_cache(mocker, tmp_path):
     index_file.write_text(json.dumps([{"id": "bp-1", "path": "bp-1-dir"}]))
     bp_dir = storage_dir / "bp-1-dir"
     bp_dir.mkdir()
-    (bp_dir / "manifest.json").write_text("{}")
+    (bp_dir / "manifest.json").write_text(_manifest_text())
     mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
 
     result = runner.invoke(app, ["blueprint", "run", "bp-1", "--update"])
@@ -910,7 +917,7 @@ def test_blueprint_run_blueprint_repo_uses_repo_specific_cache(mocker, tmp_path)
             (storage_dir / "index.json").write_text(json.dumps([{"id": "bp-1", "path": "bp-1-dir"}]))
             bp_dir = storage_dir / "bp-1-dir"
             bp_dir.mkdir()
-            (bp_dir / "manifest.json").write_text("{}")
+            (bp_dir / "manifest.json").write_text(_manifest_text())
         return completed
 
     mock_run = mocker.patch('mn_cli.libs.blueprint_cmds.subprocess.run', side_effect=fake_run)
@@ -936,7 +943,7 @@ def test_blueprint_run_uses_standard_env_local_source(mocker, tmp_path, monkeypa
     (repo / "index.json").write_text(json.dumps([{"id": "bp-1", "path": "bp-1-dir"}]))
     bp_dir = repo / "bp-1-dir"
     bp_dir.mkdir()
-    (bp_dir / "manifest.json").write_text("{}")
+    (bp_dir / "manifest.json").write_text(_manifest_text())
     monkeypatch.setenv("MN_BLUEPRINT_SOURCE", "local")
     monkeypatch.setenv("MN_BLUEPRINT_LOCAL", str(repo))
     monkeypatch.delenv("MN_BLUEPRINT_REPO", raising=False)
@@ -966,7 +973,7 @@ def test_blueprint_run_set_overrides_local_bundle_without_persisting(
 ):
     bp_dir = tmp_path / "bundle"
     bp_dir.mkdir()
-    (bp_dir / "manifest.json").write_text(json.dumps({}))
+    (bp_dir / "manifest.json").write_text(_manifest_text())
     config_dir = bp_dir / "config"
     config_dir.mkdir()
     (config_dir / "default.json").write_text(
@@ -1011,7 +1018,7 @@ def test_blueprint_run_delegates_default_model_preparation_to_runtime_launch(
     bp_dir = tmp_path / "bundle"
     bp_dir.mkdir()
     (bp_dir / "manifest.json").write_text(
-        json.dumps(
+        _manifest_text(
             {
                 "llm": {
                     "enabled": True,
@@ -1044,7 +1051,7 @@ def test_blueprint_run_set_rejects_invalid_assignment_before_submit(
 ):
     bp_dir = tmp_path / "bundle"
     bp_dir.mkdir()
-    (bp_dir / "manifest.json").write_text(json.dumps({}))
+    (bp_dir / "manifest.json").write_text(_manifest_text())
     mock_run_bundle = mocker.patch("mn_cli.libs.blueprint_cmds._run_bundle")
 
     result = runner.invoke(
@@ -1071,7 +1078,7 @@ def test_blueprint_run_help_lists_repeatable_set_option():
 def test_blueprint_run_set_is_forwarded_to_scheduled_bundle(mocker, tmp_path):
     bp_dir = tmp_path / "bundle"
     bp_dir.mkdir()
-    (bp_dir / "manifest.json").write_text(json.dumps({}))
+    (bp_dir / "manifest.json").write_text(_manifest_text())
     mock_run_bundle = mocker.patch("mn_cli.libs.blueprint_cmds._run_bundle")
 
     result = runner.invoke(
@@ -1095,7 +1102,9 @@ def test_blueprint_run_set_is_forwarded_to_scheduled_bundle(mocker, tmp_path):
 def test_blueprint_run_fake_llm_flag_overrides_local_bundle(mocker, tmp_path):
     bp_dir = tmp_path / "bundle"
     bp_dir.mkdir()
-    (bp_dir / "manifest.json").write_text(json.dumps({"runtime": {"models": {"primary": {"model": "default"}}}}))
+    (bp_dir / "manifest.json").write_text(
+        _manifest_text({"runtime": {"models": {"primary": {"model": "default"}}}})
+    )
     config_dir = bp_dir / "config"
     config_dir.mkdir()
     (config_dir / "default.json").write_text(
@@ -1141,7 +1150,7 @@ def test_blueprint_run_fake_llm_flag_overrides_local_bundle(mocker, tmp_path):
 def test_blueprint_run_testing_flags_override_local_bundle(mocker, tmp_path):
     bp_dir = tmp_path / "bundle"
     bp_dir.mkdir()
-    (bp_dir / "manifest.json").write_text(json.dumps({}))
+    (bp_dir / "manifest.json").write_text(_manifest_text())
     config_dir = bp_dir / "config"
     config_dir.mkdir()
     (config_dir / "default.json").write_text(json.dumps({"execution": {"existing": True}}))
@@ -1169,7 +1178,7 @@ def test_blueprint_run_testing_flags_override_local_bundle(mocker, tmp_path):
 def test_blueprint_run_passes_follow_seconds_to_bundle(mocker, tmp_path):
     bp_dir = tmp_path / "bundle"
     bp_dir.mkdir()
-    (bp_dir / "manifest.json").write_text(json.dumps({}))
+    (bp_dir / "manifest.json").write_text(_manifest_text())
     mock_run_bundle = mocker.patch("mn_cli.libs.blueprint_cmds._run_bundle")
 
     result = runner.invoke(app, ["blueprint", "run", str(bp_dir), "--follow-seconds", "2.5"])
@@ -1181,7 +1190,9 @@ def test_blueprint_run_passes_follow_seconds_to_bundle(mocker, tmp_path):
 def test_blueprint_doctor_local_folder_passes_flags(mocker, tmp_path):
     bp_dir = tmp_path / "bundle"
     bp_dir.mkdir()
-    (bp_dir / "manifest.json").write_text(json.dumps({"metadata": {"blueprint_id": "local-bp"}}))
+    (bp_dir / "manifest.json").write_text(
+        _manifest_text({"metadata": {"blueprint_id": "local-bp"}})
+    )
     mocker.patch("mn_cli.libs.blueprint_cmds._make_blueprint_run_id", return_value="doctor-run")
     mock_doctor = mocker.patch(
         "mn_cli.libs.blueprint_cmds._doctor_bundle",
@@ -1228,7 +1239,9 @@ def test_blueprint_doctor_catalog_uses_run_resolution(mocker, tmp_path):
     (storage_dir / "index.json").write_text(json.dumps([{"id": "bp-1", "path": "bp-1-dir"}]))
     bp_dir = storage_dir / "bp-1-dir"
     bp_dir.mkdir()
-    (bp_dir / "manifest.json").write_text(json.dumps({"metadata": {"blueprint_id": "catalog-bp"}}))
+    (bp_dir / "manifest.json").write_text(
+        _manifest_text({"metadata": {"blueprint_id": "catalog-bp"}})
+    )
     mocker.patch("mn_cli.libs.blueprint_cmds._git_revision", return_value="abc123")
     mocker.patch("mn_cli.libs.blueprint_cmds._make_blueprint_run_id", return_value="doctor-run")
     mock_doctor = mocker.patch(
@@ -1268,7 +1281,7 @@ def test_blueprint_doctor_blueprint_repo_flag_uses_custom_cache(mocker, tmp_path
             (storage_dir / "index.json").write_text(json.dumps([{"id": "bp-1", "path": "bp-1-dir"}]))
             bp_dir = storage_dir / "bp-1-dir"
             bp_dir.mkdir()
-            (bp_dir / "manifest.json").write_text("{}")
+            (bp_dir / "manifest.json").write_text(_manifest_text())
         return completed
 
     mock_run = mocker.patch("mn_cli.libs.blueprint_cmds.subprocess.run", side_effect=fake_run)
@@ -1401,13 +1414,13 @@ def test_blueprint_run_generates_python_source_bundle(mocker, tmp_path, monkeypa
     bp_dir = storage_dir / "bp-1-dir"
     bp_dir.mkdir()
     (bp_dir / "manifest.json").write_text(
-        json.dumps({"metadata": {"blueprint_id": "bp-1", "python_source_mode": True}})
+        _manifest_text({"metadata": {"blueprint_id": "bp-1", "python_source_mode": True}})
     )
 
     def fake_generate_bundle(blueprint_dir, output_dir):
         output_dir.mkdir(parents=True)
         (output_dir / "manifest.json").write_text(
-            json.dumps({"metadata": {"blueprint_id": "bp-1", "python_source_mode": True}})
+            _manifest_text({"metadata": {"blueprint_id": "bp-1", "python_source_mode": True}})
         )
         (output_dir / "payloads").mkdir()
         return output_dir
@@ -1432,7 +1445,7 @@ def test_blueprint_run_accepts_explicit_local_bundle_path(mocker, tmp_path):
     bundle_dir = tmp_path / "local-bundle"
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text(
-        json.dumps(
+        _manifest_text(
             {
                 "graph_id": "local_bundle_v1",
                 "metadata": {"blueprint_id": "local_bundle"},
@@ -1453,7 +1466,7 @@ def test_blueprint_run_accepts_explicit_local_python_source_path(mocker, tmp_pat
     source_dir = tmp_path / "source-blueprint"
     source_dir.mkdir()
     (source_dir / "manifest.json").write_text(
-        json.dumps(
+        _manifest_text(
             {
                 "graph_id": "source_blueprint_v1",
                 "metadata": {
@@ -1465,7 +1478,7 @@ def test_blueprint_run_accepts_explicit_local_python_source_path(mocker, tmp_pat
     )
     def generate_bundle(_source, output):
         output.mkdir(parents=True)
-        (output / "manifest.json").write_text(json.dumps({"nodes": []}))
+        (output / "manifest.json").write_text(_manifest_text({"nodes": []}))
         return output
 
     mock_generate_bundle = mocker.patch(
@@ -1496,7 +1509,7 @@ def test_blueprint_run_local_python_source_generation_failure_is_reported(mocker
     source_dir = tmp_path / "source-blueprint"
     source_dir.mkdir()
     (source_dir / "manifest.json").write_text(
-        json.dumps(
+        _manifest_text(
             {
                 "metadata": {
                     "blueprint_id": "source_blueprint",
@@ -1526,7 +1539,7 @@ def test_run_folder_generates_local_python_source_bundle(mocker, tmp_path, monke
     monkeypatch.setenv("MN_GENERATED_BLUEPRINT_BUNDLES_DIR", str(generated_root))
     source_dir.mkdir()
     (source_dir / "manifest.json").write_text(
-        json.dumps(
+        _manifest_text(
             {
                 "graph_id": "source_blueprint_v1",
                 "metadata": {
@@ -1540,7 +1553,7 @@ def test_run_folder_generates_local_python_source_bundle(mocker, tmp_path, monke
     def fake_generate_bundle(blueprint_dir, output_dir):
         output_dir.mkdir(parents=True)
         (output_dir / "manifest.json").write_text(
-            json.dumps({"metadata": {"blueprint_id": "source_blueprint"}})
+            _manifest_text({"metadata": {"blueprint_id": "source_blueprint"}})
         )
         (output_dir / "payloads").mkdir()
         return output_dir
@@ -1667,7 +1680,7 @@ def test_blueprint_run_update_fail(mocker, tmp_path):
     index_file.write_text(json.dumps([{"id": "bp-1", "path": "bp-1-dir"}]))
     bp_dir = storage_dir / "bp-1-dir"
     bp_dir.mkdir()
-    (bp_dir / "manifest.json").write_text("{}")
+    (bp_dir / "manifest.json").write_text(_manifest_text())
     
     mock_run_bundle = mocker.patch('mn_cli.libs.blueprint_cmds._run_bundle')
     mocker.patch('mn_cli.libs.blueprint_cmds._git_revision', return_value="abc123")

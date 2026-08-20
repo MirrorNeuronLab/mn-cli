@@ -6,22 +6,23 @@ import re
 import subprocess
 import sys
 import uuid
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import SimpleNamespace
+
 import pytest
-from logging.handlers import RotatingFileHandler
-from typer.testing import CliRunner
-from rich.console import Console
-from mn_cli.main import app
-from mn_cli.libs import model_cmds, run_cmds
-from mn_cli.libs.ui import (
-    JobMonitorState,
-    _agent_table,
-    _workflow_agent_table,
-    generate_live_layout,
+from mn_sdk import (
+    AgentProgress,
+    load_model_ownership,
+    load_model_remotes,
+    upsert_model_remote,
 )
+from rich.console import Console
+from typer.testing import CliRunner
+
+from mn_cli.libs import model_cmds, run_cmds
 from mn_cli.libs.run_cmds.handlers.monitor import (
-    _get_job_for_monitor,
+    _get_run_for_monitor,
     _live_monitor_api_stream,
     _manifest_from_job_data,
     _monitor_api_stream_timeout_seconds,
@@ -29,17 +30,18 @@ from mn_cli.libs.run_cmds.handlers.monitor import (
     _workflow_progress_for_monitor,
 )
 from mn_cli.libs.run_cmds.live import _read_monitor_key
+from mn_cli.libs.run_manifest import prepare_manifest_for_submission
+from mn_cli.libs.ui import (
+    JobMonitorState,
+    _agent_table,
+    _workflow_agent_table,
+    generate_live_layout,
+)
 from mn_cli.libs.workflow_progress import (
     BlueprintWorkflowProgress,
     _agent_progress_detail,
 )
-from mn_cli.libs.run_manifest import prepare_manifest_for_submission
-from mn_sdk import (
-    AgentProgress,
-    load_model_ownership,
-    load_model_remotes,
-    upsert_model_remote,
-)
+from mn_cli.main import app
 
 runner = CliRunner()
 
@@ -66,19 +68,10 @@ def isolated_mn_home(tmp_path, monkeypatch):
 def test_monitor_success(mocker):
     mocker.patch(
         "mn_cli.libs.run_public.client.get_run",
-        return_value=json.dumps({"run_id": "run-123", "runtime_job_id": "job-123"}),
-    )
-    mocker.patch(
-        "mn_cli.libs.run_cmds.client.get_job",
-        return_value=json.dumps(
-            {
-                "summary": {"status": "completed", "live?": False},
-                "job": {"job_name": "test"},
-                "agents": [
-                    {"agent_id": "a1", "status": "running", "processed_messages": 10}
-                ],
-            }
-        ),
+        side_effect=[
+            json.dumps({"run_id": "run-123", "job_id": "job-123", "status": "completed"}),
+            json.dumps({"run_id": "run-123", "job_id": "job-123", "status": "completed"}),
+        ],
     )
     mocker.patch("sys.stdin.isatty", return_value=False)
 
@@ -377,6 +370,10 @@ def test_monitor_prefers_source_manifest_from_local_run_store(mocker, tmp_path):
     (run_dir / "config.json").write_text(
         json.dumps(
             {
+                "apiVersion": "mn.workflow/v1",
+                "kind": "Workflow",
+                "id": "source-workflow",
+                "contract": {},
                 "workflow": {
                     "workflow_id": "source-workflow",
                     "steps": [
@@ -392,6 +389,7 @@ def test_monitor_prefers_source_manifest_from_local_run_store(mocker, tmp_path):
                         },
                     }
                 },
+                "agents": {},
             }
         )
     )
@@ -447,13 +445,13 @@ def test_monitor_retries_transient_deadline_fetch(mocker, monkeypatch):
 
     payload = json.dumps({"job_id": "job-retry", "status": "running"})
     get_job = mocker.patch(
-        "mn_cli.libs.run_cmds.handlers.monitor.client.get_job",
+        "mn_cli.libs.run_cmds.handlers.monitor.client.get_run",
         side_effect=[DeadlineError("Deadline Exceeded"), payload],
     )
     monkeypatch.setenv("MN_JOB_MONITOR_RETRY_BACKOFF_SECONDS", "0")
     monkeypatch.setenv("MN_JOB_MONITOR_GRPC_TIMEOUT_SECONDS", "30")
 
-    assert _get_job_for_monitor("job-retry") == payload
+    assert _get_run_for_monitor("run-retry") == payload
     assert get_job.call_count == 2
 
 
@@ -468,8 +466,10 @@ def test_monitor_projects_existing_run_from_blueprint_mapping_without_get_job(
     blueprint_dir = blueprint_root / "vc_assistant"
     blueprint_dir.mkdir(parents=True)
     manifest = {
-        "apiVersion": "mn.workflow/v2",
+        "apiVersion": "mn.workflow/v1",
         "kind": "Workflow",
+        "id": "vc-workflow",
+        "contract": {},
         "workflow": {
             "workflow_id": "vc-workflow",
             "steps": [
@@ -491,6 +491,7 @@ def test_monitor_projects_existing_run_from_blueprint_mapping_without_get_job(
                 }
             }
         },
+        "agents": {},
     }
     (blueprint_dir / "manifest.json").write_text(json.dumps(manifest))
     (blueprint_root / "index.json").write_text(
@@ -532,7 +533,7 @@ def test_monitor_projects_existing_run_from_blueprint_mapping_without_get_job(
         return_value=runs_root,
     )
     get_job = mocker.patch(
-        "mn_cli.libs.run_cmds.handlers.monitor.client.get_job",
+        "mn_cli.libs.run_cmds.handlers.monitor.client.get_run",
         side_effect=AssertionError("large GetJob response should not be fetched"),
     )
 
@@ -557,10 +558,16 @@ def test_monitor_prefers_blueprint_path_over_lowered_runtime_workflow(mocker, tm
     (blueprint_dir / "manifest.json").write_text(
         json.dumps(
             {
+                "apiVersion": "mn.workflow/v1",
+                "kind": "Workflow",
+                "id": "vc-assistant",
+                "contract": {},
                 "workflow": {
                     "workflow_id": "vc_assistant_v2",
                     "steps": [{"id": "collect", "run": "collect__start"}],
-                }
+                },
+                "agents": {},
+                "runtime": {},
             }
         )
     )
@@ -600,7 +607,7 @@ def test_monitor_prefers_blueprint_path_over_lowered_runtime_workflow(mocker, tm
     assert [step["id"] for step in manifest["workflow"]["steps"]] == ["collect"]
 
     mocker.patch(
-        "mn_cli.libs.run_cmds.handlers.monitor.client.get_job",
+        "mn_cli.libs.run_cmds.handlers.monitor.client.get_run",
         return_value=json.dumps(data),
     )
     mocker.patch(
@@ -637,8 +644,10 @@ def test_monitor_reattaches_by_execution_run_id_when_stable_job_id_differs(
     run_dir = runs_root / "vc-run"
     run_dir.mkdir(parents=True)
     manifest = {
-        "apiVersion": "mn.workflow/v2",
+        "apiVersion": "mn.workflow/v1",
         "kind": "Workflow",
+        "id": "vc-workflow",
+        "contract": {},
         "workflow": {
             "workflow_id": "vc-workflow",
             "steps": [
@@ -659,6 +668,7 @@ def test_monitor_reattaches_by_execution_run_id_when_stable_job_id_differs(
                 }
             }
         },
+        "agents": {},
     }
     (run_dir / "job.json").write_text(
         json.dumps(
@@ -687,7 +697,7 @@ def test_monitor_reattaches_by_execution_run_id_when_stable_job_id_differs(
         return_value=runs_root,
     )
     get_job = mocker.patch(
-        "mn_cli.libs.run_cmds.handlers.monitor.client.get_job",
+        "mn_cli.libs.run_cmds.handlers.monitor.client.get_run",
         side_effect=AssertionError("saved source contract should avoid GetJob"),
     )
 
@@ -804,10 +814,10 @@ def test_monitor_error(mocker):
     mocker.patch("sys.stdin.isatty", return_value=False)
     mocker.patch(
         "mn_cli.libs.run_public.client.get_run",
-        return_value=json.dumps({"run_id": "run-123", "runtime_job_id": "job-123"}),
-    )
-    mocker.patch(
-        "mn_cli.libs.run_cmds.client.get_job", side_effect=Exception("Network fail")
+        side_effect=[
+            json.dumps({"run_id": "run-123", "job_id": "job-123", "status": "running"}),
+            Exception("Network fail"),
+        ],
     )
     result = runner.invoke(app, ["run", "watch", "run-123"])
     assert result.exit_code == 0

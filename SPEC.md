@@ -19,9 +19,7 @@ The root command registers these operator-facing families:
 - `node`: cluster membership, drain, reconcile, and maintenance;
 - `operation`: durable group-operation inspection and reattachment;
 - `runtime`: start, stop, aggregate status, doctor, sidecars, and updates;
-- `resource`, `service`, and `model`: local and cluster capability management;
-- `deployment`: versioned deployment operations; and
-- `schedule` and `event`: periodic, delayed, and event-driven execution.
+- `resource`, `service`, and `model`: local and cluster capability management.
 
 `mn_cli/main.py` and each Typer sub-application are authoritative for exact
 commands and options. Public command names, option meanings, exit codes, and
@@ -38,13 +36,10 @@ node       list show add remove reconcile drain undrain maintenance refresh-toke
 operation  show watch
 resource   show usage set
 service    list show
-deployment list deploy show promote rollback pause resume fail
-schedule   list add show pause resume run remove
-event      list emit
 ```
 
-Removed paths are recognized only to return an actionable replacement with
-exit code `2`; they are never execution aliases. The root diagnostic flag is
+Obsolete deployment, global-schedule, event, backup, inline-job, and
+`stable-job` command groups are not registered. The root diagnostic flag is
 `--debug`; `--verbose` is not registered.
 
 `mn blueprint run --web-ui-host HOST --web-ui-port PORT` projects per-run
@@ -62,8 +57,8 @@ The CLI owns:
 - local process, Docker, Redis, sidecar, and cluster service orchestration; and
 - pre-submission preparation of job-scoped OpenShell sandboxes and their
   concrete runtime configuration; and
-- streaming blueprint payloads into content-addressed storage, preparing local
-  payload models, and building/restoring `mn.backup.v2` air-gap capsules; and
+- streaming blueprint payloads into content-addressed storage and preparing
+  local payload models; and
 - conversion of SDK/runtime failures into actionable terminal errors.
 
 The CLI delegates reusable manifest conversion, submission preparation, model
@@ -99,7 +94,7 @@ those contracts.
 
 ## Safety
 
-- Commands that delete, clear, remove, cancel broadly, expose listeners, or
+- Commands that delete, remove, cancel broadly, expose listeners, or
   alter cluster membership require deliberate user intent.
 - Values from manifests, catalogs, the filesystem, environment, SDK, gRPC, and
   subprocesses are untrusted and must be validated or safely rendered.
@@ -107,30 +102,24 @@ those contracts.
   be printed or logged.
 - Unit tests use fakes and temporary paths; normal tests do not mutate the real
   `~/.mn`, start services, or access the network.
-- Stable-job archive retains shared data. Job-data reset, terminal-run delete,
+- Durable-job archive retains shared data. Job-data reset, terminal-run delete,
   and permanent job delete require confirmation. Run cleanup must never be
-  presented as deleting stable job data. Terminal clearing removes every
-  run-owned runtime resource before reporting success; permanent job deletion
-  also removes all historical runs and definition-owned runtime resources.
+  presented as deleting durable job data. Permanent job deletion also removes
+  all historical runs and definition-owned runtime resources.
 - `--yes` answers confirmation only, `--force` overrides one documented
   precondition but never supplies consent, and `--dry-run` never mutates.
   Destructive JSON/non-interactive commands require `--yes`.
-- Air-gapped backup fails closed when a dependency, blob, model source, or
-  required image cannot be materialized. Restore verifies checksums and the
-  recorded operating system, architecture, Python implementation, and ABI
-  before mutation.
-
-## Stable Job/Run Contract
+## Durable Job/Run Contract
 
 `mn job list/create/show/start/archive/reset-data/delete` addresses durable job
 definitions. `mn run list/show/watch/logs/result/resources/compare/pause/resume/cancel/delete`
 addresses executions and always
-accepts `run_id`. A stable `job_id` owns configuration, schedules, and job data;
+accepts `run_id`. A durable `job_id` owns configuration, schedules, and job data;
 every intentional start gets a distinct run identity, while attempts retain
 their run. CLI output must label and persist both fields without treating them
 as aliases.
 
-`mn blueprint run` creates a stable job and first run by default, or starts a
+`mn blueprint run` creates a durable job and first run by default, or starts a
 new run of the `--job-id` definition. For an explicit existing job, the command
 first prepares and atomically installs the current executable bundle while
 preserving job data, schedules, and prior run history. `mn job start` and

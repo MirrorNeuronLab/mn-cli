@@ -5,21 +5,53 @@ import re
 import subprocess
 import sys
 import uuid
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import SimpleNamespace
+
 import pytest
 import typer
-from logging.handlers import RotatingFileHandler
-from typer.testing import CliRunner
+from mn_sdk import (
+    AgentProgress,
+    load_model_ownership,
+    load_model_remotes,
+    upsert_model_remote,
+)
 from rich.console import Console
-from mn_cli.main import app
+from typer.testing import CliRunner
+
 from mn_cli.libs import model_cmds, run_cmds
-from mn_cli.libs.ui import JobMonitorState, generate_live_layout
-from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress, _agent_progress_detail
 from mn_cli.libs.run_manifest import prepare_manifest_for_submission
-from mn_sdk import AgentProgress, load_model_ownership, load_model_remotes, upsert_model_remote
+from mn_cli.libs.ui import JobMonitorState, generate_live_layout
+from mn_cli.libs.workflow_progress import (
+    BlueprintWorkflowProgress,
+    _agent_progress_detail,
+)
+from mn_cli.main import app
 
 runner = CliRunner()
+
+
+def _workflow_manifest(fields: dict | None = None) -> dict:
+    values = dict(fields or {})
+    nodes = values.pop("nodes", [])
+    workflow_id = str(
+        values.get("id")
+        or values.get("graph_id")
+        or values.get("job_name")
+        or "test-workflow"
+    )
+    values.pop("apiVersion", None)
+    values.pop("kind", None)
+    return {
+        "apiVersion": "mn.workflow/v1",
+        "kind": "Workflow",
+        "id": workflow_id,
+        "contract": values.pop("contract", {}),
+        "agents": values.pop("agents", {"nodes": nodes}),
+        "runtime": values.pop("runtime", {}),
+        **values,
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -54,7 +86,7 @@ def test_runtime_model_events_report_model_and_node_immediately():
 def test_run_success(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="run-bundle-auto")
-    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-123"}))
     mock_stream = mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_pending"}),
         json.dumps({"type": "job_completed"})
@@ -63,7 +95,7 @@ def test_run_success(mocker, tmp_path, monkeypatch):
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
     manifest_file = bundle_dir / "manifest.json"
-    manifest_file.write_text('{"nodes": []}')
+    manifest_file.write_text(json.dumps(_workflow_manifest({"nodes": []})))
     
     payloads_dir = bundle_dir / "payloads"
     payloads_dir.mkdir()
@@ -143,43 +175,40 @@ def test_run_rejects_invalid_web_ui_port(tmp_path):
 def test_run_stream_error_falls_back_to_status_polling(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch("mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="run-stream-fallback")
-    mocker.patch("mn_cli.libs.run_cmds.client.submit_job", return_value="job-stream-fallback")
+    mocker.patch("mn_cli.libs.run_cmds.client.create_job", return_value=json.dumps({"job_id": "job-stream-fallback"}))
     mocker.patch(
         "mn_cli.libs.run_cmds.client.stream_events",
         side_effect=RuntimeError("resource exhausted by event stream"),
     )
     mock_get = mocker.patch(
-        "mn_cli.libs.run_cmds.client.get_job",
+        "mn_cli.libs.run_cmds.client.get_run",
         return_value=json.dumps(
             {
-                "job": {"status": "completed", "result": {"ok": True}},
-                "summary": {"status": "completed"},
-                "recent_events": [
-                    {
-                        "type": "job_completed",
-                        "result": {"ok": True},
-                    }
-                ],
+                "run_id": "run-stream-fallback",
+                "status": "completed",
+                "result": {"ok": True},
             }
         ),
     )
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text('{"nodes": []}')
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(_workflow_manifest({"nodes": []}))
+    )
 
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir), "--follow-seconds", "0"])
 
     assert result.exit_code == 0
     assert "Job submitted" in result.stdout
     assert "Completed" in result.stdout
-    assert "Watch" in result.stdout
-    mock_get.assert_called_once_with("run-stream-fallback")
+    assert mock_get.call_count == 2
+    mock_get.assert_called_with("run-stream-fallback")
 
 def test_run_records_lazy_runtime_models_before_model_validation(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="run-order")
-    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-order")
+    mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-order"}))
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_completed"}),
     ])
@@ -204,7 +233,9 @@ def test_run_records_lazy_runtime_models_before_model_validation(mocker, tmp_pat
 
     bundle_dir = tmp_path / "run_order_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps({"nodes": []}))
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(_workflow_manifest({"nodes": []}))
+    )
 
     run_cmds.run_bundle(str(bundle_dir), follow_seconds=0)
 
@@ -223,7 +254,7 @@ def test_run_defers_injected_cluster_model_selection_preparation_and_gateway(
     cluster = fake_runtime_model_cluster_factory(include_spark=True)
     dependencies = cluster.dependencies()
     submit = mocker.patch(
-        "mn_cli.libs.run_cmds.client.submit_job", return_value="job-injected-models"
+        "mn_cli.libs.run_cmds.client.create_job", return_value=json.dumps({"job_id": "job-injected-models"})
     )
     mocker.patch(
         "mn_cli.libs.run_cmds.client.stream_events",
@@ -234,7 +265,8 @@ def test_run_defers_injected_cluster_model_selection_preparation_and_gateway(
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text(
         json.dumps(
-            {
+            _workflow_manifest({
+                "apiVersion": "mn.workflow/v1",
                 "manifest_version": "1",
                 "graph_id": "injected-model-run",
                 "job_name": "injected-model-run",
@@ -247,7 +279,7 @@ def test_run_defers_injected_cluster_model_selection_preparation_and_gateway(
                         },
                     }
                 ],
-            }
+            })
         ),
         encoding="utf-8",
     )
@@ -288,7 +320,7 @@ def test_run_defers_injected_cluster_model_selection_preparation_and_gateway(
     assert cluster.prepare_calls == []
     assert cluster.gateway_syncs == []
     submitted_manifest = json.loads(submit.call_args.args[0])
-    assistant = submitted_manifest["nodes"][0]
+    assistant = submitted_manifest["agents"]["nodes"][0]
     assert assistant["config"]["environment"]["MN_LLM_MODEL"] == "default"
     assert assistant["config"]["environment"]["MN_LLM_API_BASE"] == "auto"
     assert assistant["config"]["environment"]["MN_RUNTIME_MODEL_MANAGED"] == "1"
@@ -296,15 +328,20 @@ def test_run_defers_injected_cluster_model_selection_preparation_and_gateway(
 def test_run_auto_schedule_creates_resource_wait_schedule(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="run-scheduled")
-    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job')
+    mock_submit = mocker.patch(
+        'mn_cli.libs.run_cmds.client.create_job',
+        return_value=json.dumps({"job_id": "scheduled-job"}),
+    )
     mock_create_schedule = mocker.patch(
-        'mn_cli.libs.run_cmds.client.create_schedule',
+        'mn_cli.libs.run_cmds.client.create_job_schedule',
         return_value=json.dumps({"schedule_id": "schedule-123", "kind": "resource_wait"}),
     )
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text('{"nodes": []}')
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(_workflow_manifest({"nodes": []}))
+    )
     (bundle_dir / "payloads").mkdir()
 
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir), "--auto-schedule"])
@@ -318,14 +355,15 @@ def test_run_auto_schedule_creates_resource_wait_schedule(mocker, tmp_path, monk
 def test_run_force_skips_input_validation(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="forced-run")
-    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-123"}))
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_completed"})
     ])
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps({
+    (bundle_dir / "manifest.json").write_text(json.dumps(_workflow_manifest({
+        "apiVersion": "mn.workflow/v1",
         "nodes": [],
         "input_validation": {
             "rules": [
@@ -336,7 +374,7 @@ def test_run_force_skips_input_validation(mocker, tmp_path, monkeypatch):
                 }
             ]
         },
-    }))
+    })))
     (bundle_dir / "payloads").mkdir()
 
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir), "--force"])
@@ -352,13 +390,14 @@ def test_run_force_skips_input_validation(mocker, tmp_path, monkeypatch):
         "input_validation",
         "soft_requirements",
     ]
-    assert mock_submit.call_args.kwargs["force"] is True
+    manifest = json.loads(mock_submit.call_args.args[0])
+    assert manifest["metadata"]["mn_validation"]["force"] is True
 
 
 def test_run_prevalidates_command_rules_before_core_submission(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch("mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="prevalidated-run")
-    mock_submit = mocker.patch("mn_cli.libs.run_cmds.client.submit_job", return_value="job-123")
+    mock_submit = mocker.patch("mn_cli.libs.run_cmds.client.create_job", return_value=json.dumps({"job_id": "job-123"}))
     mocker.patch(
         "mn_cli.libs.run_cmds.client.stream_events",
         return_value=[json.dumps({"type": "job_completed"})],
@@ -368,7 +407,8 @@ def test_run_prevalidates_command_rules_before_core_submission(mocker, tmp_path,
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text(
         json.dumps(
-            {
+            _workflow_manifest({
+                "apiVersion": "mn.workflow/v1",
                 "job_name": "prevalidated-bundle",
                 "nodes": [],
                 "input_validation": {
@@ -387,7 +427,7 @@ def test_run_prevalidates_command_rules_before_core_submission(mocker, tmp_path,
                         },
                     ]
                 },
-            }
+            })
         )
     )
     (bundle_dir / "payloads").mkdir()
@@ -417,7 +457,7 @@ def test_run_prevalidates_command_rules_before_core_submission(mocker, tmp_path,
 def test_run_submits_python_environment_requirements_payload(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="python-env-run")
-    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-123"}))
     mocker.patch(
         "mn_cli.libs.run_cmds.client.get_system_summary",
         return_value=json.dumps(
@@ -441,7 +481,8 @@ def test_run_submits_python_environment_requirements_payload(mocker, tmp_path, m
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps({
+    (bundle_dir / "manifest.json").write_text(json.dumps(_workflow_manifest({
+        "apiVersion": "mn.workflow/v1",
         "nodes": [
             {
                 "node_id": "worker",
@@ -455,7 +496,7 @@ def test_run_submits_python_environment_requirements_payload(mocker, tmp_path, m
                 },
             }
         ]
-    }))
+    })))
     payloads_dir = bundle_dir / "payloads" / "worker"
     payloads_dir.mkdir(parents=True)
     (payloads_dir / "requirements.txt").write_text("opencv-python-headless>=4.10,<5\n")
@@ -464,19 +505,20 @@ def test_run_submits_python_environment_requirements_payload(mocker, tmp_path, m
 
     assert result.exit_code == 0
     submitted_manifest = json.loads(mock_submit.call_args.args[0])
-    assert submitted_manifest["nodes"][0]["config"]["python_environment"]["path"] == str(env_dir)
+    assert submitted_manifest["agents"]["nodes"][0]["config"]["python_environment"]["path"] == str(env_dir)
     payloads = mock_submit.call_args.args[1]
     assert payloads["worker/requirements.txt"] == b"opencv-python-headless>=4.10,<5\n"
 
 def test_run_injects_blueprint_config_with_cli_set_over_overwrite(mocker, tmp_path):
-    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-123"}))
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_completed"})
     ])
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps({
+    (bundle_dir / "manifest.json").write_text(json.dumps(_workflow_manifest({
+        "apiVersion": "mn.workflow/v1",
         "nodes": [
             {
                 "node_id": "worker",
@@ -488,7 +530,7 @@ def test_run_injects_blueprint_config_with_cli_set_over_overwrite(mocker, tmp_pa
                 },
             }
         ]
-    }))
+    })))
     config_dir = bundle_dir / "config"
     config_dir.mkdir()
     (config_dir / "default.json").write_text(json.dumps({"identity": {"blueprint_id": "bp-1"}, "video_source": {"uri": "default"}}))
@@ -506,7 +548,7 @@ def test_run_injects_blueprint_config_with_cli_set_over_overwrite(mocker, tmp_pa
 
     assert result.exit_code == 0
     manifest = json.loads(mock_submit.call_args.args[0])
-    env = manifest["nodes"][0]["config"]["environment"]
+    env = manifest["agents"]["nodes"][0]["config"]["environment"]
     injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
     assert injected_config["identity"]["blueprint_id"] == "bp-1"
     assert injected_config["video_source"]["uri"] == "cli"
@@ -518,7 +560,7 @@ def test_run_injects_blueprint_config_with_cli_set_over_overwrite(mocker, tmp_pa
 
 def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
-    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-auto")
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-auto"}))
     mocker.patch(
         "mn_cli.libs.run_cmds.client.get_system_summary",
         return_value=json.dumps(
@@ -541,7 +583,8 @@ def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_pat
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps({
+    (bundle_dir / "manifest.json").write_text(json.dumps(_workflow_manifest({
+        "apiVersion": "mn.workflow/v1",
         "graph_id": "bp_graph",
         "nodes": [
             {
@@ -557,7 +600,7 @@ def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_pat
                 },
             }
         ],
-    }))
+    })))
     config_dir = bundle_dir / "config"
     config_dir.mkdir()
     (config_dir / "default.json").write_text(json.dumps({
@@ -591,7 +634,7 @@ def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_pat
     assert mapping["job_id"] == "job-auto"
     assert mapping["run_id"] == "bp-1-auto-run"
     manifest = json.loads(mock_submit.call_args.args[0])
-    env = manifest["nodes"][0]["config"]["environment"]
+    env = manifest["agents"]["nodes"][0]["config"]["environment"]
     injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
     assert env["MN_RUN_ID"] == "bp-1-auto-run"
     assert env["MN_RUNS_ROOT"].startswith(
@@ -605,7 +648,7 @@ def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_pat
         tmp_path / "runs" / "bp-1-auto-run" / "web_ui.json"
     ).exists()
     assert not (tmp_path / "runs" / "bp-1-auto-run" / "ui.json").exists()
-    config = manifest["nodes"][0]["config"]
+    config = manifest["agents"]["nodes"][0]["config"]
     assert config["upload_path"] == "."
     assert config["upload_as"] == "."
     assert "upload_paths" not in config
@@ -615,21 +658,22 @@ def test_run_starts_pre_launch_hook_before_submit(mocker, tmp_path, monkeypatch)
     monkeypatch.setenv("OPENSHELL_CONFIG_DIR", str(tmp_path / "openshell-config"))
     monkeypatch.delenv("OPENSHELL_GATEWAY", raising=False)
     monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
-    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-pre-launch")
+    mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-pre-launch"}))
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_completed"}),
     ])
 
     bundle_dir = tmp_path / "pre_launch_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps({
+    (bundle_dir / "manifest.json").write_text(json.dumps(_workflow_manifest({
+        "apiVersion": "mn.workflow/v1",
         "nodes": [
             {
                 "node_id": "worker",
                 "config": {"environment": {}},
             }
         ]
-    }))
+    })))
     script_path = bundle_dir / "scripts" / "pre-launch.sh"
     script_path.parent.mkdir()
     script_path.write_text("#!/usr/bin/env bash\n")
@@ -670,8 +714,8 @@ def test_run_starts_pre_launch_hook_before_submit(mocker, tmp_path, monkeypatch)
     assert env["MN_RUN_ID"].startswith("pre-launch-")
     assert env["MN_BLUEPRINT_BUNDLE_DIR"] == str(bundle_dir)
     assert json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])["video_source"]["uri"].startswith("rtsp://")
-    submitted_manifest = json.loads(run_cmds.client.submit_job.call_args.args[0])
-    submitted_env = submitted_manifest["nodes"][0]["config"]["environment"]
+    submitted_manifest = json.loads(run_cmds.client.create_job.call_args.args[0])
+    submitted_env = submitted_manifest["agents"]["nodes"][0]["config"]["environment"]
     assert submitted_env["VIDEO_SOURCE_URI"] == "rtsp://127.0.0.1:8561/video-watch"
     assert submitted_env["STREAM_URI"] == "rtsp://127.0.0.1:8561/video-watch"
     assert submitted_env["RTSP_PORT"] == "8561"
@@ -682,13 +726,14 @@ def test_run_starts_pre_launch_hook_before_submit(mocker, tmp_path, monkeypatch)
 
 def test_run_cleans_pre_launch_hook_on_validation_failure(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
-    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job')
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.create_job')
     mock_killpg = mocker.patch("mn_cli.libs.run_cmds.os.killpg")
     mocker.patch("mn_cli.libs.run_cmds.os.kill")
 
     bundle_dir = tmp_path / "pre_launch_validation_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps({
+    (bundle_dir / "manifest.json").write_text(json.dumps(_workflow_manifest({
+        "apiVersion": "mn.workflow/v1",
         "nodes": [],
         "input_validation": {
             "rules": [
@@ -700,7 +745,7 @@ def test_run_cleans_pre_launch_hook_on_validation_failure(mocker, tmp_path, monk
                 }
             ]
         },
-    }))
+    })))
     script_path = bundle_dir / "scripts" / "pre-launch.sh"
     script_path.parent.mkdir()
     script_path.write_text("#!/usr/bin/env bash\n")
@@ -727,7 +772,7 @@ def test_run_cleans_pre_launch_hook_on_validation_failure(mocker, tmp_path, monk
 
 def test_run_executes_post_launch_hook_after_terminal_status(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
-    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-post-launch")
+    mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-post-launch"}))
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_completed"}),
     ])
@@ -739,14 +784,15 @@ def test_run_executes_post_launch_hook_after_terminal_status(mocker, tmp_path, m
 
     bundle_dir = tmp_path / "post_launch_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps({
+    (bundle_dir / "manifest.json").write_text(json.dumps(_workflow_manifest({
+        "apiVersion": "mn.workflow/v1",
         "nodes": [
             {
                 "node_id": "worker",
                 "config": {"environment": {}},
             }
         ]
-    }))
+    })))
     scripts_dir = bundle_dir / "scripts"
     scripts_dir.mkdir()
     pre_launch_script = scripts_dir / "pre-launch.sh"
@@ -784,21 +830,22 @@ def test_run_executes_post_launch_hook_after_terminal_status(mocker, tmp_path, m
 
 def test_run_records_blueprint_run_id_mapping(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
-    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-abc")
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-abc"}))
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_completed"})
     ])
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps({
+    (bundle_dir / "manifest.json").write_text(json.dumps(_workflow_manifest({
+        "apiVersion": "mn.workflow/v1",
         "nodes": [
             {
                 "node_id": "worker",
                 "config": {"environment": {}},
             }
         ]
-    }))
+    })))
     config_dir = bundle_dir / "config"
     config_dir.mkdir()
     (config_dir / "default.json").write_text(json.dumps({
@@ -838,11 +885,11 @@ def test_run_records_blueprint_run_id_mapping(mocker, tmp_path, monkeypatch):
     assert "environment" not in json.dumps(monitor_manifest)
     assert not (tmp_path / "blueprints" / "worker" / "runs").exists()
     manifest = json.loads(mock_submit.call_args.args[0])
-    env = manifest["nodes"][0]["config"]["environment"]
+    env = manifest["agents"]["nodes"][0]["config"]["environment"]
     injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
     assert env["MN_RUN_ID"] == "bp-run"
     assert env["MN_RUNS_ROOT"].startswith(
-        str(tmp_path / "shared" / "submissions" / "job_rb-")
+        str(tmp_path / "shared" / "submissions" / "job_tw-")
     )
     assert "-def-" in env["MN_RUNS_ROOT"]
     assert env["MN_RUNS_ROOT"].endswith("/outputs/runs")
@@ -851,7 +898,7 @@ def test_run_records_blueprint_run_id_mapping(mocker, tmp_path, monkeypatch):
 
 def test_run_uses_detach_log_seconds_env(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUN_DETACH_LOG_SECONDS", "4.5")
-    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-env-follow")
+    mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-env-follow"}))
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_pending"}),
         json.dumps({"type": "job_scheduled"}),
@@ -863,7 +910,9 @@ def test_run_uses_detach_log_seconds_env(mocker, tmp_path, monkeypatch):
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text('{"nodes": []}')
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(_workflow_manifest({"nodes": []}))
+    )
 
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
 
@@ -873,7 +922,7 @@ def test_run_uses_detach_log_seconds_env(mocker, tmp_path, monkeypatch):
 
 def test_run_follow_seconds_option_overrides_env(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUN_DETACH_LOG_SECONDS", "9")
-    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-option-follow")
+    mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-option-follow"}))
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_scheduled"}),
     ])
@@ -884,7 +933,9 @@ def test_run_follow_seconds_option_overrides_env(mocker, tmp_path, monkeypatch):
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text('{"nodes": []}')
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(_workflow_manifest({"nodes": []}))
+    )
 
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir), "--follow-seconds", "1.25"])
 
@@ -896,15 +947,15 @@ def test_run_follow_seconds_option_overrides_env(mocker, tmp_path, monkeypatch):
 def test_run_detached_starts_without_live_workflow_ui(flag, mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value=f"detached-{flag.strip('-')}")
-    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-detached")
+    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-detached"}))
     mock_stream = mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
         json.dumps({"type": "job_completed"}),
     ])
 
     bundle_dir = tmp_path / f"run_bundle_{flag.strip('-')}"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps({
-        "apiVersion": "mn.workflow/v2",
+    (bundle_dir / "manifest.json").write_text(json.dumps(_workflow_manifest({
+        "apiVersion": "mn.workflow/v1",
         "kind": "Workflow",
         "id": "detached-workflow",
         "workflow": {
@@ -919,7 +970,7 @@ def test_run_detached_starts_without_live_workflow_ui(flag, mocker, tmp_path, mo
             "edges": [],
         },
         "runtime": {"bindings": {"step_one": {"worker": {"id": "worker-one"}}}},
-    }))
+    })))
 
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir), flag])
 
@@ -931,7 +982,7 @@ def test_run_detached_starts_without_live_workflow_ui(flag, mocker, tmp_path, mo
     mock_stream.assert_not_called()
 
 def test_run_error_submitting(mocker, tmp_path):
-    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', side_effect=Exception("API failure"))
+    mocker.patch('mn_cli.libs.run_cmds.client.create_job', side_effect=Exception("API failure"))
     mocker.patch(
         "mn_cli.libs.run_cmds.prepare_job_submission",
         return_value=SimpleNamespace(
@@ -945,7 +996,7 @@ def test_run_error_submitting(mocker, tmp_path):
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
     manifest_file = bundle_dir / "manifest.json"
-    manifest_file.write_text('{"nodes": []}')
+    manifest_file.write_text(json.dumps(_workflow_manifest({"nodes": []})))
     
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
     
@@ -974,7 +1025,13 @@ def test_run_existing_job_replaces_prepared_bundle_before_starting(mocker, tmp_p
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text(
-        json.dumps({"graph_id": "existing-graph", "nodes": []})
+        json.dumps(
+            _workflow_manifest({
+                "apiVersion": "mn.workflow/v1",
+                "graph_id": "existing-graph",
+                "nodes": [],
+            })
+        )
     )
     payload_dir = bundle_dir / "payloads"
     payload_dir.mkdir()
@@ -1021,7 +1078,9 @@ def test_run_existing_job_cleans_fresh_definition_when_update_fails(
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text('{"nodes": []}')
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(_workflow_manifest({"nodes": []}))
+    )
 
     with pytest.raises(typer.Exit):
         run_cmds.run_bundle(
@@ -1046,7 +1105,9 @@ def test_run_command_debug_prints_preparation_diagnostic(mocker, tmp_path):
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text('{"nodes": []}')
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(_workflow_manifest({"nodes": []}))
+    )
 
     result = runner.invoke(
         app,
@@ -1069,7 +1130,7 @@ def test_run_reports_remote_docker_worker_preparation(mocker, tmp_path):
         },
     )
     submit = mocker.patch(
-        "mn_cli.libs.run_cmds.client.submit_job", return_value="job-docker-worker"
+        "mn_cli.libs.run_cmds.client.create_job", return_value=json.dumps({"job_id": "job-docker-worker"})
     )
     mocker.patch(
         "mn_cli.libs.run_cmds.prepare_job_submission",
@@ -1113,14 +1174,15 @@ def test_run_reports_remote_docker_worker_preparation(mocker, tmp_path):
     bundle_dir.mkdir()
     (bundle_dir / "manifest.json").write_text(
         json.dumps(
-            {
+            _workflow_manifest({
+                "apiVersion": "mn.workflow/v1",
                 "nodes": [
                     {
                         "node_id": "visual_detector",
                         "config": {"runner_module": "MirrorNeuron.Runner.DockerWorker"},
                     }
                 ]
-            }
+            })
         ),
         encoding="utf-8",
     )
@@ -1146,13 +1208,13 @@ def test_run_reports_remote_docker_worker_preparation(mocker, tmp_path):
 
 
 def test_run_keyboard_interrupt(mocker, tmp_path):
-    mocker.patch('mn_cli.libs.run_cmds.client.submit_job', return_value="job-123")
+    mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-123"}))
     mocker.patch('mn_cli.libs.run_cmds.client.stream_events', side_effect=KeyboardInterrupt)
     
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
     manifest_file = bundle_dir / "manifest.json"
-    manifest_file.write_text('{"nodes": []}')
+    manifest_file.write_text(json.dumps(_workflow_manifest({"nodes": []})))
     
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
     

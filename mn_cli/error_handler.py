@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 import typer
+from mn_sdk.errors import AppError, normalize_exception, sanitize_context
 from rich.console import Console
 
 from mn_cli.config import CliConfig
 from mn_cli.libs.ui import print_error
-from mn_cli.output import record_error
 from mn_cli.logging_config import configure_logging
-from mn_sdk.errors import AppError, normalize_exception, sanitize_context
+from mn_cli.output import record_error
 
 log_file = CliConfig.from_env().log_path
 logger = configure_logging("mn-cli", log_file)
@@ -18,16 +19,6 @@ logger = configure_logging("mn-cli", log_file)
 _DEBUG = False
 
 CONTEXT_MESSAGES = {
-    "submit": "Error submitting job",
-    "status": "Error fetching job status",
-    "list_jobs": "Error listing jobs",
-    "clear": "Error clearing jobs",
-    "cancel": "Error cancelling job",
-    "cancel_all": "Error cancelling active jobs",
-    "pause": "Error pausing job",
-    "resume": "Error resuming job",
-    "backup": "Error backing up job",
-    "restore": "Error restoring job",
     "nodes": "Error fetching nodes",
     "reconcile-node": "Error reconciling node",
     "drain-node": "Error draining node",
@@ -38,15 +29,6 @@ CONTEXT_MESSAGES = {
     "resource set": "Error setting resource limits",
     "service list": "Error listing services",
     "service show": "Error showing service",
-    "deploy": "Error deploying bundle",
-    "deployment list": "Error listing deployments",
-    "deployment show": "Error fetching deployment",
-    "deployment promote": "Error promoting deployment",
-    "deployment rollback": "Error rolling back deployment",
-    "deployment pause": "Error pausing deployment",
-    "deployment resume": "Error resuming deployment",
-    "deployment fail": "Error failing deployment",
-    "dead_letters": "Error listing dead letters",
     "run bundle": "Error running bundle",
     "monitor stream": "Error fetching job",
     "fetch results": "Error fetching results",

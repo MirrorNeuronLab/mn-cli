@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
 
 import typer
 from mn_sdk import prepare_job_submission
@@ -10,13 +9,12 @@ from mn_sdk.submission_preparation import prepare_manifest_for_submission
 
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.bundles import read_bundle
-from mn_cli.libs.job_cleanup import JobResourceCleanupError, cleanup_cleared_job_resources
+from mn_cli.libs.job_cleanup import JobResourceCleanupError, cleanup_job_resources
 from mn_cli.libs.run_cmds.common import _stage_bundle_payloads
 from mn_cli.libs.ui import (
     activity,
     print_collection,
     print_detail,
-    print_error,
     print_success_confirmation,
     require_confirmation,
 )
@@ -26,12 +24,12 @@ from mn_cli.shared import client, console, logger
 
 def create(
     bundle: str = typer.Argument(help="Blueprint/job bundle directory or archive."),
-    job_id: Optional[str] = typer.Option(None, "--job-id", help="Optional stable job ID."),
-    config: Optional[str] = typer.Option(
+    job_id: str | None = typer.Option(None, "--job-id", help="Optional durable job ID."),
+    config: str | None = typer.Option(
         None, "--config", help="Resolved configuration JSON file."
     ),
 ):
-    """Create a stable job definition without starting a run."""
+    """Create a durable job definition without starting a run."""
     try:
         manifest_json, payloads = read_bundle(bundle)
         resolved = _read_json_object(config) if config else {}
@@ -89,15 +87,15 @@ def definitions(
         handle_cli_error(exc, console, "job definitions")
 
 
-def inspect(job_id: str = typer.Argument(help="Stable job ID.")):
-    """Inspect a stable job definition."""
+def inspect(job_id: str = typer.Argument(help="Durable job ID.")):
+    """Inspect a durable job definition."""
     try:
         print_detail(console, "Job", json.loads(client.get_job(job_id)))
     except Exception as exc:
         handle_cli_error(exc, console, "job show")
 
 
-def archive(job_id: str = typer.Argument(help="Stable job ID.")):
+def archive(job_id: str = typer.Argument(help="Durable job ID.")):
     """Archive a job while retaining its persistent data."""
     try:
         result = json.loads(client.archive_job(job_id))
@@ -108,7 +106,7 @@ def archive(job_id: str = typer.Argument(help="Stable job ID.")):
 
 
 def reset_data(
-    job_id: str = typer.Argument(help="Stable job ID."),
+    job_id: str = typer.Argument(help="Durable job ID."),
     yes: bool = typer.Option(False, "--yes", "-y"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview the reset without changing data."),
 ):
@@ -128,11 +126,11 @@ def reset_data(
 
 
 def delete(
-    job_id: str = typer.Argument(help="Stable job ID."),
+    job_id: str = typer.Argument(help="Durable job ID."),
     yes: bool = typer.Option(False, "--yes", "-y"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview deletion without changing state."),
 ):
-    """Permanently delete a stable job, its runs, resources, and data."""
+    """Permanently delete a durable job, its runs, resources, and data."""
     yes = yes is True
     dry_run = dry_run is True
     if dry_run:
@@ -144,11 +142,11 @@ def delete(
         action="Job deletion",
     )
     try:
-        run_ids = _stable_job_run_ids(job_id)
+        run_ids = _job_run_ids(job_id)
         cleanup_errors = []
         for resource_id in [*run_ids, job_id]:
             try:
-                cleanup_cleared_job_resources(
+                cleanup_job_resources(
                     resource_id, runtime_client=client, log=logger
                 )
             except JobResourceCleanupError as error:
@@ -169,11 +167,11 @@ def delete(
 
 
 def start(
-    job_id: str = typer.Argument(help="Stable job ID."),
-    run_id: Optional[str] = typer.Option(None, "--run-id"),
-    inputs: Optional[str] = typer.Option(None, "--inputs", help="Run-input JSON file."),
+    job_id: str = typer.Argument(help="Durable job ID."),
+    run_id: str | None = typer.Option(None, "--run-id"),
+    inputs: str | None = typer.Option(None, "--inputs", help="Run-input JSON file."),
 ):
-    """Start a new run of a stable job."""
+    """Start a new run of a durable job."""
     try:
         result = json.loads(
             client.start_run(
@@ -193,7 +191,7 @@ def start(
         handle_cli_error(exc, console, "job start")
 
 
-def runs(job_id: str = typer.Argument(help="Stable job ID.")):
+def runs(job_id: str = typer.Argument(help="Durable job ID.")):
     """List the independent execution runs belonging to a job."""
     try:
         console.print_json(data=json.loads(client.list_runs(job_id)))
@@ -285,12 +283,12 @@ def _read_json_object(path: str) -> dict:
     return decoded
 
 
-def _stable_job_run_ids(job_id: str) -> list[str]:
+def _job_run_ids(job_id: str) -> list[str]:
     try:
         result = json.loads(client.list_runs(job_id))
     except Exception:
         logger.warning(
-            "Could not list historical runs before deleting stable job %s",
+            "Could not list historical runs before deleting durable job %s",
             job_id,
             exc_info=True,
         )

@@ -5,22 +5,13 @@ import re
 import subprocess
 import sys
 import uuid
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import SimpleNamespace
+
 import grpc
 import pytest
 import typer
-from logging.handlers import RotatingFileHandler
-from typer.testing import CliRunner
-from rich.console import Console
-from mn_cli.main import app
-from mn_cli.libs import model_cmds, run_cmds
-from mn_cli.libs.ui import JobMonitorState, generate_live_layout
-from mn_cli.libs.workflow_progress import (
-    BlueprintWorkflowProgress,
-    _agent_progress_detail,
-)
-from mn_cli.libs.run_manifest import prepare_manifest_for_submission
 from mn_sdk import (
     AgentProgress,
     ModelPrepareRemoteError,
@@ -28,6 +19,17 @@ from mn_sdk import (
     load_model_remotes,
     upsert_model_remote,
 )
+from rich.console import Console
+from typer.testing import CliRunner
+
+from mn_cli.libs import model_cmds, run_cmds
+from mn_cli.libs.run_manifest import prepare_manifest_for_submission
+from mn_cli.libs.ui import JobMonitorState, generate_live_layout
+from mn_cli.libs.workflow_progress import (
+    BlueprintWorkflowProgress,
+    _agent_progress_detail,
+)
+from mn_cli.main import app
 
 runner = CliRunner()
 
@@ -1465,8 +1467,9 @@ def test_runtime_model_preflight_ignores_skill_owned_rag_model(mocker, tmp_path)
 
 def _write_adaptive_source_model_config(bundle_dir: Path) -> dict:
     manifest = {
-        "apiVersion": "mn.workflow.source/v2",
+        "apiVersion": "mn.workflow/v1",
         "kind": "WorkflowSource",
+        "identity": {"name": "source-assistant"},
         "config": {"manifest_defaults": ["llm", "knowledge_rag"]},
         "llm": {
             "enabled": True,
@@ -1595,8 +1598,10 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
     prepared_worker_manifest = run_cmds.prepare_manifest_for_submission(
         bundle_dir,
         {
-            "apiVersion": "mn.workflow/v2",
-            "graph_id": "adaptive-model-placement",
+            "apiVersion": "mn.workflow/v1",
+            "kind": "Workflow",
+            "id": "adaptive-model-placement",
+            "contract": {},
             "agents": {
                 "nodes": [
                     {
@@ -1607,6 +1612,7 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
                     }
                 ]
             },
+            "runtime": {},
         },
         env_overrides=env_overrides,
     )

@@ -1,14 +1,20 @@
-from ..common import *
-from ..live import *
-from ..outputs import *
 from contextlib import contextmanager
-from mn_cli.libs.workflow_progress import build_workflow_progress_snapshot
+
 from mn_sdk import (
     is_lowered_runtime_projection as _is_lowered_runtime_projection,
+)
+from mn_sdk import (
     matches_public_workflow_contract as _matches_public_workflow_contract,
+)
+from mn_sdk import (
     workflow_step_ids as _workflow_step_ids,
 )
 
+from mn_cli.libs.workflow_progress import build_workflow_progress_snapshot
+
+from ..common import *
+from ..live import *
+from ..outputs import *
 
 _MONITOR_JOB_FIELDS = {
     "agents",
@@ -158,28 +164,28 @@ def _monitor_retry_backoff_seconds() -> float:
         return 0.25
 
 
-def _get_job_for_monitor(job_id: str) -> str:
-    """Fetch a job with bounded retries for transient gRPC read failures."""
+def _get_run_for_monitor(run_id: str) -> str:
+    """Fetch a run with bounded retries for transient gRPC read failures."""
 
     attempts = _monitor_retry_attempts()
     backoff = _monitor_retry_backoff_seconds()
     for attempt in range(attempts):
         try:
             with _temporary_monitor_rpc_timeout():
-                return client.get_job(job_id)
+                return client.get_run(run_id)
         except Exception as exc:
             if not _is_transient_monitor_fetch_error(exc) or attempt == attempts - 1:
                 raise
             delay = backoff * (attempt + 1)
             logger.warning(
-                "Transient monitor job fetch failure for job_id=%s; retrying in %.2fs: %s",
-                job_id,
+                "Transient monitor run fetch failure for run_id=%s; retrying in %.2fs: %s",
+                run_id,
                 delay,
                 exc,
             )
             if delay:
                 time.sleep(delay)
-    raise RuntimeError(f"Unable to fetch job {job_id}")
+    raise RuntimeError(f"Unable to fetch run {run_id}")
 
 
 def _read_monitor_json_value(path: Path) -> Any:
@@ -216,7 +222,7 @@ def _local_run_store_entries(
                 (candidate, _read_monitor_json_object(candidate / "job.json") or {})
             )
 
-    # Stable-job launches persist separate stable job, execution run, and
+    # Durable job launches persist separate durable job, execution run, and
     # blueprint-run identities. Reattachment may start with any one of them,
     # so match every identity in the small job mapping.
     identifier_set = set(identifiers)
@@ -502,7 +508,7 @@ def _manifest_from_job_data(
         or "workflow"
     )
     return {
-        "apiVersion": "mn.workflow/v2",
+        "apiVersion": "mn.workflow/v1",
         "kind": "Workflow",
         "id": workflow_id,
         "name": str(job.get("job_name") or summary.get("job_name") or workflow_id),
@@ -552,11 +558,11 @@ def _public_workflow_manifest_from_job(
         step_ids = _public_step_ids_from_topology(job)
     if not step_ids:
         # ``GetJob`` deliberately returns a compact projection for active
-        # stable-job runs.  That projection omits both ``workflow_state`` and
+        # durable job runs.  That projection omits both ``workflow_state`` and
         # ``runtime_topology``, but retains the live agent list.  Step-source
         # agents are one-to-one with the source-facing workflow steps, so use
         # them as a final read-only reconstruction path.  This keeps
-        # ``mn run watch`` useful for runs started from a stable job even when
+        # ``mn run watch`` useful for runs started from a durable job even when
         # the CLI did not create a local run-store mapping.
         step_ids = _public_step_ids_from_agents(job, events=events)
     if not step_ids:
@@ -621,7 +627,7 @@ def _public_workflow_manifest_from_job(
     )
     policies = {"stream_mode": "live"} if job_type.lower() == "service" else {}
     return {
-        "apiVersion": "mn.workflow/v2",
+        "apiVersion": "mn.workflow/v1",
         "kind": "Workflow",
         "id": str(job.get("graph_id") or summary.get("graph_id") or workflow_id),
         "name": str(job.get("job_name") or summary.get("job_name") or workflow_id),
@@ -815,7 +821,7 @@ def _public_progress_from_api_snapshot(
             return snapshot
 
     try:
-        data = json.loads(_get_job_for_monitor(job_id))
+        data = json.loads(_get_run_for_monitor(job_id))
     except Exception:
         return snapshot
     if not isinstance(data, dict):
@@ -907,9 +913,9 @@ def _live_monitor_api_stream(
         return False
 
     import queue
-    import threading
     import select
     import sys
+    import threading
 
     event_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
 
@@ -965,8 +971,8 @@ def _live_monitor_api_stream(
     is_tty = _interactive_live_output()
     old_settings = None
     if is_tty:
-        import tty
         import termios
+        import tty
 
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
@@ -1046,16 +1052,17 @@ def _live_monitor(
     ):
         return
 
-    import sys
     import select
+    import sys
     import time
+
     from rich.live import Live
 
     is_tty = _interactive_live_output()
     old_settings = None
     if is_tty:
-        import tty
         import termios
+        import tty
 
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
@@ -1101,8 +1108,8 @@ def _live_monitor(
             while True:
                 try:
                     with _temporary_monitor_rpc_timeout():
-                        job_json = _get_job_for_monitor(job_id)
-                        data = json.loads(job_json)
+                        run_json = _get_run_for_monitor(job_id)
+                        data = json.loads(run_json)
                         data["workflow_progress"] = _with_monitor_identity(
                             _workflow_progress_for_monitor(job_id, data),
                             run_id=run_id,
