@@ -75,7 +75,7 @@ def test_create_prepares_source_bundle_before_stable_submission(monkeypatch, tmp
         stable_job_cmds,
         "client",
         SimpleNamespace(
-            create_stable_job=lambda manifest_json, payloads, **kwargs: json.dumps(
+            create_job=lambda manifest_json, payloads, **kwargs: json.dumps(
                 {
                     "job_id": "stable-job",
                     "manifest_json": manifest_json,
@@ -114,7 +114,7 @@ def test_delete_cleans_every_historical_run_and_definition_resources(monkeypatch
                     ],
                 }
             ),
-            delete_stable_job=lambda job_id, confirmed: json.dumps(
+            delete_job=lambda job_id, confirmed: json.dumps(
                 {"job_id": job_id, "status": "deleted", "confirmed": confirmed}
             ),
         ),
@@ -144,7 +144,7 @@ def test_delete_attempts_all_local_cleanup_before_reporting_failure(monkeypatch)
             list_runs=lambda _job_id: json.dumps(
                 {"data": [{"run_id": "run-1"}, {"run_id": "run-2"}]}
             ),
-            delete_stable_job=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            delete_job=lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 AssertionError("Core deletion must not start after local cleanup fails")
             ),
         ),
@@ -183,7 +183,7 @@ def test_delete_cleans_historical_runs_from_v2_items_response(monkeypatch):
         "client",
         SimpleNamespace(
             list_runs=lambda _job_id: json.dumps({"items": [{"run_id": "run-1"}]}),
-            delete_stable_job=lambda job_id, confirmed: json.dumps(
+            delete_job=lambda job_id, confirmed: json.dumps(
                 {"job_id": job_id, "status": "deleted", "confirmed": confirmed}
             ),
         ),

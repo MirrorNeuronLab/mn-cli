@@ -85,7 +85,7 @@ def _runtime_run_items(*, blueprint_id: str | None, limit: int) -> list[dict]:
     """
 
     try:
-        jobs_payload = json.loads(client.list_stable_jobs(page_size=max(limit, 50)))
+        jobs_payload = json.loads(client.list_jobs(page_size=max(limit, 50)))
     except Exception:
         logger.debug("Unable to list runtime jobs for run listing", exc_info=True)
         return []

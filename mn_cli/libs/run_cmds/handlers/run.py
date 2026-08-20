@@ -506,7 +506,7 @@ def run_bundle(
         )
         if not job_id:
             created = json.loads(
-                client.create_stable_job(
+                client.create_job(
                     manifest,
                     payloads,
                     job_id=stable_job_id,
@@ -516,7 +516,7 @@ def run_bundle(
             stable_job_id = str(created["job_id"])
             definition_committed = True
         else:
-            client.update_stable_job(
+            client.update_job(
                 stable_job_id,
                 {"resolved_configuration": config_overrides}
                 if config_overrides

@@ -99,7 +99,7 @@ def stable_job_runtime_contract_adapter(monkeypatch):
 
     created_bundles = {}
 
-    def create_stable_job(manifest_json, payloads, **_kwargs):
+    def create_job(manifest_json, payloads, **_kwargs):
         manifest = json.loads(manifest_json)
         force = bool((manifest.get("metadata", {}).get("mn_validation") or {}).get("force"))
         job_id = run_cmds.client.submit_job(manifest_json, payloads, force=force)
@@ -119,6 +119,6 @@ def stable_job_runtime_contract_adapter(monkeypatch):
             source=source,
         )
 
-    monkeypatch.setattr(run_cmds.client, "create_stable_job", create_stable_job)
+    monkeypatch.setattr(run_cmds.client, "create_job", create_job)
     monkeypatch.setattr(run_cmds.client, "start_run", start_run)
     monkeypatch.setattr(run_cmds.client, "create_job_schedule", create_job_schedule)

@@ -54,7 +54,7 @@ def create(
             cluster_client=client,
         )
         result = json.loads(
-            client.create_stable_job(
+            client.create_job(
                 prepared.manifest_json,
                 prepared.payloads,
                 job_id=job_id or "",
@@ -77,7 +77,7 @@ def definitions(
 ):
     """List durable job definitions."""
     try:
-        payload = json.loads(client.list_stable_jobs(include_archived=include_archived))
+        payload = json.loads(client.list_jobs(include_archived=include_archived))
         items = payload.get("data") or payload.get("jobs") or payload.get("items") or [] if isinstance(payload, dict) else []
         print_collection(
             console,
@@ -92,7 +92,7 @@ def definitions(
 def inspect(job_id: str = typer.Argument(help="Stable job ID.")):
     """Inspect a stable job definition."""
     try:
-        print_detail(console, "Job", json.loads(client.get_stable_job(job_id)))
+        print_detail(console, "Job", json.loads(client.get_job(job_id)))
     except Exception as exc:
         handle_cli_error(exc, console, "job show")
 
@@ -100,7 +100,7 @@ def inspect(job_id: str = typer.Argument(help="Stable job ID.")):
 def archive(job_id: str = typer.Argument(help="Stable job ID.")):
     """Archive a job while retaining its persistent data."""
     try:
-        result = json.loads(client.archive_stable_job(job_id))
+        result = json.loads(client.archive_job(job_id))
         print_success_confirmation(console, "Job archive", status=result.get("status"), details={"Job ID": job_id})
         record_result(result)
     except Exception as exc:
@@ -120,7 +120,7 @@ def reset_data(
         return
     _confirm_destructive(f"Reset all persistent data for {job_id}?", yes=yes, action="Job data reset")
     try:
-        result = json.loads(client.reset_stable_job_data(job_id))
+        result = json.loads(client.reset_job_data(job_id))
         print_success_confirmation(console, "Job data reset", status=result.get("status"), details={"Job ID": job_id})
         record_result(result)
     except Exception as exc:
@@ -156,7 +156,7 @@ def delete(
         if cleanup_errors:
             raise JobResourceCleanupError("; ".join(cleanup_errors))
 
-        result = json.loads(client.delete_stable_job(job_id, confirmed=True))
+        result = json.loads(client.delete_job(job_id, confirmed=True))
         cleanup_errors = [
             str(error) for error in result.get("resource_cleanup_errors") or []
         ]

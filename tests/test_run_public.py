@@ -166,7 +166,7 @@ def test_run_list_enriches_local_mapping_with_runtime_status(mocker):
         ),
     )
     mocker.patch(
-        "mn_cli.libs.run_public.client.list_stable_jobs",
+        "mn_cli.libs.run_public.client.list_jobs",
         return_value=json.dumps(
             {
                 "items": [

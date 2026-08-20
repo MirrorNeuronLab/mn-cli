@@ -956,7 +956,7 @@ def test_run_error_submitting(mocker, tmp_path):
 
 def test_run_existing_job_replaces_prepared_bundle_before_starting(mocker, tmp_path):
     update = mocker.patch(
-        "mn_cli.libs.run_cmds.client.update_stable_job",
+        "mn_cli.libs.run_cmds.client.update_job",
         return_value=json.dumps({"job_id": "job-existing"}),
     )
     start = mocker.patch(
@@ -965,7 +965,7 @@ def test_run_existing_job_replaces_prepared_bundle_before_starting(mocker, tmp_p
             {"job_id": "job-existing", "run_id": "existing-rerun"}
         ),
     )
-    create = mocker.patch("mn_cli.libs.run_cmds.client.create_stable_job")
+    create = mocker.patch("mn_cli.libs.run_cmds.client.create_job")
     mocker.patch(
         "mn_cli.libs.run_cmds.client.stream_events",
         return_value=[json.dumps({"type": "job_completed"})],
@@ -1004,7 +1004,7 @@ def test_run_existing_job_cleans_fresh_definition_when_update_fails(
     mocker, tmp_path
 ):
     mocker.patch(
-        "mn_cli.libs.run_cmds.client.update_stable_job",
+        "mn_cli.libs.run_cmds.client.update_job",
         side_effect=RuntimeError("atomic update rejected"),
     )
     mocker.patch(
