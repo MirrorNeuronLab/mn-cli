@@ -2195,6 +2195,18 @@ def _network_core_env(
             "MN_EPMD_PORT": str(epmd_port),
             "MN_NODE_NAME": node_name,
             "MN_NODE_ROLE": "runtime",
+            "MN_BLUEPRINT_WEB_UI_BIND_HOST": env.get("MN_BLUEPRINT_WEB_UI_BIND_HOST")
+            or DEFAULT_BLUEPRINT_WEB_UI_BIND_HOST,
+            "MN_BLUEPRINT_WEB_UI_PUBLIC_HOST": env.get("MN_BLUEPRINT_WEB_UI_PUBLIC_HOST")
+            or host,
+            "MN_BLUEPRINT_WEB_UI_PORT_START": env.get("MN_BLUEPRINT_WEB_UI_PORT_START")
+            or DEFAULT_BLUEPRINT_WEB_UI_PORT_START,
+            "MN_BLUEPRINT_WEB_UI_PORT_END": env.get("MN_BLUEPRINT_WEB_UI_PORT_END")
+            or DEFAULT_BLUEPRINT_WEB_UI_PORT_END,
+            "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE": env.get(
+                "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE"
+            )
+            or DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE,
             "MN_CLUSTER_NODES": cluster_nodes,
             "MN_REDIS_URL": redis_url,
             "MN_HOST_SHARED_STORAGE_ROOT": host_shared_storage_root,
@@ -2644,6 +2656,7 @@ def _start_network_core(
     publish_host = _network_publish_host(host)
     env_args = _docker_env_args(env)
     port_args = ["-p", f"{publish_host}:{grpc_port}:{grpc_port}"]
+    port_args.extend(_network_blueprint_web_ui_port_args(env))
     if publish_cluster_ports:
         epmd_port = _parse_configured_port(env.get("MN_EPMD_PORT")) or int(DEFAULT_EPMD_PORT)
         port_args.extend(
@@ -2669,6 +2682,39 @@ def _start_network_core(
         *_distributed_core_command(),
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
+
+
+def _network_blueprint_web_ui_port_args(env: dict[str, str]) -> list[str]:
+    """Publish a worker node's allocated blueprint UI range to the LAN.
+
+    HostLocal services execute in the worker's Core container.  Without this
+    mapping a service can be healthy inside that container while its URL on the
+    worker's LAN address is unreachable from an operator's browser.
+    """
+
+    allocation_mode = str(
+        env.get("MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE")
+        or DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE
+    ).strip().lower()
+    if allocation_mode != "prepublished":
+        return []
+    start = _parse_configured_port(
+        env.get("MN_BLUEPRINT_WEB_UI_PORT_START")
+        or DEFAULT_BLUEPRINT_WEB_UI_PORT_START
+    )
+    end = _parse_configured_port(
+        env.get("MN_BLUEPRINT_WEB_UI_PORT_END")
+        or DEFAULT_BLUEPRINT_WEB_UI_PORT_END
+    )
+    if start is None or end is None or end < start:
+        return []
+    bind_host = _network_publish_host(
+        str(
+            env.get("MN_BLUEPRINT_WEB_UI_BIND_HOST")
+            or DEFAULT_BLUEPRINT_WEB_UI_BIND_HOST
+        )
+    )
+    return ["-p", f"{bind_host}:{start}-{end}:{start}-{end}"]
 
 def _running_network_token(container_names: tuple[str, ...] = ()) -> Optional[str]:
     for container_name in container_names:
