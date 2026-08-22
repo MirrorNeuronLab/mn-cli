@@ -2195,6 +2195,18 @@ def _network_core_env(
             "MN_EPMD_PORT": str(epmd_port),
             "MN_NODE_NAME": node_name,
             "MN_NODE_ROLE": "runtime",
+            "MN_BLUEPRINT_WEB_UI_BIND_HOST": env.get("MN_BLUEPRINT_WEB_UI_BIND_HOST")
+            or DEFAULT_BLUEPRINT_WEB_UI_BIND_HOST,
+            "MN_BLUEPRINT_WEB_UI_PUBLIC_HOST": env.get("MN_BLUEPRINT_WEB_UI_PUBLIC_HOST")
+            or host,
+            "MN_BLUEPRINT_WEB_UI_PORT_START": env.get("MN_BLUEPRINT_WEB_UI_PORT_START")
+            or DEFAULT_BLUEPRINT_WEB_UI_PORT_START,
+            "MN_BLUEPRINT_WEB_UI_PORT_END": env.get("MN_BLUEPRINT_WEB_UI_PORT_END")
+            or DEFAULT_BLUEPRINT_WEB_UI_PORT_END,
+            "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE": env.get(
+                "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE"
+            )
+            or DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE,
             "MN_CLUSTER_NODES": cluster_nodes,
             "MN_REDIS_URL": redis_url,
             "MN_HOST_SHARED_STORAGE_ROOT": host_shared_storage_root,
@@ -2644,6 +2656,7 @@ def _start_network_core(
     publish_host = _network_publish_host(host)
     env_args = _docker_env_args(env)
     port_args = ["-p", f"{publish_host}:{grpc_port}:{grpc_port}"]
+    port_args.extend(_network_blueprint_web_ui_port_args(env))
     if publish_cluster_ports:
         epmd_port = _parse_configured_port(env.get("MN_EPMD_PORT")) or int(DEFAULT_EPMD_PORT)
         port_args.extend(
@@ -2669,6 +2682,39 @@ def _start_network_core(
         *_distributed_core_command(),
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
+
+
+def _network_blueprint_web_ui_port_args(env: dict[str, str]) -> list[str]:
+    """Publish a worker node's allocated blueprint UI range to the LAN.
+
+    HostLocal services execute in the worker's Core container.  Without this
+    mapping a service can be healthy inside that container while its URL on the
+    worker's LAN address is unreachable from an operator's browser.
+    """
+
+    allocation_mode = str(
+        env.get("MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE")
+        or DEFAULT_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE
+    ).strip().lower()
+    if allocation_mode != "prepublished":
+        return []
+    start = _parse_configured_port(
+        env.get("MN_BLUEPRINT_WEB_UI_PORT_START")
+        or DEFAULT_BLUEPRINT_WEB_UI_PORT_START
+    )
+    end = _parse_configured_port(
+        env.get("MN_BLUEPRINT_WEB_UI_PORT_END")
+        or DEFAULT_BLUEPRINT_WEB_UI_PORT_END
+    )
+    if start is None or end is None or end < start:
+        return []
+    bind_host = _network_publish_host(
+        str(
+            env.get("MN_BLUEPRINT_WEB_UI_BIND_HOST")
+            or DEFAULT_BLUEPRINT_WEB_UI_BIND_HOST
+        )
+    )
+    return ["-p", f"{bind_host}:{start}-{end}:{start}-{end}"]
 
 def _running_network_token(container_names: tuple[str, ...] = ()) -> Optional[str]:
     for container_name in container_names:
@@ -2749,6 +2795,51 @@ def _print_network_seed_ready(
             details=details,
             next_steps=f"mn node add {host} --token {token}{network_args}",
         )
+
+def _print_runtime_join_ready(
+    env: dict[str, str],
+    *,
+    host: Optional[str],
+    grpc_port: int,
+    token: Optional[str] = None,
+    already_running: bool = False,
+) -> None:
+    """Print the credential that another Core must use to federate this node."""
+
+    container_names = (LOCAL_CORE_CONTAINER,)
+    join_token = token or _running_network_token(container_names)
+    if not join_token:
+        print_warning(
+            console,
+            "Runtime started, but its persisted federation join token could not be read. "
+            "Run 'mn node refresh-token', restart the runtime, and try again.",
+        )
+        return
+
+    advertised_host = (
+        str(env.get("MN_NETWORK_ADVERTISE_HOST") or "").strip()
+        or _running_network_host(host, container_names)
+    )
+    advertised_port = _parse_port(
+        env.get("MN_GRPC_ADVERTISE_PORT") or env.get("MN_GRPC_PORT"),
+        grpc_port,
+    )
+    node_name = str(env.get("MN_NODE_NAME") or "").strip() or _network_node_name(
+        advertised_host
+    )
+    printer = print_confirmed if already_running else print_success_confirmation
+    printer(
+        console,
+        "Runtime node ready",
+        status="already running" if already_running else "running",
+        details=(
+            ("Host", advertised_host),
+            ("gRPC", f"{advertised_host}:{advertised_port}"),
+            ("Node", node_name),
+            ("Token", join_token),
+        ),
+        next_steps=f"mn node add {advertised_host} --token {join_token} --grpc-port {advertised_port}",
+    )
 
 def _return_running_network_seed(
     host: Optional[str],
@@ -2948,7 +3039,7 @@ def _start_network_seed(
         docker_network_name=network_name,
         node_alias=node_alias,
         node_name=node_name,
-        cluster_nodes=node_name,
+        cluster_nodes="",
         grpc_port=grpc_port,
         epmd_port=epmd_port,
         dist_port=dist_port,
@@ -3007,7 +3098,7 @@ def _join_network(
     docker_network_name: Optional[str] = None,
     action: str = "Node join",
 ) -> dict:
-    from mn_sdk import Client
+    from mn_sdk import join_federated_node
 
     target = f"{seed_host}:{grpc_port}"
     local_host = (host or _detect_lan_ip()).strip()
@@ -3021,58 +3112,40 @@ def _join_network(
         _ensure_network_docker_network(requested_mode, network_name)
         if _docker_network_uses_internal_identity(requested_mode):
             local_node_name = _docker_node_name(_resolve_node_alias(env))
-    _ensure_local_cluster_runtime_for_join(
-        local_host=local_host,
-        node_name=local_node_name,
-        docker_network_mode=requested_mode,
-        docker_network_name=network_name,
-    )
-    try:
-        handshake = Client(target=target, auth_token="", timeout=10).network_handshake(
-            token,
+    from mn_cli.shared import client as local_client
+
+    # A running Core is authoritative. Joining must not recreate it merely to
+    # manufacture legacy BEAM/Compose settings; that could interrupt jobs and
+    # erase the standalone-store boundary federation is intended to preserve.
+    running_node_name = _running_core_node_name(local_client)
+    if not running_node_name:
+        _ensure_local_cluster_runtime_for_join(
+            local_host=local_host,
             node_name=local_node_name,
-            node_info=_handshake_node_info(
-                local_host,
-                node_name=local_node_name,
-                grpc_port=env.get("MN_GRPC_PORT"),
-            ),
+            docker_network_mode=requested_mode,
+            docker_network_name=network_name,
+        )
+    print_info(console, f"Establishing federated peer relationship with {target}…")
+    try:
+        joined = join_federated_node(
+            local_client,
+            host=seed_host,
+            token=token,
+            grpc_ports=(grpc_port,),
+            local_host=_running_core_advertised_host(local_client) or local_host,
         )
     except Exception as exc:
+        if getattr(exc, "code", None):
+            raise
         _raise_join_handshake_error(exc, target)
-    _connect_syncthing_peers(
-        _syncthing_node_info(env, local_host),
-        _syncthing_info_from_handshake(handshake),
-    )
-    remote_node = handshake.get("node_name") or _network_node_name(seed_host)
-    redis_host, redis_port, redis_url = _validate_remote_redis_details(handshake, seed_host, token)
-    from mn_cli.shared import client as local_client
-    _require_shared_coordination_store(local_client, handshake, remote_node)
 
-    print_info(console, f"Adding MirrorNeuron network node {remote_node} from {target}…")
-    if _docker_network_uses_internal_identity(requested_mode):
-        print_info(console, "Received Docker-internal cluster wiring from the remote node.")
-    else:
-        print_info(console, f"Remote Redis is advertised at {redis_host}:{redis_port}.")
-    try:
-        status = local_client.add_node(remote_node, token=token)
-    except TypeError:
-        status = local_client.add_node(remote_node)
-    except Exception as exc:
-        from mn_sdk.errors import AppError
+    remote_node = str(joined.get("node_name") or _network_node_name(seed_host))
+    peer = joined.get("peer") if isinstance(joined.get("peer"), dict) else {}
+    remote_syncthing = peer.get("syncthing") if isinstance(peer.get("syncthing"), dict) else {}
+    _connect_syncthing_peers(_syncthing_node_info(env, local_host), remote_syncthing)
 
-        raise AppError(
-            "MN_EXECUTION_FAILED",
-            f"Could not add {remote_node} to the local cluster.",
-            internal_message=str(exc),
-            hint="Check that the local MirrorNeuron core is running, and that the remote host and token are correct.",
-            exit_code=1,
-            http_status=500,
-            cause=exc,
-        ) from exc
-    status = _confirm_joined_node(local_client, remote_node, token, status)
-    if runtime_compose_available():
-        _persist_compose_cluster_node(remote_node)
     details: list[tuple[str, str]] = [("Node", remote_node)]
+    details.append(("Mode", "federated"))
     model_reconcile = _reconcile_cluster_models_after_membership_change()
     if model_reconcile and model_reconcile.get("nodes"):
         details.append(
@@ -3082,87 +3155,40 @@ def _join_network(
                 f"{len(model_reconcile.get('nodes') or [])} nodes",
             )
         )
-    if not _docker_network_uses_internal_identity(requested_mode):
-        details.insert(1, ("Remote Redis", f"{redis_host}:{redis_port}"))
-        details.append(("Remote Redis URL", redis_url))
     print_success_confirmation(
         console,
         action,
-        status=status,
+        status="federated",
         details=details,
         next_steps=("mn node list", "mn resource show", "mn model list"),
     )
-    return handshake
+    return joined
 
 
-def _require_shared_coordination_store(
-    local_client: Any,
-    handshake: dict[str, Any],
-    remote_node: str,
-) -> None:
+def _running_core_node_name(client: Any) -> str:
+    node = _running_core_self_node(client)
+    return str(node.get("name") or node.get("node") or "").strip()
+
+
+def _running_core_advertised_host(client: Any) -> str:
+    node = _running_core_self_node(client)
+    return str(node.get("grpc_host") or "").strip()
+
+
+def _running_core_self_node(client: Any) -> dict[str, Any]:
     try:
-        summary = json.loads(local_client.get_system_summary())
-    except Exception as exc:
-        from mn_sdk.errors import AppError
-
-        raise AppError(
-            "MN_EXECUTION_FAILED",
-            "Could not verify the local coordination store before joining the node.",
-            internal_message=str(exc),
-            hint="Run mn doctor runtime and retry after the local Core is healthy.",
-            exit_code=1,
-            http_status=500,
-            cause=exc,
-        ) from exc
-
-    local_nodes = [
-        node
-        for node in (summary.get("nodes") or [])
-        if isinstance(node, dict)
-        and (node.get("self") is True or node.get("self?") is True)
-    ]
-    if not local_nodes and len(summary.get("nodes") or []) == 1:
-        local_nodes = list(summary["nodes"])
-    local_store = next(
-        (
-            node.get("coordination_store")
-            for node in local_nodes
-            if isinstance(node, dict)
-            and isinstance(node.get("coordination_store"), dict)
-            and node["coordination_store"].get("healthy") is True
-        ),
-        None,
+        payload = client.get_system_summary()
+        summary = json.loads(payload) if isinstance(payload, str) else payload
+    except Exception:
+        return {}
+    if not isinstance(summary, dict):
+        return {}
+    nodes = [node for node in summary.get("nodes") or [] if isinstance(node, dict)]
+    node = next(
+        (item for item in nodes if item.get("self") is True or item.get("self?") is True),
+        nodes[0] if len(nodes) == 1 else {},
     )
-    node_info = handshake.get("node_info")
-    remote_store = (
-        node_info.get("coordination_store")
-        if isinstance(node_info, dict)
-        and isinstance(node_info.get("coordination_store"), dict)
-        else None
-    )
-    local_identity = str((local_store or {}).get("identity") or "").strip()
-    remote_identity = str((remote_store or {}).get("identity") or "").strip()
-    remote_writable = (remote_store or {}).get("writable_primary") is True
-    if (
-        local_identity
-        and remote_identity == local_identity
-        and remote_writable
-    ):
-        return
-
-    from mn_sdk.errors import AppError
-
-    raise AppError(
-        "MN_EXECUTION_FAILED",
-        f"Node {remote_node} is using a different or read-only coordination store.",
-        internal_message="coordination_store_mismatch",
-        hint=(
-            "Restart the joining Core with the primary node's MN_REDIS_URL, "
-            "or the same Sentinel configuration, before adding it to the cluster."
-        ),
-        exit_code=1,
-        http_status=409,
-    )
+    return node
 
 
 def _reconcile_cluster_models_after_membership_change() -> dict[str, Any] | None:
@@ -3174,65 +3200,6 @@ def _reconcile_cluster_models_after_membership_change() -> dict[str, Any] | None
         print_warning(console, f"Cluster joined, but model route reconciliation failed: {exc}")
         return None
 
-
-def _confirm_joined_node(
-    local_client: Any,
-    remote_node: str,
-    token: str,
-    status: str,
-    *,
-    attempts: int = 4,
-    sleep_fn: Callable[[float], None] = time.sleep,
-) -> str:
-    for attempt in range(max(1, attempts)):
-        if _summary_has_active_node(local_client, remote_node):
-            return status
-        if attempt >= attempts - 1:
-            break
-        sleep_fn(0.75)
-        try:
-            status = local_client.add_node(remote_node, token=token)
-        except TypeError:
-            status = local_client.add_node(remote_node)
-
-    from mn_sdk.errors import AppError
-
-    raise AppError(
-        "MN_EXECUTION_FAILED",
-        f"Could not confirm {remote_node} joined the local cluster.",
-        hint="Run 'mn node list' and retry the join if the worker is still not visible as healthy.",
-        exit_code=1,
-        http_status=500,
-    )
-
-
-def _summary_has_active_node(local_client: Any, remote_node: str) -> bool:
-    try:
-        summary = json.loads(local_client.get_system_summary())
-    except Exception:
-        return False
-
-    for node in summary.get("nodes") or []:
-        if not isinstance(node, dict) or node.get("name") != remote_node:
-            continue
-        status = str(node.get("status") or "").strip().lower()
-        return (
-            status in {"healthy", "joining"}
-            and node.get("scheduling_eligible") is not False
-            and node.get("operator_disconnect") is not True
-        )
-    return False
-
-def _persist_compose_cluster_node(node_name: str) -> None:
-    node_name = str(node_name or "").strip()
-    if not node_name:
-        return
-
-    env = _read_env_file(RUNTIME_COMPOSE_ENV)
-    nodes = _split_env_list(env.get("MN_CLUSTER_NODES"))
-    if node_name not in nodes:
-        nodes.append(node_name)
-        _write_env_file_values(RUNTIME_COMPOSE_ENV, {"MN_CLUSTER_NODES": ",".join(nodes)})
 
 def _persist_join_owner_metadata(
     *,
@@ -3367,11 +3334,12 @@ def _ensure_local_cluster_runtime_for_join(
         not _node_name_unset(existing_node_name)
         and existing_node_name == node_name
         and existing_advertise_host == local_host
+        and not str(env.get("MN_CLUSTER_NODES") or "").strip()
     ):
         return
 
     primary_token = _resolve_network_token()
-    print_info(console, f"Enabling cluster mode for this primary node as {node_name}…")
+    print_info(console, f"Enabling federation for this local Core as {node_name}…")
     env = _ensure_runtime_grpc_tokens(env, persist_compose=True)
     env = _ensure_compose_native_port_settings(env)
     env = _ensure_compose_cluster_bind_settings(env, local_host)
@@ -3384,7 +3352,7 @@ def _ensure_local_cluster_runtime_for_join(
     env["MN_NETWORK_ADVERTISE_HOST"] = local_host
     env["MN_NODE_NAME"] = node_name
     env["MN_MODEL_SERVICE_NODE_NAME"] = node_name
-    env["MN_CLUSTER_NODES"] = node_name
+    env["MN_CLUSTER_NODES"] = ""
     env["MN_NODE_ROLE"] = env.get("MN_NODE_ROLE") or "runtime"
     env["MN_DIST_PORT"] = str(env.get("MN_DIST_PORT") or DEFAULT_DIST_PORT)
     env["MN_COOKIE"] = _derive_network_secret(primary_token, "cookie")
@@ -6137,6 +6105,12 @@ def _start_server(
         print_info(console, f"Runtime endpoints: {RUNTIME_ENDPOINTS_FILE}")
         logger.info("Refreshed MirrorNeuron runtime endpoints: %s", endpoint_snapshot.get("api", {}))
         _print_service_endpoints(None, web_ui_available)
+        _print_runtime_join_ready(
+            env,
+            host=host,
+            grpc_port=grpc_port,
+            already_running=True,
+        )
         return
 
     compose_runtime = runtime_compose_available()
@@ -6155,7 +6129,7 @@ def _start_server(
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     if ip and not token:
-        print_error(console, "Worker registration requires the token printed by 'mn runtime start --worker'.")
+        print_error(console, "Federation registration requires the token printed by 'mn runtime start'.")
         raise typer.Exit(1)
 
     network_token = token or _resolve_network_token()
@@ -6491,6 +6465,13 @@ def _start_server(
         logger.info("Wrote MirrorNeuron runtime endpoints: %s", endpoint_snapshot.get("api", {}))
 
     _print_service_endpoints(ip, web_ui_available)
+    if not ip:
+        _print_runtime_join_ready(
+            env,
+            host=advertised_host,
+            grpc_port=grpc_port,
+            token=network_token,
+        )
 
 def _prepare_running_compose_exposure(
     env: dict[str, str],

@@ -42,6 +42,12 @@ Obsolete deployment, global-schedule, event, backup, inline-job, and
 `stable-job` command groups are not registered. The root diagnostic flag is
 `--debug`; `--verbose` is not registered.
 
+`mn runtime start` has one federation-capable mode. It starts an independent
+Core with its own writable coordination store and prints the advertised host,
+gRPC endpoint, node identity, active federation join token, and an exact
+`mn node add` command. The former `--worker` option is removed and must fail as
+a usage error with a migration hint to use `mn runtime start`.
+
 `mn blueprint run --web-ui-host HOST --web-ui-port PORT` projects per-run
 listener overrides into `web_ui.service.host` and `web_ui.service.port`.
 Blueprint manifest/config bindings remain responsible for mapping those
@@ -99,7 +105,10 @@ those contracts.
 - Values from manifests, catalogs, the filesystem, environment, SDK, gRPC, and
   subprocesses are untrusted and must be validated or safely rendered.
 - Secrets, bearer tokens, passwords, and unredacted environment values must not
-  be printed or logged.
+  be printed or logged, except that a successful `mn runtime start`
+  intentionally displays its active federation join token and exact add-node
+  command to the invoking operator. Structured diagnostics and unrelated
+  commands continue to redact that credential.
 - Unit tests use fakes and temporary paths; normal tests do not mutate the real
   `~/.mn`, start services, or access the network.
 - Durable-job archive retains shared data. Job-data reset, terminal-run delete,

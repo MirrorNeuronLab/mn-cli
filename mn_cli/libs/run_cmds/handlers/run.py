@@ -512,6 +512,7 @@ def run_bundle(
                     payloads,
                     job_id=stable_job_id,
                     resolved_configuration=config_overrides,
+                    owner_node=str(env_overrides.get("MN_SELECTED_RUNTIME_NODE") or ""),
                 )
             )
             stable_job_id = str(created["job_id"])

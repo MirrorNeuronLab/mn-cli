@@ -322,7 +322,7 @@ def test_run_defers_injected_cluster_model_selection_preparation_and_gateway(
     submitted_manifest = json.loads(submit.call_args.args[0])
     assistant = submitted_manifest["agents"]["nodes"][0]
     assert assistant["config"]["environment"]["MN_LLM_MODEL"] == "default"
-    assert assistant["config"]["environment"]["MN_LLM_API_BASE"] == "auto"
+    assert assistant["config"]["environment"]["MN_LLM_API_BASE"] == "http://127.0.0.1:4000/v1"
     assert assistant["config"]["environment"]["MN_RUNTIME_MODEL_MANAGED"] == "1"
 
 def test_run_auto_schedule_creates_resource_wait_schedule(mocker, tmp_path, monkeypatch):

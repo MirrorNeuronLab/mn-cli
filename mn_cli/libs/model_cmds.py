@@ -117,7 +117,6 @@ model_app = typer.Typer(
 REMOTE_DMR_SOURCE = "remote-dmr"
 REMOTE_LITELLM_GATEWAY_SOURCE = "remote_litellm_gateway"
 CLUSTER_REMOTE_MODEL_SOURCES = {
-    REMOTE_DMR_SOURCE,
     REMOTE_LITELLM_GATEWAY_SOURCE,
 }
 
@@ -361,7 +360,7 @@ def add_model(
                 ("Docker model", target),
                 ("Backend", compatibility.get("backend")),
                 ("Node", payload["node"]),
-                ("Route", "remote-dmr" if selected_node else "local-litellm-gateway"),
+                ("Route", "remote-litellm-gateway" if selected_node else "local-litellm-gateway"),
                 ("Default", "yes" if default else "no"),
             ],
             next_steps=f"mn model doctor {entry.get('id')}",
@@ -1558,7 +1557,7 @@ def _cluster_node_native_sdk_endpoint(node_name: str, node: dict[str, Any]) -> d
     if not native:
         raise RuntimeError(
             f"cluster node {node_name} does not advertise native SDK gRPC; "
-            "restart that worker with an updated `mn runtime start --worker`"
+            "restart that node with an updated `mn runtime start`"
         )
     if native.get("enabled") is False:
         raise RuntimeError(f"cluster node {node_name} advertises native SDK gRPC as disabled")
@@ -2342,7 +2341,7 @@ def _remote_installations_for_model(
                 "model": runtime_model,
                 "api_model": remote.get("api_model") or runtime_model,
                 "api_base": base_url,
-                "route_source": REMOTE_DMR_SOURCE if node else "manual-remote",
+                "route_source": REMOTE_LITELLM_GATEWAY_SOURCE if node else "manual-remote",
             }
         )
     return sorted(

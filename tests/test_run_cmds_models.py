@@ -369,9 +369,9 @@ def test_selected_workflow_node_controls_model_placement_and_gateway_sync(mocker
                     "model": "docker.io/ai/gemma4:E2B",
                     "runtime_model": "docker.io/ai/gemma4:E2B",
                     "api_model": "docker.io/ai/gemma4:E2B",
-                    "api_base": "http://spark:12434/engines/v1",
+                    "api_base": "http://spark:4000/v1",
                     "node": "mirror_neuron@spark",
-                    "source": "remote-dmr",
+                    "source": "remote_litellm_gateway",
                 }
             }
         },
@@ -381,7 +381,7 @@ def test_selected_workflow_node_controls_model_placement_and_gateway_sync(mocker
     assert endpoints["gemma4:e2b"]["api_base"] == "http://mn-litellm-proxy:4000/v1"
     remotes = load_model_remotes()["remotes"]
     assert len(remotes) == 1
-    assert next(iter(remotes.values()))["base_url"] == "http://spark:12434/engines/v1"
+    assert next(iter(remotes.values()))["base_url"] == "http://spark:4000/v1"
 
 
 def test_prepare_runtime_models_installs_missing_model_for_run(

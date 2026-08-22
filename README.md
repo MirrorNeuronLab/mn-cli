@@ -19,9 +19,18 @@ Try the CLI:
 
 ```bash
 mn --version
+mn runtime start
 mn node list
 mn blueprint run message_routing_trace
 ```
+
+`mn runtime start` starts a normal, federation-capable Core. There is no
+separate worker mode: every Core owns its Redis state, can own jobs, and runs
+all agents for those jobs locally. The successful start output includes the
+advertised host, gRPC port, node identity, a join token, and the exact
+`mn node add` command to run from another Core. Treat the displayed token as a
+credential, keep terminal output private, and use `mn node refresh-token` when
+it must be rotated.
 
 Static HTML exports use the optional `mirrorneuron-web-ui-skill` package. With
 the MirrorNeuron GAR package index configured, install it with:

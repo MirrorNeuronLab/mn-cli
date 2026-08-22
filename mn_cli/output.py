@@ -45,7 +45,7 @@ REMOVED_COMMANDS: dict[tuple[str, ...], str] = {
     ("runtime", "health"): "mn runtime status (or mn runtime doctor for diagnostics)",
     ("runtime", "metrics"): "mn resource usage",
     ("node", "join"): "mn node add HOST --token TOKEN",
-    ("node", "expose"): "mn runtime start --worker",
+    ("node", "expose"): "mn runtime start",
     ("node", "leave"): "mn node remove",
     ("operation", "status"): "mn operation show",
     ("resource", "list"): "mn resource show",
@@ -58,10 +58,11 @@ REMOVED_COMMANDS: dict[tuple[str, ...], str] = {
 }
 REMOVED_OPTIONS: dict[str, str] = {
     "--verbose": "use '--debug' instead",
-    "--worker-node": "use 'mn runtime start --worker' instead",
+    "--worker": "all runtimes are federation-capable; use 'mn runtime start' instead",
+    "--worker-node": "use 'mn runtime start' instead",
     "--join-host": (
-        "run 'mn runtime start --worker' on the worker, then "
-        "'mn node add HOST --token TOKEN' on the primary"
+        "run 'mn runtime start' on the remote node, then "
+        "'mn node add HOST --token TOKEN' on the local node"
     ),
 }
 

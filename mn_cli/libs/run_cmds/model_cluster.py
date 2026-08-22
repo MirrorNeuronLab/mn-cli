@@ -6,6 +6,7 @@ from mn_sdk.workflow_placement import (
     workflow_placement_mode,
     workflow_requires_single_node,
 )
+from mn_sdk.federation import owner_node_eligible
 
 
 _WORKFLOW_PLACEMENT_NODE: ContextVar[str] = ContextVar(
@@ -152,7 +153,7 @@ def _cluster_node_native_sdk_endpoint(
     if not native:
         raise RuntimeError(
             f"cluster node {node_name} does not advertise native SDK gRPC; "
-            "restart that worker with an updated `mn runtime start --worker` "
+            "restart that node with an updated `mn runtime start` "
             "so runtime model preparation can run outside Core"
         )
     if native.get("enabled") is False:
@@ -845,11 +846,17 @@ def _workflow_node_rejections(
     explicit_node: str,
 ) -> list[str]:
     reasons: list[str] = []
+    federated_owner = owner_node_eligible(resource, system)
+    is_federated = any(
+        facts.get("connection_mode") == "federated" for facts in (resource, system)
+    )
     for source, facts in (("resource", resource), ("system", system)):
         status = str(facts.get("status") or "healthy").strip().lower()
         if status not in {"healthy", "joining"}:
             reasons.append(f"{source}_status={status}")
-        if facts.get("scheduling_eligible") is False:
+        if facts.get("scheduling_eligible") is False and not (
+            is_federated and federated_owner
+        ):
             reasons.append(f"{source}_scheduling_ineligible")
         if _workflow_truthy(facts.get("drain")):
             reasons.append(f"{source}_draining")

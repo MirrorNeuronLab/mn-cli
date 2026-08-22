@@ -689,9 +689,12 @@ def _doctor_prepare_python_env_from_content(
     timeout: float,
     local_source_roots: list[Path] | None = None,
     local_source_versions: dict[str, str] | None = None,
+    force_local_core: bool = False,
 ) -> Path:
-
-    core_container = _doctor_running_core_container(timeout)
+    core_container = _doctor_running_core_container(
+        timeout,
+        allow_remote_target=force_local_core,
+    )
     runtime_python = ["docker", "exec", core_container, "python3"] if core_container else [sys.executable]
     version = subprocess.run(
         [*runtime_python, "--version"],
@@ -701,6 +704,10 @@ def _doctor_prepare_python_env_from_content(
     )
     if version.returncode != 0:
         raise RuntimeError((version.stdout + version.stderr).strip() or "python --version failed")
+    packages, local_source_versions = _doctor_rebase_missing_local_sources(
+        packages,
+        local_source_versions=local_source_versions,
+    )
     local_sources_by_argument = {
         package: source
         for package in packages
@@ -862,6 +869,69 @@ def _doctor_prepare_python_env_from_content(
     return env_dir
 
 
+def _doctor_rebase_missing_local_sources(
+    packages: list[str],
+    *,
+    local_source_versions: dict[str, str] | None,
+) -> tuple[list[str], dict[str, str] | None]:
+    """Rebase development dependency paths when preparation runs on another node.
+
+    Submission preparation localizes editable skill and agent dependencies so a
+    source checkout can be installed instead of a package-index release.  The
+    source path in that manifest belongs to the submitting machine, however.
+    A native runtime node with the same MN checkout has a different absolute
+    path (for example macOS ``/Users/...`` versus Linux ``/home/...``).
+
+    Only rebase an unavailable path to a verified source directory inside the
+    local MN checkout.  All other requirements remain untouched and pip keeps
+    its normal validation/error behavior.
+    """
+
+    versions = dict(local_source_versions or {})
+    rebased: list[str] = []
+    for package in packages:
+        replacement = _doctor_rebase_missing_local_source(package)
+        rebased.append(replacement)
+        if replacement != package and package in versions:
+            versions[replacement] = versions[package]
+    return rebased, versions or None
+
+
+def _doctor_rebase_missing_local_source(package: str) -> str:
+    candidate = Path(package).expanduser()
+    if not candidate.is_absolute() or candidate.exists():
+        return package
+
+    parts = candidate.parts
+    source_roots = _doctor_source_checkout_roots()
+    for segment in ("mn-skills", "mn-agents", "mn-python-sdk", "mn-cli", "mn-api"):
+        try:
+            index = parts.index(segment)
+        except ValueError:
+            continue
+        relative = Path(*parts[index:])
+        for root in source_roots:
+            replacement = root / relative
+            if replacement.is_dir() and replacement.joinpath("pyproject.toml").is_file():
+                return str(replacement)
+            if replacement.is_file() and replacement.suffix == ".whl":
+                return str(replacement)
+    return package
+
+
+def _doctor_source_checkout_roots() -> list[Path]:
+    """Find the MN monorepo containing this CLI installation, if any."""
+
+    roots: list[Path] = []
+    for parent in Path(__file__).resolve().parents:
+        if (
+            parent.joinpath("mn-cli", "mn_cli").is_dir()
+            and parent.joinpath("mn-python-sdk", "mn_sdk").is_dir()
+        ):
+            roots.append(parent)
+    return list(dict.fromkeys(roots))
+
+
 def _doctor_local_source_version(value: Any) -> str:
     version = str(value or "").strip()
     return version if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+!-]*", version) else ""
@@ -1007,11 +1077,18 @@ def _doctor_remove_shared_cache_path(
         )
 
 
-def _doctor_running_core_container(timeout: float) -> str:
+def _doctor_running_core_container(
+    timeout: float,
+    *,
+    allow_remote_target: bool = False,
+) -> str:
     target = str(RuntimeConfig.from_env().grpc_target or "").strip().lower()
     if target.startswith("dns:///"):
         target = target.removeprefix("dns:///")
-    if target not in {"localhost:55051", "127.0.0.1:55051", "[::1]:55051"}:
+    if (
+        not allow_remote_target
+        and target not in {"localhost:55051", "127.0.0.1:55051", "[::1]:55051"}
+    ):
         return ""
     return running_core_container(timeout_seconds=max(timeout, 1.0)) or ""
 

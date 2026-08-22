@@ -27,6 +27,7 @@ from mn_cli.libs.workflow_progress import (
     _agent_progress_detail,
 )
 from mn_cli.main import app
+from mn_cli.runtime import server as runtime_server
 
 runner = CliRunner()
 
@@ -563,6 +564,70 @@ def test_doctor_resolves_bundle_payload_source_and_wheel_from_explicit_roots(
         str(wheel),
         extra_roots=[bundle_root],
     ) == wheel
+
+
+def test_doctor_rebases_missing_monorepo_local_source_for_remote_runtime(
+    tmp_path,
+    mocker,
+):
+    remote_checkout = tmp_path / "mirror-neuron-set"
+    remote_source = remote_checkout / "mn-skills" / "web-ui-skill"
+    remote_source.mkdir(parents=True)
+    remote_source.joinpath("pyproject.toml").write_text(
+        "[project]\nname='web-ui-skill'\nversion='1.0.0'\n",
+        encoding="utf-8",
+    )
+    submitter_source = "/Users/homer/Projects/mirror-neuron-set/mn-skills/web-ui-skill"
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor._doctor_source_checkout_roots",
+        return_value=[remote_checkout],
+    )
+
+    packages, versions = run_cmds._doctor_rebase_missing_local_sources(
+        [submitter_source, "requests==2.32.0"],
+        local_source_versions={submitter_source: "1.2.31"},
+    )
+
+    assert packages == [str(remote_source), "requests==2.32.0"]
+    assert versions == {
+        submitter_source: "1.2.31",
+        str(remote_source): "1.2.31",
+    }
+
+
+def test_doctor_finds_local_core_for_remote_native_hostlocal_prepare(
+    monkeypatch,
+    mocker,
+):
+    monkeypatch.setenv("MN_GRPC_TARGET", "10.0.4.23:55051")
+    container = mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor.running_core_container",
+        return_value="mirror-neuron-network-core",
+    )
+
+    assert run_cmds._doctor_running_core_container(1) == ""
+    assert (
+        run_cmds._doctor_running_core_container(1, allow_remote_target=True)
+        == "mirror-neuron-network-core"
+    )
+    container.assert_called_once_with(timeout_seconds=1.0)
+
+
+def test_network_worker_publishes_preallocated_blueprint_ui_ports():
+    assert runtime_server._network_blueprint_web_ui_port_args(
+        {
+            "MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE": "prepublished",
+            "MN_BLUEPRINT_WEB_UI_PORT_START": "61000",
+            "MN_BLUEPRINT_WEB_UI_PORT_END": "61049",
+            "MN_BLUEPRINT_WEB_UI_BIND_HOST": "0.0.0.0",
+        }
+    ) == ["-p", "0.0.0.0:61000-61049:61000-61049"]
+
+
+def test_network_worker_does_not_publish_ui_range_in_dynamic_mode():
+    assert runtime_server._network_blueprint_web_ui_port_args(
+        {"MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE": "dynamic"}
+    ) == []
 
 
 def test_doctor_removes_partial_core_owned_python_environment_in_core(

@@ -226,7 +226,8 @@ def test_verbose_root_alias_is_removed():
 @pytest.mark.parametrize(
     "option,replacement",
     [
-        ("--worker-node", "mn runtime start --worker"),
+        ("--worker", "mn runtime start"),
+        ("--worker-node", "mn runtime start"),
         ("--join-host", "mn node add HOST --token TOKEN"),
     ],
 )
@@ -237,6 +238,14 @@ def test_removed_runtime_start_options_have_actionable_json_errors(option, repla
     payload = json.loads(result.stdout)
     assert payload["error"]["code"] == "MN_USAGE_ERROR"
     assert replacement in payload["error"]["message"]
+
+
+def test_runtime_start_has_one_federation_capable_mode():
+    result = runner.invoke(app, ["runtime", "start", "--help"])
+
+    assert result.exit_code == 0
+    assert "--host" in result.stdout
+    assert "--worker" not in result.stdout
 
 
 def test_streaming_json_uses_ndjson_records():

@@ -28,9 +28,11 @@ def create(
     config: str | None = typer.Option(
         None, "--config", help="Resolved configuration JSON file."
     ),
+    node: str | None = typer.Option(None, "--node", help="Core that will own and execute this job."),
 ):
     """Create a durable job definition without starting a run."""
     try:
+        owner_node = node.strip() if isinstance(node, str) else ""
         manifest_json, payloads = read_bundle(bundle)
         resolved = _read_json_object(config) if config else {}
         bundle_path = Path(bundle).expanduser().resolve()
@@ -57,6 +59,7 @@ def create(
                 prepared.payloads,
                 job_id=job_id or "",
                 resolved_configuration=resolved,
+                owner_node=owner_node,
             )
         )
         print_success_confirmation(

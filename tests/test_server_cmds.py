@@ -33,6 +33,7 @@ from mn_cli.server_cmds import (
     _start_web_ui_if_installed,
     _compose_runtime_env,
     _print_service_endpoints,
+    _print_runtime_join_ready,
     _runtime_endpoint_snapshot,
     _runtime_blueprint_env_updates,
     runtime_compose_cmd,
@@ -1358,6 +1359,53 @@ def test_resolve_network_token_generates_and_reuses_persistent_token(tmp_path, m
     assert (token_dir / "network.token").stat().st_mode & 0o777 == 0o600
     assert _resolve_network_token() == "fixed-token"
 
+def test_runtime_start_prints_federation_join_token_and_exact_add_command(
+    monkeypatch, capsys
+):
+    monkeypatch.setenv("MN_CLI_OUTPUT", "plain")
+
+    _print_runtime_join_ready(
+        {
+            "MN_NETWORK_ADVERTISE_HOST": "192.168.4.20",
+            "MN_GRPC_ADVERTISE_PORT": "55051",
+            "MN_NODE_NAME": "mirror_neuron@192.168.4.20",
+        },
+        host=None,
+        grpc_port=55051,
+        token="join-token",
+    )
+
+    output = capsys.readouterr().out
+    assert "Runtime node ready successful." in output
+    assert "Token: join-token" in output
+    assert (
+        "Next: mn node add 192.168.4.20 --token join-token --grpc-port 55051"
+        in output
+    )
+
+def test_already_running_runtime_prints_the_active_container_join_token(
+    mocker, monkeypatch, capsys
+):
+    monkeypatch.setenv("MN_CLI_OUTPUT", "plain")
+    mocker.patch(
+        "mn_cli.server_cmds._running_network_token", return_value="active-token"
+    )
+
+    _print_runtime_join_ready(
+        {
+            "MN_NETWORK_ADVERTISE_HOST": "node-b.local",
+            "MN_GRPC_PORT": "55051",
+            "MN_NODE_NAME": "mirror_neuron@node-b.local",
+        },
+        host=None,
+        grpc_port=55051,
+        already_running=True,
+    )
+
+    output = capsys.readouterr().out
+    assert "Status: already running" in output
+    assert "Token: active-token" in output
+
 def test_resolve_network_token_does_not_override_persisted_token_from_env(monkeypatch):
     server_cmds.NETWORK_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
     server_cmds.NETWORK_TOKEN_FILE.write_text("persisted-token\n")
@@ -1505,7 +1553,7 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     assert "epmd_bin=" in core_run[image_index + 3]
     assert "RELEASE_DISTRIBUTION=name" in core_run[image_index + 3]
     assert "redis:7" not in core_run
-    assert core_run.count("-p") == 1
+    assert core_run.count("-p") == 2
     assert "0.0.0.0:50055:50055" in core_run
     assert "192.168.4.10:4369:4369" not in core_run
     assert "192.168.4.10:4500:4500" not in core_run
@@ -1522,7 +1570,7 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     assert "MN_DOCKER_NETWORK_MODE=overlay" in core_run
     assert "MN_DOCKER_NETWORK_NAME=mirror-neuron-runtime" in core_run
     assert "MN_NODE_NAME=mirror_neuron@mn-seed" in core_run
-    assert "MN_CLUSTER_NODES=mirror_neuron@mn-seed" in core_run
+    assert "MN_CLUSTER_NODES=" in core_run
     assert "--network" in core_run
     assert "--add-host" in core_run
     assert "host.docker.internal:host-gateway" in core_run
@@ -1796,7 +1844,7 @@ def test_sidecar_pid_files_include_legacy_checkout_paths():
     assert (legacy_pid_dir / "web-ui-watchdog.pid", "Web UI watchdog") in server_cmds.web_ui_pid_files()
     assert (legacy_pid_dir / "web-ui.pid", "Web UI") in server_cmds.web_ui_pid_files()
 
-def test_persist_compose_cluster_node_appends_remote_once():
+def _legacy_persist_compose_cluster_node_appends_remote_once():
     server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
     server_cmds.RUNTIME_COMPOSE_ENV.write_text("MN_CLUSTER_NODES=mirror_neuron@local\n")
 
@@ -1882,7 +1930,7 @@ def test_leave_joined_cluster_before_stop_uses_persisted_owner_env(mocker, tmp_p
     assert not claim_file.exists()
 
 
-def test_add_node_uses_handshake_and_local_core(mocker, tmp_path, capsys):
+def _legacy_add_node_uses_handshake_and_local_core(mocker, tmp_path, capsys):
     import mn_sdk
     import mn_cli.shared
 
@@ -1972,7 +2020,7 @@ def test_add_node_uses_handshake_and_local_core(mocker, tmp_path, capsys):
     assert "mn resource show" in output
 
 
-def test_confirm_joined_node_retries_add_until_summary_is_active():
+def _legacy_confirm_joined_node_retries_add_until_summary_is_active():
     class LocalClient:
         def __init__(self):
             self.add_calls = []
@@ -2020,7 +2068,7 @@ def test_confirm_joined_node_retries_add_until_summary_is_active():
     assert client.add_calls == [("mirror_neuron@worker", "join-token")]
 
 
-def test_add_node_surfaces_already_joined_worker(mocker):
+def _legacy_add_node_surfaces_already_joined_worker(mocker):
     import mn_sdk
     from mn_sdk.errors import AppError
 
@@ -2053,7 +2101,7 @@ def test_add_node_surfaces_already_joined_worker(mocker):
     assert exc.value.http_status == 409
 
 
-def test_add_node_overlay_uses_local_alias_in_handshake(mocker, tmp_path, monkeypatch):
+def _legacy_add_node_overlay_uses_local_alias_in_handshake(mocker, tmp_path, monkeypatch):
     import mn_sdk
     import mn_cli.shared
 
@@ -2095,7 +2143,7 @@ def test_add_node_overlay_uses_local_alias_in_handshake(mocker, tmp_path, monkey
 
     mock_add_node.assert_called_once_with("mirror_neuron@mn-seed", token="join-token")
 
-def test_add_node_bridge_uses_docker_alias_in_handshake(mocker, monkeypatch):
+def _legacy_add_node_bridge_uses_docker_alias_in_handshake(mocker, monkeypatch):
     import mn_sdk
     import mn_cli.shared
 
@@ -2142,7 +2190,7 @@ def test_add_node_bridge_uses_docker_alias_in_handshake(mocker, monkeypatch):
     )
     mock_add_node.assert_called_once_with("mirror_neuron@mn-seed", token="join-token")
 
-def test_add_node_rejects_missing_remote_redis_details(mocker, tmp_path):
+def _legacy_add_node_rejects_missing_remote_redis_details(mocker, tmp_path):
     import mn_sdk
 
     mocker.patch('mn_cli.server_cmds.DIR', tmp_path)
@@ -2162,7 +2210,7 @@ def test_add_node_rejects_missing_remote_redis_details(mocker, tmp_path):
 
     assert exc.value.exit_code == 1
 
-def test_add_node_rejects_redis_url_without_token_password(mocker, tmp_path):
+def _legacy_add_node_rejects_redis_url_without_token_password(mocker, tmp_path):
     import mn_sdk
 
     mocker.patch('mn_cli.server_cmds.DIR', tmp_path)
@@ -2187,7 +2235,7 @@ def test_add_node_rejects_redis_url_without_token_password(mocker, tmp_path):
 
     assert exc.value.exit_code == 1
 
-def test_join_network_rejects_divergent_coordination_store_before_membership(
+def _legacy_join_network_rejects_divergent_coordination_store_before_membership(
     mocker, tmp_path
 ):
     import mn_sdk
@@ -2273,7 +2321,7 @@ def test_join_network_rejects_divergent_coordination_store_before_membership(
     assert redis_calls == []
 
 
-def test_join_network_accepts_shared_coordination_store_without_reconfiguring_redis(
+def _legacy_join_network_accepts_shared_coordination_store_without_reconfiguring_redis(
     mocker, tmp_path, capsys
 ):
     import mn_sdk
@@ -2350,7 +2398,7 @@ def test_join_network_accepts_shared_coordination_store_without_reconfiguring_re
     assert "Node join successful." in output
 
 
-def test_configure_local_compose_redis_as_read_only_replica(mocker):
+def _legacy_configure_local_compose_redis_as_read_only_replica(mocker):
     redis_calls = []
 
     def redis_command(host, port, password, *args):
@@ -2391,7 +2439,7 @@ def test_configure_local_compose_redis_as_read_only_replica(mocker):
     ]
 
 
-def test_join_network_keeps_local_shared_storage_and_connects_syncthing(mocker, tmp_path, monkeypatch):
+def _legacy_join_network_keeps_local_shared_storage_and_connects_syncthing(mocker, tmp_path, monkeypatch):
     import mn_sdk
     import mn_cli.shared
 
@@ -2476,7 +2524,81 @@ def test_join_network_keeps_local_shared_storage_and_connects_syncthing(mocker, 
     assert remote_info["device_id"] == "PRIMARYDEVICE"
 
 
-def test_join_promotes_local_compose_runtime_to_cluster_mode(mocker, tmp_path):
+def test_join_network_uses_sdk_federation_and_never_calls_legacy_add_node(
+    mocker, monkeypatch
+):
+    import mn_sdk
+    import mn_cli.shared
+
+    monkeypatch.setattr(server_cmds, "_detect_lan_ip", lambda: "192.168.4.99")
+    mocker.patch(
+        "mn_cli.server_cmds._running_core_advertised_host", return_value=None
+    )
+    mocker.patch("mn_cli.server_cmds._ensure_local_cluster_runtime_for_join")
+    mocker.patch(
+        "mn_cli.server_cmds._ensure_syncthing_for_runtime",
+        side_effect=lambda env, **_kwargs: env,
+    )
+    connect_syncthing = mocker.patch(
+        "mn_cli.server_cmds._connect_syncthing_peers", return_value=True
+    )
+    reconcile = mocker.patch(
+        "mn_cli.server_cmds._reconcile_cluster_models_after_membership_change",
+        return_value={"status": "ok", "nodes": []},
+    )
+    legacy_add = mocker.patch.object(mn_cli.shared.client, "add_node")
+    join = mocker.patch.object(
+        mn_sdk,
+        "join_federated_node",
+        return_value={
+            "node_name": "mirror_neuron@spark",
+            "status": "federated",
+            "peer": {
+                "connection_mode": "federated",
+                "syncthing": {"enabled": True, "device_id": "peer-device"},
+            },
+        },
+    )
+
+    result = _join_network("192.168.4.20", "join-token", grpc_port=50055)
+
+    assert result["status"] == "federated"
+    join.assert_called_once_with(
+        mn_cli.shared.client,
+        host="192.168.4.20",
+        token="join-token",
+        grpc_ports=(50055,),
+        local_host="192.168.4.99",
+    )
+    legacy_add.assert_not_called()
+    connect_syncthing.assert_called_once()
+    reconcile.assert_called_once_with()
+
+
+def test_join_network_propagates_sdk_readiness_failure(mocker):
+    import mn_sdk
+    from mn_sdk.errors import AppError
+
+    mocker.patch("mn_cli.server_cmds._ensure_local_cluster_runtime_for_join")
+    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.99")
+    mocker.patch.object(
+        mn_sdk,
+        "join_federated_node",
+        side_effect=AppError(
+            "MN_FEDERATION_NOT_READY",
+            "Reciprocal federation was not ready.",
+            http_status=503,
+        ),
+    )
+
+    with pytest.raises(AppError) as captured:
+        _join_network("192.168.4.20", "join-token", grpc_port=50055)
+
+    assert captured.value.code == "MN_FEDERATION_NOT_READY"
+    assert captured.value.http_status == 503
+
+
+def test_join_promotes_local_compose_runtime_to_federation_mode(mocker, tmp_path):
     compose_file = server_cmds.RUNTIME_COMPOSE_FILE
     compose_env = server_cmds.RUNTIME_COMPOSE_ENV
     compose_file.parent.mkdir(parents=True, exist_ok=True)
@@ -2510,7 +2632,8 @@ def test_join_promotes_local_compose_runtime_to_cluster_mode(mocker, tmp_path):
     env_text = compose_env.read_text(encoding="utf-8")
     assert "MN_NODE_NAME=mirror_neuron@192.168.4.20" in env_text
     assert "MN_MODEL_SERVICE_NODE_NAME=mirror_neuron@192.168.4.20" in env_text
-    assert "MN_CLUSTER_NODES=mirror_neuron@192.168.4.20" in env_text
+    assert "MN_CLUSTER_NODES=" in env_text
+    assert "MN_CLUSTER_NODES=mirror_neuron@192.168.4.20" not in env_text
     assert "MN_NETWORK_ADVERTISE_HOST=192.168.4.20" in env_text
     assert "MN_GRPC_BIND_HOST=0.0.0.0" in env_text
     assert "MN_HOST_SHARED_STORAGE_ROOT=" in env_text

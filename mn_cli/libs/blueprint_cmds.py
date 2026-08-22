@@ -265,6 +265,7 @@ def _run_resolved_blueprint(
     benchmark: bool = False,
     debug: bool = False,
     job_id: str | None = None,
+    owner_node: str | None = None,
 ) -> None:
     shared_run_id = run_id or _make_blueprint_run_id(blueprint_id)
     _print_blueprint_run_phase(1, 3, "Prepare blueprint bundle")
@@ -307,6 +308,7 @@ def _run_resolved_blueprint(
             "MN_RUN_ID": shared_run_id,
             "MN_BLUEPRINT_ID": blueprint_id,
             "MN_BLUEPRINT_REVISION": revision or "",
+            **({"MN_SELECTED_RUNTIME_NODE": owner_node} if owner_node else {}),
             **_fake_llm_env_overrides(fake_llm),
             **_fake_skills_env_overrides(fake_skills),
             **_benchmark_env_overrides(benchmark),
@@ -809,6 +811,7 @@ def run_catalog_blueprint(
     benchmark: bool = False,
     debug: bool = False,
     job_id: str | None = None,
+    owner_node: str | None = None,
 ) -> None:
     """Run a catalog blueprint by name through the shared blueprint runner."""
     _reject_local_blueprint_path(blueprint_name)
@@ -867,6 +870,7 @@ def run_catalog_blueprint(
         benchmark=benchmark,
         debug=debug,
         job_id=job_id,
+        owner_node=owner_node,
     )
 
 
@@ -886,6 +890,7 @@ def run_local_blueprint_folder(
     benchmark: bool = False,
     debug: bool = False,
     job_id: str | None = None,
+    owner_node: str | None = None,
 ) -> None:
     """Run a local Python source blueprint folder through the shared blueprint runner."""
     blueprint_dir = Path(folder).expanduser()
@@ -922,6 +927,7 @@ def run_local_blueprint_folder(
         benchmark=benchmark,
         debug=debug,
         job_id=job_id,
+        owner_node=owner_node,
     )
 
 
@@ -941,6 +947,7 @@ def _run_local_folder(
     benchmark: bool = False,
     debug: bool = False,
     job_id: str | None = None,
+    owner_node: str | None = None,
 ) -> None:
     bundle_dir = Path(folder).expanduser()
     manifest = _load_blueprint_manifest(bundle_dir, str(bundle_dir))
@@ -960,10 +967,13 @@ def _run_local_folder(
             benchmark=benchmark,
             debug=debug,
             job_id=job_id,
+            owner_node=owner_node,
         )
         return
 
     env_overrides = {"MN_RUN_ID": run_id} if run_id else {}
+    if owner_node:
+        env_overrides["MN_SELECTED_RUNTIME_NODE"] = owner_node
     env_overrides.update(_fake_llm_env_overrides(fake_llm))
     env_overrides.update(_fake_skills_env_overrides(fake_skills))
     env_overrides.update(_benchmark_env_overrides(benchmark))
@@ -1338,6 +1348,13 @@ def blueprint_run(
             help="Run an existing durable job instead of creating a new job.",
         ),
     ] = None,
+    owner_node: Annotated[
+        str | None,
+        typer.Option(
+            "--node",
+            help="Create and execute the job on this federated Core.",
+        ),
+    ] = None,
     blueprint_repo: Annotated[
         str | None,
         typer.Option(
@@ -1501,6 +1518,7 @@ def blueprint_run(
             benchmark=benchmark,
             debug=debug,
             job_id=job_id,
+            owner_node=owner_node,
         )
         return
 
@@ -1523,6 +1541,7 @@ def blueprint_run(
         benchmark=benchmark,
         debug=debug,
         job_id=job_id,
+        owner_node=owner_node,
     )
 
 

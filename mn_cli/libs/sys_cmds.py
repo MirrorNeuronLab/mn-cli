@@ -15,7 +15,6 @@ from mn_cli.terminal import use_progress
 from mn_cli.server_cmds import (
     _start_server,
     _start_network_seed,
-    _start_worker_node,
     _join_network,
     _detach_local_docker_node_if_matches,
     _refresh_network_token,
@@ -54,29 +53,21 @@ CONTEXT_ENGINE_EXPECTATION = (
 )
 
 def start(
-    worker_node: bool = typer.Option(
-        False,
-        "--worker",
-        help="Start this box as a headless resource-pool node for a primary box to join.",
-    ),
     host: Optional[str] = typer.Option(
         None,
         "--host",
-        help="Advertised host or IP for this node.",
+        help="Federation-reachable host or IP advertised by this node.",
     ),
     grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Core gRPC port."),
 ):
-    """Start MirrorNeuron services"""
+    """Start a federation-capable MirrorNeuron runtime"""
     console.print(format_banner("MirrorNeuron Local Runtime"))
-    if worker_node:
-        _start_worker_node(host=host, grpc_port=grpc_port)
-    else:
-        _start_server(host=host, grpc_port=grpc_port)
+    _start_server(host=host, grpc_port=grpc_port)
 
 def join(
     host: str,
-    token: str = typer.Option(..., "--token", help="Worker token printed by mn runtime start --worker."),
-    grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Worker node gRPC port."),
+    token: str = typer.Option(..., "--token", help="Join token printed by mn runtime start on the remote node."),
+    grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Remote node gRPC port."),
     local_host: Optional[str] = typer.Option(
         None,
         "--local-host",
@@ -105,7 +96,7 @@ def join(
         help="Docker network name to use for bridge/overlay mode.",
     ),
 ):
-    """Join a worker node into this primary MirrorNeuron cluster"""
+    """Federate this runtime with another MirrorNeuron node"""
     _join_network(
         seed_host=host,
         token=token,
@@ -164,7 +155,7 @@ def expose_node(
 
 def add_node(
     host: str,
-    token: str = typer.Option(..., "--token", help="Token printed by mn runtime start --worker on the remote box."),
+    token: str = typer.Option(..., "--token", help="Join token printed by mn runtime start on the remote node."),
     grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Remote exposed node gRPC port."),
     docker_network_mode: Optional[str] = typer.Option(
         None,
@@ -177,7 +168,7 @@ def add_node(
         help="Docker network name to validate for bridge/overlay mode.",
     ),
 ):
-    """Add a remote exposed node to the local/main MirrorNeuron cluster"""
+    """Add a remote runtime as a reciprocal federated peer"""
     _join_network(
         seed_host=host,
         token=token,
