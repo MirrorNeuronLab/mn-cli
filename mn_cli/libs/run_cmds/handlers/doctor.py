@@ -154,6 +154,9 @@ def doctor_bundle(
             manifest_dict,
             timeout=timeout,
             check_only=check_only,
+            selected_runtime_node=str(
+                env_overrides.get("MN_SELECTED_RUNTIME_NODE") or ""
+            ),
         )
         payloads = _stage_bundle_payloads(bundle_dir, manifest_dict)
 
@@ -497,13 +500,16 @@ def _doctor_prepare_hostlocal_python_envs(
     *,
     timeout: float,
     check_only: bool,
+    selected_runtime_node: str = "",
 ) -> dict[str, Any]:
     prepared: list[dict[str, Any]] = []
     skipped = 0
     failures: list[dict[str, Any]] = []
     metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
     placement = metadata.get("mn_workflow_placement") if isinstance(metadata.get("mn_workflow_placement"), dict) else {}
-    selected_node = str(placement.get("selected_node") or "").strip()
+    selected_node = str(
+        placement.get("selected_node") or selected_runtime_node or ""
+    ).strip()
     remote_selected_node = selected_node and selected_node != _local_runtime_node_name()
     for node in manifest_nodes(manifest):
         config = node.get("config") if isinstance(node.get("config"), dict) else {}

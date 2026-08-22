@@ -430,6 +430,9 @@ def run_bundle(
             manifest_dict,
             timeout=float(os.getenv("MN_BLUEPRINT_PYTHON_ENV_TIMEOUT_SECONDS", "30")),
             check_only=False,
+            selected_runtime_node=str(
+                env_overrides.get("MN_SELECTED_RUNTIME_NODE") or ""
+            ),
         )
         if host_python_report.get("status") == "critical":
             failures = host_python_report.get("failures") or []

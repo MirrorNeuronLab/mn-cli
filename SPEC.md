@@ -202,6 +202,9 @@ native runtime preparation boundary.
 Prepared HostLocal Python environments retain separate host and Core-visible
 paths; submissions use the configured Core cache mount so console-script
 entrypoints resolve inside a containerized local runtime.
+For a distributed workflow forwarded to a federated owner, HostLocal Python
+environments are prepared on that owner even though no single-node placement
+marker is added to the workflow.
 An explicitly configured non-default gRPC target is not treated as the local
 managed Docker Core merely because a standard Core container is also running.
 The local Docker runtime constrains automatic service ports to its published

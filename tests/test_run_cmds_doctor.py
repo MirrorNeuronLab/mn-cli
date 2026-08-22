@@ -242,6 +242,62 @@ def test_doctor_prepares_hostlocal_python_on_selected_remote_node(mocker, tmp_pa
     local_prepare.assert_not_called()
 
 
+def test_doctor_prepares_distributed_hostlocal_python_on_federated_owner(
+    mocker,
+    tmp_path,
+):
+    manifest = {
+        "runtime": {"placement": {"mode": "distributed"}},
+        "nodes": [
+            {
+                "node_id": "web_ui",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.HostLocal",
+                    "python_environment": {"packages": ["requests==2.32.0"]},
+                },
+            }
+        ],
+    }
+    runtime_client = object()
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor._local_runtime_node_name",
+        return_value="mirror_neuron@mac",
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor._cluster_node_endpoint",
+        return_value={"node": {}},
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor._runtime_model_prepare_client",
+        return_value=runtime_client,
+    )
+    prepare = mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor._prepare_runtime_model_with_retry",
+        return_value={
+            "runtime_path": "/root/.mn/cache/blueprint-python-envs/remote",
+            "host_path": "/home/user/.mn/cache/blueprint-python-envs/remote",
+        },
+    )
+    local_prepare = mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor._doctor_prepare_python_env"
+    )
+
+    report = run_cmds._doctor_prepare_hostlocal_python_envs(
+        tmp_path,
+        manifest,
+        timeout=1,
+        check_only=False,
+        selected_runtime_node="mirror_neuron@spark",
+    )
+
+    assert report["status"] == "passing"
+    assert prepare.call_args.args[1]["node"] == "mirror_neuron@spark"
+    assert manifest["nodes"][0]["config"]["python_environment"]["path"] == (
+        "/root/.mn/cache/blueprint-python-envs/remote"
+    )
+    local_prepare.assert_not_called()
+
+
 def test_doctor_passes_declared_local_source_versions_to_local_hostlocal_prepare(
     mocker,
     tmp_path,
