@@ -600,7 +600,7 @@ def run_bundle(
                 _start_background_event_relay_if_needed(
                     bundle_dir,
                     submitted_manifest or manifest_dict,
-                    execution_id,
+                    stable_job_id,
                     blueprint_run_dir,
                     "submitted",
                     config_overrides=config_overrides,
@@ -636,7 +636,7 @@ def run_bundle(
             _start_background_event_relay_if_needed(
                 bundle_dir,
                 submitted_manifest or manifest_dict,
-                execution_id,
+                stable_job_id,
                 blueprint_run_dir,
                 final_status,
                 config_overrides=config_overrides,
@@ -681,7 +681,7 @@ def run_bundle(
                 _start_background_event_relay_if_needed(
                     submitted_bundle_dir,
                     submitted_manifest,
-                    submitted_job_id,
+                    stable_job_id,
                     submitted_run_dir,
                     status,
                     config_overrides=submitted_config_overrides,

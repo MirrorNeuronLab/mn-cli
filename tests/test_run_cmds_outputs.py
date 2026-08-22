@@ -567,10 +567,12 @@ def test_detached_batch_run_starts_output_event_relay_for_shared_storage(
     mock_popen.assert_called_once()
     command = mock_popen.call_args.args[0]
     assert command[:3] == [sys.executable, "-m", "mn_sdk.blueprint_support.event_relay"]
+    assert command[command.index("--job-id") + 1] == "job-batch-output"
     assert "--shared-storage-json" in command
     relay = json.loads(
         (tmp_path / "runs" / "batch-output-run" / "event_relay.json").read_text()
     )
+    assert relay["job_id"] == "job-batch-output"
     storage_path = Path(relay["shared_storage_path"])
     storage = json.loads(storage_path.read_text())
     assert storage["output_copy_executor"] == "master_host"
