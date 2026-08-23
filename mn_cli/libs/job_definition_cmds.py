@@ -5,6 +5,7 @@ from pathlib import Path
 
 import typer
 from mn_sdk import prepare_job_submission
+from mn_sdk.blueprint_support import make_run_id
 from mn_sdk.submission_preparation import prepare_manifest_for_submission
 
 from mn_cli.error_handler import handle_cli_error
@@ -173,20 +174,51 @@ def start(
     job_id: str = typer.Argument(help="Durable job ID."),
     run_id: str | None = typer.Option(None, "--run-id"),
     inputs: str | None = typer.Option(None, "--inputs", help="Run-input JSON file."),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Permanently replace the existing run of a service job.",
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Confirm replacement without prompting."),
 ):
     """Start a new run of a durable job."""
+    force = force is True
+    yes = yes is True
+    if force:
+        _confirm_destructive(
+            (
+                f"Replace the existing run for {job_id}? Active work will be cancelled "
+                "and old run history and artifacts will be permanently removed."
+            ),
+            yes=yes,
+            action="Service run replacement",
+        )
+        run_id = run_id or make_run_id(job_id)
+
     try:
         result = json.loads(
             client.start_run(
                 job_id,
                 run_id=run_id or "",
                 inputs=_read_json_object(inputs) if inputs else {},
+                replace_existing_run=force,
             )
         )
+        details = [
+            ("Job ID", job_id),
+            ("Run ID", result.get("run_id")),
+        ]
+        if result.get("replaced_run_ids"):
+            details.append(
+                ("Replaced", ", ".join(result["replaced_run_ids"]))
+            )
+        if result.get("cleanup_deferred"):
+            pending = ", ".join(result.get("cleanup_pending_nodes") or [])
+            details.append(("Cleanup", f"deferred{f' on {pending}' if pending else ''}"))
         print_success_confirmation(
             console,
-            "Run start",
-            details=[("Job ID", job_id), ("Run ID", result.get("run_id"))],
+            "Run replace" if force else "Run start",
+            details=details,
             next_steps=f"mn run show {result.get('run_id')}",
         )
         record_result(result)

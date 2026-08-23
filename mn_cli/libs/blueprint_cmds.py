@@ -266,6 +266,7 @@ def _run_resolved_blueprint(
     debug: bool = False,
     job_id: str | None = None,
     owner_node: str | None = None,
+    replace_existing_run: bool = False,
 ) -> None:
     shared_run_id = run_id or _make_blueprint_run_id(blueprint_id)
     _print_blueprint_run_phase(1, 3, "Prepare blueprint bundle")
@@ -332,6 +333,7 @@ def _run_resolved_blueprint(
         schedule=schedule,
         debug=debug,
         job_id=job_id,
+        replace_existing_run=replace_existing_run,
     )
 
 
@@ -812,6 +814,7 @@ def run_catalog_blueprint(
     debug: bool = False,
     job_id: str | None = None,
     owner_node: str | None = None,
+    replace_existing_run: bool = False,
 ) -> None:
     """Run a catalog blueprint by name through the shared blueprint runner."""
     _reject_local_blueprint_path(blueprint_name)
@@ -871,6 +874,7 @@ def run_catalog_blueprint(
         debug=debug,
         job_id=job_id,
         owner_node=owner_node,
+        replace_existing_run=replace_existing_run,
     )
 
 
@@ -891,6 +895,7 @@ def run_local_blueprint_folder(
     debug: bool = False,
     job_id: str | None = None,
     owner_node: str | None = None,
+    replace_existing_run: bool = False,
 ) -> None:
     """Run a local Python source blueprint folder through the shared blueprint runner."""
     blueprint_dir = Path(folder).expanduser()
@@ -928,6 +933,7 @@ def run_local_blueprint_folder(
         debug=debug,
         job_id=job_id,
         owner_node=owner_node,
+        replace_existing_run=replace_existing_run,
     )
 
 
@@ -948,6 +954,7 @@ def _run_local_folder(
     debug: bool = False,
     job_id: str | None = None,
     owner_node: str | None = None,
+    replace_existing_run: bool = False,
 ) -> None:
     bundle_dir = Path(folder).expanduser()
     manifest = _load_blueprint_manifest(bundle_dir, str(bundle_dir))
@@ -968,6 +975,7 @@ def _run_local_folder(
             debug=debug,
             job_id=job_id,
             owner_node=owner_node,
+            replace_existing_run=replace_existing_run,
         )
         return
 
@@ -1010,6 +1018,7 @@ def _run_local_folder(
         schedule=schedule,
         debug=debug,
         job_id=job_id,
+        replace_existing_run=replace_existing_run,
     )
 
 
@@ -1402,6 +1411,17 @@ def blueprint_run(
             help="Run even if blueprint input validation or runtime requirements fail.",
         ),
     ] = False,
+    replace_existing_run: Annotated[
+        bool,
+        typer.Option(
+            "--replace-existing-run",
+            help="Permanently replace the run attached to an existing service job.",
+        ),
+    ] = False,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Confirm service-run replacement without prompting."),
+    ] = False,
     detached: Annotated[
         bool,
         typer.Option(
@@ -1477,6 +1497,23 @@ def blueprint_run(
     ] = False,
 ):
     """Run a catalog blueprint or an explicitly addressed local folder."""
+    replace_existing_run = replace_existing_run is True
+    yes = yes is True
+    if replace_existing_run:
+        if not job_id:
+            print_error(console, "--replace-existing-run requires --job-id.")
+            raise typer.Exit(2)
+        require_confirmation(
+            console,
+            action="Service run replacement",
+            prompt=(
+                f"Replace the existing run for {job_id}? Active work will be cancelled "
+                "and old run history and artifacts will be permanently removed."
+            ),
+            yes=yes,
+        )
+        run_id = run_id or _make_blueprint_run_id(job_id)
+
     if auto_schedule and schedule:
         print_error(console, "Pass either --auto-schedule or --schedule, not both.")
         raise typer.Exit(2)
@@ -1519,6 +1556,7 @@ def blueprint_run(
             debug=debug,
             job_id=job_id,
             owner_node=owner_node,
+            replace_existing_run=replace_existing_run,
         )
         return
 
@@ -1542,6 +1580,7 @@ def blueprint_run(
         debug=debug,
         job_id=job_id,
         owner_node=owner_node,
+        replace_existing_run=replace_existing_run,
     )
 
 

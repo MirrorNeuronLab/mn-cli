@@ -1052,9 +1052,52 @@ def test_run_existing_job_replaces_prepared_bundle_before_starting(mocker, tmp_p
         "existing-graph"
     )
     assert update.call_args.kwargs["payloads"]["input.txt"] == b"fresh"
+    assert update.call_args.kwargs["replace_existing_run"] is False
     start.assert_called_once_with(
         "job-existing", run_id="existing-rerun", inputs={}
     )
+
+
+def test_run_existing_service_job_replaces_through_bundle_update(mocker, tmp_path):
+    update = mocker.patch(
+        "mn_cli.libs.run_cmds.client.update_job",
+        return_value=json.dumps({"job_id": "job-existing"}),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.start_run",
+        return_value=json.dumps(
+            {"job_id": "job-existing", "run_id": "run-fresh"}
+        ),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.stream_events",
+        return_value=[json.dumps({"type": "job_completed"})],
+    )
+
+    bundle_dir = tmp_path / "service_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(
+            _workflow_manifest(
+                {
+                    "apiVersion": "mn.workflow/v1",
+                    "graph_id": "service-graph",
+                    "type": "service",
+                    "nodes": [],
+                }
+            )
+        )
+    )
+
+    run_cmds.run_bundle(
+        str(bundle_dir),
+        job_id="job-existing",
+        replace_existing_run=True,
+        env_overrides={"MN_RUN_ID": "run-fresh"},
+        submission_metadata={"blueprint_run_id": "run-fresh"},
+    )
+
+    assert update.call_args.kwargs["replace_existing_run"] is True
 
 
 def test_run_existing_job_cleans_fresh_definition_when_update_fails(

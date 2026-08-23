@@ -196,6 +196,7 @@ def run_bundle(
     debug: bool = False,
     runtime_model_dependencies: RuntimeModelDependencies | None = None,
     job_id: str | None = None,
+    replace_existing_run: bool = False,
 ):
     """Run a bundle after applying optional runtime metadata and environment."""
     pre_launch_process: subprocess.Popen[Any] | None = None
@@ -229,6 +230,8 @@ def run_bundle(
                 or bundle_dir.name
             )
         )
+        if replace_existing_run and not job_id:
+            raise ValueError("replace_existing_run requires an existing job_id")
         definition_submission_id = generate_job_definition_submission_id(
             stable_job_id
         )
@@ -528,6 +531,7 @@ def run_bundle(
                 else {},
                 manifest_json=manifest,
                 payloads=payloads,
+                replace_existing_run=replace_existing_run,
             )
             definition_committed = True
         if schedule_attrs is not None:

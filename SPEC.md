@@ -124,15 +124,24 @@ those contracts.
 definitions. `mn run list/show/watch/logs/result/resources/compare/pause/resume/cancel/delete`
 addresses executions and always
 accepts `run_id`. A durable `job_id` owns configuration, schedules, and job data;
-every intentional start gets a distinct run identity, while attempts retain
-their run. CLI output must label and persist both fields without treating them
-as aliases.
+every intentional batch start gets a distinct run identity, while attempts
+retain their run. Only `type: service` jobs have one attached run. Ordinary
+second starts fail with `service_run_exists`; `mn job start --force` explicitly
+replaces it with a fresh run ID and always confirms interactively or requires
+`--yes`. CLI output must label and persist both fields without treating them as
+aliases.
+The interactive workflow monitor renders a running service step as `live` and
+a downstream not-yet-activated step as `waiting`; it does not present either as
+completed merely to advance a long-running workflow.
 
 `mn blueprint run` creates a durable job and first run by default, or starts a
 new run of the `--job-id` definition. For an explicit existing job, the command
 first prepares and atomically installs the current executable bundle while
 preserving job data, schedules, and prior run history. `mn job start` and
 scheduled dispatch remain source independent and reuse the stored bundle.
+For an existing service job, `mn blueprint run --replace-existing-run --job-id
+...` performs destructive run replacement after confirmation. This option is
+separate from blueprint validation `--force`.
 Blueprint launches use the SDK run-store writer for the job/run mapping and
 sanitized source-facing monitor manifest; API launches consume the same
 contract so both surfaces render the same public workflow steps.

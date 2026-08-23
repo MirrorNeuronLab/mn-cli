@@ -291,6 +291,46 @@ def test_workflow_monitor_renders_service_idle_and_ready_counts():
     assert "Review visual detection" in rendered
     assert "Visual Detector" in rendered
 
+
+def test_workflow_monitor_labels_running_service_live_and_downstream_pending_waiting():
+    progress = {
+        "workflow_id": "warehouse_service",
+        "workflow_kind": "service",
+        "status": "running",
+        "elapsed_seconds": 12,
+        "current_step_id": "warehouse_service",
+        "current_step_ids": ["warehouse_service"],
+        "steps": [
+            {
+                "id": "warehouse_service",
+                "label": "Warehouse Service",
+                "status": "running",
+                "current": True,
+                "running_count": 1,
+                "ready_count": 1,
+                "total_count": 1,
+                "agents": [],
+            },
+            {
+                "id": "finalize",
+                "label": "Finalize",
+                "status": "pending",
+                "current": False,
+                "total_count": 1,
+                "agents": [],
+            },
+        ],
+        "messages": [],
+    }
+
+    console = Console(record=True, width=140)
+    console.print(generate_live_layout("job-service", {"workflow_progress": progress}, JobMonitorState()))
+    rendered = console.export_text()
+
+    assert "Warehouse Service" in rendered
+    assert "(live)" in rendered
+    assert "Finalize (waiting)" in rendered
+
 def test_workflow_monitor_renders_graph_layers_and_multiple_active_steps():
     progress = {
         "workflow_id": "tax_graph",

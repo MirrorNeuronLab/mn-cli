@@ -594,15 +594,22 @@ def _workflow_phase_table(steps: list[dict[str, Any]], *, workflow_kind: str = "
     for step in steps:
         status = str(step.get("status") or "unknown")
         current = bool(step.get("current"))
-        icon = _status_icon("running" if current and status not in {"done", "completed"} else status)
+        display_status = status
+        if workflow_kind == "service":
+            if status == "running":
+                display_status = "live"
+            elif status == "pending" and not current:
+                display_status = "waiting"
+        icon_status = "running" if display_status == "live" else display_status
+        icon = _status_icon("running" if current and status not in {"done", "completed"} else icon_status)
         label = f"{icon} {step.get('label') or step.get('id') or 'Step'}"
         if workflow_kind == "service" and status not in {"done", "completed"}:
-            label = f"{label} ({status})"
+            label = f"{label} ({display_status})"
         ready_count = int(step.get("ready_count") or step.get("done_count") or 0)
         done_count = int(step.get("done_count") or 0)
         count_value = ready_count if workflow_kind == "service" else done_count
         count = f"{count_value}/{int(step.get('total_count') or 0)}"
-        table.add_row(label, count, style="bright_blue" if current else _status_color(status))
+        table.add_row(label, count, style="bright_blue" if current else _status_color(icon_status))
     if not steps:
         table.add_row(". Runtime", "0/0", style="cyan")
     return table

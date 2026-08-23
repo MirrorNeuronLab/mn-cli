@@ -6,6 +6,58 @@ from mn_cli.libs import job_definition_cmds
 from mn_cli.libs.job_cleanup import JobResourceCleanupError
 
 
+def test_job_start_force_confirms_and_replaces_with_fresh_run_id(monkeypatch):
+    calls = {}
+    confirmations = []
+    printed = []
+
+    def start_run(job_id, **kwargs):
+        calls.update(job_id=job_id, **kwargs)
+        return json.dumps(
+            {
+                "job_id": job_id,
+                "run_id": kwargs["run_id"],
+                "replaced_run_ids": ["run-old"],
+                "cleanup_deferred": True,
+                "cleanup_pending_nodes": ["node-offline"],
+            }
+        )
+
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "client",
+        SimpleNamespace(start_run=start_run),
+    )
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "require_confirmation",
+        lambda _console, **kwargs: confirmations.append(kwargs),
+    )
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "make_run_id",
+        lambda _job_id: "run-fresh",
+    )
+    monkeypatch.setattr(job_definition_cmds, "record_result", printed.append)
+
+    job_definition_cmds.start(
+        "service-job",
+        run_id=None,
+        inputs=None,
+        force=True,
+        yes=True,
+    )
+
+    assert confirmations[0]["yes"] is True
+    assert calls == {
+        "job_id": "service-job",
+        "run_id": "run-fresh",
+        "inputs": {},
+        "replace_existing_run": True,
+    }
+    assert printed[0]["replaced_run_ids"] == ["run-old"]
+
+
 def test_run_resume_shows_activity_while_waiting_for_runtime(monkeypatch):
     events = []
     rendered = []
