@@ -71,7 +71,7 @@ def _web_ui_url_from_mapping(value: Any) -> Optional[str]:
 def _start_background_event_relay_if_needed(
     bundle_dir: Path,
     manifest_dict: dict[str, Any],
-    job_id: str,
+    run_id: str,
     run_dir: Path,
     final_status: str,
     *,
@@ -106,8 +106,8 @@ def _start_background_event_relay_if_needed(
         sys.executable,
         "-m",
         "mn_sdk.blueprint_support.event_relay",
-        "--job-id",
-        job_id,
+        "--run-id",
+        run_id,
         "--run-dir",
         str(run_dir),
         "--poll-seconds",
@@ -135,7 +135,7 @@ def _start_background_event_relay_if_needed(
             env=os.environ.copy(),
         )
     relay_info = {
-        "job_id": job_id,
+        "run_id": run_id,
         "pid": process.pid,
         "poll_seconds": poll_seconds,
         "max_seconds": max_seconds,
