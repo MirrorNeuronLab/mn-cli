@@ -10,6 +10,7 @@ from ..run_state import *
 from ..web_ui import *
 from ..web_ui import (
     _console_web_ui_url,
+    _register_manifest_web_ui_handle,
     _start_background_event_relay_if_needed,
 )
 from .doctor import _doctor_prepare_hostlocal_python_envs
@@ -534,6 +535,20 @@ def run_bundle(
                 replace_existing_run=replace_existing_run,
             )
             definition_committed = True
+        try:
+            _register_manifest_web_ui_handle(
+                manifest_dict,
+                stable_job_id,
+                configuration=load_blueprint_config(
+                    bundle_dir, config_overrides=config_overrides
+                )
+                or {},
+            )
+        except OSError as exc:
+            console.print(
+                "[yellow]Warning:[/yellow] Could not register the blueprint Web UI "
+                f"for the local dashboard: {exc}"
+            )
         if schedule_attrs is not None:
             result = json.loads(
                 client.create_job_schedule(

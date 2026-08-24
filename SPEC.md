@@ -55,6 +55,10 @@ exported identity still takes precedence.
 listener overrides into `web_ui.service.host` and `web_ui.service.port`.
 Blueprint manifest/config bindings remain responsible for mapping those
 settings into the executable service declaration.
+For a declared `web_ui` service, `--web-ui` reports the local job dashboard
+route. The persisted service handle declares the dashboard's permitted HTTP
+and WebSocket companion ports so the local Web UI server can proxy a selected
+remote node without exposing its LAN URL to the browser.
 
 ## Behavior Boundary
 
@@ -82,6 +86,9 @@ those contracts.
   NDJSON records.
 - Default output is concise, human readable, and action oriented. Results use
   stdout while progress, warnings, and errors use stderr.
+- `mn job list` renders a durable definition's canonical Type (`service` or
+  `batch`) and Node (`owner_node`), the Core runtime that owns its definition
+  and job data. It does not imply a human or account owner.
 - Human-readable validation failures use wrapped Rich tables, omitting empty
   columns so long requirements and remediation steps remain legible at narrow
   terminal widths.

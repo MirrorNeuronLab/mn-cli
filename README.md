@@ -126,6 +126,12 @@ mn blueprint run ./cctv_operator --web-ui \
 reachable peers; the blueprint is responsible for its authentication and
 network-safety contract.
 
+When a blueprint declares a `web_ui` service, `--web-ui` reports the local
+`/jobs/<job_id>/ui` dashboard route. Docker Compose service handles include an
+allowlist for the dashboard's declared video and WebSocket companions, so the
+local Web UI server can proxy a selected remote node without sending the
+browser directly to that node's LAN IP.
+
 ## Stable jobs and execution runs
 
 Create a reusable job once, then start independent runs that share its declared
@@ -153,6 +159,12 @@ deletion. Starting the same job again creates another run; retrying a run does
 not. Use `mn blueprint run --job-id <job-id>` to run an existing definition.
 Without that option, blueprint run creates a durable job and starts
 its first run.
+
+`mn job list` shows each definition's canonical Type (`service` or `batch`) and
+its Node. Node is the Core runtime (`owner_node`, such as
+`mirror_neuron@spark`) that durably owns the definition and its job data; it is
+not a human or account owner.
+
 With `--job-id`, the CLI prepares the currently installed blueprint revision
 and atomically replaces the inactive job's executable bundle before starting
 the run. Job data, schedules, and earlier run history are preserved. In

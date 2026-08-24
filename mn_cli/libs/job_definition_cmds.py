@@ -85,7 +85,13 @@ def definitions(
             console,
             "Jobs",
             items,
-            columns=(("ID", "job_id"), ("Kind", "kind"), ("State", "status"), ("Owner", "owner"), ("Updated", "updated_at")),
+            columns=(
+                ("ID", "job_id"),
+                ("Type", "type"),
+                ("State", "status"),
+                ("Node", "owner_node"),
+                ("Updated", "updated_at"),
+            ),
         )
     except Exception as exc:
         handle_cli_error(exc, console, "job definitions")

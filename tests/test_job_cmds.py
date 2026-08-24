@@ -8,7 +8,7 @@ import pytest
 import typer
 from rich.console import Console
 
-from mn_cli.libs import job_cleanup, job_cmds, operation_cmds
+from mn_cli.libs import job_cleanup, job_cmds, job_definition_cmds, operation_cmds
 
 
 class StubRpcError(grpc.RpcError):
@@ -27,6 +27,7 @@ def _capture_console(monkeypatch):
     output = StringIO()
     test_console = Console(file=output, force_terminal=False, width=160)
     monkeypatch.setattr(job_cmds, "console", test_console)
+    monkeypatch.setattr(job_definition_cmds, "console", test_console)
     monkeypatch.setattr(operation_cmds, "console", test_console)
     return output
 
@@ -197,6 +198,44 @@ def test_openshell_cleanup_name_matches_long_prepared_sandbox_name():
         "-820154137a"
     )
     assert len(sandbox_name) <= 63
+
+
+def test_job_list_shows_type_and_owning_node(monkeypatch):
+    output = _capture_console(monkeypatch)
+    payload = {
+        "items": [
+            {
+                "job_id": "job-service",
+                "type": "service",
+                "status": "active",
+                "owner_node": "mirror_neuron@spark",
+                "updated_at": "2026-08-24T17:23:25.642Z",
+            },
+            {
+                "job_id": "job-batch",
+                "type": "batch",
+                "status": "archived",
+                "owner_node": "mirror_neuron@homer",
+                "updated_at": "2026-08-24T16:23:25.642Z",
+            },
+        ]
+    }
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "client",
+        SimpleNamespace(list_jobs=lambda **_kwargs: json.dumps(payload)),
+    )
+
+    job_definition_cmds.definitions(include_archived=True)
+
+    rendered = output.getvalue()
+    assert "Type" in rendered
+    assert "Node" in rendered
+    assert "Owner" not in rendered
+    assert "service" in rendered
+    assert "batch" in rendered
+    assert "mirror_neuron@spark" in rendered
+    assert "mirror_neuron@homer" in rendered
 
 
 
