@@ -498,6 +498,7 @@ def test_ensure_syncthing_for_runtime_starts_sidecar_without_sudo(mocker, tmp_pa
         encoding="utf-8"
     )
     assert 'MN_SYNCTHING_LAN_ONLY: "1"' in override
+    assert 'chown -R "$${PUID:-1000}:$${PGID:-1000}" "$$config_dir"' in override
     for setting in (
         "<relaysEnabled>false</relaysEnabled>",
         "<globalAnnounceEnabled>false</globalAnnounceEnabled>",

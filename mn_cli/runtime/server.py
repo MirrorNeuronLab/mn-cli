@@ -283,6 +283,11 @@ sed -i \\
   -e 's#<crashReportingEnabled>[^<]*</crashReportingEnabled>#<crashReportingEnabled>false</crashReportingEnabled>#' \\
   "$config_file"
 
+# The Syncthing image starts as root for setup, then drops to PUID:PGID.  Its
+# generated config files otherwise remain root-owned and make the sidecar
+# crash-loop on its next start when Syncthing needs to update its certificates.
+chown -R "${PUID:-1000}:${PGID:-1000}" "$config_dir"
+
 exec /bin/entrypoint.sh /bin/syncthing serve"""
 SYNCTHING_MANAGED_IGNORE_PATTERNS = (
     "/blueprint-python-envs",
