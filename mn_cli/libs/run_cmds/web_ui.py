@@ -1,12 +1,13 @@
 from .common import *
 from .run_state import *
+from mn_sdk import job_data_dir_from_id
 
 
 def _console_web_ui_url(
     manifest_dict: dict[str, Any],
-    run_dir: Optional[Path],
+    job_id: str,
 ) -> Optional[str]:
-    return _console_web_ui_url_from_run_dir(run_dir) or _console_web_ui_url_from_manifest(
+    return _console_web_ui_url_from_job_data(job_id) or _console_web_ui_url_from_manifest(
         manifest_dict
     )
 
@@ -48,12 +49,15 @@ def _console_web_ui_url_from_manifest(
     return None
 
 
-def _console_web_ui_url_from_run_dir(run_dir: Optional[Path]) -> Optional[str]:
-    if run_dir is None:
+def _console_web_ui_url_from_job_data(job_id: str) -> Optional[str]:
+    job_data_dir = job_data_dir_from_id(job_id)
+    if job_data_dir is None:
         return None
     try:
-        handle = json.loads((run_dir / "web_ui.json").read_text(encoding="utf-8"))
+        handle = json.loads((job_data_dir / "web_ui.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return None
+    if handle.get("job_id") != job_id:
         return None
     return _web_ui_url_from_mapping(handle)
 

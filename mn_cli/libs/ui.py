@@ -283,6 +283,48 @@ def print_doctor_checks(
     console.print(table)
 
 
+def print_validation_issues(
+    console,
+    title: str,
+    issues: Iterable[Mapping[str, Any]],
+) -> None:
+    """Render validation failures in the CLI's wrapped diagnostic table."""
+
+    items = [dict(issue) for issue in issues if isinstance(issue, Mapping)]
+    has_rule = any(
+        isinstance(item.get("rule"), Mapping)
+        and (item["rule"].get("name") or item["rule"].get("id"))
+        for item in items
+    )
+    table = Table(
+        title=title,
+        title_style="bold red",
+        show_header=True,
+        header_style="bold",
+        box=None if _is_plain_confirmation_mode() else box.ROUNDED,
+        show_lines=True,
+        expand=True,
+    )
+    table.add_column("Field", ratio=1, overflow="fold")
+    table.add_column("Problem", ratio=2, overflow="fold")
+    table.add_column("Fix", ratio=2, overflow="fold")
+    if has_rule:
+        table.add_column("Rule", ratio=1, overflow="fold")
+
+    for item in items:
+        location = item.get("location") if isinstance(item.get("location"), Mapping) else {}
+        rule = item.get("rule") if isinstance(item.get("rule"), Mapping) else {}
+        values = [
+            str(location.get("path") or location.get("pointer") or "-"),
+            str(item.get("message") or item.get("code") or "Validation failed"),
+            str(item.get("help") or "-"),
+        ]
+        if has_rule:
+            values.append(str(rule.get("name") or rule.get("id") or "-"))
+        table.add_row(*[Text(value, overflow="fold") for value in values])
+    console.print(table)
+
+
 def _status_console(console):
     if getattr(console, "_mn_shared_console", False):
         from mn_cli.shared import error_console

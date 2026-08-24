@@ -262,6 +262,8 @@ snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
 ## Notes
 
 - A running MirrorNeuron core is required for live runtime commands.
+- Validation failures render in wrapped terminal tables, so long requirements
+  and recommended fixes remain readable in narrow terminals.
 - The default gRPC target comes from `MN_GRPC_TARGET`, then local deployment
   settings, then `localhost:55051`.
 - Use `mn blueprint validate` before `mn blueprint run ./folder` when checking a local bundle.

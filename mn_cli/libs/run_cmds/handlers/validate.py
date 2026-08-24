@@ -398,27 +398,7 @@ def _emit_validation_report(
             console.print(f"[red]{title}: {error}[/red]")
         return
 
-    console.print(f"[red]{title}[/red]")
-    console.print("Field | Problem | Fix | Rule", markup=False)
-    console.print("--- | --- | --- | ---", markup=False)
-    for issue in issues:
-        location = (
-            issue.get("location") if isinstance(issue.get("location"), dict) else {}
-        )
-        rule = issue.get("rule") if isinstance(issue.get("rule"), dict) else {}
-        console.print(
-            " | ".join(
-                [
-                    str(location.get("path") or location.get("pointer") or "-"),
-                    str(
-                        issue.get("message") or issue.get("code") or "Validation failed"
-                    ),
-                    str(issue.get("help") or "-"),
-                    str(rule.get("name") or rule.get("id") or "-"),
-                ]
-            ),
-            markup=False,
-        )
+    print_validation_issues(console, title, issues)
 
 def _model_capacity_summary(report: dict[str, Any]) -> str:
     summaries: list[str] = []

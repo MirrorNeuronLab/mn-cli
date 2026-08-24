@@ -576,7 +576,7 @@ def run_bundle(
                 monitor_manifest=manifest_dict,
             )
         web_ui_url = (
-            _console_web_ui_url(manifest_dict, blueprint_run_dir) if web_ui else None
+            _console_web_ui_url(manifest_dict, stable_job_id) if web_ui else None
         )
         submitted_web_ui_url = web_ui_url
         resolved_follow_seconds = (

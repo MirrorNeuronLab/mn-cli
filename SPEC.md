@@ -79,6 +79,9 @@ those contracts.
   NDJSON records.
 - Default output is concise, human readable, and action oriented. Results use
   stdout while progress, warnings, and errors use stderr.
+- Human-readable validation failures use wrapped Rich tables, omitting empty
+  columns so long requirements and remediation steps remain legible at narrow
+  terminal widths.
 - Interactive Rich sessions show a transient spinner while a run pause, resume,
   or cancel request is in flight. JSON and plain output omit transient progress
   so their output remains automation-safe.

@@ -5,6 +5,8 @@ import re
 import subprocess
 import sys
 import uuid
+from importlib import import_module
+from io import StringIO
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,6 +32,39 @@ from mn_cli.libs.workflow_progress import (
 from mn_cli.main import app
 
 runner = CliRunner()
+validate_handler = import_module("mn_cli.libs.run_cmds.handlers.validate")
+
+
+@pytest.mark.parametrize("width", [80, 120])
+def test_validation_report_uses_a_wrapped_table(mocker, width):
+    stream = StringIO()
+    report_console = Console(file=stream, force_terminal=False, no_color=True, width=width)
+    mocker.patch.object(validate_handler, "console", report_console)
+
+    validate_handler._emit_validation_report(
+        {
+            "issues": [
+                {
+                    "location": {"path": "gpu"},
+                    "message": "This blueprint needs an Nvidia CUDA runtime node with GPU memory >= 48GB.",
+                    "help": "Add or connect a healthy, scheduling-eligible runtime node that satisfies this GPU requirement, then launch again.",
+                    "rule": {},
+                }
+            ]
+        },
+        "table",
+        title="Runtime requirements need attention",
+    )
+
+    output = stream.getvalue()
+    assert "Runtime requirements need attention" in output
+    assert "Field" in output
+    assert "Problem" in output
+    assert "Fix" in output
+    assert "Rule" not in output
+    assert "╭" in output
+    assert "Field | Problem | Fix | Rule" not in output
+    assert max(len(line) for line in output.splitlines()) <= width
 
 
 @pytest.fixture(autouse=True)
