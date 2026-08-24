@@ -47,6 +47,9 @@ Core with its own writable coordination store and prints the advertised host,
 gRPC endpoint, node identity, active federation join token, and an exact
 `mn node add` command. The former `--worker` option is removed and must fail as
 a usage error with a migration hint to use `mn runtime start`.
+The advertised local identity is persisted in `$MN_HOME/docker-compose.env` and
+is automatically used by Docker Compose blueprint submission; an explicitly
+exported identity still takes precedence.
 
 `mn blueprint run --web-ui-host HOST --web-ui-port PORT` projects per-run
 listener overrides into `web_ui.service.host` and `web_ui.service.port`.

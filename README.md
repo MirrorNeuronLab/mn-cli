@@ -230,6 +230,12 @@ export MN_API_PORT=8080
 mn runtime status
 ```
 
+`mn runtime start --host <LAN-IP>` persists the local runtime identity in
+`$MN_HOME/docker-compose.env`. Blueprint launches automatically use that
+identity for Compose placement, so `MN_NETWORK_ADVERTISE_HOST` does not need to
+be exported for ordinary local submissions. An explicitly exported value still
+overrides the persisted identity.
+
 Keep secrets, credentials, production hostnames, production database URLs, cloud
 credentials, and user-specific local paths out of source files. Use
 environment variables or uncommitted `.env` files instead.
