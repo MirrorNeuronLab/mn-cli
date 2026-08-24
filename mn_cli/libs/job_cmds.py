@@ -15,6 +15,12 @@ from mn_cli.shared import client, console
 
 _ACTIVE_JOB_STATUSES = {"pending", "validated", "scheduled", "running", "paused", "cancelling"}
 _ALL_JOBS_LIMIT = 2_147_483_647
+_NODE_LIST_COLUMNS = (
+    ("Node", "node"),
+    ("Hostname", "hostname"),
+    ("Status", "status"),
+    ("Role", "role"),
+)
 
 
 
@@ -38,7 +44,7 @@ _ALL_JOBS_LIMIT = 2_147_483_647
 
 
 def nodes():
-    """Get system summary and nodes"""
+    """List connected nodes with their reachable endpoint and job role."""
     try:
         summary_json = client.get_system_summary()
         summary = json.loads(summary_json)
@@ -50,8 +56,8 @@ def nodes():
         print_collection(
             console,
             "Nodes",
-            items if isinstance(items, list) else [],
-            columns=(("ID", "name"), ("Kind", "kind"), ("State", "status"), ("Node / Owner", "owner"), ("Updated", "updated_at")),
+            _node_list_items(items),
+            columns=_NODE_LIST_COLUMNS,
         )
         record_result(summary)
     except Exception as e:
@@ -113,6 +119,59 @@ def _node_list_restart_history_key(key: object) -> bool:
     }:
         return True
     return "restart" in normalized and ("history" in normalized or "reason" in normalized)
+
+
+def _node_list_items(nodes: object) -> list[dict[str, str]]:
+    """Normalize Core node records into complete, node-specific table rows."""
+
+    if not isinstance(nodes, list):
+        return []
+
+    return [
+        _node_list_item(node)
+        for node in nodes
+        if isinstance(node, dict)
+    ]
+
+
+def _node_list_item(node: dict) -> dict[str, str]:
+    node_name = _node_text(node, "name", "node", "id") or "unknown"
+    host = _node_text(node, "hostname", "display_name", "grpc_host", "address")
+    host = host or _node_host_from_name(node_name) or "unknown"
+    return {
+        "node": node_name,
+        "hostname": host,
+        "status": _node_text(node, "status") or "unknown",
+        "role": f"{_node_connection(node)} · {_node_job_ownership(node)}",
+    }
+
+
+def _node_text(node: dict, *keys: str) -> str:
+    for key in keys:
+        value = node.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _node_host_from_name(node_name: str) -> str:
+    return node_name.split("@", 1)[1] if "@" in node_name else ""
+
+
+def _node_connection(node: dict) -> str:
+    if node.get("self?") is True or node.get("self") is True:
+        return "local"
+    return _node_text(node, "connection_mode") or "cluster"
+
+
+def _node_job_ownership(node: dict) -> str:
+    if node.get("job_owner_eligible") is False:
+        return "jobs unavailable"
+    if node.get("job_owner_eligible") is True:
+        return "job owner"
+    if node.get("scheduling_eligible") is False:
+        return "not scheduled"
+    return "job owner"
 
 
 def reconcile_node(
@@ -317,5 +376,3 @@ def metrics():
         )
     except Exception as e:
         handle_cli_error(e, console, "resource usage")
-
-

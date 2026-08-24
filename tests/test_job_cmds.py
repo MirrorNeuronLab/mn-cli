@@ -290,3 +290,48 @@ def test_node_list_strips_restart_history_and_reasons(monkeypatch):
     assert "actor failed" not in rendered
     assert "attempts exhausted" not in rendered
     assert "operator maintenance" not in rendered
+
+
+def test_node_list_uses_complete_node_specific_columns(monkeypatch):
+    output = _capture_console(monkeypatch)
+    summary = {
+        "nodes": [
+            {
+                "name": "mirror_neuron@10.0.4.23",
+                "display_name": "spark",
+                "hostname": "spark",
+                "grpc_host": "10.0.4.23",
+                "grpc_port": 55051,
+                "status": "healthy",
+                "connection_mode": "federated",
+                "job_owner_eligible": True,
+                "scheduling_eligible": True,
+            },
+            {
+                "name": "mirror_neuron@10.0.4.26",
+                "status": "maintenance",
+                "self?": True,
+                "job_owner_eligible": False,
+            },
+        ]
+    }
+    monkeypatch.setattr(
+        job_cmds,
+        "client",
+        SimpleNamespace(get_system_summary=lambda: json.dumps(summary)),
+    )
+
+    job_cmds.nodes()
+
+    rendered = output.getvalue()
+    for label in ("Node", "Hostname", "Status", "Role"):
+        assert label in rendered
+    assert "Kind" not in rendered
+    assert "Node / Owner" not in rendered
+    assert "Updated" not in rendered
+    assert "spark" in rendered
+    assert "federated" in rendered
+    assert "job owner" in rendered
+    assert "local" in rendered
+    assert "jobs unavailable" in rendered
+    assert "10.0.4.26" in rendered

@@ -32,6 +32,11 @@ advertised host, gRPC port, node identity, a join token, and the exact
 credential, keep terminal output private, and use `mn node refresh-token` when
 it must be rotated.
 
+`mn node list` shows each node's hostname, health, and role (connection mode
+plus job-ownership eligibility) without artifact-only fields such as kind,
+owner, or update time. Use `mn node show <node>` for the complete endpoint and
+capability record.
+
 Static HTML exports use the optional `mirrorneuron-web-ui-skill` package. With
 the MirrorNeuron GAR package index configured, install it with:
 

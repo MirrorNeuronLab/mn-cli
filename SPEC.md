@@ -89,6 +89,11 @@ those contracts.
 - `mn job list` renders a durable definition's canonical Type (`service` or
   `batch`) and Node (`owner_node`), the Core runtime that owns its definition
   and job data. It does not imply a human or account owner.
+- `mn node list` renders node-specific fields: Node, Hostname, Status, and a
+  Role that combines connection mode with job-ownership eligibility. Nodes are
+  not artifacts, so the table does not include generic Kind, Owner, or Updated
+  columns. `mn node show <node>` provides the full endpoint and capability
+  record.
 - Human-readable validation failures use wrapped Rich tables, omitting empty
   columns so long requirements and remediation steps remain legible at narrow
   terminal widths.
