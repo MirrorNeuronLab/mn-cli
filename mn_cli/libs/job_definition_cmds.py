@@ -16,6 +16,7 @@ from mn_cli.libs.ui import (
     activity,
     print_collection,
     print_detail,
+    print_info,
     print_success_confirmation,
     require_confirmation,
 )
@@ -109,7 +110,18 @@ def archive(job_id: str = typer.Argument(help="Durable job ID.")):
     """Archive a job while retaining its persistent data."""
     try:
         result = json.loads(client.archive_job(job_id))
-        print_success_confirmation(console, "Job archive", status=result.get("status"), details={"Job ID": job_id})
+        if result.get("status") == "archive_pending":
+            print_info(
+                console,
+                f"Job archive pending for {job_id}; waiting for its owner runtime.",
+            )
+        else:
+            print_success_confirmation(
+                console,
+                "Job archive",
+                status=result.get("status"),
+                details={"Job ID": job_id},
+            )
         record_result(result)
     except Exception as exc:
         handle_cli_error(exc, console, "job archive")
@@ -153,7 +165,10 @@ def delete(
     )
     try:
         run_ids = _job_run_ids(job_id)
-        cleanup_errors = []
+        result = json.loads(client.delete_job(job_id, confirmed=True))
+        cleanup_errors = [
+            str(error) for error in result.get("resource_cleanup_errors") or []
+        ]
         for resource_id in [*run_ids, job_id]:
             try:
                 cleanup_job_resources(
@@ -161,13 +176,6 @@ def delete(
                 )
             except JobResourceCleanupError as error:
                 cleanup_errors.append(str(error))
-        if cleanup_errors:
-            raise JobResourceCleanupError("; ".join(cleanup_errors))
-
-        result = json.loads(client.delete_job(job_id, confirmed=True))
-        cleanup_errors = [
-            str(error) for error in result.get("resource_cleanup_errors") or []
-        ]
         if cleanup_errors:
             raise JobResourceCleanupError("; ".join(cleanup_errors))
         print_success_confirmation(console, "Job delete", status=result.get("status"), details={"Job ID": job_id})
@@ -280,7 +288,7 @@ def run_delete(
     yes: bool = typer.Option(False, "--yes", "-y"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview deletion without changing state."),
 ):
-    """Delete one terminal run without deleting job data."""
+    """Delete one run, cancelling it first when active, without deleting job data."""
     yes = yes is True
     dry_run = dry_run is True
     if dry_run:

@@ -129,10 +129,14 @@ those contracts.
   commands continue to redact that credential.
 - Unit tests use fakes and temporary paths; normal tests do not mutate the real
   `~/.mn`, start services, or access the network.
-- Durable-job archive retains shared data. Job-data reset, terminal-run delete,
+- Durable-job archive retains shared data. Job-data reset and run delete,
   and permanent job delete require confirmation. Run cleanup must never be
   presented as deleting durable job data. Permanent job deletion also removes
-  all historical runs and definition-owned runtime resources.
+  all historical runs and definition-owned runtime resources, automatically
+  cancelling and clearing any attached active runs first. Run delete likewise
+  cancels and clears an active run before detaching it. A federated archive
+  accepted while its owner is unavailable is reported as `archive_pending`,
+  not as a completed archive, and `mn job list` reflects that pending state.
 - `--yes` answers confirmation only, `--force` overrides one documented
   precondition but never supplies consent, and `--dry-run` never mutates.
   Destructive JSON/non-interactive commands require `--yes`.

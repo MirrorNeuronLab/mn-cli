@@ -90,6 +90,44 @@ def test_run_resume_shows_activity_while_waiting_for_runtime(monkeypatch):
     assert rendered == [("Run resume", {"status": "resumed", "details": {"Run ID": "run-1"}})]
 
 
+def test_run_delete_confirms_and_delegates_active_run_cleanup_to_core(monkeypatch):
+    calls = []
+    rendered = []
+    printed = []
+
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "client",
+        SimpleNamespace(
+            delete_run=lambda run_id, confirmed: calls.append((run_id, confirmed))
+            or json.dumps({"run_id": run_id, "status": "deleted"})
+        ),
+    )
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "require_confirmation",
+        lambda _console, **kwargs: rendered.append(("confirmation", kwargs)),
+    )
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "print_success_confirmation",
+        lambda _console, action, **kwargs: rendered.append((action, kwargs)),
+    )
+    monkeypatch.setattr(job_definition_cmds, "record_result", printed.append)
+
+    job_definition_cmds.run_delete("run-active", yes=True)
+
+    assert calls == [("run-active", True)]
+    assert rendered == [
+        (
+            "confirmation",
+            {"action": "Run deletion", "prompt": "Delete run run-active?", "yes": True},
+        ),
+        ("Run delete", {"status": "deleted", "details": {"Run ID": "run-active"}}),
+    ]
+    assert printed == [{"run_id": "run-active", "status": "deleted"}]
+
+
 def test_create_prepares_source_bundle_before_stable_submission(monkeypatch, tmp_path):
     bundle = tmp_path / "blueprint"
     bundle.mkdir()
@@ -186,9 +224,15 @@ def test_delete_cleans_every_historical_run_and_definition_resources(monkeypatch
     ]
 
 
-def test_delete_attempts_all_local_cleanup_before_reporting_failure(monkeypatch):
+def test_delete_attempts_local_cleanup_after_core_closes_runs(monkeypatch):
     cleaned = []
+    events = []
     handled_errors = []
+
+    def delete_job(job_id, confirmed):
+        events.append(("delete", job_id, confirmed))
+        return json.dumps({"job_id": job_id, "status": "deleted"})
+
     monkeypatch.setattr(
         job_definition_cmds,
         "client",
@@ -196,13 +240,12 @@ def test_delete_attempts_all_local_cleanup_before_reporting_failure(monkeypatch)
             list_runs=lambda _job_id: json.dumps(
                 {"data": [{"run_id": "run-1"}, {"run_id": "run-2"}]}
             ),
-            delete_job=lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                AssertionError("Core deletion must not start after local cleanup fails")
-            ),
+            delete_job=delete_job,
         ),
     )
 
     def cleanup(job_id, **_kwargs):
+        assert events == [("delete", "stable-job", True)]
         cleaned.append(job_id)
         if job_id == "run-1":
             raise JobResourceCleanupError("OpenShell sandbox is busy")
@@ -218,6 +261,7 @@ def test_delete_attempts_all_local_cleanup_before_reporting_failure(monkeypatch)
 
     job_definition_cmds.delete("stable-job", yes=True)
 
+    assert events == [("delete", "stable-job", True)]
     assert cleaned == ["run-1", "run-2", "stable-job"]
     assert handled_errors == [
         (
@@ -225,6 +269,40 @@ def test_delete_attempts_all_local_cleanup_before_reporting_failure(monkeypatch)
             "job delete",
         )
     ]
+
+
+def test_archive_pending_is_reported_as_pending_not_successful(monkeypatch):
+    info = []
+    success = []
+    printed = []
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "client",
+        SimpleNamespace(
+            archive_job=lambda job_id: json.dumps(
+                {"job_id": job_id, "status": "archive_pending"}
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "print_info",
+        lambda _console, message: info.append(message),
+    )
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "print_success_confirmation",
+        lambda *_args, **_kwargs: success.append(True),
+    )
+    monkeypatch.setattr(job_definition_cmds, "record_result", printed.append)
+
+    job_definition_cmds.archive("stable-job")
+
+    assert info == [
+        "Job archive pending for stable-job; waiting for its owner runtime."
+    ]
+    assert success == []
+    assert printed == [{"job_id": "stable-job", "status": "archive_pending"}]
 
 
 def test_delete_cleans_historical_runs_from_v2_items_response(monkeypatch):

@@ -181,9 +181,15 @@ Lifecycle commands are deliberately separate:
 ```bash
 mn job archive vc-diligence            # retains shared data
 mn job reset-data vc-diligence         # confirms; clears/reseeds and advances generation
-mn run delete <terminal-run-id>         # confirms; never deletes shared data
+mn run delete <run-id>                  # confirms; cancels an active run, then removes it; never deletes shared data
 mn job delete vc-diligence              # confirms; deletes all runs, runtime resources, definition, and data
 ```
+
+Permanent job deletion automatically cancels and clears attached active runs
+before removing the definition and shared data. Run deletion does the same for
+an active run before detaching it. If an archive must wait for an
+unavailable owner runtime, the command and `mn job list` report
+`archive_pending` until federation replay settles it.
 
 Execution status and controls use `mn run ...`; attached blueprint progress
 uses the canonical workflow-progress stream and the same public-step contract as the
