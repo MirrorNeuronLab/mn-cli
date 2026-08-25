@@ -1556,6 +1556,65 @@ def _connect_syncthing_peers(local_info: dict[str, Any], remote_info: dict[str, 
         print_warning(console, f"Could not connect Syncthing shared-storage peers: {exc}")
         return False
 
+
+def _reconcile_syncthing_federated_peers(
+    env: dict[str, str],
+    *,
+    advertised_host: str,
+    core_client: Any = None,
+) -> dict[str, int]:
+    """Rehydrate Syncthing devices from registered federation peers.
+
+    Reinstalling a runtime creates a new Syncthing device identity. Federation
+    registration survives independently, so an otherwise healthy Core pair can
+    be left with sidecars that know only themselves. Reconciliation is
+    idempotent and restores the peer entries on both active sidecars.
+    """
+
+    local_info = _syncthing_node_info(env, advertised_host)
+    if not local_info.get("enabled") or not local_info.get("device_id"):
+        return {"discovered": 0, "connected": 0}
+
+    try:
+        if core_client is None:
+            from mn_cli.shared import client as core_client
+
+        payload = core_client.get_system_summary()
+        summary = json.loads(payload) if isinstance(payload, str) else payload
+        nodes = summary.get("nodes") if isinstance(summary, dict) else []
+    except Exception as exc:
+        logger.info("Could not read federation peers for Syncthing reconciliation: %s", exc)
+        return {"discovered": 0, "connected": 0}
+
+    discovered = 0
+    connected = 0
+    for node in nodes if isinstance(nodes, list) else []:
+        if not isinstance(node, dict) or node.get("connection_mode") != "federated":
+            continue
+        if node.get("peer_available") is False:
+            continue
+        node_name = str(node.get("name") or node.get("node") or "").strip()
+        if not node_name:
+            continue
+        discovered += 1
+        try:
+            peer = core_client.get_federated_peer(node_name)
+            remote_info = peer.get("syncthing") if isinstance(peer, dict) else None
+            if isinstance(remote_info, dict) and _connect_syncthing_peers(
+                local_info, remote_info
+            ):
+                connected += 1
+        except Exception as exc:
+            logger.warning("Could not reconcile Syncthing peer %s: %s", node_name, exc)
+
+    if discovered:
+        logger.info(
+            "Syncthing federation reconciliation discovered=%s connected=%s",
+            discovered,
+            connected,
+        )
+    return {"discovered": discovered, "connected": connected}
+
 def _compose_shared_storage_env_changed(updates: dict[str, str]) -> bool:
     if not updates:
         return False
@@ -6104,6 +6163,10 @@ def _start_server(
             env,
             restart_running=True,
             restart_reason="runtime already running",
+        )
+        _reconcile_syncthing_federated_peers(
+            env,
+            advertised_host=_advertised_network_host(host),
         )
         web_ui_available = _start_web_ui_if_installed(env)
         endpoint_snapshot = _write_runtime_endpoints_file(env, web_ui_available=web_ui_available)

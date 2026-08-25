@@ -644,6 +644,56 @@ def test_connect_syncthing_peers_configures_both_nodes(mocker):
     )
 
 
+def test_reconcile_syncthing_federated_peers_rehydrates_registered_peer(mocker):
+    class CoreClient:
+        def get_system_summary(self):
+            return {
+                "nodes": [
+                    {"name": "mirror_neuron@mini", "connection_mode": "local"},
+                    {
+                        "name": "mirror_neuron@spark",
+                        "connection_mode": "federated",
+                        "peer_available": True,
+                    },
+                ]
+            }
+
+        def get_federated_peer(self, node_name):
+            assert node_name == "mirror_neuron@spark"
+            return {
+                "syncthing": {
+                    "enabled": True,
+                    "device_id": "SPARKDEVICE",
+                    "api_key": "spark-key",
+                    "host": "10.0.4.26",
+                    "gui_port": 58384,
+                    "sync_port": 22000,
+                    "folder_id": server_cmds.SYNCTHING_FOLDER_ID,
+                    "folder_path": server_cmds.SYNCTHING_FOLDER_PATH,
+                }
+            }
+
+    connect = mocker.patch(
+        "mn_cli.server_cmds._connect_syncthing_peers", return_value=True
+    )
+
+    result = server_cmds._reconcile_syncthing_federated_peers(
+        {
+            "MN_SYNCTHING_ENABLED": "auto",
+            "MN_SYNCTHING_DEVICE_ID": "MINIDEVICE",
+            "MN_SYNCTHING_API_KEY": "mini-key",
+            "MN_SYNCTHING_ADVERTISE_HOST": "10.0.4.23",
+        },
+        advertised_host="10.0.4.23",
+        core_client=CoreClient(),
+    )
+
+    assert result == {"discovered": 1, "connected": 1}
+    local_info, remote_info = connect.call_args.args
+    assert local_info["device_id"] == "MINIDEVICE"
+    assert remote_info["device_id"] == "SPARKDEVICE"
+
+
 def test_ensure_syncthing_folder_updates_existing_settings_and_preserves_peers_and_ignores(
     mocker,
 ):
@@ -2712,6 +2762,7 @@ def test_start_server_already_running(mocker, tmp_path):
     )
     mock_start_web = mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed', return_value=True)
     mock_start_native_sdk = mocker.patch('mn_cli.runtime.server._start_native_sdk_grpc_if_installed', return_value=True)
+    mock_reconcile_syncthing = mocker.patch('mn_cli.server_cmds._reconcile_syncthing_federated_peers')
     mock_write_endpoints = mocker.patch('mn_cli.server_cmds._write_runtime_endpoints_file', return_value={"api": {}})
     mock_print_endpoints = mocker.patch('mn_cli.server_cmds._print_service_endpoints')
 
@@ -2724,6 +2775,7 @@ def test_start_server_already_running(mocker, tmp_path):
     mock_start_native_sdk.assert_called_once()
     assert mock_start_native_sdk.call_args.kwargs["restart_running"] is True
     assert mock_start_native_sdk.call_args.kwargs["restart_reason"] == "runtime already running"
+    mock_reconcile_syncthing.assert_called_once()
     mock_write_endpoints.assert_called_once()
     mock_print_endpoints.assert_called_once_with(None, True)
 
