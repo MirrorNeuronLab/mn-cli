@@ -6526,6 +6526,12 @@ def _start_server(
     _start_native_sdk_grpc_if_installed(env)
     api_started = _start_api_if_installed(env)
 
+    if api_started:
+        _reconcile_syncthing_federated_peers(
+            env,
+            advertised_host=advertised_host,
+        )
+
     web_ui_available = _start_web_ui_if_installed(env)
     if api_started:
         endpoint_snapshot = _write_runtime_endpoints_file(env, web_ui_available=web_ui_available)
