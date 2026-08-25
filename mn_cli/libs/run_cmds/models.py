@@ -247,7 +247,7 @@ def _deferred_runtime_model_summary(
         entry = item.get("entry") if isinstance(item.get("entry"), dict) else {}
         logical = str(item.get("logical_model") or item.get("requested_model") or entry.get("id") or "").strip()
         policy = (
-            ["nemotron3", "gemma4:e2b"]
+            ["nemotron-3.5-lightning:latest", "gemma4:e2b"]
             if logical.lower() == "default"
             else [str(entry.get("id") or logical)]
         )
@@ -302,7 +302,7 @@ def _print_runtime_model_deferred_debug_plan(
         effective_entry = fallback or entry
         logical = str(item.get("logical_model") or "").strip().lower()
         chain = (
-            ["default", "nemotron3", "gemma4:e2b"]
+            ["default", "nemotron-3.5-lightning:latest", "gemma4:e2b"]
             if logical == "default"
             else _runtime_model_debug_chain(item, effective_entry)
         )

@@ -126,16 +126,16 @@ def test_model_list_defaults_to_added_and_available_includes_catalog(mocker):
 
 def test_model_list_marks_cluster_remote_installed_and_local_route_wins(mocker):
     upsert_model_remote(
-        "nemotron3",
-        "docker.io/ai/nemotron3:latest",
+        "nemotron-3.5-lightning:latest",
+        "nemotron-3.5-lightning:latest",
         "http://192.168.4.173:12434/engines/v1",
-        api_model="docker.io/ai/nemotron3:latest",
+        api_model="nemotron-3.5-lightning:latest",
         node="mirror_neuron@spark",
     )
     remotes = load_model_remotes()
-    remotes["remotes"]["nemotron3"]["managed_by"] = "mirror-neuron-cluster"
+    remotes["remotes"]["nemotron-3.5-lightning:latest"]["managed_by"] = "mirror-neuron-cluster"
     save_model_remotes(remotes)
-    entry = resolve_model_entry("nemotron3")
+    entry = resolve_model_entry("nemotron-3.5-lightning:latest")
     add_registered_models([dmr_registration(entry, selected_node="mirror_neuron@spark")])
     installed = set()
     mocker.patch(
@@ -146,27 +146,27 @@ def test_model_list_marks_cluster_remote_installed_and_local_route_wins(mocker):
         "mn_cli.libs.model_cmds._local_runtime_node_name",
         return_value="mirror_neuron@local",
     )
-    mocker.patch("mn_cli.libs.model_cmds.litellm_gateway_health", return_value={"ok": True, "models": ["nemotron3"]})
+    mocker.patch("mn_cli.libs.model_cmds.litellm_gateway_health", return_value={"ok": True, "models": ["nemotron-3.5-lightning:latest"]})
 
     remote_result = runner.invoke(app, ["model", "list", "--json"])
     assert remote_result.exit_code == 0
     remote_model = next(
         model
         for model in cli_data(remote_result)["models"]
-        if model["id"] == "nemotron3"
+        if model["id"] == "nemotron-3.5-lightning:latest"
     )
     assert remote_model["installed"] is True
     assert remote_model["kind"] == "dmr"
     assert remote_model["state"] == "ready"
     assert remote_model["node"] == "mirror_neuron@spark"
 
-    installed.add("docker.io/ai/nemotron3:latest")
+    installed.add("nemotron-3.5-lightning:latest")
     local_result = runner.invoke(app, ["model", "list", "--json"])
     assert local_result.exit_code == 0
     local_model = next(
         model
         for model in cli_data(local_result)["models"]
-        if model["id"] == "nemotron3"
+        if model["id"] == "nemotron-3.5-lightning:latest"
     )
     assert local_model["installed"] is True
     assert local_model["state"] == "ready"
@@ -175,21 +175,21 @@ def test_model_list_marks_cluster_remote_installed_and_local_route_wins(mocker):
 def test_model_list_includes_unregistered_cluster_artifact_as_unmanaged(mocker):
     upsert_model_remote(
         "spark-nemotron",
-        "docker.io/ai/nemotron3:latest",
+        "nemotron-3.5-lightning:latest",
         "http://192.168.4.173:4000/v1",
-        api_model="docker.io/ai/nemotron3:latest",
+        api_model="nemotron-3.5-lightning:latest",
         node="spark",
     )
     remotes = load_model_remotes()
     remotes["remotes"]["spark-nemotron"]["managed_by"] = "mirror-neuron-cluster"
     save_model_remotes(remotes)
     mocker.patch("mn_cli.libs.model_cmds._installed_model_names", return_value=set())
-    mocker.patch("mn_cli.libs.model_cmds.litellm_gateway_health", return_value={"ok": True, "models": ["nemotron3"]})
+    mocker.patch("mn_cli.libs.model_cmds.litellm_gateway_health", return_value={"ok": True, "models": ["nemotron-3.5-lightning:latest"]})
 
     result = runner.invoke(app, ["model", "list", "--json"])
 
     assert result.exit_code == 0
-    model = next(item for item in cli_data(result)["models"] if item["id"] == "nemotron3")
+    model = next(item for item in cli_data(result)["models"] if item["id"] == "nemotron-3.5-lightning:latest")
     assert model["state"] == "unmanaged"
     assert model["registered"] is False
     assert model["installed"] is True
@@ -206,11 +206,11 @@ def test_cluster_model_reconcile_reads_redis_snapshots_and_syncs_only_local_gate
             "status": {
                 "models": [
                     {
-                        "id": "nemotron3",
+                        "id": "nemotron-3.5-lightning:latest",
                         "provider": "docker_model_runner",
-                        "model": "docker.io/ai/nemotron3:latest",
-                        "api_model": "docker.io/ai/nemotron3:latest",
-                        "route_aliases": ["nemotron3"],
+                        "model": "nemotron-3.5-lightning:latest",
+                        "api_model": "nemotron-3.5-lightning:latest",
+                        "route_aliases": ["nemotron-3.5-lightning:latest"],
                         "installed": True,
                     }
                 ]
@@ -279,24 +279,24 @@ def test_cluster_model_reconcile_reads_redis_snapshots_and_syncs_only_local_gate
     assert result["models"] == 2
     assert len(synced) == 1
     assert synced[0]["restart"] is False
-    assert synced[0]["runtime_endpoints"]["nemotron3"]["node"] == "mirror_neuron@spark"
+    assert synced[0]["runtime_endpoints"]["nemotron-3.5-lightning:latest"]["node"] == "mirror_neuron@spark"
     assert (
-        synced[0]["runtime_endpoints"]["nemotron3"]["api_base"]
+        synced[0]["runtime_endpoints"]["nemotron-3.5-lightning:latest"]["api_base"]
         == "http://10.0.0.2:4000/v1"
     )
     assert (
-        synced[0]["runtime_endpoints"]["nemotron3"]["source"]
+        synced[0]["runtime_endpoints"]["nemotron-3.5-lightning:latest"]["source"]
         == "remote_litellm_gateway"
     )
-    assert synced[0]["runtime_endpoints"]["nemotron3"]["api_model"] == "nemotron3"
+    assert synced[0]["runtime_endpoints"]["nemotron-3.5-lightning:latest"]["api_model"] == "nemotron-3.5-lightning:latest"
     assert "gemma4:e2b" not in synced[0]["runtime_endpoints"]
     assert persisted[0][1]["replace"] is True
     assert persisted[0][1]["local_node"] == "mirror_neuron@local"
     peer_client.assert_not_called()
     local_result = next(item for item in result["nodes"] if item["node"] == local["name"])
     assert set(local_result["gateway_ack"]["accepted_routes"]) == {
-        "docker.io/ai/nemotron3:latest",
-        "nemotron3",
+        "nemotron-3.5-lightning:latest",
+        "nemotron-3.5-lightning:latest",
     }
     assert local_result["gateway_ack"]["status_event_ack"]["acked_count"] == 1
     event_ack.assert_called_once_with(["1-0"])
@@ -311,9 +311,9 @@ def test_cluster_model_reconcile_prunes_departed_runtime_status_snapshots(mocker
             "status": {
                 "models": [
                     {
-                        "id": "nemotron3",
+                        "id": "nemotron-3.5-lightning:latest",
                         "provider": "docker_model_runner",
-                        "model": "docker.io/ai/nemotron3:latest",
+                        "model": "nemotron-3.5-lightning:latest",
                         "installed": True,
                     }
                 ]
@@ -590,11 +590,11 @@ def test_cluster_route_reconcile_moves_duplicate_model_to_remaining_owner():
         "host": "10.0.0.2",
     }
     nemotron = {
-        "id": "nemotron3",
+        "id": "nemotron-3.5-lightning:latest",
         "provider": "docker_model_runner",
-        "model": "docker.io/ai/nemotron3:latest",
-        "api_model": "docker.io/ai/nemotron3:latest",
-        "route_aliases": ["nemotron3"],
+        "model": "nemotron-3.5-lightning:latest",
+        "api_model": "nemotron-3.5-lightning:latest",
+        "route_aliases": ["nemotron-3.5-lightning:latest"],
     }
 
     duplicate_routes = model_cmds._cluster_routes_from_inventories(
@@ -604,8 +604,8 @@ def test_cluster_route_reconcile_moves_duplicate_model_to_remaining_owner():
         [(local, []), (spark, [nemotron])]
     )
 
-    assert duplicate_routes["nemotron3"]["node"] == "mirror_neuron@local"
-    assert remaining_routes["nemotron3"]["node"] == "mirror_neuron@spark"
+    assert duplicate_routes["nemotron-3.5-lightning:latest"]["node"] == "mirror_neuron@local"
+    assert remaining_routes["nemotron-3.5-lightning:latest"]["node"] == "mirror_neuron@spark"
 
 
 def test_local_gateway_ignores_remote_route_when_same_model_is_installed_locally():
@@ -614,9 +614,9 @@ def test_local_gateway_ignores_remote_route_when_same_model_is_installed_locally
         "host": "10.0.0.1",
     }
     routes = {
-        "nemotron3": {
-            "runtime_model": "docker.io/ai/nemotron3:latest",
-            "api_model": "nemotron3",
+        "nemotron-3.5-lightning:latest": {
+            "runtime_model": "nemotron-3.5-lightning:latest",
+            "api_model": "nemotron-3.5-lightning:latest",
             "api_base": "http://10.0.0.2:12434/engines/v1",
             "node": "mirror_neuron@spark",
             "source": "remote-dmr",
@@ -626,7 +626,7 @@ def test_local_gateway_ignores_remote_route_when_same_model_is_installed_locally
     assert model_cmds._runtime_endpoints_for_local_gateway(
         routes,
         local,
-        local_installed_models={"docker.io/ai/nemotron3:latest"},
+        local_installed_models={"nemotron-3.5-lightning:latest"},
     ) == {}
 
 
@@ -1619,9 +1619,9 @@ def test_cluster_runtime_endpoint_sync_excludes_each_route_owner(mocker):
 
     model_cmds._sync_gateway_runtime_endpoints_across_cluster(
         {
-            "nemotron3": {
+            "nemotron-3.5-lightning:latest": {
                 "provider": "docker_model_runner",
-                "model": "docker.io/ai/nemotron3:latest",
+                "model": "nemotron-3.5-lightning:latest",
                 "api_base": "http://192.168.4.173:4000/v1",
                 "node": "spark-display-name",
                 "source": "remote_litellm_gateway",
@@ -1643,7 +1643,7 @@ def test_cluster_runtime_endpoint_sync_excludes_each_route_owner(mocker):
     }
     assert routes_by_target == {
         "192.168.4.173:55052": {"small"},
-        "192.168.4.174:55052": {"nemotron3"},
+        "192.168.4.174:55052": {"nemotron-3.5-lightning:latest"},
     }
 
 

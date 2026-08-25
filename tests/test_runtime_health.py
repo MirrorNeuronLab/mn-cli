@@ -242,7 +242,7 @@ def test_runtime_doctor_detects_stale_litellm_gateway_config(mocker):
             "ok": True,
             "path": "/tmp/.mn/models/litellm-gateway/config.yaml",
             "model_count": 2,
-            "models": ["gemma4:e2b", "nemotron3"],
+            "models": ["gemma4:e2b", "nemotron-3.5-lightning:latest"],
         },
     )
     mocker.patch(
@@ -255,7 +255,7 @@ def test_runtime_doctor_detects_stale_litellm_gateway_config(mocker):
     gateway = report["foundation"]["litellm_gateway"]
     assert report["overall"] == "critical"
     assert gateway["status"] == "critical"
-    assert gateway["missing_models"] == ["gemma4:e2b", "nemotron3"]
+    assert gateway["missing_models"] == ["gemma4:e2b", "nemotron-3.5-lightning:latest"]
     assert "stale config" in gateway["detail"]
 
 
@@ -337,7 +337,7 @@ def test_runtime_doctor_detects_legacy_compose_model_override(mocker, tmp_path):
         "\n"
         "models:\n"
         "  llm-runtime-model:\n"
-        "    model: \"${MN_LLM_MODEL_RUNNER_MODEL:-nemotron3}\"\n",
+        "    model: \"${MN_LLM_MODEL_RUNNER_MODEL:-nemotron-3.5-lightning:latest}\"\n",
         encoding="utf-8",
     )
     mocker.patch("mn_cli.libs.runtime_health.RUNTIME_COMPOSE_FILE", compose_file)
@@ -378,9 +378,9 @@ def test_runtime_doctor_command_json_exits_nonzero_for_stale_gateway(mocker):
                     "name": "litellm_gateway",
                     "status": "critical",
                     "target": "http://127.0.0.1:4000/v1",
-                    "configured_models": ["nemotron3"],
+                    "configured_models": ["nemotron-3.5-lightning:latest"],
                     "live_models": [],
-                    "missing_models": ["nemotron3"],
+                    "missing_models": ["nemotron-3.5-lightning:latest"],
                     "detail": "LiteLLM gateway is serving stale config",
                 }
             ],
@@ -396,7 +396,7 @@ def test_runtime_doctor_command_json_exits_nonzero_for_stale_gateway(mocker):
     assert result.exit_code == 1
     payload = cli_data(result)
     assert payload["overall"] == "critical"
-    assert payload["components"][0]["missing_models"] == ["nemotron3"]
+    assert payload["components"][0]["missing_models"] == ["nemotron-3.5-lightning:latest"]
 
 
 def test_runtime_health_repair_rechecks_after_restart(mocker):

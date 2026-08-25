@@ -1116,14 +1116,14 @@ def test_record_non_default_runtime_model_keeps_default_llm_model_runner_env():
 
     server_cmds.record_runtime_model_install(
         {
-            "id": "nemotron3",
-            "model": "nemotron3",
+            "id": "nemotron-3.5-lightning:latest",
+            "model": "nemotron-3.5-lightning:latest",
             "aliases": [],
         }
     )
 
     env = server_cmds._read_env_file(server_cmds.RUNTIME_COMPOSE_ENV)
-    assert env["MN_NODE_RUNTIME_MODELS"] == "nemotron3"
+    assert env["MN_NODE_RUNTIME_MODELS"] == "nemotron-3.5-lightning:latest"
     assert env["MN_LLM_MODEL_RUNNER_MODEL"] == "gemma4:e2b"
 
 
@@ -1517,7 +1517,7 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     monkeypatch.setattr(server_cmds.os, "uname", lambda: type("Uname", (), {"sysname": "Linux"})())
     mocker.patch('mn_cli.server_cmds.secrets.token_urlsafe', return_value="seed-token")
     mocker.patch('mn_cli.server_cmds._docker_container_running', return_value=False)
-    mocker.patch('mn_cli.server_cmds._installed_catalog_runtime_models', return_value=["nemotron3"])
+    mocker.patch('mn_cli.server_cmds._installed_catalog_runtime_models', return_value=["nemotron-3.5-lightning:latest"])
     port_available = mocker.patch('mn_cli.server_cmds._port_available_or_owned', return_value=True)
     start_api = mocker.patch('mn_cli.server_cmds._start_api_if_installed')
     start_web_ui = mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed')
@@ -1566,7 +1566,7 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     assert "MN_NETWORK_ONLY=true" in core_run
     assert not any(value.startswith("MN_REDIS_FORWARD_PRIMARY=") for value in core_run)
     assert "MN_NATIVE_SDK_GRPC_TARGET=host.docker.internal:55052" in core_run
-    assert "MN_NODE_RUNTIME_MODELS=nemotron3" in core_run
+    assert "MN_NODE_RUNTIME_MODELS=nemotron-3.5-lightning:latest" in core_run
     assert "MN_NODE_ALIAS=mn-seed" in core_run
     assert "MN_DOCKER_NETWORK_MODE=overlay" in core_run
     assert "MN_DOCKER_NETWORK_NAME=mirror-neuron-runtime" in core_run

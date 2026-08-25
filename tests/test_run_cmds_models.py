@@ -519,18 +519,18 @@ def test_prepare_runtime_models_preserves_node_owned_remote_while_rechecking_tar
             "models": {
                 "primary": {
                     "provider": "docker_model_runner",
-                    "runtime_model": "nemotron3:latest",
+                    "runtime_model": "nemotron-3.5-lightning:latest",
                     "backend": "llama.cpp",
                 }
             }
         },
     }
     catalog = {
-        "nemotron3:latest": {
-            "id": "nemotron3:latest",
-            "model": "docker.io/docker.io/ai/nemotron3:latest",
-            "api_model": "docker.io/docker.io/ai/nemotron3:latest",
-            "aliases": ["nemotron3", "docker.io/docker.io/ai/nemotron3:latest"],
+        "nemotron-3.5-lightning:latest": {
+            "id": "nemotron-3.5-lightning:latest",
+            "model": "nemotron-3.5-lightning:latest",
+            "api_model": "nemotron-3.5-lightning:latest",
+            "aliases": ["nemotron-3.5-lightning"],
             "provider": "docker_model_runner",
             "backend": "llama.cpp",
             "requirements": {"min_vram_gb": 48},
@@ -538,9 +538,9 @@ def test_prepare_runtime_models_preserves_node_owned_remote_while_rechecking_tar
     }
     upsert_model_remote(
         "spark",
-        "docker.io/docker.io/ai/nemotron3:latest",
+        "nemotron-3.5-lightning:latest",
         "http://192.168.4.173:12434/v1",
-        api_model="docker.io/docker.io/ai/nemotron3:latest",
+        api_model="nemotron-3.5-lightning:latest",
         node="spark",
     )
     mocker.patch("mn_cli.libs.run_cmds.load_model_catalog", return_value=catalog)
@@ -562,9 +562,9 @@ def test_prepare_runtime_models_preserves_node_owned_remote_while_rechecking_tar
             "install": {"status": "already_installed"},
             "endpoint": {
                 "provider": "docker_model_runner",
-                "model": "docker.io/docker.io/ai/nemotron3:latest",
-                "runtime_model": "docker.io/docker.io/ai/nemotron3:latest",
-                "api_model": "docker.io/docker.io/ai/nemotron3:latest",
+                "model": "nemotron-3.5-lightning:latest",
+                "runtime_model": "nemotron-3.5-lightning:latest",
+                "api_model": "nemotron-3.5-lightning:latest",
                 "api_base": "http://spark:12434/engines/v1",
                 "node": "spark",
                 "source": "cluster_node_install",
@@ -588,13 +588,13 @@ def test_prepare_runtime_models_preserves_node_owned_remote_while_rechecking_tar
     assert remotes["spark"]["base_url"] == "http://192.168.4.173:12434/v1"
     endpoints = json.loads(env_overrides["MN_MODEL_ENDPOINTS_JSON"])
     assert (
-        endpoints["nemotron3:latest"]["api_base"] == "http://mn-litellm-proxy:4000/v1"
+        endpoints["nemotron-3.5-lightning:latest"]["api_base"] == "http://mn-litellm-proxy:4000/v1"
     )
-    assert endpoints["nemotron3:latest"]["node"] == "spark"
+    assert endpoints["nemotron-3.5-lightning:latest"]["node"] == "spark"
     resolver = run_cmds._prepared_model_installed_resolver(summary)
     assert (
         resolver(
-            "docker.io/docker.io/ai/nemotron3:latest", {"model": "nemotron3:latest"}
+            "nemotron-3.5-lightning:latest", {"model": "nemotron-3.5-lightning:latest"}
         )
         is True
     )
@@ -614,13 +614,13 @@ def test_prepare_runtime_models_preserves_node_owned_remote_while_rechecking_tar
 def test_runtime_model_ready_label_includes_remote_install_node():
     label = run_cmds._runtime_model_ready_label(
         {
-            "id": "nemotron3",
+            "id": "nemotron-3.5-lightning:latest",
             "status": "runtime_node_installed",
             "endpoint": {"node": "mirror_neuron@192.168.4.173"},
         }
     )
 
-    assert label == "nemotron3 installed on mirror_neuron@192.168.4.173"
+    assert label == "nemotron-3.5-lightning:latest installed on mirror_neuron@192.168.4.173"
 
 
 def test_runtime_model_ready_label_includes_remote_already_installed_node():
@@ -638,14 +638,14 @@ def test_runtime_model_ready_label_includes_remote_already_installed_node():
 def test_model_remove_remote_records_matches_aliases(tmp_path, monkeypatch):
     monkeypatch.setenv("MN_MODEL_REMOTES_PATH", str(tmp_path / "remotes.json"))
     upsert_model_remote(
-        "spark-nemotron3",
-        "docker.io/docker.io/ai/nemotron3:latest",
+        "spark-nemotron-3.5-lightning:latest",
+        "nemotron-3.5-lightning:latest",
         "http://192.168.4.173:4000/v1",
-        api_model="docker.io/docker.io/ai/nemotron3:latest",
+        api_model="nemotron-3.5-lightning:latest",
         node="mirror_neuron@192.168.4.173",
     )
 
-    removed = model_cmds._remove_remote_model_records("nemotron3")
+    removed = model_cmds._remove_remote_model_records("nemotron-3.5-lightning:latest")
 
     assert len(removed) == 1
     assert removed[0]["node"] == "mirror_neuron@192.168.4.173"
@@ -668,16 +668,16 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
             {
                 "llm": {
                     "enabled": True,
-                    "model": "nemotron3:latest",
-                    "runtime_model": "nemotron3:latest",
+                    "model": "nemotron-3.5-lightning:latest",
+                    "runtime_model": "nemotron-3.5-lightning:latest",
                     "strict_json": True,
                     "require_live": True,
                     "default_config": "primary",
                     "configs": {
                         "primary": {
                             "provider": "docker_model_runner",
-                            "model": "nemotron3:latest",
-                            "runtime_model": "nemotron3:latest",
+                            "model": "nemotron-3.5-lightning:latest",
+                            "runtime_model": "nemotron-3.5-lightning:latest",
                             "backend": "llama.cpp",
                             "context_size": 8192,
                         }
@@ -692,17 +692,17 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
             "models": {
                 "primary": {
                     "provider": "docker_model_runner",
-                    "runtime_model": "nemotron3:latest",
+                    "runtime_model": "nemotron-3.5-lightning:latest",
                     "backend": "llama.cpp",
                 }
             }
         },
     }
     catalog = {
-        "nemotron3:latest": {
-            "id": "nemotron3:latest",
-            "model": "docker.io/docker.io/ai/nemotron3:latest",
-            "api_model": "docker.io/docker.io/ai/nemotron3:latest",
+        "nemotron-3.5-lightning:latest": {
+            "id": "nemotron-3.5-lightning:latest",
+            "model": "nemotron-3.5-lightning:latest",
+            "api_model": "nemotron-3.5-lightning:latest",
             "provider": "docker_model_runner",
             "backend": "llama.cpp",
             "requirements": {
@@ -744,9 +744,9 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
         return_value={
             "endpoint": {
                 "provider": "docker_model_runner",
-                "model": "docker.io/docker.io/ai/nemotron3:latest",
-                "runtime_model": "docker.io/docker.io/ai/nemotron3:latest",
-                "api_model": "docker.io/docker.io/ai/nemotron3:latest",
+                "model": "nemotron-3.5-lightning:latest",
+                "runtime_model": "nemotron-3.5-lightning:latest",
+                "api_model": "nemotron-3.5-lightning:latest",
                 "api_base": "http://spark:12434/engines/v1",
                 "node": "spark",
                 "source": "cluster_node_install",
@@ -766,19 +766,19 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
     assert summary["ok"] is True
     assert summary["models"][0]["status"] == "runtime_node_installed"
     assert "MN_MODEL_ENDPOINTS_JSON" in env_overrides
-    assert "docker.io/docker.io/ai/nemotron3:latest" in json.loads(
+    assert "nemotron-3.5-lightning:latest" in json.loads(
         env_overrides["MN_PREPARED_RUNTIME_MODELS_JSON"]
     )
     install_model.assert_not_called()
     cluster_install.assert_called_once()
     assert (
-        "Installing runtime model nemotron3:latest on spark"
+        "Installing runtime model nemotron-3.5-lightning:latest on spark"
         not in capsys.readouterr().out
     )
     resolver = run_cmds._prepared_model_installed_resolver(summary)
     assert (
         resolver(
-            "docker.io/docker.io/ai/nemotron3:latest", {"model": "nemotron3:latest"}
+            "nemotron-3.5-lightning:latest", {"model": "nemotron-3.5-lightning:latest"}
         )
         is True
     )
@@ -790,7 +790,7 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
                     "configs": {
                         "primary": {
                             "provider": "docker_model_runner",
-                            "model": "nemotron3:latest",
+                            "model": "nemotron-3.5-lightning:latest",
                         }
                     }
                 }
@@ -815,7 +815,7 @@ def _preferred_large_model_config(default_model: str = "gemma4:e2b") -> dict:
             "model": default_model,
             "runtime_model": default_model,
             "fallback_model": "gemma4:e2b",
-            "preferred_model": "nemotron3",
+            "preferred_model": "nemotron-3.5-lightning:latest",
             "default_config": "primary",
             "configs": {
                 "primary": {
@@ -831,8 +831,8 @@ def _preferred_large_model_config(default_model: str = "gemma4:e2b") -> dict:
                 },
                 "large": {
                     "provider": "docker_model_runner",
-                    "model": "nemotron3",
-                    "runtime_model": "nemotron3",
+                    "model": "nemotron-3.5-lightning:latest",
+                    "runtime_model": "nemotron-3.5-lightning:latest",
                     "backend": "llama.cpp",
                     "context_size": 8192,
                     "max_tokens": 1800,
@@ -873,8 +873,8 @@ def _preferred_large_model_config(default_model: str = "gemma4:e2b") -> dict:
             },
             "large_model_profile": {
                 "provider": "docker_model_runner",
-                "model": "nemotron3",
-                "runtime_model": "nemotron3",
+                "model": "nemotron-3.5-lightning:latest",
+                "runtime_model": "nemotron-3.5-lightning:latest",
                 "fallback_model": "gemma4:e2b",
                 "backend": "llama.cpp",
                 "context_size": 8192,
@@ -908,8 +908,8 @@ def test_default_manifest_model_is_satisfied_by_prepared_fallback():
     summary = {
         "models": [
             {
-                "id": "nemotron3",
-                "model": "docker.io/ai/nemotron3:latest",
+                "id": "nemotron-3.5-lightning:latest",
+                "model": "nemotron-3.5-lightning:latest",
                 "status": "fallback_model",
                 "fallback": {
                     "id": "gemma4:e2b",
@@ -940,8 +940,8 @@ def test_prepared_default_model_marks_inheriting_llm_profile_cluster_provided():
     summary = {
         "models": [
             {
-                "id": "nemotron3",
-                "model": "docker.io/ai/nemotron3:latest",
+                "id": "nemotron-3.5-lightning:latest",
+                "model": "nemotron-3.5-lightning:latest",
                 "status": "explicit_config",
             }
         ]
@@ -969,10 +969,10 @@ def test_prepared_default_model_marks_inheriting_llm_profile_cluster_provided():
 
 def _preferred_large_model_catalog() -> dict:
     return {
-        "nemotron3": {
-            "id": "nemotron3",
-            "model": "docker.io/docker.io/ai/nemotron3:latest",
-            "api_model": "nemotron3",
+        "nemotron-3.5-lightning:latest": {
+            "id": "nemotron-3.5-lightning:latest",
+            "model": "nemotron-3.5-lightning:latest",
+            "api_model": "nemotron-3.5-lightning:latest",
             "provider": "docker_model_runner",
             "backend": "llama.cpp",
             "context_size": 8192,
@@ -1053,9 +1053,9 @@ def test_prepare_runtime_models_promotes_preferred_large_profile_on_capable_clus
             },
             "endpoint": {
                 "provider": "docker_model_runner",
-                "model": "nemotron3",
-                "runtime_model": "docker.io/docker.io/ai/nemotron3:latest",
-                "api_model": "nemotron3",
+                "model": "nemotron-3.5-lightning:latest",
+                "runtime_model": "nemotron-3.5-lightning:latest",
+                "api_model": "nemotron-3.5-lightning:latest",
                 "api_base": "http://192.168.5.12:12434/engines/v1",
                 "node": "mirror_neuron@192.168.5.12",
                 "source": "remote-dmr",
@@ -1071,30 +1071,30 @@ def test_prepare_runtime_models_promotes_preferred_large_profile_on_capable_clus
 
     assert summary["ok"] is True
     assert len(summary["models"]) == 1
-    assert summary["models"][0]["id"] == "nemotron3"
+    assert summary["models"][0]["id"] == "nemotron-3.5-lightning:latest"
     assert summary["models"][0]["status"] == "runtime_node_already_installed"
     assert summary["models"][0]["cluster"]["node"] == "mirror_neuron@192.168.5.12"
     cluster_install.assert_called_once()
     install_model.assert_not_called()
     prepared = json.loads(env_overrides["MN_PREPARED_RUNTIME_MODELS_JSON"])
-    assert "nemotron3" in prepared
-    assert "docker.io/docker.io/ai/nemotron3:latest" in prepared
+    assert "nemotron-3.5-lightning:latest" in prepared
+    assert "nemotron-3.5-lightning:latest" in prepared
     effective_config = json.loads(env_overrides["MN_BLUEPRINT_CONFIG_JSON"])
     assert effective_config["llm"]["active_model_profile"] == "large_model_profile"
-    assert effective_config["llm"]["model"] == "nemotron3"
+    assert effective_config["llm"]["model"] == "nemotron-3.5-lightning:latest"
     assert (
         effective_config["llm"]["runtime_model"]
-        == "docker.io/docker.io/ai/nemotron3:latest"
+        == "nemotron-3.5-lightning:latest"
     )
     assert effective_config["llm"]["strict_json"] is True
-    assert effective_config["llm"]["configs"]["primary"]["model"] == "nemotron3"
+    assert effective_config["llm"]["configs"]["primary"]["model"] == "nemotron-3.5-lightning:latest"
     assert (
         effective_config["llm"]["configs"]["primary"]["runtime_model"]
-        == "docker.io/docker.io/ai/nemotron3:latest"
+        == "nemotron-3.5-lightning:latest"
     )
     resolver = run_cmds._prepared_model_installed_resolver(summary)
     assert (
-        resolver("docker.io/docker.io/ai/nemotron3:latest", {"model": "nemotron3"})
+        resolver("nemotron-3.5-lightning:latest", {"model": "nemotron-3.5-lightning:latest"})
         is True
     )
     validation_manifest, validation_config = (
@@ -1104,7 +1104,7 @@ def test_prepare_runtime_models_promotes_preferred_large_profile_on_capable_clus
                     "models": {
                         "primary": {
                             "provider": "docker_model_runner",
-                            "model": "nemotron3",
+                            "model": "nemotron-3.5-lightning:latest",
                         }
                     }
                 }
@@ -1114,7 +1114,7 @@ def test_prepare_runtime_models_promotes_preferred_large_profile_on_capable_clus
                     "configs": {
                         "primary": {
                             "provider": "docker_model_runner",
-                            "model": "nemotron3",
+                            "model": "nemotron-3.5-lightning:latest",
                         }
                     }
                 }
@@ -1235,7 +1235,7 @@ def test_prepare_runtime_models_surfaces_large_profile_prepare_failure_without_f
     cluster_install.assert_called_once()
     install_model.assert_not_called()
     output = capsys.readouterr().out
-    assert "Runtime model preparation failed: nemotron3" in output
+    assert "Runtime model preparation failed: nemotron-3.5-lightning:latest" in output
     assert "remote prepare failed" in output
     assert "code=model.prepare_install_failed" in output
 
@@ -1288,9 +1288,9 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
             "status": "installed",
             "endpoint": {
                 "provider": "docker_model_runner",
-                "model": "nemotron3",
-                "runtime_model": "nemotron3",
-                "api_model": "nemotron3",
+                "model": "nemotron-3.5-lightning:latest",
+                "runtime_model": "nemotron-3.5-lightning:latest",
+                "api_model": "nemotron-3.5-lightning:latest",
                 "api_base": "http://mn-litellm-proxy:4000/v1",
                 "node": "mirror_neuron@192.168.4.173",
                 "source": "litellm_gateway",
@@ -1303,11 +1303,11 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
     result = run_cmds._install_runtime_cluster_model(
         requirement={"context_size": 8192},
         entry={
-            "id": "nemotron3",
-            "model": "nemotron3",
+            "id": "nemotron-3.5-lightning:latest",
+            "model": "nemotron-3.5-lightning:latest",
             "provider": "docker_model_runner",
         },
-        model={"id": "nemotron3", "model": "nemotron3"},
+        model={"id": "nemotron-3.5-lightning:latest", "model": "nemotron-3.5-lightning:latest"},
         cluster={"node": "mirror_neuron@192.168.4.173"},
         backend="llama.cpp",
         context_size=8192,
@@ -1324,19 +1324,19 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
     remote_client.prepare_runtime_model.assert_called_once()
     payload = remote_client.prepare_runtime_model.call_args.args[0]
     assert payload["node"] == "mirror_neuron@192.168.4.173"
-    assert payload["model"] == "nemotron3"
+    assert payload["model"] == "nemotron-3.5-lightning:latest"
     assert payload["backend"] == "llama.cpp"
     assert result["endpoint"]["node"] == "mirror_neuron@192.168.4.173"
     assert result["endpoint"]["api_base"] == "http://192.168.4.173:4000/v1"
     assert result["endpoint"]["source"] == "remote_litellm_gateway"
     output = " ".join(capsys.readouterr().err.split())
     assert (
-        "Preparing runtime model nemotron3 on mirror_neuron@192.168.4.173 "
+        "Preparing runtime model nemotron-3.5-lightning:latest on mirror_neuron@192.168.4.173 "
         "with native SDK gRPC"
     ) in output
     assert len(progress_descriptions) == 1
     assert (
-        "Checking and preparing nemotron3 on mirror_neuron@192.168.4.173; "
+        "Checking and preparing nemotron-3.5-lightning:latest on mirror_neuron@192.168.4.173; "
         "waiting for remote Docker Model Runner..."
     ) in progress_descriptions[0]
 
@@ -1449,7 +1449,7 @@ def test_runtime_model_preflight_ignores_skill_owned_rag_model(mocker, tmp_path)
     config = {
         "llm": {
             "configs": {
-                "primary": {"provider": "docker_model_runner", "model": "nemotron3"}
+                "primary": {"provider": "docker_model_runner", "model": "nemotron-3.5-lightning:latest"}
             }
         },
         "knowledge_rag": {
@@ -1462,7 +1462,7 @@ def test_runtime_model_preflight_ignores_skill_owned_rag_model(mocker, tmp_path)
     plan = run_cmds._build_runtime_model_prepare_plan(tmp_path, {"nodes": []})
 
     labels = {item["id"] for item in plan["placement_models"]}
-    assert labels == {"nemotron3"}
+    assert labels == {"nemotron-3.5-lightning:latest"}
 
 
 def _write_adaptive_source_model_config(bundle_dir: Path) -> dict:
@@ -1524,7 +1524,7 @@ def test_runtime_model_plan_reads_source_manifest_defaults(tmp_path):
     ("include_spark", "expected_node", "expected_chat_model"),
     [
         (False, "mirror_neuron@mac", "docker.io/ai/gemma4:E2B"),
-        (True, "mirror_neuron@spark", "docker.io/ai/nemotron3:latest"),
+        (True, "mirror_neuron@spark", "nemotron-3.5-lightning:latest"),
     ],
 )
 def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_through_litellm(
@@ -1547,7 +1547,7 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
     )
     assert set(plan["catalog"]) == {
         "gemma4:e2b",
-        "nemotron3",
+        "nemotron-3.5-lightning:latest",
     }
     placement = run_cmds._preflight_and_apply_runtime_model_placement(
         manifest,
@@ -1631,11 +1631,11 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
     assert "action=inspect selected-node DMR, install if missing" in debug_output
     assert "Runtime model prepare responses" in debug_output
     if include_spark:
-        assert "default -> medium -> nemotron3" in debug_output
+        assert "default -> medium -> nemotron-3.5-lightning:latest" in debug_output
         assert "fallback=" not in debug_output
     else:
         assert "default -> medium -> gemma4:e2b" in debug_output
-        assert "fallback=nemotron3 is not runnable" in debug_output
+        assert "fallback=nemotron-3.5-lightning:latest is not runnable" in debug_output
 
 
 def test_injected_remote_installed_state_remains_routed_through_local_litellm(
@@ -1646,7 +1646,7 @@ def test_injected_remote_installed_state_remains_routed_through_local_litellm(
     manifest = _write_adaptive_source_model_config(bundle_dir)
     cluster = fake_runtime_model_cluster_factory(include_spark=True)
     cluster.installed_by_node["mirror_neuron@spark"] = {
-        "docker.io/ai/nemotron3:latest",
+        "nemotron-3.5-lightning:latest",
     }
     dependencies = cluster.dependencies()
     plan = run_cmds._build_runtime_model_prepare_plan(
@@ -1694,8 +1694,8 @@ def test_runtime_model_preflight_rejects_ineligible_node_before_prepare(mocker):
     manifest = {"runtime": {"placement": {"mode": "single_node"}}, "nodes": []}
     requirements = [
         {
-            "label": "nemotron3",
-            "model": "docker.io/ai/nemotron3:latest",
+            "label": "nemotron-3.5-lightning:latest",
+            "model": "nemotron-3.5-lightning:latest",
             "entry": {"requirements": {"min_unified_memory_gb": 48}},
             "source": "llm.configs.primary",
         }
@@ -1732,7 +1732,7 @@ def test_runtime_model_preflight_rejects_ineligible_node_before_prepare(mocker):
             system_summary=system,
         )
 
-    assert "model nemotron3: gpu_memory_free_mb=32768 < required=49152" in str(
+    assert "model nemotron-3.5-lightning:latest: gpu_memory_free_mb=32768 < required=49152" in str(
         error.value
     )
     prepare.assert_not_called()
@@ -1742,11 +1742,11 @@ def test_runtime_model_preflight_selects_small_fallback_for_default_on_small_nod
     manifest = {"runtime": {"placement": {"mode": "single_node"}}, "nodes": []}
     requirements = [
         {
-            "label": "nemotron3",
-            "model": "nemotron3",
+            "label": "nemotron-3.5-lightning:latest",
+            "model": "nemotron-3.5-lightning:latest",
             "entry": {
-                "id": "nemotron3",
-                "model": "nemotron3",
+                "id": "nemotron-3.5-lightning:latest",
+                "model": "nemotron-3.5-lightning:latest",
                 "fallback_model": "gemma4:e2b",
                 "requirements": {"min_unified_memory_gb": 48},
             },
@@ -1810,8 +1810,8 @@ def test_distributed_runtime_model_preflight_rejects_before_prepare(mocker):
     manifest = {"runtime": {"placement": {"mode": "distributed"}}, "nodes": []}
     requirements = [
         {
-            "label": "nemotron3",
-            "model": "docker.io/ai/nemotron3:latest",
+            "label": "nemotron-3.5-lightning:latest",
+            "model": "nemotron-3.5-lightning:latest",
             "entry": {"requirements": {"min_unified_memory_gb": 48}},
             "source": "llm.configs.primary",
         }
@@ -1841,7 +1841,7 @@ def test_distributed_runtime_model_preflight_rejects_before_prepare(mocker):
     prepare = mocker.patch("mn_cli.libs.run_cmds._install_runtime_cluster_model")
 
     with pytest.raises(
-        RuntimeError, match="No runtime node can prepare required model nemotron3"
+        RuntimeError, match="No runtime node can prepare required model nemotron-3.5-lightning:latest"
     ):
         run_cmds._preflight_and_apply_runtime_model_placement(
             manifest,
@@ -1858,11 +1858,11 @@ def test_runtime_model_summary_names_failed_model_and_node(capsys):
         {
             "models": [
                 {
-                    "id": "nemotron3",
+                    "id": "nemotron-3.5-lightning:latest",
                     "status": "failed",
                     "cluster": {"node": "mirror_neuron@mac"},
                     "prepare_stage": "compatibility",
-                    "error": "nemotron3 requires at least 48GB unified memory on Apple Silicon.",
+                    "error": "nemotron-3.5-lightning:latest requires at least 48GB unified memory on Apple Silicon.",
                     "error_code": "model.prepare_incompatible_hardware",
                 },
                 {
@@ -1875,7 +1875,7 @@ def test_runtime_model_summary_names_failed_model_and_node(capsys):
     )
 
     output = capsys.readouterr().out
-    assert "nemotron3 on mirror_neuron@mac" in output
+    assert "nemotron-3.5-lightning:latest on mirror_neuron@mac" in output
     assert "(compatibility):" in output
     assert "model.prepare_incompatible_hardware" in output
     assert (
@@ -1929,11 +1929,11 @@ def test_runtime_cluster_model_install_requires_native_sdk_grpc_metadata(mocker)
         run_cmds._install_runtime_cluster_model(
             requirement={"context_size": 8192},
             entry={
-                "id": "nemotron3",
-                "model": "nemotron3",
+                "id": "nemotron-3.5-lightning:latest",
+                "model": "nemotron-3.5-lightning:latest",
                 "provider": "docker_model_runner",
             },
-            model={"id": "nemotron3", "model": "nemotron3"},
+            model={"id": "nemotron-3.5-lightning:latest", "model": "nemotron-3.5-lightning:latest"},
             cluster={"node": "mirror_neuron@192.168.4.173"},
             backend="llama.cpp",
             context_size=8192,
@@ -1959,14 +1959,14 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
             {
                 "llm": {
                     "enabled": True,
-                    "model": "nemotron3:latest",
-                    "runtime_model": "nemotron3:latest",
+                    "model": "nemotron-3.5-lightning:latest",
+                    "runtime_model": "nemotron-3.5-lightning:latest",
                     "default_config": "primary",
                     "configs": {
                         "primary": {
                             "provider": "docker_model_runner",
-                            "model": "nemotron3:latest",
-                            "runtime_model": "nemotron3:latest",
+                            "model": "nemotron-3.5-lightning:latest",
+                            "runtime_model": "nemotron-3.5-lightning:latest",
                             "backend": "llama.cpp",
                             "context_size": 8192,
                         }
@@ -1983,8 +1983,8 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
                     },
                     "large_model_profile": {
                         "provider": "docker_model_runner",
-                        "model": "nemotron3:latest",
-                        "runtime_model": "nemotron3:latest",
+                        "model": "nemotron-3.5-lightning:latest",
+                        "runtime_model": "nemotron-3.5-lightning:latest",
                         "backend": "llama.cpp",
                         "context_size": 8192,
                         "max_tokens": 1800,
@@ -2003,16 +2003,16 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
             "models": {
                 "primary": {
                     "provider": "docker_model_runner",
-                    "runtime_model": "nemotron3:latest",
+                    "runtime_model": "nemotron-3.5-lightning:latest",
                     "backend": "llama.cpp",
                 }
             }
         },
     }
     catalog = {
-        "nemotron3:latest": {
-            "id": "nemotron3:latest",
-            "model": "docker.io/docker.io/ai/nemotron3:latest",
+        "nemotron-3.5-lightning:latest": {
+            "id": "nemotron-3.5-lightning:latest",
+            "model": "nemotron-3.5-lightning:latest",
             "provider": "docker_model_runner",
             "backend": "llama.cpp",
             "fallback_model": "gemma4:e2b",
@@ -2087,16 +2087,16 @@ def test_runtime_model_profile_applies_large_model_strict_contract():
     config = {
         "llm": {
             "enabled": True,
-            "model": "nemotron3",
-            "runtime_model": "nemotron3",
+            "model": "nemotron-3.5-lightning:latest",
+            "runtime_model": "nemotron-3.5-lightning:latest",
             "strict_json": False,
             "require_live": False,
             "default_config": "primary",
             "configs": {
                 "primary": {
                     "provider": "docker_model_runner",
-                    "model": "nemotron3",
-                    "runtime_model": "nemotron3",
+                    "model": "nemotron-3.5-lightning:latest",
+                    "runtime_model": "nemotron-3.5-lightning:latest",
                     "backend": "llama.cpp",
                     "max_tokens": 900,
                     "num_retries": 2,
@@ -2111,8 +2111,8 @@ def test_runtime_model_profile_applies_large_model_strict_contract():
             },
             "large_model_profile": {
                 "provider": "docker_model_runner",
-                "model": "nemotron3",
-                "runtime_model": "nemotron3",
+                "model": "nemotron-3.5-lightning:latest",
+                "runtime_model": "nemotron-3.5-lightning:latest",
                 "backend": "llama.cpp",
                 "context_size": 8192,
                 "max_tokens": 1800,

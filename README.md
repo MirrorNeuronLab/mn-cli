@@ -304,7 +304,7 @@ snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
   submission; the submitted node receives the concrete sandbox name and SSH
   host instead of asking Core to create host resources.
 - `default` is a LiteLLM model group, not a concrete model: it prefers
-  `nemotron3` and falls back to `gemma4:e2b` when no healthy node can run
+  `nemotron-3.5-lightning:latest` and falls back to `gemma4:e2b` when no healthy node can run
   Nemotron. The existing cluster model monitor
   rebuilds these routes as nodes join, rejoin, or leave; incomplete peer
   snapshots retain the last safe routes until departure is confirmed.
