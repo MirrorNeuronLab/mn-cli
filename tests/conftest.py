@@ -82,3 +82,10 @@ def current_job_run_contract(monkeypatch):
             {"job_id": job_id, "run_id": run_id or f"{job_id}-run", "inputs": inputs}
         ),
     )
+
+
+@pytest.fixture(autouse=True)
+def disable_background_event_relay_in_tests(monkeypatch):
+    """Keep command tests from leaving detached relays behind after pytest exits."""
+
+    monkeypatch.setenv("MN_RUN_BACKGROUND_EVENT_RELAY", "0")

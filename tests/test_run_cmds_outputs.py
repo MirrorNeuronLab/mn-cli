@@ -488,6 +488,7 @@ def test_materialize_shared_storage_outputs_retains_submission_after_copy(tmp_pa
 def test_detached_batch_run_starts_output_event_relay_for_shared_storage(
     mocker, tmp_path, monkeypatch
 ):
+    monkeypatch.setenv("MN_RUN_BACKGROUND_EVENT_RELAY", "1")
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", str(tmp_path / "shared"))
     monkeypatch.setenv("MN_RUNTIME_SHARED_STORAGE_ROOT", "/runtime/shared")
