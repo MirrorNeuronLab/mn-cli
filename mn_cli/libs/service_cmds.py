@@ -62,7 +62,12 @@ def resolve_service(
         payload = json.loads(response)
         print_detail(console, "Service", payload if isinstance(payload, dict) else {"services": payload})
     except Exception as exc:
-        handle_cli_error(exc, console, "service show")
+        handle_cli_error(
+            exc,
+            console,
+            "service show",
+            command_context={"name": name},
+        )
 
 
 def check_services(

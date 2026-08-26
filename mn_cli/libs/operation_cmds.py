@@ -62,7 +62,12 @@ def status(
     try:
         print_detail(console, "Operation", _json_object(client.get_operation(operation_id)))
     except Exception as error:
-        handle_cli_error(error, console, "operation show")
+        handle_cli_error(
+            error,
+            console,
+            "operation show",
+            command_context={"operation_id": operation_id},
+        )
 
 
 def watch(
@@ -75,7 +80,12 @@ def watch(
         print_info(console, f"Detached from operation {operation_id}; it continues in the cluster.")
         console.print(f"Operation ID: {operation_id}")
     except Exception as error:
-        handle_cli_error(error, console, "operation watch")
+        handle_cli_error(
+            error,
+            console,
+            "operation watch",
+            command_context={"operation_id": operation_id},
+        )
 
 
 def _watch(

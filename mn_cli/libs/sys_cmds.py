@@ -428,7 +428,12 @@ def leave(
             next_steps="mn node list",
         )
     except Exception as e:
-        handle_cli_error(e, console, 'leave')
+        handle_cli_error(
+            e,
+            console,
+            "leave",
+            command_context={"node_name": node_name},
+        )
 
 def refresh_token():
     """Rotate the persistent MirrorNeuron network join token"""

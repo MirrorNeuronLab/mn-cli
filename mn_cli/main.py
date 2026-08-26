@@ -250,11 +250,15 @@ def cli() -> None:
         raise
     except Exception as exc:
         try:
+            command_parts = [
+                part for part in sys.argv[1:] if part and not part.startswith("-")
+            ]
+            command = " ".join(command_parts[:2]) or "command"
             handle_cli_error(
                 exc,
                 Console(stderr=True),
-                " ".join(sys.argv[1:2]) or "command",
-                command_context={"argv": sys.argv[1:]},
+                command,
+                command_context={"command": command, "argv": sys.argv[1:]},
             )
         except typer.Exit as exit_exc:
             raise SystemExit(exit_exc.exit_code) from exc

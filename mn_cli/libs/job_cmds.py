@@ -90,7 +90,12 @@ def show_node(node_name: str = typer.Argument(help="Runtime node name.")):
     except typer.Exit:
         raise
     except Exception as exc:
-        handle_cli_error(exc, console, "node show")
+        handle_cli_error(
+            exc,
+            console,
+            "node show",
+            command_context={"node_name": node_name},
+        )
 
 
 def _strip_node_list_restart_history(value):
@@ -190,7 +195,12 @@ def reconcile_node(
     except typer.Exit:
         raise
     except Exception as e:
-        handle_cli_error(e, console, 'reconcile-node')
+        handle_cli_error(
+            e,
+            console,
+            "reconcile-node",
+            command_context={"node_name": node_name},
+        )
 
 
 def drain_node(
@@ -224,7 +234,12 @@ def drain_node(
     except typer.Exit:
         raise
     except Exception as e:
-        handle_cli_error(e, console, 'drain-node')
+        handle_cli_error(
+            e,
+            console,
+            "drain-node",
+            command_context={"node_name": node_name},
+        )
 
 
 def undrain_node(
@@ -250,7 +265,12 @@ def undrain_node(
             details={"Mark eligible": mark_eligible},
         )
     except Exception as e:
-        handle_cli_error(e, console, 'undrain-node')
+        handle_cli_error(
+            e,
+            console,
+            "undrain-node",
+            command_context={"node_name": node_name},
+        )
 
 
 def maintenance_node(
@@ -272,7 +292,12 @@ def maintenance_node(
             details={"Mode": "enabled" if enable else "disabled"},
         )
     except Exception as e:
-        handle_cli_error(e, console, 'maintenance-node')
+        handle_cli_error(
+            e,
+            console,
+            "maintenance-node",
+            command_context={"node_name": node_name},
+        )
 
 
 def parse_duration_ms(value: str) -> int:

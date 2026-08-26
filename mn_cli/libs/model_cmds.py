@@ -126,7 +126,12 @@ CLUSTER_REMOTE_MODEL_SOURCES = {
 }
 
 
-def _handle_model_error(error: Exception, context: str) -> None:
+def _handle_model_error(
+    error: Exception,
+    context: str,
+    *,
+    model: str | None = None,
+) -> None:
     if isinstance(error, (ValueError, ModelRegistryError)):
         error = AppError(
             "MN_MODEL_INVALID",
@@ -137,7 +142,8 @@ def _handle_model_error(error: Exception, context: str) -> None:
             http_status=422,
             cause=error,
         )
-    handle_cli_error(error, console, context)
+    command_context = {"model": model} if model else None
+    handle_cli_error(error, console, context, command_context=command_context)
 
 
 @model_app.command(name="list")
@@ -243,7 +249,7 @@ def show_model(
             return
         _print_model_detail(payload)
     except Exception as exc:
-        _handle_model_error(exc, "model show")
+        _handle_model_error(exc, "model show", model=model)
         raise typer.Exit(1)
 
 
@@ -447,7 +453,7 @@ def add_model(
     except typer.Exit:
         raise
     except Exception as exc:
-        _handle_model_error(exc, "model add")
+        _handle_model_error(exc, "model add", model=model)
         raise typer.Exit(1)
 
 
@@ -509,7 +515,7 @@ def update_model(
     except typer.Exit:
         raise
     except Exception as exc:
-        _handle_model_error(exc, "model update")
+        _handle_model_error(exc, "model update", model=model)
         raise typer.Exit(1)
 
 
@@ -706,7 +712,7 @@ def remove_model(
     except typer.Exit:
         raise
     except Exception as exc:
-        _handle_model_error(exc, "model remove")
+        _handle_model_error(exc, "model remove", model=model)
         raise typer.Exit(1)
 
 
@@ -863,7 +869,7 @@ def doctor_model(
     except typer.Exit:
         raise
     except Exception as exc:
-        _handle_model_error(exc, "model doctor")
+        _handle_model_error(exc, "model doctor", model=model)
         raise typer.Exit(1)
 
 

@@ -256,7 +256,9 @@ def test_delete_attempts_local_cleanup_after_core_closes_runs(monkeypatch):
     monkeypatch.setattr(
         job_definition_cmds,
         "handle_cli_error",
-        lambda error, _console, action: handled_errors.append((str(error), action)),
+        lambda error, _console, action, **kwargs: handled_errors.append(
+            (str(error), action, kwargs.get("command_context"))
+        ),
     )
 
     job_definition_cmds.delete("stable-job", yes=True)
@@ -267,6 +269,7 @@ def test_delete_attempts_local_cleanup_after_core_closes_runs(monkeypatch):
         (
             "OpenShell sandbox is busy",
             "job delete",
+            {"job_id": "stable-job"},
         )
     ]
 

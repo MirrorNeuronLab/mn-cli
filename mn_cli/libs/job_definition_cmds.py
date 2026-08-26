@@ -103,7 +103,7 @@ def inspect(job_id: str = typer.Argument(help="Durable job ID.")):
     try:
         print_detail(console, "Job", json.loads(client.get_job(job_id)))
     except Exception as exc:
-        handle_cli_error(exc, console, "job show")
+        handle_cli_error(exc, console, "job show", command_context={"job_id": job_id})
 
 
 def archive(job_id: str = typer.Argument(help="Durable job ID.")):
@@ -124,7 +124,7 @@ def archive(job_id: str = typer.Argument(help="Durable job ID.")):
             )
         record_result(result)
     except Exception as exc:
-        handle_cli_error(exc, console, "job archive")
+        handle_cli_error(exc, console, "job archive", command_context={"job_id": job_id})
 
 
 def reset_data(
@@ -144,7 +144,7 @@ def reset_data(
         print_success_confirmation(console, "Job data reset", status=result.get("status"), details={"Job ID": job_id})
         record_result(result)
     except Exception as exc:
-        handle_cli_error(exc, console, "job reset-data")
+        handle_cli_error(exc, console, "job reset-data", command_context={"job_id": job_id})
 
 
 def delete(
@@ -181,7 +181,7 @@ def delete(
         print_success_confirmation(console, "Job delete", status=result.get("status"), details={"Job ID": job_id})
         record_result(result)
     except Exception as exc:
-        handle_cli_error(exc, console, "job delete")
+        handle_cli_error(exc, console, "job delete", command_context={"job_id": job_id})
 
 
 def start(
@@ -237,7 +237,7 @@ def start(
         )
         record_result(result)
     except Exception as exc:
-        handle_cli_error(exc, console, "job start")
+        handle_cli_error(exc, console, "job start", command_context={"job_id": job_id})
 
 
 def runs(job_id: str = typer.Argument(help="Durable job ID.")):
@@ -245,7 +245,7 @@ def runs(job_id: str = typer.Argument(help="Durable job ID.")):
     try:
         console.print_json(data=json.loads(client.list_runs(job_id)))
     except Exception as exc:
-        handle_cli_error(exc, console, "run list")
+        handle_cli_error(exc, console, "run list", command_context={"job_id": job_id})
 
 
 def run_status(run_id: str):
@@ -300,7 +300,7 @@ def run_delete(
         print_success_confirmation(console, "Run delete", status=result.get("status"), details={"Run ID": run_id})
         record_result(result)
     except Exception as exc:
-        handle_cli_error(exc, console, "run delete")
+        handle_cli_error(exc, console, "run delete", command_context={"run_id": run_id})
 
 
 def _print_run(
@@ -322,7 +322,7 @@ def _print_run(
             print_success_confirmation(console, label.replace("run ", "Run "), status=result.get("status"), details={"Run ID": run_id})
             record_result(result)
     except Exception as exc:
-        handle_cli_error(exc, console, label)
+        handle_cli_error(exc, console, label, command_context={"run_id": run_id})
 
 
 def _read_json_object(path: str) -> dict:

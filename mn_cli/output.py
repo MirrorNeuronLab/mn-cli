@@ -202,6 +202,15 @@ def record_warning(message: Any, *, code: str | None = None) -> None:
 
 def record_error(error: AppError | Exception, *, command_context: dict[str, Any] | None = None) -> AppError:
     app_error = error if isinstance(error, AppError) else normalize_exception(error, context=command_context)
+    command = str((command_context or {}).get("command") or "").strip()
+    if command:
+        from mn_cli.error_handler import contextualize_cli_error
+
+        app_error = contextualize_cli_error(
+            app_error,
+            command,
+            command_context=command_context,
+        )
     session = current_session()
     if session is not None and session.error is None:
         session.error = app_error
