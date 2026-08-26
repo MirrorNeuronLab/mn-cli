@@ -94,12 +94,14 @@ def test_doctor_bundle_check_only_skips_openshell_build(mocker, tmp_path):
     (bundle_dir / "manifest.json").write_text(
         json.dumps(
             {
-                "nodes": [
-                    {
-                        "node_id": "shell",
-                        "config": {"runner_module": "MirrorNeuron.Sandbox.OpenShell"},
-                    }
-                ]
+                "agents": {
+                    "nodes": [
+                        {
+                            "node_id": "shell",
+                            "config": {"runner_module": "MirrorNeuron.Sandbox.OpenShell"},
+                        }
+                    ]
+                }
             }
         )
     )
@@ -146,15 +148,17 @@ def test_doctor_environment_probe_reports(mocker, tmp_path):
     env_dir = tmp_path / "venv"
     mocker.patch("mn_cli.libs.run_cmds._doctor_prepare_python_env", return_value=env_dir)
     host_manifest = {
-        "nodes": [
-            {
-                "node_id": "native",
-                "config": {
-                    "runner_module": "MirrorNeuron.Runner.HostLocal",
-                    "python_environment": {"packages": ["requests"]},
-                },
-            }
-        ]
+        "agents": {
+            "nodes": [
+                {
+                    "node_id": "native",
+                    "config": {
+                        "runner_module": "MirrorNeuron.Runner.HostLocal",
+                        "python_environment": {"packages": ["requests"]},
+                    },
+                }
+            ]
+        }
     }
 
     host_report = run_cmds._doctor_prepare_hostlocal_python_envs(
@@ -165,12 +169,14 @@ def test_doctor_environment_probe_reports(mocker, tmp_path):
     )
     openshell_report = run_cmds._doctor_openshell_report(
         {
-            "nodes": [
-                {
-                    "node_id": "shell",
-                    "config": {"runner_module": "MirrorNeuron.Sandbox.OpenShell"},
-                }
-            ]
+            "agents": {
+                "nodes": [
+                    {
+                        "node_id": "shell",
+                        "config": {"runner_module": "MirrorNeuron.Sandbox.OpenShell"},
+                    }
+                ]
+            }
         }
     )
     docker_report = run_cmds._doctor_docker_worker_report(
@@ -202,17 +208,19 @@ def test_doctor_prepares_hostlocal_python_on_selected_remote_node(mocker, tmp_pa
                 ]
             },
         },
-        "nodes": [
-            {
-                "node_id": "report_writer",
-                "config": {
-                    "runner_module": "MirrorNeuron.Runner.HostLocal",
-                    "python_environment": {
-                        "packages": [str(local_source), "requests==2.32.0"]
+        "agents": {
+            "nodes": [
+                {
+                    "node_id": "report_writer",
+                    "config": {
+                        "runner_module": "MirrorNeuron.Runner.HostLocal",
+                        "python_environment": {
+                            "packages": [str(local_source), "requests==2.32.0"]
+                        },
                     },
-                },
-            }
-        ],
+                }
+            ]
+        },
     }
     runtime_client = object()
     mocker.patch("mn_cli.libs.run_cmds.handlers.doctor._local_runtime_node_name", return_value="mirror_neuron@mac")
@@ -232,7 +240,7 @@ def test_doctor_prepares_hostlocal_python_on_selected_remote_node(mocker, tmp_pa
     )
 
     assert report["status"] == "passing"
-    assert manifest["nodes"][0]["config"]["python_environment"]["path"] == "/runtime/shared/blueprint-python-envs/remote"
+    assert manifest["agents"]["nodes"][0]["config"]["python_environment"]["path"] == "/runtime/shared/blueprint-python-envs/remote"
     assert prepare.call_args.args[0] is runtime_client
     assert prepare.call_args.args[1]["node"] == "mirror_neuron@spark"
     assert prepare.call_args.args[1]["ensure_hostlocal_python_environment"] is True
@@ -248,15 +256,17 @@ def test_doctor_prepares_distributed_hostlocal_python_on_federated_owner(
 ):
     manifest = {
         "runtime": {"placement": {"mode": "distributed"}},
-        "nodes": [
-            {
-                "node_id": "web_ui",
-                "config": {
-                    "runner_module": "MirrorNeuron.Runner.HostLocal",
-                    "python_environment": {"packages": ["requests==2.32.0"]},
-                },
-            }
-        ],
+        "agents": {
+            "nodes": [
+                {
+                    "node_id": "web_ui",
+                    "config": {
+                        "runner_module": "MirrorNeuron.Runner.HostLocal",
+                        "python_environment": {"packages": ["requests==2.32.0"]},
+                    },
+                }
+            ]
+        },
     }
     runtime_client = object()
     mocker.patch(
@@ -292,7 +302,7 @@ def test_doctor_prepares_distributed_hostlocal_python_on_federated_owner(
 
     assert report["status"] == "passing"
     assert prepare.call_args.args[1]["node"] == "mirror_neuron@spark"
-    assert manifest["nodes"][0]["config"]["python_environment"]["path"] == (
+    assert manifest["agents"]["nodes"][0]["config"]["python_environment"]["path"] == (
         "/root/.mn/cache/blueprint-python-envs/remote"
     )
     local_prepare.assert_not_called()
@@ -315,15 +325,17 @@ def test_doctor_passes_declared_local_source_versions_to_local_hostlocal_prepare
                 ]
             }
         },
-        "nodes": [
-            {
-                "node_id": "worker",
-                "config": {
-                    "runner_module": "MirrorNeuron.Runner.HostLocal",
-                    "python_environment": {"packages": [str(local_source)]},
-                },
-            }
-        ],
+        "agents": {
+            "nodes": [
+                {
+                    "node_id": "worker",
+                    "config": {
+                        "runner_module": "MirrorNeuron.Runner.HostLocal",
+                        "python_environment": {"packages": [str(local_source)]},
+                    },
+                }
+            ]
+        },
     }
     mocker.patch(
         "mn_cli.libs.run_cmds.handlers.doctor._local_runtime_node_name",
@@ -755,15 +767,17 @@ def test_doctor_warns_when_explicit_python_cache_is_synchronized(
     mocker.patch("mn_cli.libs.run_cmds._doctor_prepare_python_env", return_value=env_dir)
     mocker.patch("mn_cli.libs.run_cmds._doctor_running_core_container", return_value="")
     manifest = {
-        "nodes": [
-            {
-                "node_id": "native",
-                "config": {
-                    "runner_module": "MirrorNeuron.Runner.HostLocal",
-                    "python_environment": {"packages": ["requests"]},
-                },
-            }
-        ]
+        "agents": {
+            "nodes": [
+                {
+                    "node_id": "native",
+                    "config": {
+                        "runner_module": "MirrorNeuron.Runner.HostLocal",
+                        "python_environment": {"packages": ["requests"]},
+                    },
+                }
+            ]
+        }
     }
 
     report = run_cmds._doctor_prepare_hostlocal_python_envs(

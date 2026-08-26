@@ -90,9 +90,6 @@ from mn_sdk.staged_artifacts import (
     resolve_json_reference,
 )
 from mn_sdk.submission_preparation import (
-    add_mn_llm_aliases as _add_mn_llm_aliases,
-)
-from mn_sdk.submission_preparation import (
     blueprint_runtime_environment as _blueprint_runtime_environment,
 )
 from mn_sdk.submission_preparation import (
@@ -196,7 +193,6 @@ CONTEXT_ENGINE_EXPECTATION = (
 )
 FALSE_VALUES = {"0", "false", "no", "off"}
 _HELPER_COMPAT = (
-    _add_mn_llm_aliases,
     _blueprint_runtime_environment,
     _extract_web_ui_url,
     _inject_node_environment,

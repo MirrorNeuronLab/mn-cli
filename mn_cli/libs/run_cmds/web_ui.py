@@ -100,7 +100,6 @@ def _manifest_web_ui_service(manifest_dict: dict[str, Any]) -> Optional[dict[str
 
 def _manifest_services(manifest_dict: dict[str, Any]) -> list[dict[str, Any]]:
     groups: list[Any] = [
-        manifest_dict.get("nodes"),
         (manifest_dict.get("agents") or {}).get("nodes"),
         (manifest_dict.get("agents") or {}).get("extra_nodes"),
         (manifest_dict.get("flow") or {}).get("nodes"),

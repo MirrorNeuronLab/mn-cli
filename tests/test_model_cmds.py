@@ -133,7 +133,8 @@ def test_model_list_marks_cluster_remote_installed_and_local_route_wins(mocker):
         node="mirror_neuron@spark",
     )
     remotes = load_model_remotes()
-    remotes["remotes"]["nemotron-3.5-lightning:latest"]["managed_by"] = "mirror-neuron-cluster"
+    remote_key = next(iter(remotes["remotes"]))
+    remotes["remotes"][remote_key]["managed_by"] = "mirror-neuron-cluster"
     save_model_remotes(remotes)
     entry = resolve_model_entry("nemotron-3.5-lightning:latest")
     add_registered_models([dmr_registration(entry, selected_node="mirror_neuron@spark")])

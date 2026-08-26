@@ -127,37 +127,39 @@ def _cctv_placement_manifest():
             },
             "memory": {"enabled": True},
         },
-        "nodes": [
-            {
-                "node_id": "visual_detector",
-                "config": {
-                    "runner_module": "MirrorNeuron.Runner.DockerWorker",
-                    "gpus": "all",
-                },
-                "constraints": [
-                    {
-                        "attribute": "capabilities",
-                        "operator": "contains_all",
-                        "value": ["nvidia", "cuda"],
-                    }
-                ],
-                "resources": {
-                    "gpu_count": 1,
-                    "devices": [
+        "agents": {
+            "nodes": [
+                {
+                    "node_id": "visual_detector",
+                    "config": {
+                        "runner_module": "MirrorNeuron.Runner.DockerWorker",
+                        "gpus": "all",
+                    },
+                    "constraints": [
                         {
-                            "kind": "gpu",
-                            "vendor": "nvidia",
-                            "driver": "cuda",
-                            "min_memory_mb": 49152,
+                            "attribute": "capabilities",
+                            "operator": "contains_all",
+                            "value": ["nvidia", "cuda"],
                         }
                     ],
+                    "resources": {
+                        "gpu_count": 1,
+                        "devices": [
+                            {
+                                "kind": "gpu",
+                                "vendor": "nvidia",
+                                "driver": "cuda",
+                                "min_memory_mb": 49152,
+                            }
+                        ],
+                    },
                 },
-            },
-            {
-                "node_id": "report_writer",
-                "config": {"runner_module": "MirrorNeuron.Runner.HostLocal"},
-            },
-        ],
+                {
+                    "node_id": "report_writer",
+                    "config": {"runner_module": "MirrorNeuron.Runner.HostLocal"},
+                },
+            ]
+        },
     }
 
 
@@ -168,6 +170,11 @@ def _matching_system_summary(resources):
             "name": node["name"],
             "status": node["status"],
             "scheduling_eligible": node["scheduling_eligible"],
+            "coordination_store": {
+                "identity": "test-store",
+                "writable_primary": True,
+                "healthy": True,
+            },
         }
         if "spark" in node["name"]:
             system["native_sdk_grpc"] = {
@@ -195,7 +202,7 @@ def test_single_node_placement_selects_spark_and_pins_all_agents():
         manifest["metadata"]["mn_workflow_placement"]["selected_node"]
         == "mirror_neuron@spark"
     )
-    for node in manifest["nodes"]:
+    for node in manifest["agents"]["nodes"]:
         assert node["policies"]["scheduler"]["preferred_node"] == "mirror_neuron@spark"
         assert {
             "attribute": "node.name",
@@ -208,13 +215,13 @@ def test_single_node_placement_selects_spark_and_pins_all_agents():
 def test_hostlocal_preflight_without_models_pins_cpu_workflow_to_local_node():
     manifest = {
         "requirements": {"gpu": {"min_count": 0}},
-        "nodes": [
-            {
+        "agents": {
+            "nodes": [{
                 "node_id": "worker",
                 "config": {"runner_module": "MirrorNeuron.Runner.HostLocal"},
                 "resources": {"cpu_cores": 0.1, "memory_mb": 64},
-            }
-        ]
+            }]
+        }
     }
     resources = _mac_and_spark_resources()
     system = _matching_system_summary(resources)
@@ -227,7 +234,7 @@ def test_hostlocal_preflight_without_models_pins_cpu_workflow_to_local_node():
     )
 
     assert placement["selected_node"] == "mirror_neuron@mac"
-    assert manifest["nodes"][0]["policies"]["scheduler"]["preferred_node"] == (
+    assert manifest["agents"]["nodes"][0]["policies"]["scheduler"]["preferred_node"] == (
         "mirror_neuron@mac"
     )
 
@@ -295,10 +302,10 @@ def test_single_node_placement_requires_remote_native_sdk_prerequisites():
 
 def test_single_node_placement_rejects_conflicting_explicit_agents():
     manifest = _cctv_placement_manifest()
-    manifest["nodes"][0]["policies"] = {
+    manifest["agents"]["nodes"][0]["policies"] = {
         "scheduler": {"preferred_node": "mirror_neuron@spark"}
     }
-    manifest["nodes"][1]["constraints"] = [
+    manifest["agents"]["nodes"][1]["constraints"] = [
         {"attribute": "node.name", "operator": "==", "value": "mirror_neuron@mac"}
     ]
     resources = _mac_and_spark_resources()
@@ -313,30 +320,22 @@ def test_single_node_placement_rejects_conflicting_explicit_agents():
         )
 
 
-def test_distributed_placement_and_legacy_alias_leave_agents_unpinned():
+def test_distributed_placement_leaves_agents_unpinned():
     resources = _mac_and_spark_resources()
-    legacy_manifest = _cctv_placement_manifest()
-    legacy_manifest["runtime"].pop("placement")
-    for manifest, env in (
-        (
-            {
-                **_cctv_placement_manifest(),
-                "runtime": {"placement": {"mode": "distributed"}},
-            },
-            {},
-        ),
-        (legacy_manifest, {"MN_BLUEPRINT_SINGLE_NODE_AGENTS": "0"}),
-    ):
-        assert (
-            run_cmds._resolve_and_apply_workflow_placement(
-                manifest,
-                resource_report=resources,
-                system_summary=_matching_system_summary(resources),
-                env=env,
-            )
-            is None
+    manifest = {
+        **_cctv_placement_manifest(),
+        "runtime": {"placement": {"mode": "distributed"}},
+    }
+    assert (
+        run_cmds._resolve_and_apply_workflow_placement(
+            manifest,
+            resource_report=resources,
+            system_summary=_matching_system_summary(resources),
+            env={},
         )
-        assert "policies" not in manifest["nodes"][0]
+        is None
+    )
+    assert "policies" not in manifest["agents"]["nodes"][0]
 
 
 def test_placement_without_node_local_requirements_skips_runtime_inspection(mocker):
@@ -1715,10 +1714,15 @@ def test_runtime_model_preflight_rejects_ineligible_node_before_prepare(mocker):
     system = {
         "nodes": [
             {
-                "name": "mirror_neuron@mac",
-                "status": "healthy",
-                "scheduling_eligible": True,
-                "self": True,
+                    "name": "mirror_neuron@mac",
+                    "status": "healthy",
+                    "scheduling_eligible": True,
+                    "self": True,
+                    "coordination_store": {
+                        "identity": "test-store",
+                        "writable_primary": True,
+                        "healthy": True,
+                    },
             }
         ]
     }
@@ -1771,12 +1775,17 @@ def test_runtime_model_preflight_selects_small_fallback_for_default_on_small_nod
     }
     system = {
         "nodes": [
-            {
-                "name": "mirror_neuron@mac",
-                "status": "healthy",
-                "scheduling_eligible": True,
-                "self": True,
-            }
+                {
+                    "name": "mirror_neuron@mac",
+                    "status": "healthy",
+                    "scheduling_eligible": True,
+                    "self": True,
+                    "coordination_store": {
+                        "identity": "test-store",
+                        "writable_primary": True,
+                        "healthy": True,
+                    },
+                }
         ]
     }
 
@@ -1830,12 +1839,17 @@ def test_distributed_runtime_model_preflight_rejects_before_prepare(mocker):
     }
     system = {
         "nodes": [
-            {
-                "name": "mirror_neuron@mac",
-                "status": "healthy",
-                "scheduling_eligible": True,
-                "self": True,
-            }
+                {
+                    "name": "mirror_neuron@mac",
+                    "status": "healthy",
+                    "scheduling_eligible": True,
+                    "self": True,
+                    "coordination_store": {
+                        "identity": "test-store",
+                        "writable_primary": True,
+                        "healthy": True,
+                    },
+                }
         ]
     }
     prepare = mocker.patch("mn_cli.libs.run_cmds._install_runtime_cluster_model")
@@ -1874,7 +1888,7 @@ def test_runtime_model_summary_names_failed_model_and_node(capsys):
         }
     )
 
-    output = capsys.readouterr().out
+    output = re.sub(r"\s+", " ", capsys.readouterr().out)
     assert "nemotron-3.5-lightning:latest on mirror_neuron@mac" in output
     assert "(compatibility):" in output
     assert "model.prepare_incompatible_hardware" in output

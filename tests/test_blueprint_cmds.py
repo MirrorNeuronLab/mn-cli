@@ -1787,7 +1787,6 @@ def test_blueprint_export_markdown_contains_standard_artifacts(tmp_path):
     assert "## Final Artifact" in result.stdout
     assert "approve_plan" in result.stdout
     assert "## Event Tail" in result.stdout
-    assert "## Web UI" in result.stdout
 
     envelope = runner.invoke(
         app,

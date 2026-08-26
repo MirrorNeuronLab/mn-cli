@@ -33,7 +33,7 @@ def fake_model_catalog() -> dict[str, dict[str, Any]]:
             "id": "nemotron-3.5-lightning:latest",
             "provider": "docker_model_runner",
             "model": "nemotron-3.5-lightning:latest",
-            "dmr_model": "nemotron-3.5-lightning:latest",
+            "tag_name": "nemotron-3.5-lightning:latest",
             "api_model": "nemotron-3.5-lightning:latest",
             "aliases": ["medium", "nemotron-3.5-lightning:latest"],
             "backend": "llama.cpp",
@@ -80,6 +80,11 @@ def fake_runtime_node(
         "self": self_node,
         "grpc_host": host,
         "grpc_port": 55051,
+        "coordination_store": {
+            "identity": "test-store",
+            "writable_primary": True,
+            "healthy": True,
+        },
         "native_sdk_grpc": {
             "enabled": True,
             "host": host,

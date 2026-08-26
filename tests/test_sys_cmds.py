@@ -1,49 +1,24 @@
-import importlib
-from io import StringIO
-from types import SimpleNamespace
 from unittest.mock import call
-
-from rich.console import Console
 
 import mn_cli.libs.sys_cmds as sys_cmds
 import mn_cli.server_cmds as server_cmds
 
 
-def test_leave_does_not_rotate_grpc_tokens(monkeypatch, tmp_path):
-    auth_file = tmp_path / "grpc_auth.token"
-    admin_file = tmp_path / "grpc_admin.token"
-    auth_file.write_text("stable-auth-token\n")
-    admin_file.write_text("stable-admin-token\n")
-    calls = []
-    shared = importlib.import_module("mn_cli.shared")
-
-    monkeypatch.setattr(shared, "client", SimpleNamespace(remove_node=lambda node: "removed"))
-    monkeypatch.setattr(shared, "console", Console(file=StringIO(), force_terminal=False, width=160))
-    monkeypatch.setattr(sys_cmds, "_detach_local_docker_node_if_matches", lambda node: calls.append(node))
-
-    sys_cmds.leave("mirror_neuron@192.168.4.20", yes=True)
-
-    assert calls == ["mirror_neuron@192.168.4.20"]
-    assert auth_file.read_text().strip() == "stable-auth-token"
-    assert admin_file.read_text().strip() == "stable-admin-token"
-
-
-def test_stop_attempts_joined_cluster_leave_before_teardown(monkeypatch, mocker, tmp_path):
+def test_stop_clears_join_metadata_before_teardown(monkeypatch, mocker, tmp_path):
     calls = []
 
-    monkeypatch.setattr(sys_cmds, "leave_joined_cluster_before_stop", lambda: calls.append("leave"))
+    monkeypatch.setattr(sys_cmds, "_clear_join_owner_metadata", lambda: calls.append("clear-join"))
     monkeypatch.setattr(sys_cmds, "_stop_network_runtime", lambda: calls.append("network-runtime"))
     monkeypatch.setattr(sys_cmds, "runtime_compose_available", lambda: False)
     monkeypatch.setattr(sys_cmds, "web_ui_pid_files", lambda: ())
     monkeypatch.setattr(sys_cmds, "api_pid_files", lambda: ())
     monkeypatch.setattr(sys_cmds, "native_sdk_grpc_pid_files", lambda: ())
-    monkeypatch.setattr(sys_cmds, "BEAM_PID_FILE", tmp_path / "beam.pid")
     monkeypatch.setattr(sys_cmds, "_stop_matching_sidecar_processes", lambda *_args: None)
     mocker.patch.object(sys_cmds.subprocess, "run")
 
     sys_cmds.stop()
 
-    assert calls[:2] == ["leave", "network-runtime"]
+    assert calls[:2] == ["clear-join", "network-runtime"]
 
 
 def test_restart_sidecars_api_only_restarts_api_without_web_ui(mocker, tmp_path):
@@ -95,12 +70,12 @@ def test_restart_sidecars_web_ui_only_restarts_web_ui_without_api(mocker, tmp_pa
     write_endpoints.assert_called_once_with(env, web_ui_available=True)
 
 
-def test_sidecar_runtime_env_normalizes_legacy_ports_without_writing_compose(mocker):
+def test_sidecar_runtime_env_preserves_current_ports_without_writing_compose(mocker):
     mocker.patch.object(sys_cmds, "runtime_compose_available", return_value=True)
     mocker.patch.object(
         sys_cmds,
         "_runtime_base_env",
-        return_value={"MN_API_PORT": "4001", "MN_WEB_UI_PORT": "5173"},
+        return_value={"MN_API_PORT": "54001", "MN_WEB_UI_PORT": "55173"},
     )
 
     env = sys_cmds._sidecar_runtime_env()
@@ -116,7 +91,6 @@ def test_stop_sweeps_orphan_native_sidecars(mocker, tmp_path):
     mocker.patch.object(sys_cmds, "web_ui_pid_files", return_value=())
     mocker.patch.object(sys_cmds, "api_pid_files", return_value=())
     mocker.patch.object(sys_cmds, "native_sdk_grpc_pid_files", return_value=())
-    mocker.patch.object(sys_cmds, "BEAM_PID_FILE", tmp_path / "beam.pid")
     stop_matching = mocker.patch.object(sys_cmds, "_stop_matching_sidecar_processes", return_value=True)
 
     sys_cmds.stop()

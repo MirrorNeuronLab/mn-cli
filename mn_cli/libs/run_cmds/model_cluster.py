@@ -353,7 +353,7 @@ def _workflow_model_fallback_requirements(
                 "preferred": {
                     "id": str(entry.get("id") or ""),
                     "model": str(entry.get("model") or ""),
-                    "dmr_model": str(entry.get("dmr_model") or ""),
+                    "tag_name": str(entry.get("tag_name") or ""),
                     "aliases": list(entry.get("aliases") or []),
                 },
                 "fallback": fallback_entry,
@@ -401,7 +401,7 @@ def _workflow_model_match_keys(entry: dict[str, Any]) -> set[str]:
     values = [
         entry.get("id"),
         entry.get("model"),
-        entry.get("dmr_model"),
+        entry.get("tag_name"),
         entry.get("api_model"),
         *(entry.get("aliases") or []),
     ]
@@ -561,14 +561,6 @@ def _workflow_placement_mode(
         )
     if raw_mode:
         return raw_mode
-    values = os.environ if env is None else env
-    # Compatibility only: older callers can explicitly opt into their former
-    # distributed scheduling behavior while they migrate to runtime.placement.
-    if (
-        str(values.get("MN_BLUEPRINT_SINGLE_NODE_AGENTS", "")).strip().lower()
-        in FALSE_VALUES
-    ):
-        return "distributed"
     return None
 
 

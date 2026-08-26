@@ -229,7 +229,6 @@ def _prepare_runtime_models_for_run_or_exit(
         env_overrides.update(_runtime_model_fallback_llm_env(materialized_config))
     if env_overrides is not None and _blueprint_requests_default_llm(base_config):
         env_overrides["MN_LLM_MODEL"] = "default"
-        env_overrides["LITELLM_MODEL"] = "default"
     if not quiet:
         _print_runtime_model_install_summary(summary)
     if debug:

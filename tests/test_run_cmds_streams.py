@@ -143,7 +143,7 @@ def test_stream_cancelled_event_is_terminal(mocker, tmp_path, monkeypatch):
 
     assert result.exit_code == 0
     assert "Status: Cancelled" in result.stdout
-    mock_get.assert_called_once()
+    mock_get.assert_not_called()
 
 def test_stream_helper_cancelled_event_is_terminal_without_follow(mocker, tmp_path):
     job_id = f"job-cancelled-{uuid.uuid4().hex}"

@@ -1,7 +1,6 @@
 """Focused runtime launcher exports for sidecars."""
 
 from mn_cli.runtime.server import (
-    _legacy_checkout_pid_dir,
     web_ui_pid_files,
     api_pid_files,
     kill_tree,
@@ -27,7 +26,6 @@ from mn_cli.runtime.server import (
 )
 
 __all__ = [
-    "_legacy_checkout_pid_dir",
     "web_ui_pid_files",
     "api_pid_files",
     "kill_tree",

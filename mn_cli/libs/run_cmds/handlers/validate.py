@@ -54,44 +54,27 @@ def validate(
         if is_manifest_source(manifest):
             manifest = expand_manifest_source(manifest, root_dir=bundle_dir)
 
-        workflow_manifest = _is_workflow_manifest(manifest)
-        if workflow_manifest:
-            schema_issues = _validate_workflow_schema_issues(manifest)
-            if schema_issues:
-                report = make_validation_report(schema_issues)
-                _emit_validation_report(
-                    report, output_format, title="Workflow manifest schema validation failed"
-                )
-                raise typer.Exit(2)
+        schema_issues = _validate_workflow_schema_issues(manifest)
+        if schema_issues:
+            report = make_validation_report(schema_issues)
+            _emit_validation_report(
+                report, output_format, title="Workflow manifest schema validation failed"
+            )
+            raise typer.Exit(2)
 
-            workflow_issues = _validate_workflow_manifest_issues(manifest)
-            if workflow_issues:
-                report = make_validation_report(workflow_issues)
-                _emit_validation_report(
-                    report, output_format, title="Workflow manifest validation failed"
-                )
-                raise typer.Exit(2)
-        else:
-            required_keys = ["manifest_version", "graph_id", "job_name", "entrypoints", "nodes"]
-            missing = [k for k in required_keys if k not in manifest]
-            if missing:
-                print_error(console, f"manifest.json is missing required keys: {', '.join(missing)}")
-                raise typer.Exit(2)
-            if not isinstance(manifest.get("nodes"), type([])):
-                print_error(console, "'nodes' must be a list in manifest.json.")
-                raise typer.Exit(2)
-
-        if "requiredContextEngine" in manifest and not isinstance(
-            manifest.get("requiredContextEngine"), bool
-        ):
-            print_error(console, "'requiredContextEngine' must be true or false in manifest.json.")
+        workflow_issues = _validate_workflow_manifest_issues(manifest)
+        if workflow_issues:
+            report = make_validation_report(workflow_issues)
+            _emit_validation_report(
+                report, output_format, title="Workflow manifest validation failed"
+            )
             raise typer.Exit(2)
 
         python_environment_errors = validate_python_environments(bundle_dir, manifest)
         if python_environment_errors:
             report = make_validation_report(
                 [
-                    _legacy_validation_issue(error, source="manifest")
+                    _validation_issue(error, source="manifest")
                     for error in python_environment_errors
                 ]
             )
@@ -104,7 +87,7 @@ def validate(
         if skill_runtime_errors:
             report = make_validation_report(
                 [
-                    _legacy_validation_issue(error, source="manifest")
+                    _validation_issue(error, source="manifest")
                     for error in skill_runtime_errors
                 ]
             )
@@ -140,14 +123,11 @@ def validate(
         details: list[tuple[str, Any]] = [
             ("Bundle", bundle_path),
             ("Job Name", manifest.get("job_name")),
-            ("Workflow ID", _manifest_workflow_id(manifest) if workflow_manifest else manifest.get("graph_id")),
+            ("Workflow ID", _manifest_workflow_id(manifest)),
         ]
-        if workflow_manifest:
-            workflow = manifest.get("workflow", {}) if isinstance(manifest.get("workflow"), dict) else {}
-            steps = workflow.get("steps") if isinstance(workflow.get("steps"), list) else []
-            details.append(("Workflow steps", len(steps if isinstance(steps, list) else [])))
-        else:
-            details.append(("Nodes", len(manifest.get("nodes"))))
+        workflow = manifest.get("workflow", {}) if isinstance(manifest.get("workflow"), dict) else {}
+        steps = workflow.get("steps") if isinstance(workflow.get("steps"), list) else []
+        details.append(("Workflow steps", len(steps)))
         details.append(("Input validation rules", len(validation_result.get("results") or [])))
         print_confirmed(
             console,
@@ -222,9 +202,6 @@ def _manifest_agent_nodes(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     agent_nodes = agents.get("nodes") if isinstance(agents, dict) else None
     if isinstance(agent_nodes, list):
         return [node for node in agent_nodes if isinstance(node, dict)]
-    root_nodes = manifest.get("nodes")
-    if isinstance(root_nodes, list):
-        return [node for node in root_nodes if isinstance(node, dict)]
     return []
 
 def _validate_manifest_inputs_or_exit(
@@ -421,7 +398,7 @@ def _model_capacity_summary(report: dict[str, Any]) -> str:
         summaries.append(" ".join(parts))
     return "; ".join(summaries[:3])
 
-def _legacy_validation_issue(error: str, *, source: str) -> dict[str, Any]:
+def _validation_issue(error: str, *, source: str) -> dict[str, Any]:
     path = ""
     if ":" in error:
         path = error.split(":", 1)[0].strip()

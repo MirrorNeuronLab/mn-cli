@@ -56,9 +56,7 @@ def _record_prevalidated_command_rules(
     )
     validation_candidates = (
         (manifest, "input_validation"),
-        (manifest, "inputValidation"),
         (metadata, "input_validation"),
-        (metadata, "inputValidation"),
     )
     for container, key in validation_candidates:
         raw_validation = container.get(key)

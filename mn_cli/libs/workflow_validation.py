@@ -7,7 +7,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-DEPRECATED_WORKFLOW_ROOT_FIELDS = ("flow", "graph_id", "nodes", "edges", "entrypoints")
+RETIRED_WORKFLOW_ROOT_FIELDS = ("flow", "graph_id", "nodes", "edges", "entrypoints")
 WORKFLOW_SCHEMA = "mn.workflow.problem_graph/v1"
 WORKFLOW_MODE = "static_dag"
 WORKFLOW_MODES = {"static_dag", "dynamic_dag"}
@@ -17,8 +17,8 @@ AGENT_GRAPH_SCHEMA = "mn.agents.communication_graph/v1"
 def _is_workflow_manifest(manifest: dict[str, Any]) -> bool:
     return (
         manifest.get("apiVersion") == "mn.workflow/v1"
-        or manifest.get("kind") == "Workflow"
-        or isinstance(manifest.get("workflow"), dict)
+        and manifest.get("kind") == "Workflow"
+        and isinstance(manifest.get("workflow"), dict)
     )
 
 
@@ -41,17 +41,17 @@ def _workflow_schema_validator() -> Draft202012Validator:
 
 
 def _validate_workflow_schema_issues(manifest: dict[str, Any]) -> list[dict[str, Any]]:
-    deprecated_fields = [
-        field for field in DEPRECATED_WORKFLOW_ROOT_FIELDS if field in manifest
+    retired_fields = [
+        field for field in RETIRED_WORKFLOW_ROOT_FIELDS if field in manifest
     ]
-    if deprecated_fields:
+    if retired_fields:
         return [
             _workflow_validation_issue(
                 field,
                 f"{field} is not allowed in mn.workflow/v1 manifests",
                 code="workflow_manifest.schema_failed",
             )
-            for field in deprecated_fields
+            for field in retired_fields
         ]
 
     validator = _workflow_schema_validator()
@@ -91,7 +91,7 @@ def _workflow_schema_issue(error: ValidationError) -> dict[str, Any]:
 
 
 def _workflow_schema_message(error: ValidationError, path: str) -> str:
-    if path in DEPRECATED_WORKFLOW_ROOT_FIELDS:
+    if path in RETIRED_WORKFLOW_ROOT_FIELDS:
         return f"{path} is not allowed in mn.workflow/v1 manifests"
     if error.validator == "required":
         instance = error.instance if isinstance(error.instance, dict) else {}

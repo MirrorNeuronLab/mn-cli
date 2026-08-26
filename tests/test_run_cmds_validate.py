@@ -104,7 +104,7 @@ def test_validate_success(tmp_path):
     assert "valid" in result.stdout
     assert "Bundle:" in result.stdout
 
-def test_validate_accepts_workflow_manifest_without_legacy_nodes(tmp_path):
+def test_validate_accepts_current_workflow_manifest(tmp_path):
     bundle_dir = tmp_path / "workflow_bundle"
     bundle_dir.mkdir()
     manifest = _workflow_manifest_fixture()
@@ -128,24 +128,45 @@ def test_validate_accepts_source_manifest_after_expansion(monkeypatch, tmp_path)
     bundle_dir = tmp_path / "source_workflow_bundle"
     bundle_dir.mkdir()
     agent_root = tmp_path / "mn-agents"
-    agent_dir = agent_root / "worker_python_host"
-    docker_agent_dir = agent_root / "worker_python_docker"
+    agent_dir = (
+        agent_root
+        / "worker_python_host_agent"
+        / "src"
+        / "mn_worker_python_host_agent"
+        / "resources"
+    )
+    docker_agent_dir = (
+        agent_root
+        / "worker_python_docker_agent"
+        / "src"
+        / "mn_worker_python_docker_agent"
+        / "resources"
+    )
     agent_dir.mkdir(parents=True)
-    docker_agent_dir.mkdir()
+    docker_agent_dir.mkdir(parents=True)
     (agent_root / "index.json").write_text(
         json.dumps(
-            {
-                "agents": [
+                {
+                    "schema_version": "mn-agents.index.v2",
+                    "agents": [
                         {
+                            "agent_id": "mn-agents.worker.python_host",
                             "template_id": "mn-agents.worker.python_host",
                             "version": 1,
-                            "path": "worker_python_host",
+                            "distribution": "mn-worker-python-host-agent",
+                            "module": "mn_worker_python_host_agent",
+                            "package_kind": "runtime_node",
+                            "resource_path": "worker_python_host_agent/src/mn_worker_python_host_agent/resources/agent.json",
                             "template_category": "data",
                         },
                         {
+                            "agent_id": "mn-agents.worker.python_docker",
                             "template_id": "mn-agents.worker.python_docker",
                             "version": 1,
-                            "path": "worker_python_docker",
+                            "distribution": "mn-worker-python-docker-agent",
+                            "module": "mn_worker_python_docker_agent",
+                            "package_kind": "runtime_node",
+                            "resource_path": "worker_python_docker_agent/src/mn_worker_python_docker_agent/resources/agent.json",
                             "template_category": "data",
                         },
                 ]
@@ -155,6 +176,8 @@ def test_validate_accepts_source_manifest_after_expansion(monkeypatch, tmp_path)
     (docker_agent_dir / "agent.json").write_text(
         json.dumps(
             {
+                "schema_version": "mn.agent.package.v1",
+                "agent_id": "mn-agents.worker.python_docker",
                 "template_id": "mn-agents.worker.python_docker",
                 "version": 1,
                 "package_kind": "runtime_node",
@@ -179,6 +202,8 @@ def test_validate_accepts_source_manifest_after_expansion(monkeypatch, tmp_path)
     (agent_dir / "agent.json").write_text(
         json.dumps(
             {
+                "schema_version": "mn.agent.package.v1",
+                "agent_id": "mn-agents.worker.python_host",
                 "template_id": "mn-agents.worker.python_host",
                 "version": 1,
                 "package_kind": "runtime_node",
@@ -422,12 +447,18 @@ def test_validate_rejects_invalid_python_environment(tmp_path):
     ]
     (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
 
-    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--json"])
 
     assert result.exit_code == 2
-    normalized = re.sub(r"\s+", " ", result.stdout)
-    assert "python_environment.requirements must be a relative path inside payloads" in normalized
-    assert "python_environment.packages must be a list of non-empty strings" in result.stdout
+    messages = [issue["message"] for issue in cli_data(result)["issues"]]
+    assert any(
+        "python_environment.requirements must be a relative path inside payloads" in message
+        for message in messages
+    )
+    assert any(
+        "python_environment.packages must be a list of non-empty strings" in message
+        for message in messages
+    )
 
 def test_validate_rejects_missing_explicit_skill_runtime_dockerfile(tmp_path):
     bundle_dir = tmp_path / "bad_skill_runtime_bundle"
@@ -453,10 +484,13 @@ def test_validate_rejects_missing_explicit_skill_runtime_dockerfile(tmp_path):
     ]
     (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
 
-    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir)])
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--json"])
 
     assert result.exit_code == 2
-    assert "mn_skill_runtime Dockerfile not found" in result.stdout
+    assert any(
+        "mn_skill_runtime Dockerfile not found" in issue["message"]
+        for issue in cli_data(result)["issues"]
+    )
 
 def test_validate_runs_manifest_input_validation(tmp_path):
     bundle_dir = tmp_path / "validated_inputs"

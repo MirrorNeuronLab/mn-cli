@@ -47,7 +47,6 @@ from mn_cli.runtime.server import (
     _ensure_local_cluster_runtime_for_join,
     _wait_for_local_cluster_grpc,
     _stop_network_runtime,
-    _detach_local_docker_node_if_matches,
 )
 
 __all__ = [
@@ -95,5 +94,4 @@ __all__ = [
     "_ensure_local_cluster_runtime_for_join",
     "_wait_for_local_cluster_grpc",
     "_stop_network_runtime",
-    "_detach_local_docker_node_if_matches",
 ]

@@ -33,11 +33,7 @@ from mn_cli.server_cmds import (
     DEFAULT_API_PORT,
     DEFAULT_GRPC_PORT,
     DEFAULT_WEB_UI_PORT,
-    LEGACY_API_PORT,
-    LEGACY_GRPC_PORT,
-    LEGACY_WEB_UI_PORT,
     RUNTIME_COMPOSE_FILE,
-    RUNTIME_MODELS_OVERRIDE_FILE,
     _start_api_if_installed,
     _start_web_ui_if_installed,
     _runtime_base_env,
@@ -145,7 +141,6 @@ def collect_runtime_doctor(
     foundation = [
         _coordination_store_component(status_report),
         _shared_storage_component(status_report),
-        _runtime_compose_model_override_component(),
         _docker_model_runner_component(timeout),
         _litellm_gateway_component(timeout),
     ]
@@ -294,7 +289,6 @@ def print_doctor_report(report: dict[str, Any]) -> None:
         ("web_ui", "Web UI"),
         ("coordination_store", "Coordination store"),
         ("shared_storage", "Shared storage"),
-        ("runtime_compose_model_override", "Compose model override"),
         ("docker_model_runner", "Docker Model Runner"),
         ("litellm_gateway", "LiteLLM gateway"),
     ):
@@ -486,47 +480,6 @@ def _docker_model_runner_component(timeout: float) -> dict[str, Any]:
     }
 
 
-def _runtime_compose_model_override_component() -> dict[str, Any]:
-    path = RUNTIME_COMPOSE_FILE.parent / RUNTIME_MODELS_OVERRIDE_FILE
-    if not path.exists():
-        return {
-            "name": "runtime_compose_model_override",
-            "status": "passing",
-            "target": str(path),
-            "detail": "no legacy Compose model override present",
-        }
-
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        return {
-            "name": "runtime_compose_model_override",
-            "status": "critical",
-            "target": str(path),
-            "detail": f"legacy Compose model override exists but could not be inspected: {exc}",
-        }
-
-    marker_found = (
-        "llm-runtime-model" in text
-        or "endpoint_var:" in text
-        or "model_var:" in text
-        or text.lstrip().startswith("models:")
-        or "\nmodels:" in text
-    )
-    detail = (
-        "legacy docker-compose.models.yml exists and can trigger eager Docker Model Runner model pulls; "
-        "delete it or rerun runtime install/start with the updated CLI"
-    )
-    if not marker_found:
-        detail = "unexpected docker-compose.models.yml exists; current runtime no longer uses this override"
-    return {
-        "name": "runtime_compose_model_override",
-        "status": "critical",
-        "target": str(path),
-        "detail": detail,
-    }
-
-
 def _litellm_gateway_component(timeout: float) -> dict[str, Any]:
     config = validate_litellm_gateway_config_file()
     health = litellm_gateway_health(timeout=timeout)
@@ -608,22 +561,20 @@ def _repair_runtime_sidecars(report: dict[str, Any]) -> bool:
 def _compose_native_port_env(env: dict[str, str]) -> dict[str, str]:
     adjusted = dict(env)
     adjusted["MN_GRPC_PORT"] = _port_value(
-        adjusted, "MN_GRPC_PORT", DEFAULT_GRPC_PORT, LEGACY_GRPC_PORT
+        adjusted, "MN_GRPC_PORT", DEFAULT_GRPC_PORT
     )
     adjusted["MN_API_PORT"] = _port_value(
-        adjusted, "MN_API_PORT", DEFAULT_API_PORT, LEGACY_API_PORT
+        adjusted, "MN_API_PORT", DEFAULT_API_PORT
     )
     adjusted["MN_WEB_UI_PORT"] = _port_value(
-        adjusted, "MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT, LEGACY_WEB_UI_PORT
+        adjusted, "MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT
     )
     return adjusted
 
 
-def _port_value(
-    env: dict[str, str], key: str, default: str, legacy_default: str
-) -> str:
+def _port_value(env: dict[str, str], key: str, default: str) -> str:
     value = str(env.get(key) or "").strip()
-    if not value or value == legacy_default:
+    if not value:
         value = default
     return _valid_port_text(value, default)
 

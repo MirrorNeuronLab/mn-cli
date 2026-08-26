@@ -16,10 +16,9 @@ from mn_cli.server_cmds import (
     _start_server,
     _start_network_seed,
     _join_network,
-    _detach_local_docker_node_if_matches,
     _refresh_network_token,
     _stop_network_runtime,
-    leave_joined_cluster_before_stop,
+    _clear_join_owner_metadata,
     _runtime_base_env,
     _start_api_if_installed,
     _start_web_ui_if_installed,
@@ -27,7 +26,6 @@ from mn_cli.server_cmds import (
     _valid_port_text,
     ensure_context_engine_runtime,
     kill_tree,
-    BEAM_PID_FILE,
     COMPOSE_SENTINEL_CONTAINER,
     SYNCTHING_CONTAINER,
     DEFAULT_HOST,
@@ -36,8 +34,6 @@ from mn_cli.server_cmds import (
     DEFAULT_DIST_PORT,
     DEFAULT_WEB_UI_PORT,
     DEFAULT_DOCKER_NETWORK_NAME,
-    LEGACY_API_PORT,
-    LEGACY_WEB_UI_PORT,
     find_web_ui_dir,
     runtime_compose_available,
     runtime_compose_cmd,
@@ -73,18 +69,6 @@ def join(
         "--local-host",
         help="Advertised host or IP for this primary node. Defaults to the first detected LAN IP.",
     ),
-    dist_port: int = typer.Option(
-        int(DEFAULT_DIST_PORT),
-        "--dist-port",
-        help="Legacy IP-mode Erlang distribution port.",
-        hidden=True,
-    ),
-    redis_port: Optional[int] = typer.Option(
-        None,
-        "--redis-port",
-        help="Legacy IP-mode Redis port override.",
-        hidden=True,
-    ),
     docker_network_mode: Optional[str] = typer.Option(
         None,
         "--network",
@@ -117,19 +101,12 @@ def expose_node(
     dist_port: int = typer.Option(
         int(DEFAULT_DIST_PORT),
         "--dist-port",
-        help="Legacy IP-mode Erlang distribution port.",
-        hidden=True,
+        help="Erlang distribution port advertised by the exposed runtime.",
     ),
     redis_port: Optional[int] = typer.Option(
         None,
         "--redis-port",
-        help="Legacy IP-mode Redis port override.",
-        hidden=True,
-    ),
-    force_new_token: bool = typer.Option(
-        False,
-        "--force-new-token",
-        help="Replace the persisted node exposure token.",
+        help="Redis port advertised by the exposed runtime.",
     ),
     docker_network_mode: Optional[str] = typer.Option(
         None,
@@ -148,7 +125,6 @@ def expose_node(
         grpc_port=grpc_port,
         dist_port=dist_port,
         redis_port=redis_port,
-        force_new_token=force_new_token,
         docker_network_mode=docker_network_mode,
         docker_network_name=docker_network_name,
     )
@@ -181,7 +157,7 @@ def add_node(
 def stop():
     """Stop MirrorNeuron services"""
     print_info(console, "Stopping MirrorNeuron services…")
-    leave_joined_cluster_before_stop()
+    _clear_join_owner_metadata()
     _stop_network_runtime()
     
     if runtime_compose_available():
@@ -205,7 +181,6 @@ def stop():
         *web_ui_pid_files(),
         *api_pid_files(),
         *native_sdk_grpc_pid_files(),
-        (BEAM_PID_FILE, "Legacy Core Service"),
     ]:
         if pid_file.exists():
             try:
@@ -353,14 +328,14 @@ def _sidecar_runtime_env() -> dict[str, str]:
     compose_runtime = runtime_compose_available()
     env = _runtime_base_env(compose_runtime)
     env.setdefault("MN_API_HOST", DEFAULT_HOST)
-    env["MN_API_PORT"] = _sidecar_port_value(env, "MN_API_PORT", DEFAULT_API_PORT, LEGACY_API_PORT)
+    env["MN_API_PORT"] = _sidecar_port_value(env, "MN_API_PORT", DEFAULT_API_PORT)
     env.setdefault("MN_WEB_UI_HOST", DEFAULT_HOST)
-    env["MN_WEB_UI_PORT"] = _sidecar_port_value(env, "MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT, LEGACY_WEB_UI_PORT)
+    env["MN_WEB_UI_PORT"] = _sidecar_port_value(env, "MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT)
     return env
 
-def _sidecar_port_value(env: dict[str, str], key: str, default: str, legacy_default: str) -> str:
+def _sidecar_port_value(env: dict[str, str], key: str, default: str) -> str:
     value = str(env.get(key) or "").strip()
-    if not value or value == legacy_default:
+    if not value:
         value = default
     return _valid_port_text(value, default)
 
@@ -392,48 +367,6 @@ def _unlink_pid_file(pid_file: Path) -> None:
         pid_file.unlink(missing_ok=True)
     except OSError:
         pass
-
-def leave(
-    node_name: str,
-    yes: bool = typer.Option(False, "--yes", "-y", help="Confirm membership removal without prompting."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview membership removal without changing state."),
-):
-    """Remove a node from cluster membership."""
-    from mn_cli.shared import client, console
-    yes = yes is True
-    dry_run = dry_run is True
-    if not dry_run:
-        require_confirmation(
-            console,
-            action="Node removal",
-            prompt=f"Remove node {node_name!r} from cluster membership?",
-            yes=yes,
-        )
-    try:
-        if dry_run:
-            print_success_confirmation(
-                console,
-                "Node remove dry run",
-                status="planned",
-                details={"Node": node_name},
-            )
-            return
-        status = client.remove_node(node_name)
-        _detach_local_docker_node_if_matches(node_name)
-        print_success_confirmation(
-            console,
-            "Node remove",
-            status=status,
-            details={"Node": node_name},
-            next_steps="mn node list",
-        )
-    except Exception as e:
-        handle_cli_error(
-            e,
-            console,
-            "leave",
-            command_context={"node_name": node_name},
-        )
 
 def refresh_token():
     """Rotate the persistent MirrorNeuron network join token"""

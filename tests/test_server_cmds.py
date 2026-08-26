@@ -25,7 +25,6 @@ from mn_cli.server_cmds import (
     _join_network,
     _ensure_local_cluster_runtime_for_join,
     _avoid_local_compose_port_conflicts,
-    _detach_local_docker_node_if_matches,
     _ensure_docker_network,
     _resolve_node_alias,
     find_web_ui_dir,
@@ -89,7 +88,6 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.DIR', state_dir)
     mocker.patch('mn_cli.server_cmds.PID_DIR', pid_dir)
     mocker.patch('mn_cli.server_cmds.LOG_DIR', log_dir)
-    mocker.patch('mn_cli.server_cmds.BEAM_PID_FILE', pid_dir / "beam.pid")
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', pid_dir / "api.pid")
     mocker.patch('mn_cli.server_cmds.API_WATCHDOG_PID_FILE', pid_dir / "api-watchdog.pid")
     mocker.patch('mn_cli.server_cmds.NATIVE_SDK_GRPC_PID_FILE', pid_dir / "native-sdk-grpc.pid")
@@ -98,7 +96,6 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.REDIS_PASSWORD_FILE', state_dir / "redis.password")
     mocker.patch('mn_cli.server_cmds.WEB_UI_PID_FILE', pid_dir / "web-ui.pid")
     mocker.patch('mn_cli.server_cmds.WEB_UI_WATCHDOG_PID_FILE', pid_dir / "web-ui-watchdog.pid")
-    mocker.patch('mn_cli.server_cmds.BEAM_LOG', log_dir / "beam.log")
     mocker.patch('mn_cli.server_cmds.API_LOG', log_dir / "api.log")
     mocker.patch('mn_cli.server_cmds.API_WATCHDOG_LOG', log_dir / "api-watchdog.log")
     mocker.patch('mn_cli.server_cmds.NATIVE_SDK_GRPC_LOG', log_dir / "native-sdk-grpc.log")
@@ -1074,7 +1071,7 @@ def test_runtime_grpc_tokens_from_running_container_refreshes_compose_env(mocker
     assert "MN_GRPC_AUTH_TOKEN=mirror_neuron_password" in compose_text
     assert "MN_GRPC_ADMIN_TOKEN=mirror_neuron_password_admin" in compose_text
 
-def test_runtime_base_env_scrubs_deprecated_artifact_auth_token(monkeypatch):
+def test_runtime_base_env_rejects_retired_artifact_auth_token(monkeypatch):
     compose_env = server_cmds.RUNTIME_COMPOSE_ENV
     compose_file = server_cmds.RUNTIME_COMPOSE_FILE
     compose_env.parent.mkdir(parents=True, exist_ok=True)
@@ -1094,12 +1091,11 @@ def test_runtime_base_env_scrubs_deprecated_artifact_auth_token(monkeypatch):
     )
     monkeypatch.setenv("MN_ARTIFACT_AUTH_TOKEN", "ambient-artifact-token")
 
-    env = server_cmds._runtime_base_env(True)
+    with pytest.raises(RuntimeError, match="Unsupported retired runtime settings.*MN_ARTIFACT_AUTH_TOKEN"):
+        server_cmds._runtime_base_env(True)
 
-    assert env["MN_NETWORK_JOIN_TOKEN"] == "join-token"
-    assert "MN_ARTIFACT_AUTH_TOKEN" not in env
-    assert "MN_ARTIFACT_AUTH_TOKEN" not in compose_env.read_text(encoding="utf-8")
-    assert "MN_ARTIFACT_AUTH_TOKEN" not in compose_file.read_text(encoding="utf-8")
+    assert "MN_ARTIFACT_AUTH_TOKEN" in compose_env.read_text(encoding="utf-8")
+    assert "MN_ARTIFACT_AUTH_TOKEN" in compose_file.read_text(encoding="utf-8")
 
 def test_runtime_base_env_advertises_installed_runtime_models(mocker):
     compose_env = server_cmds.RUNTIME_COMPOSE_ENV
@@ -1131,16 +1127,13 @@ def test_runtime_base_env_merges_explicit_and_installed_runtime_models(mocker):
 
     assert env["MN_NODE_RUNTIME_MODELS"] == "custom:model,gemma4:e2b"
 
-def test_record_runtime_model_install_advertises_model_without_compose_override():
+def test_record_runtime_model_install_advertises_model():
     server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
     server_cmds.RUNTIME_COMPOSE_ENV.write_text(
         "COMPOSE_PROJECT_NAME=mirror-neuron\n"
         "MN_NODE_RUNTIME_MODELS=\n",
         encoding="utf-8",
     )
-    models_override = server_cmds._runtime_compose_models_override_file()
-    models_override.write_text("services: {}\n", encoding="utf-8")
-
     path = server_cmds.record_runtime_model_install(
         {
             "id": "gemma4:e2b",
@@ -1153,7 +1146,6 @@ def test_record_runtime_model_install_advertises_model_without_compose_override(
     assert env["MN_NODE_RUNTIME_MODELS"] == "gemma4:e2b"
     assert env["MN_LLM_MODEL_RUNNER_MODEL"] == "gemma4:e2b"
     assert path is None
-    assert not models_override.exists()
 
 
 def test_record_preferred_runtime_model_updates_default_llm_model_runner_env():
@@ -1176,17 +1168,6 @@ def test_record_preferred_runtime_model_updates_default_llm_model_runner_env():
     assert env["MN_NODE_RUNTIME_MODELS"] == "nemotron-3.5-lightning:latest"
     assert env["MN_LLM_MODEL_RUNNER_MODEL"] == "nemotron-3.5-lightning:latest"
 
-
-def test_runtime_base_env_removes_stale_models_override():
-    server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
-    server_cmds.RUNTIME_COMPOSE_ENV.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n", encoding="utf-8")
-    server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
-    models_override = server_cmds._runtime_compose_models_override_file()
-    models_override.write_text("services: {}\n", encoding="utf-8")
-
-    server_cmds._runtime_base_env(True)
-
-    assert not models_override.exists()
 
 def test_ensure_context_engine_runtime_persists_profile_and_starts_compose(mocker, tmp_path):
     membrane_dir = tmp_path / "Membrane"
@@ -1378,24 +1359,6 @@ def test_ensure_context_engine_runtime_installs_missing_model_without_compose_re
     assert run.call_args_list[0].args[0] == ["docker", "model", "pull", "hf.co/acme/context"]
     assert run.call_args_list[1].args[0] == ["docker", "model", "run", "--detach", "hf.co/acme/context"]
     assert len(run.call_args_list) == 2
-
-def test_runtime_compose_cmd_ignores_models_override():
-    server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
-    server_cmds.RUNTIME_COMPOSE_ENV.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n", encoding="utf-8")
-    server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
-    models_override = server_cmds._runtime_compose_models_override_file()
-    models_override.write_text("services: {}\n", encoding="utf-8")
-    model_runner_proxy_override = (
-        server_cmds.RUNTIME_COMPOSE_FILE.parent / server_cmds.RUNTIME_MODEL_RUNNER_PROXY_OVERRIDE_FILE
-    )
-    model_runner_proxy_override.write_text("services: {}\n", encoding="utf-8")
-
-    command = runtime_compose_cmd("up", "-d")
-
-    assert "-f" in command
-    assert str(models_override) not in command
-    assert str(model_runner_proxy_override) in command
-    assert command[-2:] == ["up", "-d"]
 
 def test_resolve_network_token_generates_and_reuses_persistent_token(tmp_path, mocker):
     token_dir = tmp_path / "state"
@@ -1710,12 +1673,10 @@ def test_start_worker_node_prefers_env_join_token_over_stale_file(mocker, tmp_pa
     start_seed = mocker.patch("mn_cli.server_cmds._start_network_seed", return_value="primary-token")
     stop_runtime = mocker.patch("mn_cli.server_cmds._stop_local_runtime_for_worker")
     clear_redis = mocker.patch("mn_cli.server_cmds._clear_worker_redis_state")
-    leave = mocker.patch("mn_cli.server_cmds.leave_joined_cluster_before_stop", return_value=False)
     clear_owner = mocker.patch("mn_cli.server_cmds._clear_join_owner_metadata")
 
     assert _start_worker_node(host="192.168.4.173") == "primary-token"
 
-    leave.assert_called_once_with()
     stop_runtime.assert_called_once()
     clear_owner.assert_called_once_with()
     clear_redis.assert_called_once()
@@ -1767,7 +1728,7 @@ def test_start_network_seed_already_exposed_prints_existing_token(mocker):
     mock_start_redis = mocker.patch('mn_cli.server_cmds._start_network_redis')
     mock_start_core = mocker.patch('mn_cli.server_cmds._start_network_core')
 
-    token = _start_network_seed(grpc_port=50055, force_new_token=True)
+    token = _start_network_seed(grpc_port=50055)
 
     rendered = output.getvalue()
     assert token == "seed-token"
@@ -1829,7 +1790,6 @@ def test_start_worker_node_clears_state_and_starts_worker(mocker, tmp_path):
     )
 
     stop_runtime = mocker.patch('mn_cli.server_cmds._stop_local_runtime_for_worker')
-    leave = mocker.patch("mn_cli.server_cmds.leave_joined_cluster_before_stop", return_value=False)
     mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
     mocker.patch("mn_cli.server_cmds.JOIN_CLAIM_FILE", claim_file)
     refresh_token = mocker.patch('mn_cli.server_cmds._refresh_network_token', return_value="rotated-token")
@@ -1840,7 +1800,6 @@ def test_start_worker_node_clears_state_and_starts_worker(mocker, tmp_path):
 
     assert _start_worker_node(host="192.168.4.20", grpc_port=50055) == "worker-token"
 
-    leave.assert_called_once_with()
     stop_runtime.assert_called_once_with()
     refresh_token.assert_not_called()
     assert not network_redis_dir.exists()
@@ -1857,7 +1816,6 @@ def test_start_worker_node_clears_state_and_starts_worker(mocker, tmp_path):
         grpc_port=50055,
         dist_port=54370,
         redis_port=None,
-        force_new_token=False,
         docker_network_mode=None,
         docker_network_name=None,
         worker_node=True,
@@ -1887,697 +1845,7 @@ def test_stop_local_runtime_for_worker_stops_compose_and_sidecars(mocker):
     assert not server_cmds.API_WATCHDOG_PID_FILE.exists()
     assert not server_cmds.WEB_UI_PID_FILE.exists()
 
-def test_sidecar_pid_files_include_legacy_checkout_paths():
-    legacy_pid_dir = server_cmds._legacy_checkout_pid_dir()
-
-    assert (legacy_pid_dir / "api-watchdog.pid", "REST API watchdog") in server_cmds.api_pid_files()
-    assert (legacy_pid_dir / "api.pid", "REST API") in server_cmds.api_pid_files()
-    assert (legacy_pid_dir / "web-ui-watchdog.pid", "Web UI watchdog") in server_cmds.web_ui_pid_files()
-    assert (legacy_pid_dir / "web-ui.pid", "Web UI") in server_cmds.web_ui_pid_files()
-
-def _legacy_persist_compose_cluster_node_appends_remote_once():
-    server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
-    server_cmds.RUNTIME_COMPOSE_ENV.write_text("MN_CLUSTER_NODES=mirror_neuron@local\n")
-
-    server_cmds._persist_compose_cluster_node("mirror_neuron@worker")
-    server_cmds._persist_compose_cluster_node("mirror_neuron@worker")
-
-    env = server_cmds._read_env_file(server_cmds.RUNTIME_COMPOSE_ENV)
-    assert env["MN_CLUSTER_NODES"] == "mirror_neuron@local,mirror_neuron@worker"
-
-
-def test_leave_joined_cluster_before_stop_uses_core_claim(mocker, tmp_path):
-    import mn_sdk
-
-    compose_env = tmp_path / "docker-compose.env"
-    claim_file = tmp_path / "cluster-join-claim.json"
-    compose_env.write_text("MN_NODE_NAME=mirror_neuron@192.168.4.173\n")
-    claim_file.write_text(
-        json.dumps(
-            {
-                "state": "confirmed",
-                "owner_node": "mirror_neuron@192.168.4.10",
-                "owner_grpc_host": "192.168.4.10",
-                "owner_grpc_port": 50055,
-            }
-        )
-    )
-
-    removed = []
-
-    class StubClient:
-        def __init__(self, target, auth_token="", timeout=0):
-            assert target == "192.168.4.10:50055"
-            assert auth_token == ""
-            assert timeout == 3
-
-        def remove_node(self, node_name):
-            removed.append(node_name)
-            return "disconnected"
-
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
-    mocker.patch("mn_cli.server_cmds.JOIN_CLAIM_FILE", claim_file)
-    mocker.patch.object(mn_sdk, "Client", StubClient)
-
-    assert server_cmds.leave_joined_cluster_before_stop() is True
-    assert removed == ["mirror_neuron@192.168.4.173"]
-    assert not claim_file.exists()
-
-
-def test_leave_joined_cluster_before_stop_uses_persisted_owner_env(mocker, tmp_path):
-    import mn_sdk
-
-    compose_env = tmp_path / "docker-compose.env"
-    claim_file = tmp_path / "cluster-join-claim.json"
-    compose_env.write_text(
-        "MN_JOIN_OWNER_NODE=mirror_neuron@master.local\n"
-        "MN_JOIN_OWNER_HOST=master.local\n"
-        "MN_JOIN_OWNER_GRPC_PORT=50060\n"
-        "MN_JOIN_WORKER_NODE=mirror_neuron@worker.local\n"
-        "MN_GRPC_AUTH_TOKEN=auth-token\n"
-    )
-    claim_file.write_text("{}")
-
-    removed = []
-
-    class StubClient:
-        def __init__(self, target, auth_token="", timeout=0):
-            assert target == "master.local:50060"
-            assert auth_token == "auth-token"
-            assert timeout == 3
-
-        def remove_node(self, node_name):
-            removed.append(node_name)
-            return "disconnected"
-
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
-    mocker.patch("mn_cli.server_cmds.JOIN_CLAIM_FILE", claim_file)
-    mocker.patch.object(mn_sdk, "Client", StubClient)
-
-    assert server_cmds.leave_joined_cluster_before_stop() is True
-    assert removed == ["mirror_neuron@worker.local"]
-    env = server_cmds._read_env_file(compose_env)
-    assert not (server_cmds.JOIN_OWNER_ENV_KEYS & set(env.keys()))
-    assert not claim_file.exists()
-
-
-def _legacy_add_node_uses_handshake_and_local_core(mocker, tmp_path, capsys):
-    import mn_sdk
-    import mn_cli.shared
-
-    mocker.patch('mn_cli.server_cmds.DIR', tmp_path)
-    mocker.patch('mn_cli.server_cmds._docker_container_running', return_value=False)
-    mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=1)
-    mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.99")
-    mocker.patch(
-        'mn_cli.server_cmds._native_sdk_grpc_command',
-        return_value=["python", "-m", "mn_sdk.native_runtime_service"],
-    )
-    redis_password = "remote-redis-password"
-
-    class StubClient:
-        def __init__(self, target, auth_token, timeout):
-            assert target == "192.168.4.10:50055"
-            assert auth_token == ""
-            assert timeout == 10
-
-        def network_handshake(self, token, node_name="", node_info=None):
-            assert token == "join-token"
-            assert node_name
-            assert node_info["node_name"] == node_name
-            assert node_info["grpc_host"] == "192.168.4.99"
-            assert node_info["grpc_port"] == int(server_cmds.DEFAULT_GRPC_PORT)
-            assert node_info["native_sdk_grpc"] == {
-                "enabled": True,
-                "host": "192.168.4.99",
-                "port": int(server_cmds.DEFAULT_NATIVE_SDK_GRPC_PORT),
-                "target": f"192.168.4.99:{server_cmds.DEFAULT_NATIVE_SDK_GRPC_PORT}",
-                "bind_host": server_cmds.DEFAULT_NATIVE_SDK_GRPC_HOST,
-            }
-            assert "display_name" in node_info
-            return {
-                "node_name": "mirror_neuron@192.168.4.10",
-                "redis_host": "192.168.4.10",
-                "redis_port": 6380,
-                "redis_url": f"redis://:{redis_password}@192.168.4.10:6380/0",
-            }
-
-    mocker.patch.object(mn_sdk, "Client", StubClient)
-    mock_add_node = mocker.patch.object(mn_cli.shared.client, "add_node", return_value="connected")
-    mocker.patch.object(
-        mn_cli.shared.client,
-        "get_system_summary",
-        return_value=json.dumps(
-            {
-                "nodes": [
-                    {
-                        "name": "mirror_neuron@192.168.4.10",
-                        "status": "healthy",
-                        "scheduling_eligible": True,
-                    }
-                ]
-            }
-        ),
-    )
-    mock_run = mocker.patch('mn_cli.server_cmds.subprocess.run')
-    reconcile_models = mocker.patch(
-        "mn_cli.server_cmds._reconcile_cluster_models_after_membership_change",
-        return_value={
-            "status": "ok",
-            "models": 2,
-            "nodes": [{"node": "local"}, {"node": "worker"}],
-        },
-    )
-
-    _join_network(
-        "192.168.4.10",
-        "join-token",
-        grpc_port=50055,
-    )
-
-    mock_run.assert_not_called()
-    mock_add_node.assert_called_once_with("mirror_neuron@192.168.4.10", token="join-token")
-    reconcile_models.assert_called_once_with()
-    output = capsys.readouterr().out
-    assert "Node join successful." in output
-    assert "mirror_neuron@192.168.4.10" in output
-    assert "Remote Redis" in output
-    assert "192.168.4.10" in output
-    assert "6380" in output
-    assert "Remote Redis URL:" in output
-    assert "2 shared across 2 nodes" in output
-    assert "redis://:" in output
-    assert "mn node list" in output
-    assert "mn resource show" in output
-
-
-def _legacy_confirm_joined_node_retries_add_until_summary_is_active():
-    class LocalClient:
-        def __init__(self):
-            self.add_calls = []
-            self.summaries = [
-                {
-                    "nodes": [
-                        {
-                            "name": "mirror_neuron@worker",
-                            "status": "disconnected",
-                            "operator_disconnect": True,
-                            "scheduling_eligible": False,
-                        }
-                    ]
-                },
-                {
-                    "nodes": [
-                        {
-                            "name": "mirror_neuron@worker",
-                            "status": "healthy",
-                            "operator_disconnect": False,
-                            "scheduling_eligible": True,
-                        }
-                    ]
-                },
-            ]
-
-        def get_system_summary(self):
-            return json.dumps(self.summaries.pop(0))
-
-        def add_node(self, node_name, token=""):
-            self.add_calls.append((node_name, token))
-            return "connected"
-
-    client = LocalClient()
-
-    status = server_cmds._confirm_joined_node(
-        client,
-        "mirror_neuron@worker",
-        "join-token",
-        "connected",
-        sleep_fn=lambda _seconds: None,
-    )
-
-    assert status == "connected"
-    assert client.add_calls == [("mirror_neuron@worker", "join-token")]
-
-
-def _legacy_add_node_surfaces_already_joined_worker(mocker):
-    import mn_sdk
-    from mn_sdk.errors import AppError
-
-    class AlreadyExists:
-        name = "ALREADY_EXISTS"
-
-    class AlreadyJoinedError(Exception):
-        def code(self):
-            return AlreadyExists()
-
-        def __str__(self):
-            return "already join a cluster"
-
-    class StubClient:
-        def __init__(self, target, auth_token, timeout):
-            assert target == "192.168.4.10:50055"
-
-        def network_handshake(self, token, node_name="", node_info=None):
-            raise AlreadyJoinedError()
-
-    mocker.patch.object(mn_sdk, "Client", StubClient)
-    mocker.patch("mn_cli.server_cmds._ensure_local_cluster_runtime_for_join")
-    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.99")
-
-    with pytest.raises(AppError) as exc:
-        _join_network("192.168.4.10", "join-token", grpc_port=50055)
-
-    assert exc.value.code == "MN_ALREADY_JOINED"
-    assert exc.value.user_message == "already join a cluster"
-    assert exc.value.http_status == 409
-
-
-def _legacy_add_node_overlay_uses_local_alias_in_handshake(mocker, tmp_path, monkeypatch):
-    import mn_sdk
-    import mn_cli.shared
-
-    monkeypatch.setenv("MN_NODE_ALIAS", "mn-main")
-    redis_password = "remote-redis-password"
-    mocker.patch(
-        "mn_cli.server_cmds.subprocess.run",
-        return_value=mocker.Mock(
-            returncode=0,
-            stdout=json.dumps([{"Driver": "overlay", "Attachable": True}]),
-        ),
-    )
-
-    class StubClient:
-        def __init__(self, target, auth_token, timeout):
-            assert target == "192.168.4.10:50055"
-
-        def network_handshake(self, token, node_name="", node_info=None):
-            assert token == "join-token"
-            assert node_name == "mirror_neuron@mn-main"
-            assert node_info["node_name"] == "mirror_neuron@mn-main"
-            return {
-                "node_name": "mirror_neuron@mn-seed",
-                "redis_host": "mn-seed-redis",
-                "redis_port": 6379,
-                "redis_url": f"redis://:{redis_password}@mn-seed-redis:6379/0",
-            }
-
-    mocker.patch.object(mn_sdk, "Client", StubClient)
-    mock_add_node = mocker.patch.object(mn_cli.shared.client, "add_node", return_value="connected")
-
-    _join_network(
-        "192.168.4.10",
-        "join-token",
-        grpc_port=50055,
-        docker_network_mode="overlay",
-        docker_network_name="mn-overlay",
-    )
-
-    mock_add_node.assert_called_once_with("mirror_neuron@mn-seed", token="join-token")
-
-def _legacy_add_node_bridge_uses_docker_alias_in_handshake(mocker, monkeypatch):
-    import mn_sdk
-    import mn_cli.shared
-
-    monkeypatch.setenv("MN_NODE_ALIAS", "mn-main")
-    redis_password = "remote-redis-password"
-    mock_run = mocker.patch(
-        "mn_cli.server_cmds.subprocess.run",
-        return_value=mocker.Mock(
-            returncode=0,
-            stdout=json.dumps([{"Driver": "bridge", "Attachable": False}]),
-        ),
-    )
-
-    class StubClient:
-        def __init__(self, target, auth_token, timeout):
-            assert target == "192.168.4.10:50055"
-
-        def network_handshake(self, token, node_name="", node_info=None):
-            assert token == "join-token"
-            assert node_name == "mirror_neuron@mn-main"
-            assert node_info["node_name"] == "mirror_neuron@mn-main"
-            return {
-                "node_name": "mirror_neuron@mn-seed",
-                "redis_host": "mn-seed-redis",
-                "redis_port": 6379,
-                "redis_url": f"redis://:{redis_password}@mn-seed-redis:6379/0",
-            }
-
-    mocker.patch.object(mn_sdk, "Client", StubClient)
-    mock_add_node = mocker.patch.object(mn_cli.shared.client, "add_node", return_value="connected")
-
-    _join_network(
-        "192.168.4.10",
-        "join-token",
-        grpc_port=50055,
-        docker_network_mode="bridge",
-        docker_network_name="mirror-neuron-runtime",
-    )
-
-    mock_run.assert_any_call(
-        ["docker", "network", "inspect", "mirror-neuron-runtime"],
-        capture_output=True,
-        text=True,
-    )
-    mock_add_node.assert_called_once_with("mirror_neuron@mn-seed", token="join-token")
-
-def _legacy_add_node_rejects_missing_remote_redis_details(mocker, tmp_path):
-    import mn_sdk
-
-    mocker.patch('mn_cli.server_cmds.DIR', tmp_path)
-    mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=1)
-
-    class StubClient:
-        def __init__(self, target, auth_token, timeout):
-            assert target == "192.168.4.10:50055"
-
-        def network_handshake(self, token, node_name="", node_info=None):
-            return {"node_name": "mirror_neuron@192.168.4.10"}
-
-    mocker.patch.object(mn_sdk, "Client", StubClient)
-
-    with pytest.raises(typer.Exit) as exc:
-        _join_network("192.168.4.10", "join-token", grpc_port=50055)
-
-    assert exc.value.exit_code == 1
-
-def _legacy_add_node_rejects_redis_url_without_token_password(mocker, tmp_path):
-    import mn_sdk
-
-    mocker.patch('mn_cli.server_cmds.DIR', tmp_path)
-    mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=1)
-
-    class StubClient:
-        def __init__(self, target, auth_token, timeout):
-            assert target == "192.168.4.10:50055"
-
-        def network_handshake(self, token, node_name="", node_info=None):
-            return {
-                "node_name": "mirror_neuron@192.168.4.10",
-                "redis_host": "192.168.4.10",
-                "redis_port": 6380,
-                "redis_url": "redis://192.168.4.10:6380/0",
-            }
-
-    mocker.patch.object(mn_sdk, "Client", StubClient)
-
-    with pytest.raises(typer.Exit) as exc:
-        _join_network("192.168.4.10", "join-token", grpc_port=50055)
-
-    assert exc.value.exit_code == 1
-
-def _legacy_join_network_rejects_divergent_coordination_store_before_membership(
-    mocker, tmp_path
-):
-    import mn_sdk
-    import mn_cli.shared
-
-    compose_file = server_cmds.RUNTIME_COMPOSE_FILE
-    compose_env = server_cmds.RUNTIME_COMPOSE_ENV
-    primary_password = "primary-redis-password"
-    worker_password = "worker-redis-password"
-    compose_file.parent.mkdir(parents=True, exist_ok=True)
-    compose_file.write_text("services: {}\n")
-    compose_env.write_text(
-        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
-        "MN_NETWORK_JOIN_TOKEN=primary-token\n"
-        "MN_NETWORK_REDIS_HOST=192.168.4.99\n"
-        "MN_NETWORK_REDIS_PORT=56379\n"
-        f"MN_REDIS_PASSWORD={primary_password}\n"
-        f"MN_REDIS_URL=redis://:{primary_password}@redis:6379/0\n"
-    )
-
-    class StubClient:
-        def __init__(self, target, auth_token, timeout):
-            assert target == "192.168.4.20:50055"
-
-        def network_handshake(self, token, node_name="", node_info=None):
-            assert token == "join-token"
-            return {
-                "node_name": "mirror_neuron@192.168.4.20",
-                "redis_host": "192.168.4.20",
-                "redis_port": 56380,
-                "redis_url": f"redis://:{worker_password}@192.168.4.20:56380/0",
-                "node_info": {
-                    "redis_ha": {
-                        "mode": "sentinel",
-                        "sentinel_port": 26379,
-                        "sentinel_master": "mirror-neuron",
-                    },
-                    "coordination_store": {
-                        "identity": "worker-store",
-                        "writable_primary": True,
-                        "healthy": True,
-                    },
-                },
-            }
-
-    redis_calls = []
-
-    def redis_command(host, port, password, *args):
-        redis_calls.append((host, port, password, args))
-        return "OK"
-
-    mocker.patch.object(mn_sdk, "Client", StubClient)
-    add_node = mocker.patch.object(
-        mn_cli.shared.client, "add_node", return_value="connected"
-    )
-    mocker.patch.object(
-        mn_cli.shared.client,
-        "get_system_summary",
-        return_value=json.dumps(
-            {
-                "nodes": [
-                    {
-                        "coordination_store": {
-                            "identity": "primary-store",
-                            "writable_primary": True,
-                            "healthy": True,
-                        }
-                    }
-                ]
-            }
-        ),
-    )
-    mocker.patch('mn_cli.server_cmds._redis_command', side_effect=redis_command)
-    mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=0)
-    mocker.patch('mn_cli.server_cmds._ensure_local_cluster_runtime_for_join')
-
-    from mn_sdk.errors import AppError
-
-    with pytest.raises(AppError, match="different or read-only"):
-        _join_network("192.168.4.20", "join-token", grpc_port=50055)
-
-    add_node.assert_not_called()
-    assert redis_calls == []
-
-
-def _legacy_join_network_accepts_shared_coordination_store_without_reconfiguring_redis(
-    mocker, tmp_path, capsys
-):
-    import mn_sdk
-    import mn_cli.shared
-
-    compose_file = server_cmds.RUNTIME_COMPOSE_FILE
-    compose_env = server_cmds.RUNTIME_COMPOSE_ENV
-    primary_password = "primary-redis-password"
-    compose_file.parent.mkdir(parents=True, exist_ok=True)
-    compose_file.write_text("services: {}\n")
-    compose_env.write_text(
-        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
-        "MN_NETWORK_JOIN_TOKEN=primary-token\n"
-        "MN_NETWORK_REDIS_HOST=192.168.4.99\n"
-        "MN_NETWORK_REDIS_PORT=56379\n"
-        f"MN_REDIS_PASSWORD={primary_password}\n"
-        f"MN_REDIS_URL=redis://:{primary_password}@redis:6379/0\n"
-    )
-
-    class StubClient:
-        def __init__(self, target, auth_token, timeout):
-            assert target == "192.168.4.20:50055"
-
-        def network_handshake(self, token, node_name="", node_info=None):
-            assert token == "join-token"
-            return {
-                "node_name": "mirror_neuron@192.168.4.20",
-                "redis_host": "192.168.4.99",
-                "redis_port": 56379,
-                "redis_url": f"redis://:{primary_password}@192.168.4.99:56379/0",
-                "node_info": {
-                    "coordination_store": {
-                        "identity": "primary-store",
-                        "writable_primary": True,
-                        "healthy": True,
-                    }
-                },
-            }
-
-    redis_calls = []
-
-    def redis_command(host, port, password, *args):
-        redis_calls.append((host, port, password, args))
-        return "OK"
-
-    mocker.patch.object(mn_sdk, "Client", StubClient)
-    mocker.patch.object(mn_cli.shared.client, "add_node", return_value="connected")
-    mocker.patch.object(
-        mn_cli.shared.client,
-        "get_system_summary",
-        return_value=json.dumps(
-            {
-                "nodes": [
-                    {
-                        "coordination_store": {
-                            "identity": "primary-store",
-                            "writable_primary": True,
-                            "healthy": True,
-                        }
-                    }
-                ]
-            }
-        ),
-    )
-    mocker.patch('mn_cli.server_cmds._redis_command', side_effect=redis_command)
-    mocker.patch('mn_cli.server_cmds._detect_host_gpu_count', return_value=0)
-    mocker.patch('mn_cli.server_cmds._ensure_local_cluster_runtime_for_join')
-
-    _join_network("192.168.4.20", "join-token", grpc_port=50055)
-
-    assert not any(call[3][0] == "REPLICAOF" for call in redis_calls)
-    output = " ".join(capsys.readouterr().out.split())
-    assert "Replication:" not in output
-    assert "Node join successful." in output
-
-
-def _legacy_configure_local_compose_redis_as_read_only_replica(mocker):
-    redis_calls = []
-
-    def redis_command(host, port, password, *args):
-        redis_calls.append((host, port, password, args))
-        return "OK"
-
-    mocker.patch.object(server_cmds, "_redis_command", side_effect=redis_command)
-    mocker.patch.object(server_cmds, "_published_container_port", return_value=56379)
-
-    result = server_cmds._configure_local_compose_redis_replica(
-        {
-            "MN_REDIS_URL": "redis://:primary-password@10.0.4.23:56379/0",
-            "MN_REDIS_PASSWORD": "local-password",
-            "MN_REDIS_PORT": "56379",
-        }
-    )
-
-    assert result == "127.0.0.1:56379 -> 10.0.4.23:56379"
-    assert redis_calls == [
-        (
-            "127.0.0.1",
-            56379,
-            "local-password",
-            ("CONFIG", "SET", "masterauth", "primary-password"),
-        ),
-        (
-            "127.0.0.1",
-            56379,
-            "local-password",
-            ("CONFIG", "SET", "replica-read-only", "yes"),
-        ),
-        (
-            "127.0.0.1",
-            56379,
-            "local-password",
-            ("REPLICAOF", "10.0.4.23", "56379"),
-        ),
-    ]
-
-
-def _legacy_join_network_keeps_local_shared_storage_and_connects_syncthing(mocker, tmp_path, monkeypatch):
-    import mn_sdk
-    import mn_cli.shared
-
-    compose_file = server_cmds.RUNTIME_COMPOSE_FILE
-    compose_env = server_cmds.RUNTIME_COMPOSE_ENV
-    old_shared = tmp_path / "old-shared"
-    primary_shared = tmp_path / "primary-shared"
-    old_shared.mkdir()
-    primary_shared.mkdir()
-    compose_file.parent.mkdir(parents=True, exist_ok=True)
-    compose_file.write_text("services: {}\n")
-    compose_env.write_text(
-        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
-        "MN_HOST_SHARED_STORAGE_ROOT={old}\n"
-        "MN_SHARED_STORAGE_ROOT={old}\n"
-        "MN_RUNTIME_SHARED_STORAGE_ROOT=/root/.mn/shared\n"
-            "MN_CONTAINER_SHARED_STORAGE_ROOT=/root/.mn/shared\n".format(old=old_shared)
-    )
-    monkeypatch.setenv("MN_SYNCTHING_ENABLED", "auto")
-
-    class StubClient:
-        def __init__(self, target, auth_token, timeout):
-            assert target == "192.168.4.20:50055"
-
-        def network_handshake(self, token, node_name="", node_info=None):
-            assert node_info["host_shared_storage_root"] == str(old_shared)
-            return {
-                "node_name": "mirror_neuron@192.168.4.20",
-                "redis_host": "192.168.4.20",
-                "redis_port": 56380,
-                "redis_url": "redis://:worker@192.168.4.20:56380/0",
-                "node_info": {
-                    "host_shared_storage_root": str(primary_shared),
-                    "runtime_shared_storage_root": "/root/.mn/shared",
-                    "syncthing": {
-                        "enabled": True,
-                        "device_id": "PRIMARYDEVICE",
-                        "api_key": "primary-key",
-                        "host": "192.168.4.20",
-                        "gui_port": 58384,
-                        "sync_port": 22000,
-                        "folder_id": server_cmds.SYNCTHING_FOLDER_ID,
-                        "folder_path": server_cmds.SYNCTHING_FOLDER_PATH,
-                    },
-                },
-            }
-
-    mocker.patch.object(mn_sdk, "Client", StubClient)
-    mocker.patch.object(mn_cli.shared.client, "add_node", return_value="connected")
-    mocker.patch("mn_cli.server_cmds._detect_host_gpu_count", return_value=0)
-    mocker.patch("mn_cli.server_cmds._ensure_local_cluster_runtime_for_join")
-    mocker.patch("mn_cli.server_cmds._configure_worker_redis_replica", return_value="")
-
-    def ensure_syncthing(env, **_kwargs):
-        env.update(
-            {
-                "MN_SYNCTHING_ENABLED": "auto",
-                "MN_SYNCTHING_DEVICE_ID": "LOCALDEVICE",
-                "MN_SYNCTHING_API_KEY": "local-key",
-                "MN_SYNCTHING_ADVERTISE_HOST": "192.168.4.99",
-                "MN_SYNCTHING_GUI_PORT": "58384",
-                "MN_SYNCTHING_SYNC_PORT": "22000",
-                "MN_SYNCTHING_FOLDER_ID": server_cmds.SYNCTHING_FOLDER_ID,
-                "MN_SYNCTHING_FOLDER_PATH": server_cmds.SYNCTHING_FOLDER_PATH,
-            }
-        )
-        return env
-
-    mocker.patch("mn_cli.server_cmds._ensure_syncthing_for_runtime", side_effect=ensure_syncthing)
-    connect_syncthing = mocker.patch("mn_cli.server_cmds._connect_syncthing_peers", return_value=True)
-
-    _join_network("192.168.4.20", "join-token", grpc_port=50055)
-
-    env = server_cmds._read_env_file(compose_env)
-    assert env["MN_HOST_SHARED_STORAGE_ROOT"] == str(old_shared)
-    assert env["MN_SHARED_STORAGE_ROOT"] == str(old_shared)
-    assert env["MN_RUNTIME_SHARED_STORAGE_ROOT"] == "/root/.mn/shared"
-    assert env["MN_CONTAINER_SHARED_STORAGE_ROOT"] == "/root/.mn/shared"
-    connect_syncthing.assert_called_once()
-    local_info, remote_info = connect_syncthing.call_args.args
-    assert local_info["device_id"] == "LOCALDEVICE"
-    assert remote_info["device_id"] == "PRIMARYDEVICE"
-
-
-def test_join_network_uses_sdk_federation_and_never_calls_legacy_add_node(
-    mocker, monkeypatch
-):
+def test_join_network_uses_sdk_federation(mocker, monkeypatch):
     import mn_sdk
     import mn_cli.shared
 
@@ -2597,7 +1865,6 @@ def test_join_network_uses_sdk_federation_and_never_calls_legacy_add_node(
         "mn_cli.server_cmds._reconcile_cluster_models_after_membership_change",
         return_value={"status": "ok", "nodes": []},
     )
-    legacy_add = mocker.patch.object(mn_cli.shared.client, "add_node")
     join = mocker.patch.object(
         mn_sdk,
         "join_federated_node",
@@ -2618,10 +1885,9 @@ def test_join_network_uses_sdk_federation_and_never_calls_legacy_add_node(
         mn_cli.shared.client,
         host="192.168.4.20",
         token="join-token",
-        grpc_ports=(50055,),
+        grpc_port=50055,
         local_host="192.168.4.99",
     )
-    legacy_add.assert_not_called()
     connect_syncthing.assert_called_once()
     reconcile.assert_called_once_with()
 
@@ -3439,7 +2705,6 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.time.sleep')
     mocker.patch('mn_cli.server_cmds.PID_DIR', tmp_path / ".pids")
     mocker.patch('mn_cli.server_cmds.LOG_DIR', tmp_path / ".logs")
-    mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
     mocker.patch('mn_cli.server_cmds.API_WATCHDOG_LOG', tmp_path / "api-watchdog.log")
     mocker.patch('mn_cli.server_cmds._wait_for_api', return_value=True)
@@ -3535,7 +2800,6 @@ def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.time.sleep')
     mocker.patch('mn_cli.server_cmds.PID_DIR', tmp_path / ".pids")
     mocker.patch('mn_cli.server_cmds.LOG_DIR', tmp_path / ".logs")
-    mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path)
     mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.99")
@@ -3598,7 +2862,6 @@ def test_start_server_join_connects_syncthing_before_compose_up(mocker, tmp_path
     mocker.patch('mn_cli.server_cmds.time.sleep')
     mocker.patch('mn_cli.server_cmds.PID_DIR', tmp_path / ".pids")
     mocker.patch('mn_cli.server_cmds.LOG_DIR', tmp_path / ".logs")
-    mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path)
     mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.99")
@@ -3704,7 +2967,6 @@ def test_start_server_preserves_persisted_join_profile_on_restart(mocker, tmp_pa
     mocker.patch('mn_cli.server_cmds.time.sleep')
     mocker.patch('mn_cli.server_cmds.PID_DIR', tmp_path / ".pids")
     mocker.patch('mn_cli.server_cmds.LOG_DIR', tmp_path / ".logs")
-    mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path)
     mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.173")
@@ -3762,7 +3024,6 @@ def test_start_server_preserves_multi_node_join_profile_on_restart(mocker, tmp_p
     mocker.patch('mn_cli.server_cmds.time.sleep')
     mocker.patch('mn_cli.server_cmds.PID_DIR', tmp_path / ".pids")
     mocker.patch('mn_cli.server_cmds.LOG_DIR', tmp_path / ".logs")
-    mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path)
     mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.173")
@@ -3815,7 +3076,6 @@ def test_start_server_refreshes_generated_node_name_for_joined_runtime_ip_change
     mocker.patch('mn_cli.server_cmds.time.sleep')
     mocker.patch('mn_cli.server_cmds.PID_DIR', tmp_path / ".pids")
     mocker.patch('mn_cli.server_cmds.LOG_DIR', tmp_path / ".logs")
-    mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path)
     mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.44")
@@ -3878,7 +3138,6 @@ def test_start_server_refreshes_generated_node_name_for_joined_runtime_explicit_
     mocker.patch('mn_cli.server_cmds.time.sleep')
     mocker.patch('mn_cli.server_cmds.PID_DIR', tmp_path / ".pids")
     mocker.patch('mn_cli.server_cmds.LOG_DIR', tmp_path / ".logs")
-    mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path)
     mocker.patch('mn_cli.server_cmds._detect_lan_ip', return_value="192.168.4.44")
@@ -4103,7 +3362,6 @@ def test_start_server_success(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.time.sleep')
     mocker.patch('mn_cli.server_cmds.PID_DIR', tmp_path / ".pids")
     mocker.patch('mn_cli.server_cmds.LOG_DIR', tmp_path / ".logs")
-    mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
     mocker.patch('mn_cli.server_cmds.API_WATCHDOG_LOG', tmp_path / "api-watchdog.log")
     mocker.patch('mn_cli.server_cmds._wait_for_api', return_value=True)
@@ -4164,7 +3422,6 @@ def test_start_server_darwin(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.time.sleep')
     mocker.patch('mn_cli.server_cmds.PID_DIR', tmp_path / ".pids")
     mocker.patch('mn_cli.server_cmds.LOG_DIR', tmp_path / ".logs")
-    mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path) # no mn-api to skip api
     
@@ -4196,7 +3453,6 @@ def test_start_server_passes_slack_env_to_docker(mocker, tmp_path, monkeypatch):
     mocker.patch('mn_cli.server_cmds.time.sleep')
     mocker.patch('mn_cli.server_cmds.PID_DIR', tmp_path / ".pids")
     mocker.patch('mn_cli.server_cmds.LOG_DIR', tmp_path / ".logs")
-    mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path)
 
@@ -4274,7 +3530,6 @@ def test_start_server_mounts_docker_worker_socket_and_linux_cli(mocker, tmp_path
     mocker.patch('mn_cli.server_cmds.time.sleep')
     mocker.patch('mn_cli.server_cmds.PID_DIR', tmp_path / ".pids")
     mocker.patch('mn_cli.server_cmds.LOG_DIR', tmp_path / ".logs")
-    mocker.patch('mn_cli.server_cmds.BEAM_LOG', tmp_path / "beam.log")
     mocker.patch('mn_cli.server_cmds.API_LOG', tmp_path / "api.log")
     mocker.patch('mn_cli.server_cmds.VENV_DIR', tmp_path)
 
@@ -4292,31 +3547,6 @@ def test_start_server_mounts_docker_worker_socket_and_linux_cli(mocker, tmp_path
     assert ["-v", f"{host_docker}:/usr/local/bin/docker:ro"] == docker_run[
         docker_run.index(f"{host_docker}:/usr/local/bin/docker:ro") - 1 : docker_run.index(f"{host_docker}:/usr/local/bin/docker:ro") + 1
     ]
-
-def test_detach_local_docker_node_stops_compose_core_for_local_alias(mocker, tmp_path):
-    compose_file = tmp_path / "docker-compose.yml"
-    compose_env = tmp_path / "docker-compose.env"
-    compose_file.write_text("services: {}\n")
-    compose_env.write_text("MN_NODE_ALIAS=mn-local\n")
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_FILE", compose_file)
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
-    mock_run = mocker.patch("mn_cli.server_cmds.subprocess.run")
-
-    assert _detach_local_docker_node_if_matches("mirror_neuron@mn-local") is True
-
-    mock_run.assert_called_once_with(
-        runtime_compose_cmd("stop", "mirror-neuron-core"),
-        stderr=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-    )
-
-def test_detach_local_docker_node_ignores_remote_alias(mocker, tmp_path):
-    (server_cmds.DIR / "node.alias").parent.mkdir(parents=True, exist_ok=True)
-    (server_cmds.DIR / "node.alias").write_text("mn-local\n")
-    mock_run = mocker.patch("mn_cli.server_cmds.subprocess.run")
-
-    assert _detach_local_docker_node_if_matches("mirror_neuron@mn-remote") is False
-    mock_run.assert_not_called()
 
 def test_default_web_ui_dirs_use_nested_install_path():
     assert ORIGINAL_WEB_UI_DIRS[0].name == "webui"

@@ -221,7 +221,7 @@ def test_run_stream_error_falls_back_to_status_polling(mocker, tmp_path, monkeyp
     assert result.exit_code == 0
     assert "Job submitted" in result.stdout
     assert "Completed" in result.stdout
-    assert mock_get.call_count == 2
+    mock_get.assert_called_once()
     mock_get.assert_called_with("run-stream-fallback")
 
 def test_run_records_lazy_runtime_models_before_model_validation(mocker, tmp_path, monkeypatch):
@@ -487,6 +487,11 @@ def test_run_submits_python_environment_requirements_payload(mocker, tmp_path, m
                         "self?": True,
                         "status": "healthy",
                         "scheduling_eligible": True,
+                        "coordination_store": {
+                            "identity": "test-store",
+                            "writable_primary": True,
+                            "healthy": True,
+                        },
                     }
                 ]
             }
@@ -543,8 +548,8 @@ def test_run_injects_blueprint_config_with_cli_set_over_overwrite(mocker, tmp_pa
                 "node_id": "worker",
                 "config": {
                     "environment": {
-                        "LITELLM_MODEL": "ollama/nemotron3:33b",
-                        "LITELLM_API_BASE": "http://old",
+                        "MN_LLM_MODEL": "ollama/nemotron3:33b",
+                        "MN_LLM_API_BASE": "http://old",
                     }
                 },
             }
@@ -590,6 +595,11 @@ def test_run_auto_creates_run_store_identity_for_local_blueprint(mocker, tmp_pat
                         "self?": True,
                         "status": "healthy",
                         "scheduling_eligible": True,
+                        "coordination_store": {
+                            "identity": "test-store",
+                            "writable_primary": True,
+                            "healthy": True,
+                        },
                     }
                 ]
             }

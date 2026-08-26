@@ -1298,7 +1298,7 @@ def _doctor_llm_smoke_report(
             if name not in merged_entries:
                 merged_entries[name] = entry
         llm = {**manifest_llm, **llm, "configs": merged_entries}
-    env_model = str(env_overrides.get("MN_LLM_MODEL") or env_overrides.get("LITELLM_MODEL") or "").strip()
+    env_model = str(env_overrides.get("MN_LLM_MODEL") or "").strip()
     if env_model and not str(llm.get("model") or llm.get("runtime_model") or "").strip():
         llm = {**llm, "model": env_model}
     configs = llm.get("configs") if isinstance(llm.get("configs"), dict) else {}

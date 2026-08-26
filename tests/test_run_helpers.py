@@ -24,11 +24,9 @@ from mn_cli.libs.run_manifest import (
 
 
 def prepare_manifest_for_submission(bundle_dir, manifest, **kwargs):
-    """Add the executable-v1 envelope around legacy runtime fixtures.
+    """Add the executable-v1 envelope around concise test fixtures.
 
-    These tests exercise payload staging and runtime lowering, whose legacy
-    ``nodes`` layout remains relevant internally.  Production callers must
-    already supply one of the public v1 forms.
+    Production callers must already supply one of the public v1 forms.
     """
 
     if manifest.get("kind") != "WorkflowSource":
@@ -129,7 +127,7 @@ def test_prepare_manifest_for_submission_merges_runtime_env_and_metadata(tmp_pat
                 "node_id": "worker",
                 "config": {
                     "environment": {
-                        "LITELLM_MODEL": "ollama/test",
+                        "MN_LLM_MODEL": "ollama/test",
                         "MN_LLM_API_KEY": "kept",
                         "MN_BLUEPRINT_CONFIG_JSON": json.dumps({"identity": {"blueprint_id": "stale"}}),
                     }
@@ -814,15 +812,17 @@ def test_stage_skill_dependency_payloads_injects_pinned_gar_requirements_for_doc
                 "version": "1.2.7",
             }
         ],
-        "nodes": [
-            {
-                "node_id": "worker",
-                "config": {
-                    "runner_module": "MirrorNeuron.Runner.DockerWorker",
-                    "docker_worker_image": "worker/docker_worker",
-                },
-            }
-        ],
+        "agents": {
+            "nodes": [
+                {
+                    "node_id": "worker",
+                    "config": {
+                        "runner_module": "MirrorNeuron.Runner.DockerWorker",
+                        "docker_worker_image": "worker/docker_worker",
+                    },
+                }
+            ]
+        },
     }
     payloads = {"worker/docker_worker/Dockerfile": b"FROM python:3.11-slim\n"}
 
@@ -856,15 +856,17 @@ def test_stage_skill_dependency_payloads_ignores_comment_only_dependency_text(tm
                 "version": "1.2.7",
             }
         ],
-        "nodes": [
-            {
-                "node_id": "worker",
-                "config": {
-                    "runner_module": "MirrorNeuron.Runner.DockerWorker",
-                    "docker_worker_image": "worker/docker_worker",
-                },
-            }
-        ],
+        "agents": {
+            "nodes": [
+                {
+                    "node_id": "worker",
+                    "config": {
+                        "runner_module": "MirrorNeuron.Runner.DockerWorker",
+                        "docker_worker_image": "worker/docker_worker",
+                    },
+                }
+            ]
+        },
     }
     payloads = {
         "worker/docker_worker/Dockerfile": (
@@ -1103,17 +1105,19 @@ def test_stage_upload_path_payloads_stages_top_level_blueprint_sources(tmp_path)
     (cache_dir / "brief.pyc").write_bytes(b"cache")
 
     manifest = {
-        "nodes": [
-            {
-                "node_id": "worker",
-                "config": {
-                    "upload_paths": [
-                        {"source": "worker", "target": "worker"},
-                        {"source": "examples/sample_inputs", "target": "vc_assistant/examples/sample_inputs"},
-                    ]
-                },
-            }
-        ]
+        "agents": {
+            "nodes": [
+                {
+                    "node_id": "worker",
+                    "config": {
+                        "upload_paths": [
+                            {"source": "worker", "target": "worker"},
+                            {"source": "examples/sample_inputs", "target": "vc_assistant/examples/sample_inputs"},
+                        ]
+                    },
+                }
+            ]
+        }
     }
     payloads = {"worker/run.py": b"print('hi')\n"}
 
@@ -1234,37 +1238,6 @@ def test_prepare_manifest_for_submission_lowers_workflow_manifest_for_core_runti
     assert prepared["initial_inputs"]["ingress"] == [{"hello": "world"}]
     assert "nodes" not in prepared
     assert "edges" not in prepared
-
-
-def test_prepare_manifest_for_submission_lowers_legacy_agent_graph_workflow_id(tmp_path):
-    bundle_dir = tmp_path / "legacy_agent_graph"
-    bundle_dir.mkdir()
-
-    manifest = {
-        "manifest_version": "1.0",
-        "workflow_id": "legacy_agent_graph_v2",
-        "job_name": "legacy-agent-graph",
-        "agents": {
-            "entrypoints": ["video_understanding_agent"],
-            "nodes": [
-                {
-                    "node_id": "video_understanding_agent",
-                    "agent_type": "executor",
-                    "type": "generic",
-                    "config": {},
-                }
-            ],
-            "edges": [],
-        },
-        "runtime": {"models": {}},
-    }
-
-    prepared = prepare_manifest_for_submission(bundle_dir, manifest)
-
-    assert prepared["graph_id"] == "legacy_agent_graph_v2"
-    assert prepared["flow"]["nodes"] == prepared["agents"]["nodes"]
-    assert prepared["flow"]["edges"] == []
-    assert prepared["entrypoints"] == ["video_understanding_agent"]
 
 
 def test_stage_blueprint_support_payloads_for_support_dependent_hostlocal_worker(tmp_path, monkeypatch):
@@ -1823,19 +1796,28 @@ def test_prepare_manifest_for_submission_renders_agent_templates(tmp_path, monke
     (bundle_dir / "config" / "default.json").write_text(json.dumps({"identity": {"blueprint_id": "bp"}}))
 
     agent_root = tmp_path / "mn-agents"
-    agent_dir = agent_root / "control_message_router"
-    agent_dir.mkdir(parents=True)
+    agent_dir = agent_root / "control_message_router_agent"
+    resources_dir = agent_dir / "src" / "mn_control_message_router_agent" / "resources"
+    resources_dir.mkdir(parents=True)
     (agent_root / "index.json").write_text(json.dumps({
+        "schema_version": "mn-agents.index.v2",
         "agents": [
             {
+                "agent_id": "mn-agents.control.message_router",
                 "template_id": "mn-agents.control.message_router",
                 "version": 1,
-                "path": "control_message_router",
+                "distribution": "mn-control-message-router-agent",
+                "module": "mn_control_message_router_agent",
+                "package_kind": "runtime_node",
+                "resource_path": "control_message_router_agent/src/mn_control_message_router_agent/resources/agent.json",
                 "template_category": "control",
             }
         ]
     }))
-    (agent_dir / "agent.json").write_text(json.dumps({
+    (resources_dir / "agent.json").write_text(json.dumps({
+        "schema_version": "mn.agent.package.v1",
+        "package_kind": "runtime_node",
+        "agent_id": "mn-agents.control.message_router",
         "template_id": "mn-agents.control.message_router",
         "version": 1,
         "defaults": {
@@ -1851,13 +1833,15 @@ def test_prepare_manifest_for_submission_renders_agent_templates(tmp_path, monke
     prepared = prepare_manifest_for_submission(
         bundle_dir,
         {
-            "nodes": [
-                {
-                    "node_id": "ingress",
-                    "uses": "mn-agents.control.message_router@1",
-                    "with": {"emit_type": "video_monitor_start"},
-                }
-            ]
+            "agents": {
+                "nodes": [
+                    {
+                        "node_id": "ingress",
+                        "uses": "mn-agents.control.message_router@1",
+                        "with": {"emit_type": "video_monitor_start"},
+                    }
+                ]
+            }
         },
         env_overrides={"MN_RUN_ID": "run-template"},
     )

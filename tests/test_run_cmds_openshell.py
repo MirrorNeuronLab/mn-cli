@@ -232,7 +232,7 @@ def test_prepare_openshell_shared_sandbox_injects_prepared_runtime_config(
         "policy": "openshell-policy.yaml",
         "reuse_shared_sandbox": True,
     }
-    manifest = {"nodes": [{"node_id": "autonomous", "config": config}]}
+    manifest = {"agents": {"nodes": [{"node_id": "autonomous", "config": config}]}}
     mock_run = mocker.patch(
         "mn_cli.libs.run_cmds.subprocess.run",
         side_effect=[

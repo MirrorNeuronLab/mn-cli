@@ -122,7 +122,6 @@ def _mn_home() -> Path:
 DIR = _mn_home()
 PID_DIR = DIR / "pids"
 LOG_DIR = DIR / "logs"
-BEAM_PID_FILE = PID_DIR / "beam.pid"
 API_PID_FILE = PID_DIR / "api.pid"
 API_WATCHDOG_PID_FILE = PID_DIR / "api-watchdog.pid"
 NATIVE_SDK_GRPC_PID_FILE = PID_DIR / "native-sdk-grpc.pid"
@@ -131,7 +130,6 @@ WEB_UI_PID_FILE = PID_DIR / "web-ui.pid"
 WEB_UI_WATCHDOG_PID_FILE = PID_DIR / "web-ui-watchdog.pid"
 API_TOKEN_FILE = DIR / "api.token"
 REDIS_PASSWORD_FILE = DIR / "redis.password"
-BEAM_LOG = LOG_DIR / "beam.log"
 API_LOG = LOG_DIR / "api.log"
 API_WATCHDOG_LOG = LOG_DIR / "api-watchdog.log"
 NATIVE_SDK_GRPC_LOG = LOG_DIR / "native-sdk-grpc.log"
@@ -142,7 +140,6 @@ VENV_DIR = Path.home() / ".local" / "share" / "mn_venv"
 RUNTIME_COMPOSE_FILE = DIR / "docker-compose.yml"
 RUNTIME_COMPOSE_ENV = DIR / "docker-compose.env"
 RUNTIME_ENDPOINTS_FILE = DIR / "runtime-endpoints.json"
-RUNTIME_MODELS_OVERRIDE_FILE = "docker-compose.models.yml"
 RUNTIME_WORKERS_OVERRIDE_FILE = "docker-compose.workers.yml"
 RUNTIME_MODEL_RUNNER_PROXY_OVERRIDE_FILE = "docker-compose.model-runner-proxy.yml"
 RUNTIME_SYNCTHING_OVERRIDE_FILE = "docker-compose.syncthing.yml"
@@ -273,12 +270,6 @@ DEFAULT_RUNTIME_SHARED_STORAGE_ROOT = "/root/.mn/shared"
 DEFAULT_RUNTIME_BUNDLE_CACHE_DIR = f"{DEFAULT_RUNTIME_SHARED_STORAGE_ROOT}/bundle_cache"
 DEFAULT_REDIS_IMAGE = "redis:8"
 DEFAULT_SYNCTHING_IMAGE = "syncthing/syncthing:latest"
-LEGACY_GRPC_PORT = "50051"
-LEGACY_API_PORT = "4001"
-LEGACY_EPMD_PORT = "4369"
-LEGACY_DIST_PORT = "4370"
-LEGACY_WEB_UI_PORT = "5173"
-LEGACY_OPENSHELL_GATEWAY_PORT = "8080"
 WEB_UI_PORT = DEFAULT_WEB_UI_PORT
 REDIS_CONTAINER_PORT = 6379
 REDIS_DYNAMIC_PORT_START = 56379
@@ -346,7 +337,7 @@ JOIN_OWNER_ENV_KEYS = {
     "MN_JOIN_OWNER_GRPC_PORT",
     "MN_JOIN_WORKER_NODE",
 }
-DEPRECATED_RUNTIME_ENV_KEYS = {
+RETIRED_RUNTIME_ENV_KEYS = {
     "MN_ARTIFACT_AUTH_TOKEN",
     "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN",
     "MN_HOST_MN_DIR",
@@ -2822,9 +2813,6 @@ def _network_shared_storage_roots(env: dict[str, str]) -> tuple[str, str, str]:
     )
     host_home_dir = Path(str(env.get("MN_HOST_HOME_DIR") or DIR)).expanduser()
     host_root = str(env.get("MN_HOST_SHARED_STORAGE_ROOT") or "").strip()
-    legacy_shared_root = str(env.get("MN_SHARED_STORAGE_ROOT") or "").strip()
-    if not host_root and legacy_shared_root and legacy_shared_root != runtime_root:
-        host_root = legacy_shared_root
     if not host_root:
         host_root = str(host_home_dir / "shared")
     bundle_cache_dir = str(
@@ -3532,7 +3520,6 @@ def _stop_local_runtime_for_worker() -> None:
         *web_ui_pid_files(),
         *api_pid_files(),
         *native_sdk_grpc_pid_files(),
-        (BEAM_PID_FILE, "Legacy Core Service"),
     ]:
         if not pid_file.exists():
             continue
@@ -3576,7 +3563,6 @@ def _start_worker_node(
     docker_network_name: Optional[str] = None,
 ) -> str:
     print_info(console, "Preparing this box as a clean MirrorNeuron worker node…")
-    leave_joined_cluster_before_stop()
     _stop_local_runtime_for_worker()
     _clear_join_owner_metadata()
     _clear_worker_redis_state()
@@ -3588,7 +3574,6 @@ def _start_worker_node(
         grpc_port=grpc_port,
         dist_port=dist_port,
         redis_port=redis_port,
-        force_new_token=False,
         docker_network_mode=docker_network_mode,
         docker_network_name=docker_network_name,
         worker_node=True,
@@ -3600,7 +3585,6 @@ def _start_network_seed(
     grpc_port: int = int(DEFAULT_GRPC_PORT),
     dist_port: int = int(DEFAULT_DIST_PORT),
     redis_port: Optional[int] = None,
-    force_new_token: bool = False,
     docker_network_mode: Optional[str] = None,
     docker_network_name: Optional[str] = None,
     worker_node: bool = False,
@@ -3632,11 +3616,6 @@ def _start_network_seed(
         else _network_node_name(host)
     )
     redis_alias = _docker_redis_alias(node_alias)
-    if force_new_token:
-        print_warning(
-            console,
-            "--force-new-token is deprecated; run 'mn node refresh-token' to rotate the join token.",
-        )
     token = _resolve_network_token()
     external_redis_url = os.getenv("MN_REDIS_URL", "").strip()
     redis_password = _resolve_redis_password(env)
@@ -3769,9 +3748,9 @@ def _join_network(
             local_node_name = _docker_node_name(_resolve_node_alias(env))
     from mn_cli.shared import client as local_client
 
-    # A running Core is authoritative. Joining must not recreate it merely to
-    # manufacture legacy BEAM/Compose settings; that could interrupt jobs and
-    # erase the standalone-store boundary federation is intended to preserve.
+    # A running Core is authoritative. Joining must not recreate it because
+    # that could interrupt jobs and erase the standalone-store boundary
+    # federation is intended to preserve.
     running_node_name = _running_core_node_name(local_client)
     if not running_node_name:
         _ensure_local_cluster_runtime_for_join(
@@ -3786,7 +3765,7 @@ def _join_network(
             local_client,
             host=seed_host,
             token=token,
-            grpc_ports=(grpc_port,),
+            grpc_port=grpc_port,
             local_host=_running_core_advertised_host(local_client) or local_host,
         )
     except Exception as exc:
@@ -3894,103 +3873,6 @@ def _clear_join_owner_metadata() -> None:
         JOIN_CLAIM_FILE.unlink(missing_ok=True)
     except OSError:
         pass
-
-
-def _joined_cluster_owner_metadata() -> Optional[dict[str, str]]:
-    env = _read_env_file(RUNTIME_COMPOSE_ENV) if RUNTIME_COMPOSE_ENV.exists() else {}
-
-    metadata = _joined_cluster_owner_metadata_from_env(env)
-    if metadata:
-        return metadata
-    return _joined_cluster_owner_metadata_from_claim(env)
-
-
-def _joined_cluster_owner_metadata_from_env(
-    env: dict[str, str],
-) -> Optional[dict[str, str]]:
-    owner_node = str(env.get("MN_JOIN_OWNER_NODE") or "").strip()
-    worker_node = str(
-        env.get("MN_JOIN_WORKER_NODE") or env.get("MN_NODE_NAME") or ""
-    ).strip()
-    if not owner_node or not worker_node:
-        return None
-
-    owner_host = str(env.get("MN_JOIN_OWNER_HOST") or "").strip() or _network_node_host(
-        owner_node
-    )
-    owner_port = str(env.get("MN_JOIN_OWNER_GRPC_PORT") or DEFAULT_GRPC_PORT).strip()
-    if not owner_host:
-        return None
-
-    return {
-        "owner_node": owner_node,
-        "owner_host": owner_host,
-        "owner_grpc_port": owner_port,
-        "worker_node": worker_node,
-        "auth_token": str(env.get("MN_GRPC_AUTH_TOKEN") or "").strip(),
-    }
-
-
-def _joined_cluster_owner_metadata_from_claim(
-    env: dict[str, str],
-) -> Optional[dict[str, str]]:
-    try:
-        claim = json.loads(JOIN_CLAIM_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-
-    owner_node = str(claim.get("owner_node") or "").strip()
-    worker_node = str(env.get("MN_NODE_NAME") or "").strip()
-    if not worker_node:
-        advertised_host = str(env.get("MN_NETWORK_ADVERTISE_HOST") or "").strip()
-        worker_node = _network_node_name(advertised_host) if advertised_host else ""
-    if not owner_node or not worker_node:
-        return None
-
-    owner_host = str(claim.get("owner_grpc_host") or "").strip() or _network_node_host(
-        owner_node
-    )
-    owner_port = str(claim.get("owner_grpc_port") or DEFAULT_GRPC_PORT).strip()
-    if not owner_host:
-        return None
-
-    return {
-        "owner_node": owner_node,
-        "owner_host": owner_host,
-        "owner_grpc_port": owner_port,
-        "worker_node": worker_node,
-        "auth_token": str(env.get("MN_GRPC_AUTH_TOKEN") or "").strip(),
-    }
-
-
-def leave_joined_cluster_before_stop() -> bool:
-    metadata = _joined_cluster_owner_metadata()
-    if not metadata:
-        return False
-
-    from mn_sdk import Client
-
-    target = f"{metadata['owner_host']}:{metadata['owner_grpc_port']}"
-    try:
-        Client(
-            target=target, auth_token=metadata.get("auth_token") or "", timeout=3
-        ).remove_node(metadata["worker_node"])
-        print_info(
-            console,
-            f"Removed {metadata['worker_node']} from cluster {metadata['owner_node']}.",
-        )
-        return True
-    except Exception as exc:
-        print_warning(
-            console,
-            f"Could not notify cluster {metadata['owner_node']} before stopping; heartbeat cleanup will remove this worker.",
-        )
-        logger.debug(
-            "Best-effort cluster leave before stop failed: %s", exc, exc_info=True
-        )
-        return False
-    finally:
-        _clear_join_owner_metadata()
 
 
 def _ensure_local_cluster_runtime_for_join(
@@ -4144,30 +4026,6 @@ def _stop_network_runtime() -> None:
         )
 
 
-def _detach_local_docker_node_if_matches(node_name: str) -> bool:
-    alias = _configured_node_alias(_runtime_base_env(runtime_compose_available()))
-    if not alias or node_name != _docker_node_name(alias):
-        return False
-
-    if runtime_compose_available():
-        subprocess.run(
-            runtime_compose_cmd("stop", "mirror-neuron-core"),
-            stderr=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-        )
-        return True
-
-    stopped = False
-    for container in (LOCAL_CORE_CONTAINER, NETWORK_CORE_CONTAINER):
-        subprocess.run(
-            ["docker", "rm", "-f", container],
-            stderr=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-        )
-        stopped = True
-    return stopped
-
-
 def check_status(pid_file: Path) -> int:
     if pid_file.exists():
         try:
@@ -4215,44 +4073,17 @@ def _remove_env_file_keys(path: Path, keys: set[str]) -> None:
     _runtime_remove_env_file_keys(path, keys)
 
 
-def _remove_compose_file_env_keys(path: Path, keys: set[str]) -> None:
-    if not keys:
-        return
-
-    try:
-        original_lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return
-
-    lines: list[str] = []
-    changed = False
-    for line in original_lines:
-        stripped = line.strip()
-        remove = any(
-            stripped.startswith(f"{key}:")
-            or stripped == f"- {key}"
-            or stripped.startswith(f"- {key}=")
-            for key in keys
-        )
-        if remove:
-            changed = True
-            continue
-        lines.append(line)
-
-    if changed:
-        path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-
-
 def _runtime_base_env(compose_runtime: bool) -> dict[str, str]:
-    if compose_runtime:
-        _remove_env_file_keys(RUNTIME_COMPOSE_ENV, DEPRECATED_RUNTIME_ENV_KEYS)
-        _remove_compose_file_env_keys(RUNTIME_COMPOSE_FILE, DEPRECATED_RUNTIME_ENV_KEYS)
-        _remove_runtime_compose_models_override()
     env = _read_env_file(RUNTIME_COMPOSE_ENV) if compose_runtime else {}
     env.update(os.environ)
+    retired = sorted(key for key in RETIRED_RUNTIME_ENV_KEYS if str(env.get(key) or "").strip())
+    if retired:
+        raise RuntimeError(
+            "Unsupported retired runtime settings: "
+            + ", ".join(retired)
+            + ". Remove them and use the current MN_* runtime settings."
+        )
     env = _ensure_installed_runtime_model_env(env)
-    for key in DEPRECATED_RUNTIME_ENV_KEYS:
-        env.pop(key, None)
     return env
 
 
@@ -4367,7 +4198,6 @@ def record_runtime_model_install(entry: dict[str, Any]) -> Optional[Path]:
 
     RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
     _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
-    _remove_runtime_compose_models_override()
     return None
 
 
@@ -4909,18 +4739,6 @@ def _ensure_docker_model_runner() -> None:
     )
 
 
-def _runtime_compose_models_override_file() -> Path:
-    return RUNTIME_COMPOSE_FILE.parent / RUNTIME_MODELS_OVERRIDE_FILE
-
-
-def _remove_runtime_compose_models_override() -> None:
-    path = _runtime_compose_models_override_file()
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        return
-
-
 def _is_default_llm_model(entry: dict[str, Any]) -> bool:
     return is_default_model_entry(entry)
 
@@ -4933,13 +4751,11 @@ def _yaml_double_quote_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def _env_or_default(
-    env: dict[str, str], key: str, default: str, legacy_default: Optional[str] = None
-) -> str:
+def _env_or_default(env: dict[str, str], key: str, default: str) -> str:
     value = str(env.get(key) or "").strip()
     if os.getenv(key, "").strip():
         return os.getenv(key, "").strip()
-    if not value or (legacy_default is not None and value == legacy_default):
+    if not value:
         return default
     return value
 
@@ -5343,7 +5159,7 @@ def _write_runtime_endpoints_file(
 def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
     adjusted = dict(env)
     grpc_port = _valid_port_text(
-        _env_or_default(adjusted, "MN_GRPC_PORT", DEFAULT_GRPC_PORT, LEGACY_GRPC_PORT),
+        _env_or_default(adjusted, "MN_GRPC_PORT", DEFAULT_GRPC_PORT),
         DEFAULT_GRPC_PORT,
     )
     grpc_advertise_port = _valid_port_text(
@@ -5351,17 +5167,15 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
         grpc_port,
     )
     api_port = _valid_port_text(
-        _env_or_default(adjusted, "MN_API_PORT", DEFAULT_API_PORT, LEGACY_API_PORT),
+        _env_or_default(adjusted, "MN_API_PORT", DEFAULT_API_PORT),
         DEFAULT_API_PORT,
     )
     dist_port = _valid_port_text(
-        _env_or_default(adjusted, "MN_DIST_PORT", DEFAULT_DIST_PORT, LEGACY_DIST_PORT),
+        _env_or_default(adjusted, "MN_DIST_PORT", DEFAULT_DIST_PORT),
         DEFAULT_DIST_PORT,
     )
     web_ui_port = _valid_port_text(
-        _env_or_default(
-            adjusted, "MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT, LEGACY_WEB_UI_PORT
-        ),
+        _env_or_default(adjusted, "MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT),
         DEFAULT_WEB_UI_PORT,
     )
     artifact_port = _valid_port_text(
@@ -5369,12 +5183,7 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
         DEFAULT_ARTIFACT_PORT,
     )
     openshell_port = _valid_port_text(
-        _env_or_default(
-            adjusted,
-            "OPENSHELL_GATEWAY_PORT",
-            DEFAULT_OPENSHELL_GATEWAY_PORT,
-            LEGACY_OPENSHELL_GATEWAY_PORT,
-        ),
+        _env_or_default(adjusted, "OPENSHELL_GATEWAY_PORT", DEFAULT_OPENSHELL_GATEWAY_PORT),
         DEFAULT_OPENSHELL_GATEWAY_PORT,
     )
     openshell_bind_host = adjusted.get("OPENSHELL_GATEWAY_BIND_HOST") or "127.0.0.1"
@@ -5382,10 +5191,7 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
         f"http://{_native_endpoint_host(openshell_bind_host)}:{openshell_port}"
     )
     openshell_endpoint = _env_or_default(
-        adjusted,
-        "OPENSHELL_GATEWAY_ENDPOINT",
-        openshell_default_endpoint,
-        f"http://127.0.0.1:{LEGACY_OPENSHELL_GATEWAY_PORT}",
+        adjusted, "OPENSHELL_GATEWAY_ENDPOINT", openshell_default_endpoint
     )
     explicit_openshell_endpoint = os.getenv("OPENSHELL_GATEWAY_ENDPOINT", "").strip()
     if not explicit_openshell_endpoint:
@@ -5403,16 +5209,7 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
             # sandbox containers and the host can share one listener. Migrate
             # installer-generated loopback endpoints to that published host.
             openshell_endpoint = openshell_default_endpoint
-        elif openshell_endpoint == (
-            f"https://127.0.0.1:{LEGACY_OPENSHELL_GATEWAY_PORT}"
-        ):
-            openshell_endpoint = openshell_default_endpoint
     grpc_target = adjusted.get("MN_GRPC_TARGET") or f"localhost:{grpc_port}"
-    if (
-        not os.getenv("MN_GRPC_TARGET", "").strip()
-        and grpc_target == f"localhost:{LEGACY_GRPC_PORT}"
-    ):
-        grpc_target = f"localhost:{grpc_port}"
     native_sdk_port = _valid_port_text(
         _env_or_default(
             adjusted, "MN_NATIVE_SDK_GRPC_PORT", DEFAULT_NATIVE_SDK_GRPC_PORT
@@ -5422,14 +5219,6 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
     native_sdk_host = str(
         adjusted.get("MN_NATIVE_SDK_GRPC_HOST") or DEFAULT_NATIVE_SDK_GRPC_HOST
     ).strip()
-    explicit_native_sdk_host = os.getenv("MN_NATIVE_SDK_GRPC_HOST", "").strip()
-    if explicit_native_sdk_host:
-        native_sdk_host = explicit_native_sdk_host
-    elif native_sdk_host in {"", "127.0.0.1", "localhost", "::1"}:
-        # Older generated Compose environments bound this host service to
-        # loopback. Containers reach it through host.docker.internal, so migrate
-        # generated values to a Docker- and cluster-reachable listener.
-        native_sdk_host = DEFAULT_NATIVE_SDK_GRPC_HOST
     native_sdk_proxy_port = _valid_port_text(
         str(adjusted.get("MN_NATIVE_SDK_GRPC_PROXY_PORT") or native_sdk_port),
         native_sdk_port,
@@ -5445,13 +5234,7 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
     existing_native_sdk_target = str(
         adjusted.get("MN_NATIVE_SDK_GRPC_TARGET") or ""
     ).strip()
-    legacy_native_sdk_target = (
-        f"{DEFAULT_NATIVE_SDK_GRPC_TARGET_HOST}:{native_sdk_port}"
-    )
-    if (
-        existing_native_sdk_target
-        and existing_native_sdk_target != legacy_native_sdk_target
-    ):
+    if existing_native_sdk_target:
         native_sdk_target = existing_native_sdk_target
     else:
         native_sdk_target = (
@@ -6005,72 +5788,25 @@ def _runtime_compose_args_need_worker_override(args: tuple[str, ...]) -> bool:
     return bool(args) and args[0] in {"down", "stop", "rm", "ps", "logs"}
 
 
-def _legacy_checkout_pid_dir() -> Path:
-    checkout_dir = Path(__file__).resolve().parents[2]
-    return checkout_dir / "MirrorNeuron" / "pids"
-
-
 def web_ui_pid_files() -> tuple[tuple[Path, str], ...]:
-    legacy_pid_dir = _legacy_checkout_pid_dir()
-    paths = [
+    return (
         (WEB_UI_WATCHDOG_PID_FILE, "Web UI watchdog"),
         (WEB_UI_PID_FILE, "Web UI"),
-        (DIR / "pids" / "web-ui-watchdog.pid", "Web UI watchdog"),
-        (DIR / "pids" / "web-ui.pid", "Web UI"),
-        (legacy_pid_dir / "web-ui-watchdog.pid", "Web UI watchdog"),
-        (legacy_pid_dir / "web-ui.pid", "Web UI"),
-    ]
-    unique: list[tuple[Path, str]] = []
-    seen: set[str] = set()
-    for pid_file, name in paths:
-        key = str(pid_file)
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append((pid_file, name))
-    return tuple(unique)
+    )
 
 
 def api_pid_files() -> tuple[tuple[Path, str], ...]:
-    legacy_pid_dir = _legacy_checkout_pid_dir()
-    paths = [
+    return (
         (API_WATCHDOG_PID_FILE, "REST API watchdog"),
         (API_PID_FILE, "REST API"),
-        (DIR / "pids" / "api-watchdog.pid", "REST API watchdog"),
-        (DIR / "pids" / "api.pid", "REST API"),
-        (legacy_pid_dir / "api-watchdog.pid", "REST API watchdog"),
-        (legacy_pid_dir / "api.pid", "REST API"),
-    ]
-    unique: list[tuple[Path, str]] = []
-    seen: set[str] = set()
-    for pid_file, name in paths:
-        key = str(pid_file)
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append((pid_file, name))
-    return tuple(unique)
+    )
 
 
 def native_sdk_grpc_pid_files() -> tuple[tuple[Path, str], ...]:
-    legacy_pid_dir = _legacy_checkout_pid_dir()
-    paths = [
+    return (
         (NATIVE_SDK_GRPC_WATCHDOG_PID_FILE, "Native SDK gRPC watchdog"),
         (NATIVE_SDK_GRPC_PID_FILE, "Native SDK gRPC"),
-        (DIR / "pids" / "native-sdk-grpc-watchdog.pid", "Native SDK gRPC watchdog"),
-        (DIR / "pids" / "native-sdk-grpc.pid", "Native SDK gRPC"),
-        (legacy_pid_dir / "native-sdk-grpc-watchdog.pid", "Native SDK gRPC watchdog"),
-        (legacy_pid_dir / "native-sdk-grpc.pid", "Native SDK gRPC"),
-    ]
-    unique: list[tuple[Path, str]] = []
-    seen: set[str] = set()
-    for pid_file, name in paths:
-        key = str(pid_file)
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append((pid_file, name))
-    return tuple(unique)
+    )
 
 
 def kill_tree(parent_pid: int):
