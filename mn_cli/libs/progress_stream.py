@@ -31,6 +31,7 @@ IMMEDIATE_PROGRESS_EVENTS = {
     "runtime_model_selection_started",
     "runtime_model_selected",
     "runtime_model_install_started",
+    "runtime_model_install_progress",
     "runtime_model_ready",
     "runtime_model_install_failed",
 }

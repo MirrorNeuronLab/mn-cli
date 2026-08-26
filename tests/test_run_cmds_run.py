@@ -83,6 +83,25 @@ def test_runtime_model_events_report_model_and_node_immediately():
     )
 
 
+def test_runtime_model_progress_event_reports_dmr_bytes_and_elapsed_time():
+    event = {
+        "type": "runtime_model_install_progress",
+        "payload": {
+            "model": "nemotron-3.5-lightning:latest",
+            "node": "spark",
+            "phase": "downloading",
+            "current_bytes": 12 * 1024**3,
+            "total_bytes": 24 * 1024**3,
+            "percent": 50,
+            "elapsed_ms": 72_000,
+        },
+    }
+
+    assert run_cmds._runtime_model_event_message(event) == (
+        "Nemotron 3.5 Lightning on spark: downloading 12.0 GiB / 24.0 GiB (50%) (elapsed 1.2m)"
+    )
+
+
 def test_run_success(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="run-bundle-auto")

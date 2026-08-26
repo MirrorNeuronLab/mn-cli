@@ -541,6 +541,12 @@ def generate_workflow_progress_layout(
         else _workflow_agent_table(agents, state.selected_index, title_prefix=agent_title),
     )
 
+    preparations = [
+        item
+        for item in progress.get("runtime_model_preparations", [])
+        if isinstance(item, dict)
+    ]
+
     footer = Text(_monitor_footer_text(state), style="dim")
     messages = [str(message) for message in progress.get("messages", []) if message]
     if messages:
@@ -556,8 +562,12 @@ def generate_workflow_progress_layout(
     if token_summary:
         footer.append(f"\n{token_summary}", style="dim")
 
+    renderables = [header, subtitle]
+    if preparations:
+        renderables.append(_runtime_model_preparation_panel(preparations))
+    renderables.extend((body, footer))
     return Panel(
-        Group(header, subtitle, body, footer),
+        Group(*renderables),
         title=f"Workflow Job Monitor  {job_id}",
         border_style=color,
         box=box.ROUNDED,
@@ -567,6 +577,81 @@ def generate_workflow_progress_layout(
 def _generate_workflow_progress_layout(job_id: str, progress: dict[str, Any], state: Optional[JobMonitorState] = None) -> Panel:
     # Backward-compatible wrapper for existing callsites.
     return generate_workflow_progress_layout(job_id, progress, state=state)
+
+
+def _runtime_model_preparation_panel(preparations: list[dict[str, Any]]) -> Table:
+    """Render live lazy-install telemetry without inventing unavailable bytes."""
+
+    table = Table(
+        title="Runtime model preparation",
+        box=box.SIMPLE,
+        expand=True,
+        show_header=False,
+    )
+    table.add_column("model", ratio=1)
+    table.add_column("node", ratio=1)
+    table.add_column("progress", ratio=3)
+    for preparation in preparations:
+        model = _runtime_model_display_name(
+            str(preparation.get("model") or "runtime model")
+        )
+        node = str(preparation.get("node") or "the selected node")
+        phase = str(preparation.get("phase") or "resolving").lower()
+        current = _runtime_model_bytes(preparation.get("current_bytes"))
+        total = _runtime_model_bytes(preparation.get("total_bytes"))
+        percent = preparation.get("percent")
+        if phase == "downloading" and current and total:
+            try:
+                percentage = f" ({float(percent):.0f}%)"
+            except (TypeError, ValueError):
+                percentage = ""
+            status = f"Downloading {current} / {total}{percentage}"
+        elif phase == "downloading":
+            status = "Downloading; DMR has not supplied byte progress"
+        else:
+            status = str(preparation.get("message") or phase.replace("_", " ").title())
+        source = str(preparation.get("source_model") or "")
+        target = str(preparation.get("dmr_artifact") or "")
+        details: list[str] = []
+        if source or target:
+            details.append(f"{source or '?'} → {target or '?'}")
+        details.append(f"elapsed {_runtime_model_elapsed(preparation.get('elapsed_ms'))}")
+        update_age = preparation.get("last_update_age_ms")
+        if update_age is not None:
+            details.append(f"last update {_runtime_model_elapsed(update_age)} ago")
+        if preparation.get("stalled"):
+            details.append("still preparing — DMR has not supplied an update for 60s")
+        table.add_row(
+            f"[bold]{model}[/bold]",
+            node,
+            f"{status}\n[dim]{' • '.join(details)}[/dim]",
+            style="yellow" if preparation.get("stalled") else "cyan",
+        )
+    return table
+
+
+def _runtime_model_display_name(value: str) -> str:
+    return value.replace("-", " ").replace(":latest", "").title()
+
+
+def _runtime_model_bytes(value: Any) -> str:
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return ""
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if amount < 1024 or unit == "TiB":
+            return f"{amount:.1f} {unit}" if unit != "B" else f"{amount:.0f} B"
+        amount /= 1024
+    return ""
+
+
+def _runtime_model_elapsed(value: Any) -> str:
+    try:
+        seconds = max(float(value) / 1000, 0)
+    except (TypeError, ValueError):
+        return "0s"
+    return f"{seconds:.0f}s" if seconds < 60 else f"{seconds / 60:.1f}m"
 
 
 def _workflow_agent_token_summary(agents: list[dict[str, Any]]) -> str:

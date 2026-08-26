@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from mn_cli.libs.progress_stream import stream_api_workflow_progress
+from mn_cli.libs.progress_stream import (
+    ProgressSnapshotStream,
+    stream_api_workflow_progress,
+)
+from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress
 
 
 class _Response:
@@ -46,3 +50,19 @@ def test_api_progress_stream_uses_v2_execution_run_route(mocker):
         "timeout": 12,
     }
     assert snapshots[0]["version"] == 2
+
+
+def test_runtime_model_prepare_progress_flushes_immediately():
+    stream = ProgressSnapshotStream(BlueprintWorkflowProgress({"workflow": {"steps": []}}))
+
+    assert stream.observe_event(
+        {
+            "type": "runtime_model_install_progress",
+            "payload": {
+                "request_id": "pull",
+                "model": "nemotron-3.5-lightning:latest",
+                "node": "spark",
+                "phase": "downloading",
+            },
+        }
+    )

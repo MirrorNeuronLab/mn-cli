@@ -263,6 +263,14 @@ DockerWorker build command/output details.
 Skill-owned RAG/OCR model details are absent from launch preparation and appear
 in runtime events only when invoked. Runtime events report the actual model,
 selected node, install/reuse state, fallback reason, and duration.
+While a lazy DMR install is in progress, `mn blueprint run` and `mn run watch`
+render additive `runtime_model_install_progress` events without changing the
+existing lifecycle event names. The interactive monitor has a dedicated Runtime
+model preparation section showing model, source-to-final-tag mapping, node,
+phase, elapsed time, last-update age, and DMR bytes when available. Plain output
+prints the same facts as clear lines. After 60 seconds without a DMR update, the
+monitor shows a yellow “still preparing” warning but fails only when DMR or the
+prepare RPC reports an actual error.
 
 `default` is a logical LiteLLM model group. When a medium route is available it
 aliases to Nemotron and has Gemma as its fallback; without a medium route it

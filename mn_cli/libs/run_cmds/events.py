@@ -107,6 +107,7 @@ def _stream_and_format_events(
                             "runtime_model_selection_started",
                             "runtime_model_selected",
                             "runtime_model_install_started",
+                            "runtime_model_install_progress",
                             "runtime_model_ready",
                             "runtime_model_install_failed",
                         }:
@@ -451,12 +452,61 @@ def _stream_and_format_workflow_events(
 
 def _runtime_model_event_message(event: dict[str, Any]) -> str:
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    if str(event.get("type") or "") == "runtime_model_install_progress":
+        model = _runtime_model_display_name(str(payload.get("model") or "runtime model"))
+        node = str(payload.get("node") or "the selected node")
+        phase = str(payload.get("phase") or "resolving").replace("_", " ")
+        progress = _runtime_model_download_progress(payload)
+        detail = progress or str(payload.get("message") or phase)
+        if payload.get("stalled"):
+            detail = f"still preparing — {payload.get('message') or 'DMR has not supplied an update'}"
+        elapsed = _runtime_model_elapsed_label(payload.get("elapsed_ms"))
+        return f"{model} on {node}: {detail} (elapsed {elapsed})"
     message = str(payload.get("message") or event.get("message") or "").strip()
     if message:
         return message
     model = str(payload.get("model") or "runtime model").strip()
     node = str(payload.get("node") or "the selected node").strip()
     return f"{model} on {node}: {event.get('type') or 'update'!s}"
+
+
+def _runtime_model_download_progress(payload: dict[str, Any]) -> str:
+    if str(payload.get("phase") or "").lower() != "downloading":
+        return ""
+    current = _runtime_model_bytes(payload.get("current_bytes"))
+    total = _runtime_model_bytes(payload.get("total_bytes"))
+    if current and total:
+        percent = payload.get("percent")
+        try:
+            percent_label = f" ({float(percent):.0f}%)"
+        except (TypeError, ValueError):
+            percent_label = ""
+        return f"downloading {current} / {total}{percent_label}"
+    return "downloading; DMR has not supplied byte progress"
+
+
+def _runtime_model_bytes(value: Any) -> str:
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return ""
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if amount < 1024 or unit == "TiB":
+            return f"{amount:.1f} {unit}" if unit != "B" else f"{amount:.0f} B"
+        amount /= 1024
+    return ""
+
+
+def _runtime_model_elapsed_label(value: Any) -> str:
+    try:
+        seconds = max(float(value) / 1000, 0)
+    except (TypeError, ValueError):
+        return "0s"
+    return f"{seconds:.0f}s" if seconds < 60 else f"{seconds / 60:.1f}m"
+
+
+def _runtime_model_display_name(value: str) -> str:
+    return value.replace("-", " ").replace(":latest", "").title()
 
 
 def _follow_workflow_job_events(

@@ -3,7 +3,15 @@ from io import StringIO
 
 from rich.console import Console
 
-from mn_cli.libs.ui import activity, print_confirmed, print_error, print_info, print_success_confirmation, print_warning
+from mn_cli.libs.ui import (
+    activity,
+    generate_workflow_progress_layout,
+    print_confirmed,
+    print_error,
+    print_info,
+    print_success_confirmation,
+    print_warning,
+)
 
 
 def _capture_console(*, no_color: bool = True, width: int = 120) -> tuple[Console, StringIO]:
@@ -128,3 +136,41 @@ def test_activity_skips_transient_output_in_plain_mode(monkeypatch):
 
     with activity(SpinnerConsole(), "Resuming run run-1…"):
         pass
+
+
+def test_workflow_monitor_renders_runtime_model_prepare_progress_and_stall_warning():
+    console = Console(record=True, width=160)
+    console.print(
+        generate_workflow_progress_layout(
+            "ros-run",
+            {
+                "workflow_id": "ros_amr_controller",
+                "status": "running",
+                "elapsed_seconds": 72,
+                "steps": [],
+                "runtime_model_preparations": [
+                    {
+                        "request_id": "nemotron-pull",
+                        "model": "nemotron-3.5-lightning:latest",
+                        "source_model": "hf.co/bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF:Q4_K_M",
+                        "dmr_artifact": "nemotron-3.5-lightning:latest",
+                        "node": "spark",
+                        "phase": "downloading",
+                        "current_bytes": 12 * 1024**3,
+                        "total_bytes": 24 * 1024**3,
+                        "percent": 50,
+                        "elapsed_ms": 72_000,
+                        "last_update_age_ms": 61_000,
+                        "stalled": True,
+                    }
+                ],
+            },
+        )
+    )
+    rendered = console.export_text()
+
+    assert "Runtime model preparation" in rendered
+    assert "Nemotron 3.5 Lightning" in rendered
+    assert "12.0 GiB / 24.0 GiB (50%)" in rendered
+    assert "source_model" not in rendered
+    assert "still preparing" in rendered

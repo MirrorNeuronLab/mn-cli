@@ -97,6 +97,14 @@ Those events report the selected model/node, fallback reason, and install/reuse 
 also prints DockerWorker build commands and complete captured build output,
 including builds performed through a remote node's native SDK service.
 
+For a deferred first-use DMR pull, the run monitor includes a Runtime model
+preparation section. It shows the selected model and node, source artifact →
+final DMR tag, phase, elapsed time, and exact bytes when Docker Model Runner
+reports them. If DMR does not report bytes, the monitor says progress is
+unavailable; after 60 seconds without a DMR update it warns that preparation is
+still in progress without treating that wait as a job failure. `MN_CLI_OUTPUT=plain`
+prints the same facts as stable lines.
+
 Live Spark checks are a separate, opt-in boundary smoke after this injected
 gate passes; they are not the development loop for placement policy.
 
