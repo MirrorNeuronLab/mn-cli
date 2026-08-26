@@ -2773,8 +2773,7 @@ def test_start_server_already_running(mocker, tmp_path):
     assert not (server_cmds.DIR / "grpc_admin.token").exists()
     mock_start_web.assert_called_once()
     mock_start_native_sdk.assert_called_once()
-    assert mock_start_native_sdk.call_args.kwargs["restart_running"] is True
-    assert mock_start_native_sdk.call_args.kwargs["restart_reason"] == "runtime already running"
+    assert mock_start_native_sdk.call_args.kwargs == {}
     mock_reconcile_syncthing.assert_called_once()
     mock_write_endpoints.assert_called_once()
     mock_print_endpoints.assert_called_once_with(None, True)
@@ -2835,8 +2834,7 @@ def test_start_server_restarts_existing_api_when_runtime_blueprint_env_changes(m
     assert api_env["MN_BLUEPRINT_REPO"] == "https://github.com/MirrorNeuronLab/otterdesk-blueprints"
     assert api_env["MN_RUNS_ROOT"] == "/tmp/otterdesk-runs"
     start_native_sdk.assert_called_once()
-    assert start_native_sdk.call_args.kwargs["restart_running"] is True
-    assert start_native_sdk.call_args.kwargs["restart_reason"] == "runtime already running"
+    assert start_native_sdk.call_args.kwargs == {}
     compose_text = compose_env.read_text()
     assert "MN_ENV=prod" in compose_text
     assert "MN_BLUEPRINT_REPO=https://github.com/MirrorNeuronLab/otterdesk-blueprints" in compose_text
@@ -3454,9 +3452,17 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
     mocker.patch("mn_cli.server_cmds.secrets.token_hex", return_value="abc12345")
 
     calls = []
+    lifecycle = []
+
+    mocker.patch(
+        'mn_cli.runtime.server._start_native_sdk_grpc_if_installed',
+        side_effect=lambda _env: lifecycle.append("native-ready") or True,
+    )
 
     def mock_run(cmd, **kwargs):
         calls.append((cmd, kwargs))
+        if cmd == runtime_compose_cmd("up", "-d"):
+            lifecycle.append("compose-up")
         m = mocker.Mock()
         if cmd[:3] == ["docker", "network", "inspect"]:
             m.returncode = 1
@@ -3473,6 +3479,7 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
 
     commands = [call[0] for call in calls]
     assert runtime_compose_cmd("up", "-d") in commands
+    assert lifecycle.index("native-ready") < lifecycle.index("compose-up")
     assert all(cmd[:3] != ["docker", "network", "inspect"] for cmd in commands)
     assert ["docker", "network", "create", "--driver", "bridge", "mirror-neuron-runtime"] not in commands
     sentinel_runs = [

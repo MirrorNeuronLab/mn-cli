@@ -6129,6 +6129,7 @@ def _start_server(
             elif _running_core_has_stale_grpc_tokens():
                 print_info(console, "MirrorNeuron Core has stale gRPC tokens; recreating Docker runtime (Compose)…")
                 force_runtime_recreate = True
+            _start_native_sdk_grpc_if_installed(env)
             try:
                 compose_args = ["up", "-d"]
                 if force_runtime_recreate:
@@ -6140,6 +6141,8 @@ def _start_server(
             except (FileNotFoundError, subprocess.CalledProcessError):
                 print_error(console, "Failed to start MirrorNeuron Docker runtime.")
                 raise typer.Exit(1)
+        else:
+            _start_native_sdk_grpc_if_installed(env)
         env.setdefault("MN_API_HOST", _api_host())
         env.setdefault("MN_API_PORT", DEFAULT_API_PORT)
         env.setdefault("MN_WEB_UI_HOST", _web_ui_host())
@@ -6158,11 +6161,6 @@ def _start_server(
             env,
             restart_running=bool(api_mismatches),
             restart_reason="runtime config changed",
-        )
-        _start_native_sdk_grpc_if_installed(
-            env,
-            restart_running=True,
-            restart_reason="runtime already running",
         )
         _reconcile_syncthing_federated_peers(
             env,
@@ -6487,6 +6485,7 @@ def _start_server(
 
     if compose_runtime:
         env = _compose_runtime_env(env, ip)
+        _start_native_sdk_grpc_if_installed(env)
         print_info(console, "Starting MirrorNeuron Docker runtime (Compose)…")
         logger.info("Starting MirrorNeuron Docker Compose runtime")
         try:
@@ -6502,6 +6501,7 @@ def _start_server(
             print_error(console, "Failed to start MirrorNeuron Docker Compose runtime.")
             raise typer.Exit(1)
     else:
+        _start_native_sdk_grpc_if_installed(env)
         print_info(console, "Starting MirrorNeuron Core service (Docker)…")
         logger.info("Starting MirrorNeuron Core Docker container")
         subprocess.run(["docker", "rm", "-f", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
@@ -6523,7 +6523,6 @@ def _start_server(
     print_info(console, "Waiting for Elixir to boot…")
     time.sleep(3)
 
-    _start_native_sdk_grpc_if_installed(env)
     api_started = _start_api_if_installed(env)
 
     if api_started:

@@ -230,6 +230,10 @@ before membership or launch.
 Context-memory preparation uses the local Compose lifecycle when placement
 selects the submitting node; only genuinely remote selected nodes use the
 native runtime preparation boundary.
+Runtime startup makes the host-native SDK gRPC service responsive before it
+starts or recreates Core. Repeated `mn runtime start` calls reuse a responsive
+native service so definition-scoped response engines are not discarded or
+raced during Core recovery.
 Prepared HostLocal Python environments retain separate host and Core-visible
 paths; submissions use the configured Core cache mount so console-script
 entrypoints resolve inside a containerized local runtime.

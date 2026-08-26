@@ -32,6 +32,10 @@ advertised host, gRPC port, node identity, a join token, and the exact
 credential, keep terminal output private, and use `mn node refresh-token` when
 it must be rotated.
 
+Runtime startup readies the host-native SDK service before Core. Calling
+`mn runtime start` again reuses a healthy native service, preserving warm
+definition-scoped response engines while the remaining runtime is reconciled.
+
 `mn node list` shows each node's hostname, health, and role (connection mode
 plus job-ownership eligibility) without artifact-only fields such as kind,
 owner, or update time. Use `mn node show <node>` for the complete endpoint and
