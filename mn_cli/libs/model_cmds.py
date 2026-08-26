@@ -81,6 +81,7 @@ from mn_sdk import (
     model_installed as sdk_model_installed,
 )
 from mn_sdk import (
+    model_name_candidates as sdk_model_name_candidates,
     parse_model_list as sdk_parse_model_list,
 )
 from mn_sdk import (
@@ -104,7 +105,11 @@ from mn_cli.libs.model_rendering import (
 from mn_cli.libs.model_rendering import (
     print_provider_doctor as _print_provider_doctor,
 )
-from mn_cli.libs.ui import print_success_confirmation, print_warning, require_confirmation
+from mn_cli.libs.ui import (
+    print_success_confirmation,
+    print_warning,
+    require_confirmation,
+)
 from mn_cli.output import RemediatingTyperGroup, record_result
 from mn_cli.shared import client, console, logger
 from mn_cli.shared import config as cli_config
@@ -137,8 +142,15 @@ def _handle_model_error(error: Exception, context: str) -> None:
 
 @model_app.command(name="list")
 def list_models(
-    available: Annotated[bool, typer.Option("--available", help="Include catalog models that have not been added.")] = False,
-    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+    available: Annotated[
+        bool,
+        typer.Option(
+            "--available", help="Include catalog models that have not been added."
+        ),
+    ] = False,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Print machine-readable JSON.")
+    ] = False,
 ):
     """List registered models and discovered DMR artifacts."""
     try:
@@ -151,7 +163,8 @@ def list_models(
         remote_records = [
             remote
             for remote in (load_model_remotes().get("remotes") or {}).values()
-            if isinstance(remote, dict) and str(remote.get("managed_by") or "") == "mirror-neuron-cluster"
+            if isinstance(remote, dict)
+            and str(remote.get("managed_by") or "") == "mirror-neuron-cluster"
         ]
         gateway = litellm_gateway_health()
         routed_names = {str(name) for name in gateway.get("models") or []}
@@ -173,11 +186,11 @@ def list_models(
         for installed_model in sorted(installed_models):
             if docker_model_match_keys(installed_model) & registered_dmr_keys:
                 continue
-            models.append(_unmanaged_dmr_payload(installed_model, routed_names=routed_names))
+            models.append(
+                _unmanaged_dmr_payload(installed_model, routed_names=routed_names)
+            )
         known_model_keys = {
-            key
-            for item in models
-            for key in _model_payload_match_keys(item)
+            key for item in models for key in _model_payload_match_keys(item)
         }
         for remote in remote_records:
             if _remote_record_match_keys(remote) & known_model_keys:
@@ -192,7 +205,10 @@ def list_models(
                 if not model_id or model_id in existing_ids:
                     continue
                 models.append(_available_model_payload(entry))
-        payload = {"models": sorted(models, key=lambda item: str(item.get("id") or "")), "registry": str(default_model_registry_path())}
+        payload = {
+            "models": sorted(models, key=lambda item: str(item.get("id") or "")),
+            "registry": str(default_model_registry_path()),
+        }
         if json_output:
             record_result(payload)
             return
@@ -203,8 +219,15 @@ def list_models(
 
 
 def show_model(
-    model: Annotated[str, typer.Argument(help="Registered model id, catalog id, alias, or DMR reference.")] = DEFAULT_MODEL_ID,
-    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+    model: Annotated[
+        str,
+        typer.Argument(
+            help="Registered model id, catalog id, alias, or DMR reference."
+        ),
+    ] = DEFAULT_MODEL_ID,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Print machine-readable JSON.")
+    ] = False,
 ):
     """Show stored model facts. Use `mn model doctor` for live checks."""
     try:
@@ -226,45 +249,85 @@ def show_model(
 
 @model_app.command(name="add")
 def add_model(
-    model: Annotated[str | None, typer.Argument(help="Catalog id or Docker Model Runner model reference.")] = None,
-    definition_file: Annotated[Path | None, typer.Option("--file", help="Provider model definition JSON file.")] = None,
-    backend: Annotated[str, typer.Option("--backend", help="Backend: auto, llama.cpp, or vllm.")] = "auto",
-    context_size: Annotated[int | None, typer.Option("--context-size", help="Override model context size.")] = None,
-    force: Annotated[bool, typer.Option("--force", help="Add even when hardware compatibility fails.")] = False,
-    node: Annotated[str | None, typer.Option("--node", help="Add on a named runtime cluster node.")] = None,
-    local: Annotated[bool, typer.Option("--local", help="Force local Docker Model Runner placement.")] = False,
-    default: Annotated[bool, typer.Option("--default", help="Make the added model the highest-priority logical default.")] = False,
-    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+    model: Annotated[
+        str | None,
+        typer.Argument(help="Catalog id or Docker Model Runner model reference."),
+    ] = None,
+    definition_file: Annotated[
+        Path | None, typer.Option("--file", help="Provider model definition JSON file.")
+    ] = None,
+    backend: Annotated[
+        str, typer.Option("--backend", help="Backend: auto, llama.cpp, or vllm.")
+    ] = "auto",
+    context_size: Annotated[
+        int | None, typer.Option("--context-size", help="Override model context size.")
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Add even when hardware compatibility fails."),
+    ] = False,
+    node: Annotated[
+        str | None, typer.Option("--node", help="Add on a named runtime cluster node.")
+    ] = None,
+    local: Annotated[
+        bool, typer.Option("--local", help="Force local Docker Model Runner placement.")
+    ] = False,
+    default: Annotated[
+        bool,
+        typer.Option(
+            "--default",
+            help="Make the added model the highest-priority logical default.",
+        ),
+    ] = False,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Print machine-readable JSON.")
+    ] = False,
 ):
     """Add a DMR model or provider definition."""
     try:
         if bool(model) == bool(definition_file):
-            raise ValueError("provide exactly one MODEL argument or --file <definition.json>")
+            raise ValueError(
+                "provide exactly one MODEL argument or --file <definition.json>"
+            )
         if definition_file is not None:
             if local or node or backend != "auto" or context_size is not None or force:
-                raise ValueError("DMR placement, backend, context, and force options cannot be used with --file")
-            _add_provider_definition(definition_file, json_output=json_output, make_default=default)
+                raise ValueError(
+                    "DMR placement, backend, context, and force options cannot be used with --file"
+                )
+            _add_provider_definition(
+                definition_file, json_output=json_output, make_default=default
+            )
             return
         if local and node:
             raise ValueError("--local and --node cannot be used together")
         requested = str(model or "").strip()
         if get_registered_model(requested) is not None:
-            raise ValueError(f"model {requested!r} is already registered; run 'mn model remove {requested}' before adding it again")
+            raise ValueError(
+                f"model {requested!r} is already registered; run 'mn model remove {requested}' before adding it again"
+            )
         catalog = load_model_catalog()
         try:
             entry = resolve_model_entry(requested, catalog=catalog)
             cataloged = True
         except KeyError:
-            entry = _uncataloged_dmr_entry(requested, backend=backend, context_size=context_size)
+            entry = _uncataloged_dmr_entry(
+                requested, backend=backend, context_size=context_size
+            )
             cataloged = False
         target = docker_model_name(entry)
-        requested_node = "" if local else str(node or _selected_model_install_node() or "")
-        local_artifact_installed = _model_installed(target) if not requested_node else False
+        requested_node = (
+            "" if local else str(node or _selected_model_install_node() or "")
+        )
+        local_artifact_installed = (
+            _model_installed(target) if not requested_node else False
+        )
         selected_node = None
         if not local:
             selected_node = requested_node
             if not selected_node and not local_artifact_installed:
-                selected_node = _installed_cluster_model_node(target) or _automatic_model_install_node(entry)
+                selected_node = _installed_cluster_model_node(
+                    target
+                ) or _automatic_model_install_node(entry)
         if selected_node:
             result = _install_model_on_cluster_node(
                 entry,
@@ -275,7 +338,9 @@ def add_model(
             )
         else:
             if local_artifact_installed:
-                compatibility_result = assess_model_compatibility(entry, backend=backend, force=force)
+                compatibility_result = assess_model_compatibility(
+                    entry, backend=backend, force=force
+                )
                 if not compatibility_result.ok:
                     raise RuntimeError(compatibility_result.message)
                 result = {
@@ -286,9 +351,13 @@ def add_model(
                     "reused": True,
                 }
             elif json_output:
-                result = install_model_entry(entry, backend=backend, context_size=context_size, force=force)
+                result = install_model_entry(
+                    entry, backend=backend, context_size=context_size, force=force
+                )
             else:
-                result = install_model_entry_with_progress(entry, backend=backend, context_size=context_size, force=force)
+                result = install_model_entry_with_progress(
+                    entry, backend=backend, context_size=context_size, force=force
+                )
         compatibility = result["compatibility"]
         target = result["docker_model"]
         if not selected_node:
@@ -299,7 +368,9 @@ def add_model(
         # fresh route with an older shared-status snapshot.
         if not selected_node:
             try:
-                _sync_installed_model_gateway_route(entry, result=result, node=None, strict=True)
+                _sync_installed_model_gateway_route(
+                    entry, result=result, node=None, strict=True
+                )
             except Exception as exc:
                 raise AppError(
                     "MN_MODEL_ROUTE_FAILED",
@@ -360,7 +431,12 @@ def add_model(
                 ("Docker model", target),
                 ("Backend", compatibility.get("backend")),
                 ("Node", payload["node"]),
-                ("Route", "remote-litellm-gateway" if selected_node else "local-litellm-gateway"),
+                (
+                    "Route",
+                    "remote-litellm-gateway"
+                    if selected_node
+                    else "local-litellm-gateway",
+                ),
                 ("Default", "yes" if default else "no"),
             ],
             next_steps=f"mn model doctor {entry.get('id')}",
@@ -381,9 +457,16 @@ model_app.command(name="show")(show_model)
 @model_app.command(name="update")
 def update_model(
     model: Annotated[str | None, typer.Argument(help="Registered model id.")] = None,
-    all_models: Annotated[bool, typer.Option("--all", help="Update all registered models.")] = False,
-    force: Annotated[bool, typer.Option("--force", help="Update even when hardware compatibility fails.")] = False,
-    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+    all_models: Annotated[
+        bool, typer.Option("--all", help="Update all registered models.")
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Update even when hardware compatibility fails."),
+    ] = False,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Print machine-readable JSON.")
+    ] = False,
 ):
     """Update a registered model from its source."""
     try:
@@ -398,9 +481,15 @@ def update_model(
         provider_cache: dict[str, list[dict[str, Any]]] = {}
         for record in selected:
             if record.get("kind") == "provider":
-                results.append(_update_provider_registration(record, provider_cache=provider_cache))
+                results.append(
+                    _update_provider_registration(record, provider_cache=provider_cache)
+                )
             else:
-                results.append(_update_dmr_registration(record, force=force, json_output=json_output))
+                results.append(
+                    _update_dmr_registration(
+                        record, force=force, json_output=json_output
+                    )
+                )
         payload = {"updated": len(results), "models": results}
         if json_output:
             record_result(payload)
@@ -410,7 +499,11 @@ def update_model(
                 console,
                 "Model update",
                 status="ready",
-                details=[("Model", result.get("id")), ("Kind", result.get("kind")), ("Node", result.get("node") or "")],
+                details=[
+                    ("Model", result.get("id")),
+                    ("Kind", result.get("kind")),
+                    ("Node", result.get("node") or ""),
+                ],
                 next_steps=f"mn model doctor {result.get('id')}",
             )
     except typer.Exit:
@@ -422,12 +515,31 @@ def update_model(
 
 @model_app.command(name="remove")
 def remove_model(
-    model: Annotated[str, typer.Argument(help="Registered model id or unmanaged DMR reference.")],
-    force: Annotated[bool, typer.Option("--force", help="Remove a DMR model even when blueprint owners remain.")] = False,
-    keep_artifact: Annotated[bool, typer.Option("--keep-artifact", help="Unregister a DMR model without deleting its artifact.")] = False,
-    yes: Annotated[bool, typer.Option("--yes", "-y", help="Confirm removal without prompting.")] = False,
-    dry_run: Annotated[bool, typer.Option("--dry-run", help="Preview removal without changing state.")] = False,
-    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+    model: Annotated[
+        str, typer.Argument(help="Registered model id or unmanaged DMR reference.")
+    ],
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force", help="Remove a DMR model even when blueprint owners remain."
+        ),
+    ] = False,
+    keep_artifact: Annotated[
+        bool,
+        typer.Option(
+            "--keep-artifact",
+            help="Unregister a DMR model without deleting its artifact.",
+        ),
+    ] = False,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Confirm removal without prompting.")
+    ] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Preview removal without changing state.")
+    ] = False,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Print machine-readable JSON.")
+    ] = False,
 ):
     """Remove a registered model or unmanaged DMR artifact."""
     try:
@@ -445,7 +557,12 @@ def remove_model(
             if json_output:
                 record_result(payload)
                 return
-            print_success_confirmation(console, "Model remove dry run", status="planned", details={"Model": payload["id"], "Kind": kind})
+            print_success_confirmation(
+                console,
+                "Model remove dry run",
+                status="planned",
+                details={"Model": payload["id"], "Kind": kind},
+            )
             return
         require_confirmation(
             console,
@@ -469,20 +586,32 @@ def remove_model(
                 cluster_results.extend(
                     _sync_external_litellm_config_across_cluster(
                         {"model_list": []},
-                        source_path=Path(str(removed.get("definition_path") or default_model_registry_path())),
+                        source_path=Path(
+                            str(
+                                removed.get("definition_path")
+                                or default_model_registry_path()
+                            )
+                        ),
                         restart=True,
                         quiet=json_output,
                     )
                 )
                 if any(result.get("status") == "error" for result in cluster_results):
-                    raise RuntimeError("provider route removal could not be synchronized to every cluster node")
+                    raise RuntimeError(
+                        "provider route removal could not be synchronized to every cluster node"
+                    )
             except Exception as exc:
                 save_model_registry(snapshot)
                 _sync_gateway_best_effort(restart=True, quiet=True)
                 if isinstance(removed.get("litellm_entry"), dict):
                     _sync_external_litellm_config_across_cluster(
                         {"model_list": [removed["litellm_entry"]]},
-                        source_path=Path(str(removed.get("definition_path") or default_model_registry_path())),
+                        source_path=Path(
+                            str(
+                                removed.get("definition_path")
+                                or default_model_registry_path()
+                            )
+                        ),
                         restart=True,
                         quiet=True,
                     )
@@ -493,19 +622,29 @@ def remove_model(
                     hint=f"Run 'mn model doctor {removed.get('id')}' and retry removal.",
                     cause=exc,
                 ) from exc
-            payload = {"status": "removed", "id": removed["id"], "kind": "provider", "artifact_removed": False, "registry": str(registry_path)}
+            payload = {
+                "status": "removed",
+                "id": removed["id"],
+                "kind": "provider",
+                "artifact_removed": False,
+                "registry": str(registry_path),
+            }
         else:
             entry = _dmr_entry_for_record_or_ref(record, model)
             target = docker_model_name(entry)
             was_default = bool((record or {}).get("default"))
             owners = _model_owner_ids(target)
             if owners and not force:
-                raise ValueError(f"model is still owned by blueprints: {', '.join(owners)}; use --force to remove it")
+                raise ValueError(
+                    f"model is still owned by blueprints: {', '.join(owners)}; use --force to remove it"
+                )
             node = str((record or {}).get("selected_node") or "")
             artifact_removed = False
             if not keep_artifact:
                 if node and node not in {"local", _local_runtime_node_name()}:
-                    _remove_runtime_model_on_cluster_node(target, node=node, force=force)
+                    _remove_runtime_model_on_cluster_node(
+                        target, node=node, force=force
+                    )
                 elif _model_installed(target):
                     remove_model_ref(target, force=force)
                 artifact_removed = True
@@ -524,7 +663,9 @@ def remove_model(
                         restart=True,
                         quiet=json_output,
                     )
-                    if any(result.get("status") == "error" for result in cluster_results):
+                    if any(
+                        result.get("status") == "error" for result in cluster_results
+                    ):
                         raise RuntimeError(
                             "the updated default could not be synchronized to every cluster gateway"
                         )
@@ -540,7 +681,14 @@ def remove_model(
                     hint=f"Run 'mn model doctor {entry.get('id')}' and retry removal.",
                     cause=exc,
                 ) from exc
-            payload = {"status": "removed", "id": str((record or {}).get("id") or model), "kind": "dmr", "artifact_removed": artifact_removed, "artifact": target, "node": node}
+            payload = {
+                "status": "removed",
+                "id": str((record or {}).get("id") or model),
+                "kind": "dmr",
+                "artifact_removed": artifact_removed,
+                "artifact": target,
+                "node": node,
+            }
         if json_output:
             record_result(payload)
             return
@@ -548,7 +696,11 @@ def remove_model(
             console,
             "Model remove",
             status="removed",
-            details={"Model": payload["id"], "Kind": payload["kind"], "Artifact removed": str(payload["artifact_removed"]).lower()},
+            details={
+                "Model": payload["id"],
+                "Kind": payload["kind"],
+                "Artifact removed": str(payload["artifact_removed"]).lower(),
+            },
             next_steps="mn model list",
         )
     except typer.Exit:
@@ -560,8 +712,12 @@ def remove_model(
 
 @model_app.command(name="doctor")
 def doctor_model(
-    model: Annotated[str, typer.Argument(help="Registered model id, catalog id, or DMR reference.")] = DEFAULT_MODEL_ID,
-    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+    model: Annotated[
+        str, typer.Argument(help="Registered model id, catalog id, or DMR reference.")
+    ] = DEFAULT_MODEL_ID,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Print machine-readable JSON.")
+    ] = False,
 ):
     """Check model definition, runtime state, and route health."""
     try:
@@ -577,7 +733,9 @@ def doctor_model(
             return
         entry = _dmr_entry_for_record_or_ref(record, model)
         target = docker_model_name(entry)
-        selected_node = str((record or {}).get("selected_node") or _local_runtime_node_name() or "local")
+        selected_node = str(
+            (record or {}).get("selected_node") or _local_runtime_node_name() or "local"
+        )
         local_node = _local_runtime_node_name()
         remote_selected = selected_node not in {"", "local", local_node}
         inventory: list[dict[str, Any]] = []
@@ -595,11 +753,21 @@ def doctor_model(
                     & _model_payload_match_keys(candidate)
                     for candidate in inventory
                 )
-                node_status = str((node_endpoint.get("node") or {}).get("status") or "healthy").lower()
+                node_status = str(
+                    (node_endpoint.get("node") or {}).get("status") or "healthy"
+                ).lower()
                 runner_running = node_status in {"healthy", "joining"}
                 endpoint_ok = True
-                status = {"node": selected_node, "status": node_status, "inventory": inventory}
-                hardware_payload = (node_endpoint.get("node") or {}).get("resources") or node_endpoint.get("node") or {}
+                status = {
+                    "node": selected_node,
+                    "status": node_status,
+                    "inventory": inventory,
+                }
+                hardware_payload = (
+                    (node_endpoint.get("node") or {}).get("resources")
+                    or node_endpoint.get("node")
+                    or {}
+                )
                 compatibility_payload = _remote_node_compatibility(
                     entry,
                     selected_node=selected_node,
@@ -610,7 +778,11 @@ def doctor_model(
                 runner_running = False
                 endpoint_ok = False
                 inventory_error = str(exc)
-                status = {"node": selected_node, "status": "unavailable", "inventory": []}
+                status = {
+                    "node": selected_node,
+                    "status": "unavailable",
+                    "inventory": [],
+                }
                 hardware_payload = {}
                 compatibility_payload = {
                     "ok": False,
@@ -624,7 +796,9 @@ def doctor_model(
             status = _docker_status()
             installed = _model_installed(target)
             endpoint_ok = _endpoint_responds()
-            runner_running = bool(status.get("running")) or "running" in json.dumps(status).lower()
+            runner_running = (
+                bool(status.get("running")) or "running" in json.dumps(status).lower()
+            )
             hardware_payload = detect_host_hardware().to_dict()
         gateway_health = litellm_gateway_health()
         gateway_config = build_litellm_gateway_config()
@@ -638,14 +812,20 @@ def doctor_model(
                 **_entry_payload(entry, installed=installed),
                 "kind": "dmr",
                 "registered": record is not None,
-                "verification": str((record or {}).get("verification") or entry.get("verification") or "catalog"),
+                "verification": str(
+                    (record or {}).get("verification")
+                    or entry.get("verification")
+                    or "catalog"
+                ),
                 "node": selected_node,
             },
             "compatibility": compatibility_payload,
             "docker_model_runner": {
                 "status": status,
                 "running": runner_running,
-                "endpoint": DOCKER_MODEL_RUNNER_HOST_API_BASE if not remote_selected else selected_node,
+                "endpoint": DOCKER_MODEL_RUNNER_HOST_API_BASE
+                if not remote_selected
+                else selected_node,
                 "endpoint_ok": endpoint_ok,
                 "inventory_error": inventory_error,
             },
@@ -655,8 +835,12 @@ def doctor_model(
                 "endpoint_ok": bool(gateway_health.get("ok")),
                 "routed": routed,
                 "models": gateway_health.get("models") or [],
-                "config_model_count": int(gateway_config_file.get("model_count") or len(gateway_config.get("model_list") or [])),
-                "config_ok": bool(gateway_config_file.get("ok")) and isinstance(gateway_config.get("model_list"), list),
+                "config_model_count": int(
+                    gateway_config_file.get("model_count")
+                    or len(gateway_config.get("model_list") or [])
+                ),
+                "config_ok": bool(gateway_config_file.get("ok"))
+                and isinstance(gateway_config.get("model_list"), list),
                 "config_path": gateway_config_file.get("path"),
                 "config_error": gateway_config_file.get("error"),
             },
@@ -687,7 +871,8 @@ def _cluster_managed_remote_records() -> list[dict[str, Any]]:
     return [
         record
         for record in (load_model_remotes().get("remotes") or {}).values()
-        if isinstance(record, dict) and str(record.get("managed_by") or "") == "mirror-neuron-cluster"
+        if isinstance(record, dict)
+        and str(record.get("managed_by") or "") == "mirror-neuron-cluster"
     ]
 
 
@@ -733,7 +918,9 @@ def _remote_node_compatibility(
             if compatible
             else f"{selected_node} does not satisfy the catalog hardware requirement."
         ),
-        "help": "Run model update to select a compatible node." if not compatible else "",
+        "help": "Run model update to select a compatible node."
+        if not compatible
+        else "",
         "requirement": gpu_requirement,
     }
 
@@ -761,11 +948,22 @@ def _registered_model_payload(
         node = ""
         state = "ready" if routed else "degraded"
     else:
-        installed_keys = {key for installed_model in installed_models for key in docker_model_match_keys(installed_model)}
-        installed = bool(docker_model_match_keys(str(record.get("model") or "")) & installed_keys)
+        installed_keys = {
+            key
+            for installed_model in installed_models
+            for key in docker_model_match_keys(installed_model)
+        }
+        installed = bool(
+            docker_model_match_keys(str(record.get("model") or "")) & installed_keys
+        )
         remote_installations = _remote_installations_for_model(record, remote_records)
         installed = installed or bool(remote_installations)
-        node = str(record.get("selected_node") or (remote_installations[0].get("node") if remote_installations else "") or _local_runtime_node_name() or "local")
+        node = str(
+            record.get("selected_node")
+            or (remote_installations[0].get("node") if remote_installations else "")
+            or _local_runtime_node_name()
+            or "local"
+        )
         state = "ready" if installed and routed else "degraded"
     return {
         "id": model_id,
@@ -821,12 +1019,16 @@ def _stored_registered_model_payload(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def _unmanaged_dmr_payload(model: str, *, routed_names: set[str]) -> dict[str, Any]:
-    routed = bool(docker_model_match_keys(model) & {key for name in routed_names for key in docker_model_match_keys(name)})
+    routed = bool(
+        docker_model_match_keys(model)
+        & {key for name in routed_names for key in docker_model_match_keys(name)}
+    )
     entry = next(
         (
             candidate
             for candidate in list_model_entries(load_model_catalog())
-            if docker_model_match_keys(docker_model_name(candidate)) & docker_model_match_keys(model)
+            if docker_model_match_keys(docker_model_name(candidate))
+            & docker_model_match_keys(model)
         ),
         None,
     )
@@ -846,22 +1048,32 @@ def _unmanaged_dmr_payload(model: str, *, routed_names: set[str]) -> dict[str, A
         "api_model": model,
         "backend": str((entry or {}).get("backend") or "unknown"),
         "cataloged": entry is not None,
-        "verification": str((entry or {}).get("verification") or ("catalog" if entry else "unverified")),
+        "verification": str(
+            (entry or {}).get("verification") or ("catalog" if entry else "unverified")
+        ),
         "default": False,
     }
 
 
-def _unmanaged_remote_dmr_payload(remote: dict[str, Any], *, routed_names: set[str]) -> dict[str, Any]:
+def _unmanaged_remote_dmr_payload(
+    remote: dict[str, Any], *, routed_names: set[str]
+) -> dict[str, Any]:
     model = str(remote.get("model") or remote.get("api_model") or "").strip()
     entry = next(
         (
             candidate
             for candidate in list_model_entries(load_model_catalog())
-            if docker_model_match_keys(docker_model_name(candidate)) & docker_model_match_keys(model)
+            if docker_model_match_keys(docker_model_name(candidate))
+            & docker_model_match_keys(model)
         ),
         None,
     )
-    model_id = str((entry or {}).get("id") or remote.get("cluster_model_id") or remote.get("name") or model)
+    model_id = str(
+        (entry or {}).get("id")
+        or remote.get("cluster_model_id")
+        or remote.get("name")
+        or model
+    )
     route_keys = {
         model_id,
         model,
@@ -887,7 +1099,9 @@ def _unmanaged_remote_dmr_payload(remote: dict[str, Any], *, routed_names: set[s
         "api_model": str(remote.get("api_model") or model),
         "backend": str((entry or {}).get("backend") or "unknown"),
         "cataloged": entry is not None,
-        "verification": str((entry or {}).get("verification") or ("catalog" if entry else "unverified")),
+        "verification": str(
+            (entry or {}).get("verification") or ("catalog" if entry else "unverified")
+        ),
         "default": False,
     }
 
@@ -915,10 +1129,20 @@ def _available_model_payload(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _uncataloged_dmr_entry(model: str, *, backend: str, context_size: int | None) -> dict[str, Any]:
+def _uncataloged_dmr_entry(
+    model: str, *, backend: str, context_size: int | None
+) -> dict[str, Any]:
     requested = str(model or "").strip()
-    if not requested or any(character.isspace() for character in requested) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9][A-Za-z0-9._-]*)?", requested):
-        raise ValueError("unknown models must use a valid Docker Model Runner or Hugging Face reference")
+    if (
+        not requested
+        or any(character.isspace() for character in requested)
+        or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9][A-Za-z0-9._-]*)?", requested
+        )
+    ):
+        raise ValueError(
+            "unknown models must use a valid Docker Model Runner or Hugging Face reference"
+        )
     target = docker_model_name({"id": requested, "model": requested})
     return {
         "id": requested,
@@ -945,7 +1169,9 @@ def _add_provider_definition(
 ) -> None:
     records = load_provider_definition(definition_file)
     if make_default and len(records) != 1:
-        raise ValueError("--default requires a provider definition containing exactly one model")
+        raise ValueError(
+            "--default requires a provider definition containing exactly one model"
+        )
     conflicts = sorted(
         str(record.get("id") or "")
         for record in records
@@ -969,14 +1195,20 @@ def _add_provider_definition(
             restart=True,
             quiet=json_output,
         )
-        failed = [result for result in cluster_results if result.get("status") == "error"]
+        failed = [
+            result for result in cluster_results if result.get("status") == "error"
+        ]
         if failed:
-            raise RuntimeError("provider definition could not be synchronized to every cluster node")
+            raise RuntimeError(
+                "provider definition could not be synchronized to every cluster node"
+            )
     except Exception as exc:
         save_model_registry(snapshot)
         _sync_gateway_best_effort(restart=True, quiet=True)
         for record in added:
-            _remove_gateway_route_across_cluster(str(record.get("id") or ""), restart=True, quiet=True)
+            _remove_gateway_route_across_cluster(
+                str(record.get("id") or ""), restart=True, quiet=True
+            )
         _sync_external_litellm_config_across_cluster(
             {"model_list": []},
             source_path=definition_file.expanduser().resolve(),
@@ -993,7 +1225,12 @@ def _add_provider_definition(
     payload = {
         "status": "ready",
         "models": [
-            {"id": record["id"], "kind": "provider", "state": "ready", "source": record["source"]}
+            {
+                "id": record["id"],
+                "kind": "provider",
+                "state": "ready",
+                "source": record["source"],
+            }
             for record in added
         ],
         "registry": str(registry_path),
@@ -1017,16 +1254,25 @@ def _add_provider_definition(
     )
 
 
-def _update_provider_registration(record: dict[str, Any], *, provider_cache: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+def _update_provider_registration(
+    record: dict[str, Any], *, provider_cache: dict[str, list[dict[str, Any]]]
+) -> dict[str, Any]:
     path = str(record.get("definition_path") or "")
     if not path:
-        raise ValueError(f"provider model {record.get('id')!r} has no stored definition path")
+        raise ValueError(
+            f"provider model {record.get('id')!r} has no stored definition path"
+        )
     if path not in provider_cache:
         provider_cache[path] = load_provider_definition(path)
     records = provider_cache[path]
-    replacement = next((candidate for candidate in records if candidate.get("id") == record.get("id")), None)
+    replacement = next(
+        (candidate for candidate in records if candidate.get("id") == record.get("id")),
+        None,
+    )
     if replacement is None:
-        raise ValueError(f"provider definition no longer declares model {record.get('id')!r}")
+        raise ValueError(
+            f"provider definition no longer declares model {record.get('id')!r}"
+        )
     snapshot = load_model_registry()
     replacement["created_at"] = record.get("created_at")
     updated, _path = replace_registered_model(replacement)
@@ -1039,7 +1285,9 @@ def _update_provider_registration(record: dict[str, Any], *, provider_cache: dic
             quiet=True,
         )
         if any(result.get("status") == "error" for result in cluster_results):
-            raise RuntimeError("provider update could not be synchronized to every cluster node")
+            raise RuntimeError(
+                "provider update could not be synchronized to every cluster node"
+            )
     except Exception as exc:
         save_model_registry(snapshot)
         _sync_gateway_best_effort(restart=True, quiet=True)
@@ -1060,7 +1308,9 @@ def _update_provider_registration(record: dict[str, Any], *, provider_cache: dic
     return {"id": updated["id"], "kind": "provider", "node": "", "state": "ready"}
 
 
-def _update_dmr_registration(record: dict[str, Any], *, force: bool, json_output: bool) -> dict[str, Any]:
+def _update_dmr_registration(
+    record: dict[str, Any], *, force: bool, json_output: bool
+) -> dict[str, Any]:
     entry = _dmr_entry_for_record_or_ref(record, str(record.get("id") or ""))
     node = str(record.get("selected_node") or "")
     if node and node not in {"local", _local_runtime_node_name()}:
@@ -1073,10 +1323,24 @@ def _update_dmr_registration(record: dict[str, Any], *, force: bool, json_output
             update=True,
         )
     else:
-        result = install_model_entry(entry, backend=str(record.get("backend") or "auto"), context_size=record.get("context_size"), force=force)
-        record_manual_model_install(entry, backend=str(result.get("compatibility", {}).get("backend") or record.get("backend") or "auto"))
+        result = install_model_entry(
+            entry,
+            backend=str(record.get("backend") or "auto"),
+            context_size=record.get("context_size"),
+            force=force,
+        )
+        record_manual_model_install(
+            entry,
+            backend=str(
+                result.get("compatibility", {}).get("backend")
+                or record.get("backend")
+                or "auto"
+            ),
+        )
         try:
-            _sync_installed_model_gateway_route(entry, result=result, node=None, strict=True)
+            _sync_installed_model_gateway_route(
+                entry, result=result, node=None, strict=True
+            )
         except Exception as exc:
             raise AppError(
                 "MN_MODEL_ROUTE_FAILED",
@@ -1093,17 +1357,29 @@ def _update_dmr_registration(record: dict[str, Any], *, force: bool, json_output
     )
     replacement["created_at"] = record.get("created_at")
     replace_registered_model(replacement)
-    return {"id": replacement["id"], "kind": "dmr", "node": replacement["selected_node"], "state": "ready"}
+    return {
+        "id": replacement["id"],
+        "kind": "dmr",
+        "node": replacement["selected_node"],
+        "state": "ready",
+    }
 
 
-def _dmr_entry_for_record_or_ref(record: dict[str, Any] | None, model: str) -> dict[str, Any]:
+def _dmr_entry_for_record_or_ref(
+    record: dict[str, Any] | None, model: str
+) -> dict[str, Any]:
     if isinstance(record, dict):
         if record.get("kind") != "dmr":
             raise ValueError(f"model {model!r} is not a DMR model")
         definition = record.get("definition")
         if isinstance(definition, dict):
             return dict(definition)
-        return {"id": record.get("id"), "provider": "docker_model_runner", "model": record.get("model"), "api_model": record.get("api_model")}
+        return {
+            "id": record.get("id"),
+            "provider": "docker_model_runner",
+            "model": record.get("model"),
+            "api_model": record.get("api_model"),
+        }
     try:
         entry = resolve_model_entry(model)
     except KeyError:
@@ -1116,20 +1392,43 @@ def _model_owner_ids(model: str) -> list[str]:
     for key, record in (load_model_ownership().get("models") or {}).items():
         if not isinstance(record, dict):
             continue
-        keys = docker_model_match_keys(str(key)) | docker_model_match_keys(str(record.get("docker_model") or ""))
+        keys = docker_model_match_keys(str(key)) | docker_model_match_keys(
+            str(record.get("docker_model") or "")
+        )
         if wanted & keys:
-            owners = record.get("owners") if isinstance(record.get("owners"), dict) else {}
+            owners = (
+                record.get("owners") if isinstance(record.get("owners"), dict) else {}
+            )
             return sorted(str(owner) for owner in owners)
     return []
 
 
-def _remove_runtime_model_on_cluster_node(model: str, *, node: str, force: bool) -> None:
+def _remove_runtime_model_on_cluster_node(
+    model: str, *, node: str, force: bool
+) -> None:
     node_endpoint = _cluster_node_endpoint(node)
     runtime_client = _native_runtime_client_for_node(node_endpoint)
-    response = runtime_client.prepare_runtime_model({"action": "remove", "model": model, "node": node, "force": force, "source": "mn-cli"})
+    response = runtime_client.prepare_runtime_model(
+        {
+            "action": "remove",
+            "model": model,
+            "node": node,
+            "force": force,
+            "source": "mn-cli",
+        }
+    )
     payload = json.loads(response) if isinstance(response, str) else response
-    if not isinstance(payload, dict) or payload.get("status") not in {"removed", "not_found"}:
-        raise RuntimeError(str((payload or {}).get("error") if isinstance(payload, dict) else "remote model removal failed"))
+    if not isinstance(payload, dict) or payload.get("status") not in {
+        "removed",
+        "not_found",
+    }:
+        raise RuntimeError(
+            str(
+                (payload or {}).get("error")
+                if isinstance(payload, dict)
+                else "remote model removal failed"
+            )
+        )
 
 
 def _doctor_provider_registration(record: dict[str, Any]) -> dict[str, Any]:
@@ -1138,18 +1437,37 @@ def _doctor_provider_registration(record: dict[str, Any]) -> dict[str, Any]:
     definition_error = "definition path is missing"
     if definition_path:
         try:
-            records = load_provider_definition(definition_path, require_environment=False)
-            definition_ok = any(candidate.get("id") == record.get("id") for candidate in records)
-            definition_error = "" if definition_ok else "model id is absent from the definition"
+            records = load_provider_definition(
+                definition_path, require_environment=False
+            )
+            definition_ok = any(
+                candidate.get("id") == record.get("id") for candidate in records
+            )
+            definition_error = (
+                "" if definition_ok else "model id is absent from the definition"
+            )
         except Exception as exc:
             definition_error = str(exc)
     env_name = str(record.get("api_key_env") or "")
     environment_ok = not env_name or bool(os.environ.get(env_name))
     health = litellm_gateway_health()
-    routed = str(record.get("id") or "") in {str(name) for name in health.get("models") or []}
+    routed = str(record.get("id") or "") in {
+        str(name) for name in health.get("models") or []
+    }
     return {
-        "model": {"id": record.get("id"), "kind": "provider", "registered": True, "state": "ready" if definition_ok and environment_ok and health.get("ok") and routed else "degraded"},
-        "definition": {"path": definition_path, "ok": definition_ok, "error": definition_error},
+        "model": {
+            "id": record.get("id"),
+            "kind": "provider",
+            "registered": True,
+            "state": "ready"
+            if definition_ok and environment_ok and health.get("ok") and routed
+            else "degraded",
+        },
+        "definition": {
+            "path": definition_path,
+            "ok": definition_ok,
+            "error": definition_error,
+        },
         "environment": {"name": env_name, "ok": environment_ok},
         "litellm_gateway": {**health, "routed": routed},
         "ok": bool(definition_ok and environment_ok and health.get("ok") and routed),
@@ -1181,13 +1499,21 @@ def _install_model_on_cluster_node(
     )
     payload = call_prepare_runtime_model(runtime_client, request, logger=logger)
     install = payload.get("install") if isinstance(payload.get("install"), dict) else {}
-    compatibility = install.get("compatibility") if isinstance(install.get("compatibility"), dict) else {}
+    compatibility = (
+        install.get("compatibility")
+        if isinstance(install.get("compatibility"), dict)
+        else {}
+    )
     if not compatibility:
         compatibility = {"backend": backend, "warnings": []}
-    remote_endpoint = _cluster_gateway_endpoint(entry, node_endpoint=node_endpoint, payload=payload)
+    remote_endpoint = _cluster_gateway_endpoint(
+        entry, node_endpoint=node_endpoint, payload=payload
+    )
     try:
         sync_litellm_gateway(
-            runtime_endpoints={key: remote_endpoint for key in _model_route_keys(entry)},
+            runtime_endpoints={
+                key: remote_endpoint for key in _model_route_keys(entry)
+            },
             restart=True,
         )
     except Exception as exc:
@@ -1233,9 +1559,17 @@ def _automatic_model_install_node(entry: dict[str, Any]) -> str:
     try:
         raw_resources = client.get_resource()
         raw_systems = client.get_system_summary()
-        resource_report = json.loads(raw_resources) if isinstance(raw_resources, str) else raw_resources
-        system_summary = json.loads(raw_systems) if isinstance(raw_systems, str) else raw_systems
-        if not isinstance(resource_report, dict) or not isinstance(system_summary, dict):
+        resource_report = (
+            json.loads(raw_resources)
+            if isinstance(raw_resources, str)
+            else raw_resources
+        )
+        system_summary = (
+            json.loads(raw_systems) if isinstance(raw_systems, str) else raw_systems
+        )
+        if not isinstance(resource_report, dict) or not isinstance(
+            system_summary, dict
+        ):
             return ""
         if str(entry.get("verification") or "").lower() == "unverified":
             placement = resolve_custom_model_placement(
@@ -1309,7 +1643,9 @@ def _node_litellm_gateway_api_base(node_endpoint: dict[str, Any]) -> str:
     """Return the node's cluster-reachable LiteLLM gateway URL."""
 
     host = str(node_endpoint.get("host") or "").strip()
-    node = node_endpoint.get("node") if isinstance(node_endpoint.get("node"), dict) else {}
+    node = (
+        node_endpoint.get("node") if isinstance(node_endpoint.get("node"), dict) else {}
+    )
     gateway = (
         node_endpoint.get("litellm_gateway")
         if isinstance(node_endpoint.get("litellm_gateway"), dict)
@@ -1327,7 +1663,9 @@ def _cluster_node_endpoint(node_name: str) -> dict[str, Any]:
     try:
         summary = json.loads(client.get_system_summary())
     except Exception as exc:
-        raise RuntimeError(f"could not inspect cluster nodes for {node_name}: {exc}") from exc
+        raise RuntimeError(
+            f"could not inspect cluster nodes for {node_name}: {exc}"
+        ) from exc
     nodes = summary.get("nodes") if isinstance(summary, dict) else None
     for node in nodes or []:
         if not isinstance(node, dict):
@@ -1337,8 +1675,16 @@ def _cluster_node_endpoint(node_name: str) -> dict[str, Any]:
         host = str(node.get("grpc_host") or node.get("address") or "").strip()
         port = str(node.get("grpc_port") or "").strip()
         if not host or not port:
-            raise RuntimeError(f"cluster node {node_name} does not advertise grpc_host/grpc_port")
-        return {"grpc_target": f"{host}:{port}", "host": host, "port": port, "node": node, "node_name": node_name}
+            raise RuntimeError(
+                f"cluster node {node_name} does not advertise grpc_host/grpc_port"
+            )
+        return {
+            "grpc_target": f"{host}:{port}",
+            "host": host,
+            "port": port,
+            "node": node,
+            "node_name": node_name,
+        }
     raise RuntimeError(f"cluster node {node_name} was not found in runtime summary")
 
 
@@ -1347,7 +1693,10 @@ def _cluster_node_endpoints(*, quiet: bool = False) -> list[dict[str, Any]]:
         summary = json.loads(client.get_system_summary())
     except Exception as exc:
         if not quiet:
-            print_warning(console, f"Could not inspect cluster nodes for LiteLLM gateway sync: {exc}")
+            print_warning(
+                console,
+                f"Could not inspect cluster nodes for LiteLLM gateway sync: {exc}",
+            )
         return []
     nodes = summary.get("nodes") if isinstance(summary, dict) else None
     endpoints: list[dict[str, Any]] = []
@@ -1448,7 +1797,9 @@ def _cluster_node_is_local(node_endpoint: dict[str, Any]) -> bool:
         return False
 
     node = node_endpoint.get("node")
-    if isinstance(node, dict) and (node.get("self?") is True or node.get("self") is True):
+    if isinstance(node, dict) and (
+        node.get("self?") is True or node.get("self") is True
+    ):
         return True
 
     host = str(node_endpoint.get("host") or "").strip().lower()
@@ -1457,7 +1808,11 @@ def _cluster_node_is_local(node_endpoint: dict[str, Any]) -> bool:
     if host in _local_host_addresses():
         return True
 
-    node_name = str(node.get("name") or node.get("node") or "").strip() if isinstance(node, dict) else ""
+    node_name = (
+        str(node.get("name") or node.get("node") or "").strip()
+        if isinstance(node, dict)
+        else ""
+    )
     return bool(node_name and node_name == _local_runtime_node_name())
 
 
@@ -1501,11 +1856,15 @@ def _resolved_local_hostnames() -> set[str]:
     except Exception:
         pass
     try:
-        addresses.update(addr.lower() for addr in socket.gethostbyname_ex(socket.gethostname())[2])
+        addresses.update(
+            addr.lower() for addr in socket.gethostbyname_ex(socket.gethostname())[2]
+        )
     except Exception:
         pass
     try:
-        for info in socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM):
+        for info in socket.getaddrinfo(
+            socket.gethostname(), None, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM
+        ):
             if len(info) >= 5:
                 entry = info[4][0]
                 if isinstance(entry, str):
@@ -1529,7 +1888,9 @@ def _native_runtime_client_for_node(node_endpoint: dict[str, Any]) -> Client:
         return client
 
     node_name = str(node_endpoint.get("node_name") or "")
-    native_endpoint = _cluster_node_native_sdk_endpoint(node_name, node_endpoint["node"])
+    native_endpoint = _cluster_node_native_sdk_endpoint(
+        node_name, node_endpoint["node"]
+    )
     return Client(
         target=native_endpoint["target"],
         timeout=_runtime_model_prepare_timeout_seconds(),
@@ -1552,7 +1913,9 @@ def _node_native_sdk_grpc_info(node: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _cluster_node_native_sdk_endpoint(node_name: str, node: dict[str, Any]) -> dict[str, str]:
+def _cluster_node_native_sdk_endpoint(
+    node_name: str, node: dict[str, Any]
+) -> dict[str, str]:
     native = _node_native_sdk_grpc_info(node)
     if not native:
         raise RuntimeError(
@@ -1560,7 +1923,9 @@ def _cluster_node_native_sdk_endpoint(node_name: str, node: dict[str, Any]) -> d
             "restart that node with an updated `mn runtime start`"
         )
     if native.get("enabled") is False:
-        raise RuntimeError(f"cluster node {node_name} advertises native SDK gRPC as disabled")
+        raise RuntimeError(
+            f"cluster node {node_name} advertises native SDK gRPC as disabled"
+        )
     target = str(native.get("target") or "").strip()
     host = str(native.get("host") or "").strip()
     port = str(native.get("port") or "").strip()
@@ -1571,7 +1936,9 @@ def _cluster_node_native_sdk_endpoint(node_name: str, node: dict[str, Any]) -> d
     if not target and host and port:
         target = f"{host}:{port}"
     if not target or not host or not port:
-        raise RuntimeError(f"cluster node {node_name} advertises incomplete native SDK gRPC metadata")
+        raise RuntimeError(
+            f"cluster node {node_name} advertises incomplete native SDK gRPC metadata"
+        )
     return {"target": target, "host": host, "port": port}
 
 
@@ -1586,7 +1953,9 @@ def _sync_installed_model_gateway_route(
     node: str | None,
     strict: bool = False,
 ) -> None:
-    endpoint = result.get("endpoint") if isinstance(result.get("endpoint"), dict) else None
+    endpoint = (
+        result.get("endpoint") if isinstance(result.get("endpoint"), dict) else None
+    )
     if endpoint is None:
         endpoint = docker_model_runner_endpoint(entry, node=node, source="local-dmr")
     runtime_endpoints = {key: endpoint for key in _model_route_keys(entry)}
@@ -1648,7 +2017,10 @@ def _sync_external_litellm_config_across_cluster(
         except Exception as exc:
             results.append({"node": node_name, "status": "error", "error": str(exc)})
             if not quiet:
-                print_warning(console, f"Could not sync LiteLLM proxy config on {node_name}: {exc}")
+                print_warning(
+                    console,
+                    f"Could not sync LiteLLM proxy config on {node_name}: {exc}",
+                )
     # A cluster fanout can include this host through an independently packaged
     # native service. Reconcile once more with the CLI's current registry so an
     # older service cannot silently replace the selected default locally.
@@ -1688,7 +2060,9 @@ def _sync_gateway_runtime_endpoints_across_cluster(
         node_name = str(node_endpoint.get("node_name") or "")
         if skip_local and _cluster_node_is_local(node_endpoint):
             continue
-        node_routes = _runtime_endpoints_for_gateway_node(runtime_endpoints, node_endpoint)
+        node_routes = _runtime_endpoints_for_gateway_node(
+            runtime_endpoints, node_endpoint
+        )
         if not node_routes:
             continue
         try:
@@ -1705,7 +2079,9 @@ def _sync_gateway_runtime_endpoints_across_cluster(
         except Exception as exc:
             results.append({"node": node_name, "status": "error", "error": str(exc)})
             if not quiet:
-                print_warning(console, f"Could not sync LiteLLM gateway on {node_name}: {exc}")
+                print_warning(
+                    console, f"Could not sync LiteLLM gateway on {node_name}: {exc}"
+                )
     return results
 
 
@@ -1755,7 +2131,9 @@ def reconcile_cluster_model_routes(
         (endpoint for endpoint in node_endpoints if _cluster_node_is_local(endpoint)),
         None,
     )
-    local_installed_models = _installed_model_names() if local_endpoint is not None else set()
+    local_installed_models = (
+        _installed_model_names() if local_endpoint is not None else set()
+    )
     local_entries = _model_entries_for_installed_names(local_installed_models)
     local_revision = _runtime_model_inventory_revision(local_entries)
     reconciled_registry_models: list[dict[str, str]] = []
@@ -1778,7 +2156,10 @@ def reconcile_cluster_model_routes(
         except Exception as exc:
             errors.append({"node": local_node, "stage": "registry", "error": str(exc)})
             if not quiet:
-                print_warning(console, f"Could not reconcile local model registry ownership: {exc}")
+                print_warning(
+                    console,
+                    f"Could not reconcile local model registry ownership: {exc}",
+                )
         try:
             publish_ack = _publish_local_runtime_model_inventory(
                 local_entries,
@@ -1829,7 +2210,10 @@ def reconcile_cluster_model_routes(
                 {"node": node_name, "status": "error", "error": str(exc)}
             )
             if not quiet:
-                print_warning(console, f"No synchronized runtime model status for {node_name}: {exc}")
+                print_warning(
+                    console,
+                    f"No synchronized runtime model status for {node_name}: {exc}",
+                )
         else:
             snapshot = _runtime_model_status_snapshot(node_endpoint)
             node_results.append(
@@ -1908,7 +2292,9 @@ def reconcile_cluster_model_routes(
                     )
                     local_result["gateway_ack"]["status_event_ack"] = event_ack
         except Exception as exc:
-            errors.append({"node": local_node, "stage": failure_stage, "error": str(exc)})
+            errors.append(
+                {"node": local_node, "stage": failure_stage, "error": str(exc)}
+            )
             local_result = next(
                 (result for result in node_results if result.get("node") == local_node),
                 None,
@@ -1921,7 +2307,9 @@ def reconcile_cluster_model_routes(
                 local_result["status"] = "error"
                 local_result["error"] = str(exc)
             if not quiet:
-                print_warning(console, f"Could not reconcile local cluster model routes: {exc}")
+                print_warning(
+                    console, f"Could not reconcile local cluster model routes: {exc}"
+                )
 
     model_ids = {
         str(endpoint.get("cluster_model_id") or endpoint.get("runtime_model") or key)
@@ -1958,9 +2346,7 @@ def _reconcile_stale_local_model_registrations(
         return []
 
     installed_keys = {
-        key
-        for model in installed_models
-        for key in docker_model_match_keys(model)
+        key for model in installed_models for key in docker_model_match_keys(model)
     }
     if not installed_keys:
         return []
@@ -1975,7 +2361,11 @@ def _reconcile_stale_local_model_registrations(
         if not isinstance(record, dict) or record.get("kind") != "dmr":
             continue
         previous_node = str(record.get("selected_node") or "").strip()
-        if not previous_node or previous_node == local_node or previous_node in live_nodes:
+        if (
+            not previous_node
+            or previous_node == local_node
+            or previous_node in live_nodes
+        ):
             continue
         if not (_model_payload_match_keys(record) & installed_keys):
             continue
@@ -2007,13 +2397,17 @@ def _validated_runtime_status_ack(
         try:
             response = json.loads(response)
         except json.JSONDecodeError as exc:
-            raise RuntimeError("runtime model status publish returned invalid acknowledgement JSON") from exc
+            raise RuntimeError(
+                "runtime model status publish returned invalid acknowledgement JSON"
+            ) from exc
     if not isinstance(response, dict):
         raise RuntimeError("runtime model status publish returned no acknowledgement")
     if str(response.get("domain") or "") != "models":
         raise RuntimeError("runtime model status publish acknowledged the wrong domain")
     if str(response.get("revision") or "") != revision:
-        raise RuntimeError("runtime model status publish acknowledged the wrong revision")
+        raise RuntimeError(
+            "runtime model status publish acknowledged the wrong revision"
+        )
     status = str(response.get("status") or "").strip().lower()
     if status not in {"accepted", "unchanged"}:
         raise RuntimeError(
@@ -2038,12 +2432,16 @@ def _validated_runtime_status_event_ack(
         try:
             response = json.loads(response)
         except json.JSONDecodeError as exc:
-            raise RuntimeError("runtime status event acknowledgement returned invalid JSON") from exc
+            raise RuntimeError(
+                "runtime status event acknowledgement returned invalid JSON"
+            ) from exc
     if not isinstance(response, dict) or response.get("status") != "acked":
         raise RuntimeError("runtime status events were not acknowledged")
     expected_ids = list(dict.fromkeys(event_ids))
     acked_ids = [str(event_id) for event_id in response.get("event_ids") or []]
-    if acked_ids != expected_ids or int(response.get("acked_count") or 0) != len(expected_ids):
+    if acked_ids != expected_ids or int(response.get("acked_count") or 0) != len(
+        expected_ids
+    ):
         raise RuntimeError("runtime status event acknowledgement was incomplete")
     return response
 
@@ -2066,13 +2464,17 @@ def _publish_local_runtime_model_inventory(
 def _runtime_model_status_snapshot(node_endpoint: dict[str, Any]) -> dict[str, Any]:
     node = node_endpoint.get("node")
     runtime_status = node.get("runtime_status") if isinstance(node, dict) else None
-    snapshot = runtime_status.get("models") if isinstance(runtime_status, dict) else None
+    snapshot = (
+        runtime_status.get("models") if isinstance(runtime_status, dict) else None
+    )
     if not isinstance(snapshot, dict):
         node_name = str(node_endpoint.get("node_name") or "")
         raise RuntimeError(f"cluster node {node_name} has not published model status")
     if not str(snapshot.get("revision") or "").strip():
         node_name = str(node_endpoint.get("node_name") or "")
-        raise RuntimeError(f"cluster node {node_name} published model status without a revision")
+        raise RuntimeError(
+            f"cluster node {node_name} published model status without a revision"
+        )
     return snapshot
 
 
@@ -2084,7 +2486,9 @@ def _runtime_model_inventory_for_node(
     status = snapshot.get("status")
     models = status.get("models") if isinstance(status, dict) else None
     if not isinstance(models, list):
-        raise RuntimeError(f"cluster node {node_name} published a non-list model inventory")
+        raise RuntimeError(
+            f"cluster node {node_name} published a non-list model inventory"
+        )
     return [
         entry
         for entry in models
@@ -2095,7 +2499,9 @@ def _runtime_model_inventory_for_node(
     ]
 
 
-def _model_entries_for_installed_names(installed_models: set[str]) -> list[dict[str, Any]]:
+def _model_entries_for_installed_names(
+    installed_models: set[str],
+) -> list[dict[str, Any]]:
     catalog = load_model_catalog()
     installed_keys = {
         key for model in installed_models for key in docker_model_match_keys(model)
@@ -2164,7 +2570,11 @@ def _cluster_routes_from_inventories(
                 "source": REMOTE_LITELLM_GATEWAY_SOURCE,
                 "cluster_model_id": model_id,
                 "route_aliases": (
-                    [str(alias) for alias in explicit_aliases if str(alias or "").strip()]
+                    [
+                        str(alias)
+                        for alias in explicit_aliases
+                        if str(alias or "").strip()
+                    ]
                     if isinstance(explicit_aliases, list) and explicit_aliases
                     else sorted(route_keys)
                 ),
@@ -2190,10 +2600,16 @@ def _runtime_endpoints_for_gateway_node(
     def owned_by_target(endpoint: dict[str, Any]) -> bool:
         if str(endpoint.get("node") or "").strip() == target:
             return True
-        if str(endpoint.get("source") or "").strip() not in CLUSTER_REMOTE_MODEL_SOURCES:
+        if (
+            str(endpoint.get("source") or "").strip()
+            not in CLUSTER_REMOTE_MODEL_SOURCES
+        ):
             return False
         try:
-            endpoint_host = str(urllib.parse.urlparse(str(endpoint.get("api_base") or "")).hostname or "").lower()
+            endpoint_host = str(
+                urllib.parse.urlparse(str(endpoint.get("api_base") or "")).hostname
+                or ""
+            ).lower()
         except ValueError:
             return False
         return bool(target_host and endpoint_host == target_host)
@@ -2238,19 +2654,30 @@ def _runtime_endpoints_for_local_gateway(
     }
 
 
-def _remove_gateway_route_on_cluster_node(model: str, *, node: str, restart: bool) -> str:
+def _remove_gateway_route_on_cluster_node(
+    model: str, *, node: str, restart: bool
+) -> str:
     node_endpoint = _cluster_node_endpoint(node)
     runtime_client = _native_runtime_client_for_node(node_endpoint)
     return runtime_client.remove_litellm_gateway_route(
-        {"node": node, "model": model, "restart": restart, "source": "mn-cli-remove-route"}
+        {
+            "node": node,
+            "model": model,
+            "restart": restart,
+            "source": "mn-cli-remove-route",
+        }
     )
 
 
-def _remove_remote_model_records_for_node(model: str, *, node: str) -> list[dict[str, Any]]:
+def _remove_remote_model_records_for_node(
+    model: str, *, node: str
+) -> list[dict[str, Any]]:
     return _remove_remote_model_records(model, node=node)
 
 
-def _remove_remote_model_records(model: str, *, node: str | None = None) -> list[dict[str, Any]]:
+def _remove_remote_model_records(
+    model: str, *, node: str | None = None
+) -> list[dict[str, Any]]:
     wanted = docker_model_match_keys(model)
     ledger = load_model_remotes()
     remotes = ledger.setdefault("remotes", {})
@@ -2258,7 +2685,10 @@ def _remove_remote_model_records(model: str, *, node: str | None = None) -> list
     for key, remote in list(remotes.items()):
         if not isinstance(remote, dict):
             continue
-        if node is not None and str(remote.get("node") or "").strip() != str(node or "").strip():
+        if (
+            node is not None
+            and str(remote.get("node") or "").strip() != str(node or "").strip()
+        ):
             continue
         candidates = {
             str(key or "").strip(),
@@ -2267,7 +2697,11 @@ def _remove_remote_model_records(model: str, *, node: str | None = None) -> list
             str(remote.get("api_model") or "").strip(),
             str(remote.get("runtime_model") or "").strip(),
         }
-        if any(candidate == model or docker_model_match_keys(candidate) & wanted for candidate in candidates if candidate):
+        if any(
+            candidate == model or docker_model_match_keys(candidate) & wanted
+            for candidate in candidates
+            if candidate
+        ):
             removed.append(remotes.pop(key))
     if removed:
         save_model_remotes(ledger)
@@ -2301,7 +2735,9 @@ def _remove_gateway_route_across_cluster(
         except Exception as exc:
             results.append({"node": node_name, "status": "error", "error": str(exc)})
             if not quiet:
-                print_warning(console, f"Could not remove LiteLLM route on {node_name}: {exc}")
+                print_warning(
+                    console, f"Could not remove LiteLLM route on {node_name}: {exc}"
+                )
     return results
 
 
@@ -2327,7 +2763,9 @@ def _remote_installations_for_model(
         if not model_keys & remote_keys:
             continue
         node = str(remote.get("node") or "").strip()
-        runtime_model = str(remote.get("model") or remote.get("api_model") or "").strip()
+        runtime_model = str(
+            remote.get("model") or remote.get("api_model") or ""
+        ).strip()
         base_url = str(remote.get("base_url") or "").strip()
         identity = (node, runtime_model, base_url)
         if identity in seen:
@@ -2341,7 +2779,9 @@ def _remote_installations_for_model(
                 "model": runtime_model,
                 "api_model": remote.get("api_model") or runtime_model,
                 "api_base": base_url,
-                "route_source": REMOTE_LITELLM_GATEWAY_SOURCE if node else "manual-remote",
+                "route_source": REMOTE_LITELLM_GATEWAY_SOURCE
+                if node
+                else "manual-remote",
             }
         )
     return sorted(
@@ -2358,11 +2798,7 @@ def _model_payload_match_keys(model: dict[str, Any]) -> set[str]:
         str(model.get("api_model") or ""),
     }
     values.update(str(alias or "") for alias in model.get("aliases") or [])
-    return {
-        key
-        for value in values
-        for key in docker_model_match_keys(value)
-    }
+    return {key for value in values for key in docker_model_match_keys(value)}
 
 
 def _remote_record_match_keys(remote: dict[str, Any]) -> set[str]:
@@ -2373,11 +2809,7 @@ def _remote_record_match_keys(remote: dict[str, Any]) -> set[str]:
         str(remote.get("cluster_model_id") or ""),
     }
     values.update(str(alias or "") for alias in remote.get("route_aliases") or [])
-    return {
-        key
-        for value in values
-        for key in docker_model_match_keys(value)
-    }
+    return {key for value in values for key in docker_model_match_keys(value)}
 
 
 def install_model_entry(
@@ -2441,7 +2873,9 @@ def install_model_entry_with_progress(
 
 def _model_pull_timeout_seconds() -> float:
     try:
-        return max(float(os.getenv("MN_DOCKER_MODEL_PULL_TIMEOUT_SECONDS", "3600")), 1.0)
+        return max(
+            float(os.getenv("MN_DOCKER_MODEL_PULL_TIMEOUT_SECONDS", "3600")), 1.0
+        )
     except ValueError:
         return 3600.0
 
@@ -2465,7 +2899,9 @@ def _docker_model_pull(target: str, *, attempts: int = 2) -> None:
                 return
             last_error = exc
             if attempt < attempts:
-                console.print("[yellow]Docker model pull failed; retrying once...[/yellow]")
+                console.print(
+                    "[yellow]Docker model pull failed; retrying once...[/yellow]"
+                )
     if last_error is not None:
         raise last_error
 
@@ -2502,7 +2938,9 @@ def _entry_payload(
 
 def _ensure_docker_model_cli() -> None:
     if not _docker_model_cli_available():
-        raise RuntimeError("Docker Model Runner CLI is not available. Upgrade Docker or install the docker-model plugin.")
+        raise RuntimeError(
+            "Docker Model Runner CLI is not available. Upgrade Docker or install the docker-model plugin."
+        )
 
 
 def _docker_model_cli_available() -> bool:
@@ -2517,17 +2955,23 @@ def _docker_available() -> bool:
 
 def _docker_model_run_supports_context_size() -> bool:
     result = _docker(["model", "run", "--help"], check=False, timeout=15)
-    return result.returncode == 0 and "--context-size" in (result.stdout or result.stderr or "")
+    return result.returncode == 0 and "--context-size" in (
+        result.stdout or result.stderr or ""
+    )
 
 
 def _ensure_runner(backend: str, accelerator: str) -> None:
     status = _docker_status()
-    backends = status.get("backends") if isinstance(status.get("backends"), dict) else {}
+    backends = (
+        status.get("backends") if isinstance(status.get("backends"), dict) else {}
+    )
     backend_text = str(backends.get(backend) or "").lower()
     running = bool(status.get("running")) or "running" in json.dumps(status).lower()
     if running and "running" in backend_text:
         return
-    command = docker_runner_command(backend, already_running=running, accelerator=accelerator)
+    command = docker_runner_command(
+        backend, already_running=running, accelerator=accelerator
+    )
     _docker(command[1:], timeout=300)
 
 
@@ -2556,14 +3000,7 @@ def _parse_model_list(output: str) -> set[str]:
 
 
 def _model_name_candidates(item: dict[str, Any]) -> set[str]:
-    names: set[str] = set()
-    for key, value in item.items():
-        lowered = key.lower()
-        if lowered in {"name", "model", "id", "ref", "repository"} and isinstance(value, str):
-            names.add(value)
-        elif lowered in {"tags", "names"} and isinstance(value, list):
-            names.update(str(tag) for tag in value if tag)
-    return names
+    return sdk_model_name_candidates(item)
 
 
 def _docker(
@@ -2586,5 +3023,7 @@ def _docker(
         result = subprocess.CompletedProcess(command, 127, "", str(exc))
     if check and result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
-        raise RuntimeError(f"{' '.join(command)} failed{': ' + detail if detail else ''}")
+        raise RuntimeError(
+            f"{' '.join(command)} failed{': ' + detail if detail else ''}"
+        )
     return result

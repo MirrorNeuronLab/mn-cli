@@ -7,6 +7,9 @@ from mn_sdk import (
     matches_public_workflow_contract as _matches_public_workflow_contract,
 )
 from mn_sdk import (
+    public_workflow_manifest_from_job as _sdk_public_workflow_manifest_from_job,
+)
+from mn_sdk import (
     workflow_step_ids as _workflow_step_ids,
 )
 
@@ -406,7 +409,11 @@ def _workflow_progress_for_monitor(
         logger.exception("Failed to load workflow events for monitor")
     manifest = _manifest_from_job_data(data, events=events)
     if not _workflow_step_ids(manifest):
-        workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
+        workflow = (
+            manifest.get("workflow")
+            if isinstance(manifest.get("workflow"), dict)
+            else {}
+        )
         return {
             "schema_version": 2,
             "job_id": job_id,
@@ -458,9 +465,7 @@ def _manifest_from_job_data(
         run_manifest, workflow_manifest
     ):
         return run_manifest
-    if run_manifest and _is_lowered_runtime_projection(
-        workflow_manifest, run_manifest
-    ):
+    if run_manifest and _is_lowered_runtime_projection(workflow_manifest, run_manifest):
         return run_manifest
 
     for candidate in (
@@ -534,264 +539,7 @@ def _public_workflow_manifest_from_job(
     monitoring a blueprint.
     """
 
-    workflow_state = _workflow_state_from_job(job, summary)
-    steps_by_id = (
-        (
-            workflow_state.get("steps")
-            if isinstance(workflow_state.get("steps"), dict)
-            else {}
-        )
-        if isinstance(workflow_state, dict)
-        else {}
-    )
-    step_order = (
-        workflow_state.get("step_order")
-        if isinstance(workflow_state, dict)
-        and isinstance(workflow_state.get("step_order"), list)
-        else []
-    )
-    step_ids = [str(step_id) for step_id in step_order if str(step_id) in steps_by_id]
-    if not step_ids:
-        step_ids = [str(step_id) for step_id in steps_by_id if str(step_id).strip()]
-
-    if not step_ids:
-        step_ids = _public_step_ids_from_topology(job)
-    if not step_ids:
-        # ``GetJob`` deliberately returns a compact projection for active
-        # durable job runs.  That projection omits both ``workflow_state`` and
-        # ``runtime_topology``, but retains the live agent list.  Step-source
-        # agents are one-to-one with the source-facing workflow steps, so use
-        # them as a final read-only reconstruction path.  This keeps
-        # ``mn run watch`` useful for runs started from a durable job even when
-        # the CLI did not create a local run-store mapping.
-        step_ids = _public_step_ids_from_agents(job, events=events)
-    if not step_ids:
-        return None
-
-    edges = _public_workflow_edges(workflow_state, job, step_ids)
-    outgoing: dict[str, list[tuple[str, str]]] = {}
-    for edge in edges:
-        source = str(edge.get("from") or "")
-        target = str(edge.get("to") or "")
-        event_name = str(edge.get("event") or edge.get("message_type") or "")
-        if source and target and event_name:
-            outgoing.setdefault(source, []).append((event_name, target))
-
-    steps: list[dict[str, Any]] = []
-    for index, step_id in enumerate(step_ids):
-        record = steps_by_id.get(step_id)
-        record = record if isinstance(record, dict) else {}
-        transitions = {
-            event_name: target for event_name, target in outgoing.get(step_id, [])
-        }
-        steps.append(
-            {
-                "id": step_id,
-                "label": str(record.get("label") or _humanize_identifier(step_id)),
-                "goal": str(record.get("goal") or ""),
-                # Source manifests run a public step through this generated
-                # start node.  The shared run renderer intentionally presents
-                # the public step agent, rather than the internal node.
-                "run": str(record.get("run") or f"{step_id}__start"),
-                "emits": _step_emit_name(step_id, outgoing.get(step_id, [])),
-                "on": transitions,
-                "needs": [
-                    str(edge.get("from"))
-                    for edge in edges
-                    if str(edge.get("to") or "") == step_id
-                ],
-                "kind": "source"
-                if index == 0
-                else "sink"
-                if index == len(step_ids) - 1
-                else "stage",
-            }
-        )
-
-    workflow_id = str(
-        workflow_state.get("workflow_id")
-        if isinstance(workflow_state, dict) and workflow_state.get("workflow_id")
-        else job.get("workflow_id")
-        or summary.get("workflow_id")
-        or job.get("graph_id")
-        or summary.get("graph_id")
-        or job.get("job_id")
-        or "workflow"
-    )
-    job_type = str(
-        job.get("job_type")
-        or job.get("type")
-        or summary.get("job_type")
-        or summary.get("type")
-        or ""
-    )
-    policies = {"stream_mode": "live"} if job_type.lower() == "service" else {}
-    return {
-        "apiVersion": "mn.workflow/v1",
-        "kind": "Workflow",
-        "id": str(job.get("graph_id") or summary.get("graph_id") or workflow_id),
-        "name": str(job.get("job_name") or summary.get("job_name") or workflow_id),
-        "description": str(summary.get("description") or job.get("description") or ""),
-        "policies": policies,
-        "workflow": {
-            "workflow_id": workflow_id,
-            "entrypoint": step_ids[0],
-            "source": step_ids[0],
-            "sink": step_ids[-1],
-            "steps": steps,
-            "edges": edges,
-        },
-        # There are deliberately no bindings here: the source contract's
-        # public agent is the step, while runtime-only workers stay hidden.
-        "runtime": {"bindings": {}},
-    }
-
-
-def _workflow_state_from_job(
-    job: dict[str, Any], summary: dict[str, Any]
-) -> dict[str, Any] | None:
-    for mapping in (job, summary):
-        state = mapping.get("workflow_state") if isinstance(mapping, dict) else None
-        if isinstance(state, dict):
-            return state
-    return None
-
-
-def _public_step_ids_from_topology(job: dict[str, Any]) -> list[str]:
-    topology = (
-        job.get("runtime_topology")
-        if isinstance(job.get("runtime_topology"), dict)
-        else {}
-    )
-    nodes = topology.get("nodes") if isinstance(topology.get("nodes"), list) else []
-    step_ids: list[str] = []
-    for node in nodes:
-        if not isinstance(node, dict):
-            continue
-        node_id = str(node.get("node_id") or node.get("id") or "")
-        node_types = {
-            str(node.get(key) or "").strip().lower()
-            for key in ("agent_type", "node_type", "type")
-        }
-        if "step_source" not in node_types or not node_id.endswith("__start"):
-            continue
-        step_id = node_id.removesuffix("__start")
-        if step_id and step_id not in step_ids:
-            step_ids.append(step_id)
-    return step_ids
-
-
-def _public_step_ids_from_agents(
-    job: dict[str, Any], *, events: list[dict[str, Any]] | None = None
-) -> list[str]:
-    """Return public step IDs from compact runtime agent metadata.
-
-    A lowered workflow creates a ``<step>__start`` agent with type
-    ``step_source`` for every public step.  The compact monitor response keeps
-    that metadata even though it omits the workflow manifest and topology.
-    """
-
-    raw_agents = job.get("agents") if isinstance(job.get("agents"), list) else []
-    step_ids: list[str] = []
-    for agent in raw_agents:
-        if not isinstance(agent, dict):
-            continue
-        agent_id = str(agent.get("agent_id") or agent.get("id") or "").strip()
-        if not agent_id.endswith("__start"):
-            continue
-        agent_type = str(
-            agent.get("agent_type") or agent.get("node_type") or agent.get("type") or ""
-        ).strip().lower()
-        # Older runtimes may not include a type on agent summaries.  In that
-        # case the conventional generated ``__start`` name remains the best
-        # available public-step signal.
-        if agent_type and agent_type not in {"step_source", "source"}:
-            continue
-        step_id = agent_id.removesuffix("__start")
-        if step_id and step_id not in step_ids:
-            step_ids.append(step_id)
-    if not events:
-        return step_ids
-
-    # The agent summary is stable but normally sorted by agent ID.  Put every
-    # step the runtime has dispatched first, in event order, so a compact
-    # monitor follows the real workflow rather than an alphabetical list.
-    available_steps = set(step_ids)
-    observed_steps: list[str] = []
-    for event in events:
-        if not isinstance(event, dict):
-            continue
-        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-        step_id = str(
-            event.get("step_id")
-            or event.get("step")
-            or payload.get("step_id")
-            or payload.get("step")
-            or ""
-        ).strip()
-        if step_id in available_steps and step_id not in observed_steps:
-            observed_steps.append(step_id)
-    return observed_steps + [step_id for step_id in step_ids if step_id not in observed_steps]
-
-
-def _public_workflow_edges(
-    workflow_state: dict[str, Any] | None,
-    job: dict[str, Any],
-    step_ids: list[str],
-) -> list[dict[str, Any]]:
-    raw_edges = (
-        workflow_state.get("edges") if isinstance(workflow_state, dict) else None
-    )
-    if not isinstance(raw_edges, list):
-        topology = (
-            job.get("runtime_topology")
-            if isinstance(job.get("runtime_topology"), dict)
-            else {}
-        )
-        raw_edges = (
-            topology.get("edges") if isinstance(topology.get("edges"), list) else []
-        )
-
-    known_steps = set(step_ids)
-    edges: list[dict[str, Any]] = []
-    for raw_edge in raw_edges:
-        if not isinstance(raw_edge, dict):
-            continue
-        source = str(raw_edge.get("from") or raw_edge.get("from_node") or "")
-        target = str(raw_edge.get("to") or raw_edge.get("to_node") or "")
-        if source.endswith("__end"):
-            source = source.removesuffix("__end")
-        if target.endswith("__start"):
-            target = target.removesuffix("__start")
-        if source not in known_steps or target not in known_steps:
-            continue
-        edges.append(
-            {
-                "id": str(
-                    raw_edge.get("id")
-                    or raw_edge.get("edge_id")
-                    or f"{source}_to_{target}"
-                ),
-                "from": source,
-                "to": target,
-                "event": str(
-                    raw_edge.get("event")
-                    or raw_edge.get("message_type")
-                    or f"{source}_completed"
-                ),
-            }
-        )
-    return edges
-
-
-def _step_emit_name(step_id: str, transitions: list[tuple[str, str]]) -> str:
-    return transitions[0][0] if transitions else f"{step_id}_completed"
-
-
-def _humanize_identifier(value: str) -> str:
-    return " ".join(
-        part.capitalize() for part in value.replace("-", "_").split("_") if part
-    )
+    return _sdk_public_workflow_manifest_from_job(job, summary, events=events)
 
 
 def _public_progress_from_api_snapshot(

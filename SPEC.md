@@ -290,10 +290,19 @@ permitted in this unit gate.
 
 ## Configuration
 
-`mn_cli.config` loads configuration with real environment variables taking
-precedence over `.env` defaults selected by `MN_ENV`. Runtime connection comes
-from explicit configuration or the installed runtime endpoint metadata. New
-public keys require schema/config code, `.env.example`, README, and test updates.
+`mn_cli.config` is a compatibility facade over `mn_sdk.config`. It composes
+CLI-only presentation/orchestration keys with the SDK schema and applies
+`environment > .env.<profile> > .env > defaults`, including explicit blank
+environment overrides. Runtime connection and token-file resolution use the
+SDK `RuntimeConfig`; the CLI does not carry a copied resolver. Operators select
+model policy with `MN_MODEL_CATALOG_PATH`; semantic defaults and fallback links
+live inside that catalog rather than in CLI constants or extra environment
+variables. New public keys require schema/config code, `.env.example`, README,
+and test updates.
+
+Public workflow reconstruction and activity compaction call the SDK projection
+helpers. Terminal ordering may supply observed events, but the CLI does not
+maintain a separate workflow-policy implementation.
 
 Release updates resolve a versioned package plan from the newest stable
 `mn-deploy/install_support/v*` snapshot, not from component-repository source

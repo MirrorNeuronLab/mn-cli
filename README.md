@@ -315,9 +315,9 @@ snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
 - OpenShell workers that reuse a job-scoped sandbox are prepared before
   submission; the submitted node receives the concrete sandbox name and SSH
   host instead of asking Core to create host resources.
-- `default` is a LiteLLM model group, not a concrete model: it prefers
-  `nemotron-3.5-lightning:latest` and falls back to `gemma4:e2b` when no healthy node can run
-  Nemotron. The existing cluster model monitor
+- `default` is a LiteLLM model group, not a concrete model. Its preferred and
+  fallback entries come from the SDK catalog's `defaults.llm.model` and
+  per-entry `fallback_model` links. The existing cluster model monitor
   rebuilds these routes as nodes join, rejoin, or leave; incomplete peer
   snapshots retain the last safe routes until departure is confirmed.
   Gateway route names and `fallback_model` are read from the SDK's merged model
@@ -330,3 +330,11 @@ snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
   endpoint.
 - `--debug` retains complete Docker build diagnostics and prints deferred model
   policies. Actual model/node selection appears later in runtime events.
+
+Shared configuration parsing and defaults are owned by `mn_sdk.config`.
+`mn_cli.config` remains a source-compatible facade that composes CLI-only keys
+with the SDK schema. Layering is `environment > .env.<profile> > .env >
+defaults`, and an explicitly blank environment value overrides dotenv. Set
+`MN_MODEL_CATALOG_PATH` in `.env` to select an operator catalog containing both
+semantic defaults and model entries; there are no separate preferred/fallback
+model-name environment variables.

@@ -11,8 +11,17 @@ from rich.console import Group
 from rich.padding import Padding
 from rich.table import Table
 from rich.text import Text
-from mn_sdk import RuntimeConfig, collect_runtime_status as sdk_collect_runtime_status, docker_status, health_report_from_status
-from mn_sdk.litellm_gateway import litellm_gateway_health, validate_litellm_gateway_config_file
+from mn_sdk import (
+    RuntimeConfig,
+    collect_runtime_status as sdk_collect_runtime_status,
+    docker_status,
+    health_report_from_status,
+    overall_status as sdk_overall_status,
+)
+from mn_sdk.litellm_gateway import (
+    litellm_gateway_health,
+    validate_litellm_gateway_config_file,
+)
 from mn_sdk.model_runtime import DOCKER_MODEL_RUNNER_HOST_API_BASE, dmr_api_list_models
 
 from mn_cli.runtime_state import read_json_file
@@ -42,9 +51,15 @@ from mn_cli.server_cmds import (
 
 
 def health(
-    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
-    timeout: float = typer.Option(3.0, "--timeout", min=0.1, help="Per-component timeout in seconds."),
-    repair: bool = typer.Option(False, "--repair", help="Restart unhealthy API/Web UI sidecars when possible."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print machine-readable JSON."
+    ),
+    timeout: float = typer.Option(
+        3.0, "--timeout", min=0.1, help="Per-component timeout in seconds."
+    ),
+    repair: bool = typer.Option(
+        False, "--repair", help="Restart unhealthy API/Web UI sidecars when possible."
+    ),
 ) -> None:
     """Report Core gRPC, REST API, and Web UI health."""
     report = collect_runtime_health(timeout)
@@ -59,8 +74,12 @@ def health(
 
 
 def status(
-    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
-    timeout: float = typer.Option(3.0, "--timeout", min=0.1, help="Per-component timeout in seconds."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print machine-readable JSON."
+    ),
+    timeout: float = typer.Option(
+        3.0, "--timeout", min=0.1, help="Per-component timeout in seconds."
+    ),
 ) -> None:
     """Report runtime endpoints, health, nodes, jobs, and shared storage."""
     report = collect_runtime_status(timeout)
@@ -73,9 +92,17 @@ def status(
 
 
 def doctor(
-    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
-    timeout: float = typer.Option(3.0, "--timeout", min=0.1, help="Per-component timeout in seconds."),
-    repair: bool = typer.Option(False, "--repair", help="Repair unhealthy replaceable runtime sidecars, then recheck."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print machine-readable JSON."
+    ),
+    timeout: float = typer.Option(
+        3.0, "--timeout", min=0.1, help="Per-component timeout in seconds."
+    ),
+    repair: bool = typer.Option(
+        False,
+        "--repair",
+        help="Repair unhealthy replaceable runtime sidecars, then recheck.",
+    ),
 ) -> None:
     """Check runtime foundation services before running blueprints."""
     report = collect_runtime_doctor(timeout)
@@ -89,13 +116,17 @@ def doctor(
         raise typer.Exit(1)
 
 
-def collect_runtime_health(timeout: float = 3.0, *, core_client: Any | None = None) -> dict[str, Any]:
+def collect_runtime_health(
+    timeout: float = 3.0, *, core_client: Any | None = None
+) -> dict[str, Any]:
     return health_report_from_status(
         collect_runtime_status(timeout, core_client=core_client)
     )
 
 
-def collect_runtime_status(timeout: float = 3.0, *, core_client: Any | None = None) -> dict[str, Any]:
+def collect_runtime_status(
+    timeout: float = 3.0, *, core_client: Any | None = None
+) -> dict[str, Any]:
     installed_web_ui = compose_web_ui_enabled() or find_web_ui_dir() is not None
     config = _runtime_config(web_ui_installed=installed_web_ui)
     return sdk_collect_runtime_status(
@@ -107,7 +138,9 @@ def collect_runtime_status(timeout: float = 3.0, *, core_client: Any | None = No
     )
 
 
-def collect_runtime_doctor(timeout: float = 3.0, *, core_client: Any | None = None) -> dict[str, Any]:
+def collect_runtime_doctor(
+    timeout: float = 3.0, *, core_client: Any | None = None
+) -> dict[str, Any]:
     status_report = collect_runtime_status(timeout, core_client=core_client)
     foundation = [
         _coordination_store_component(status_report),
@@ -123,10 +156,7 @@ def collect_runtime_doctor(timeout: float = 3.0, *, core_client: Any | None = No
         "runtime": status_report.get("runtime") or {},
         "endpoints": status_report.get("endpoints") or {},
         "components": components,
-        "foundation": {
-            component["name"]: component
-            for component in foundation
-        },
+        "foundation": {component["name"]: component for component in foundation},
         "nodes": status_report.get("nodes") or {},
         "jobs": status_report.get("jobs") or {},
         "shared_storage": status_report.get("shared_storage") or {},
@@ -147,7 +177,11 @@ def _runtime_config(*, web_ui_installed: bool) -> RuntimeConfig:
 
 
 def print_health_report(report: dict[str, Any]) -> None:
-    table = Table(title=f"Runtime health: {report['overall']}", show_header=True, header_style="bold")
+    table = Table(
+        title=f"Runtime health: {report['overall']}",
+        show_header=True,
+        header_style="bold",
+    )
     table.add_column("Component")
     table.add_column("Status")
     table.add_column("Target")
@@ -174,12 +208,20 @@ def print_status_report(report: dict[str, Any]) -> None:
     nodes = report.get("nodes") if isinstance(report.get("nodes"), dict) else {}
     jobs = report.get("jobs") if isinstance(report.get("jobs"), dict) else {}
     runtime = report.get("runtime") if isinstance(report.get("runtime"), dict) else {}
-    endpoints = report.get("endpoints") if isinstance(report.get("endpoints"), dict) else {}
-    storage = report.get("shared_storage") if isinstance(report.get("shared_storage"), dict) else {}
+    endpoints = (
+        report.get("endpoints") if isinstance(report.get("endpoints"), dict) else {}
+    )
+    storage = (
+        report.get("shared_storage")
+        if isinstance(report.get("shared_storage"), dict)
+        else {}
+    )
 
     overall = str(report.get("overall") or "unknown")
     sections = [
-        Text.assemble("Runtime status: ", (overall, _status_style(overall)), overflow="fold"),
+        Text.assemble(
+            "Runtime status: ", (overall, _status_style(overall)), overflow="fold"
+        ),
         _status_section(
             "Runtime",
             overall,
@@ -200,7 +242,10 @@ def print_status_report(report: dict[str, Any]) -> None:
                 label,
                 str(component.get("status") or "unknown"),
                 [
-                    ("endpoint", endpoints.get(endpoint_key) or component.get("target")),
+                    (
+                        "endpoint",
+                        endpoints.get(endpoint_key) or component.get("target"),
+                    ),
                     ("detail", component.get("error") or component.get("detail")),
                 ],
             )
@@ -254,13 +299,26 @@ def print_doctor_report(report: dict[str, Any]) -> None:
         ("litellm_gateway", "LiteLLM gateway"),
     ):
         component = components.get(name, {})
-        detail = component.get("error") or component.get("detail") or component.get("target") or ""
+        detail = (
+            component.get("error")
+            or component.get("detail")
+            or component.get("target")
+            or ""
+        )
         missing = _format_model_list(component.get("missing_models"))
         if missing:
-            detail = f"{detail}; missing models: {missing}" if detail else f"missing models: {missing}"
+            detail = (
+                f"{detail}; missing models: {missing}"
+                if detail
+                else f"missing models: {missing}"
+            )
         fix = component.get("fix") or component.get("help") or ""
         if not fix and str(component.get("status") or "") == "critical":
-            fix = "mn runtime doctor --repair" if name in {"api", "web_ui"} else "Review runtime configuration and retry."
+            fix = (
+                "mn runtime doctor --repair"
+                if name in {"api", "web_ui"}
+                else "Review runtime configuration and retry."
+            )
         checks.append(
             {
                 "check": label,
@@ -355,8 +413,13 @@ def _shared_storage_component(status_report: dict[str, Any]) -> dict[str, Any]:
             "fix": "Grant the runtime write access on every participating node.",
         }
     if not path.exists():
-        parent = next((candidate for candidate in (path, *path.parents) if candidate.exists()), None)
-        parent_writable = bool(parent and parent.is_dir() and os.access(parent, os.W_OK))
+        parent = next(
+            (candidate for candidate in (path, *path.parents) if candidate.exists()),
+            None,
+        )
+        parent_writable = bool(
+            parent and parent.is_dir() and os.access(parent, os.W_OK)
+        )
         return {
             "name": "shared_storage",
             "status": "warning" if parent_writable else "critical",
@@ -378,12 +441,7 @@ def _shared_storage_component(status_report: dict[str, Any]) -> dict[str, Any]:
 
 
 def overall_status(components: list[dict[str, Any]]) -> str:
-    statuses = {component["status"] for component in components}
-    if "critical" in statuses:
-        return "critical"
-    if "warning" in statuses:
-        return "warning"
-    return "passing"
+    return sdk_overall_status(components)
 
 
 def _docker_model_runner_component(timeout: float) -> dict[str, Any]:
@@ -402,8 +460,15 @@ def _docker_model_runner_component(timeout: float) -> dict[str, Any]:
     else:
         endpoint_error = ""
 
-    status_text = json.dumps(status, sort_keys=True).lower() if isinstance(status, dict) else str(status).lower()
-    running = bool(isinstance(status, dict) and status.get("running")) or "running" in status_text
+    status_text = (
+        json.dumps(status, sort_keys=True).lower()
+        if isinstance(status, dict)
+        else str(status).lower()
+    )
+    running = (
+        bool(isinstance(status, dict) and status.get("running"))
+        or "running" in status_text
+    )
     component_status = "passing" if running and endpoint_ok else "warning"
     detail = "running"
     if not running and isinstance(status, dict) and status.get("error"):
@@ -498,7 +563,11 @@ def _litellm_gateway_component(timeout: float) -> dict[str, Any]:
         "live_models": live,
         "missing_models": missing,
         "detail": detail,
-        **({"error": health.get("error")} if health.get("error") and status == "critical" else {}),
+        **(
+            {"error": health.get("error")}
+            if health.get("error") and status == "critical"
+            else {}
+        ),
     }
 
 
@@ -538,13 +607,21 @@ def _repair_runtime_sidecars(report: dict[str, Any]) -> bool:
 
 def _compose_native_port_env(env: dict[str, str]) -> dict[str, str]:
     adjusted = dict(env)
-    adjusted["MN_GRPC_PORT"] = _port_value(adjusted, "MN_GRPC_PORT", DEFAULT_GRPC_PORT, LEGACY_GRPC_PORT)
-    adjusted["MN_API_PORT"] = _port_value(adjusted, "MN_API_PORT", DEFAULT_API_PORT, LEGACY_API_PORT)
-    adjusted["MN_WEB_UI_PORT"] = _port_value(adjusted, "MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT, LEGACY_WEB_UI_PORT)
+    adjusted["MN_GRPC_PORT"] = _port_value(
+        adjusted, "MN_GRPC_PORT", DEFAULT_GRPC_PORT, LEGACY_GRPC_PORT
+    )
+    adjusted["MN_API_PORT"] = _port_value(
+        adjusted, "MN_API_PORT", DEFAULT_API_PORT, LEGACY_API_PORT
+    )
+    adjusted["MN_WEB_UI_PORT"] = _port_value(
+        adjusted, "MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT, LEGACY_WEB_UI_PORT
+    )
     return adjusted
 
 
-def _port_value(env: dict[str, str], key: str, default: str, legacy_default: str) -> str:
+def _port_value(
+    env: dict[str, str], key: str, default: str, legacy_default: str
+) -> str:
     value = str(env.get(key) or "").strip()
     if not value or value == legacy_default:
         value = default
@@ -560,8 +637,14 @@ def _targets(snapshot: dict[str, Any], persisted: dict[str, Any]) -> dict[str, s
     grpc = merged.get("grpc") if isinstance(merged.get("grpc"), dict) else {}
     web_ui = merged.get("web_ui") if isinstance(merged.get("web_ui"), dict) else {}
     return {
-        "api": str(api.get("base_url") or f"http://{api.get('host', 'localhost')}:{api.get('port', '54001')}/api/v1").rstrip("/"),
-        "core_grpc": str(grpc.get("target") or f"{grpc.get('host', 'localhost')}:{grpc.get('port', '55051')}"),
+        "api": str(
+            api.get("base_url")
+            or f"http://{api.get('host', 'localhost')}:{api.get('port', '54001')}/api/v1"
+        ).rstrip("/"),
+        "core_grpc": str(
+            grpc.get("target")
+            or f"{grpc.get('host', 'localhost')}:{grpc.get('port', '55051')}"
+        ),
         "web_ui": str(web_ui.get("url") or "").rstrip("/"),
     }
 
@@ -606,7 +689,9 @@ def _availability_status(value: dict[str, Any]) -> str:
 
 def _status_section(label: str, status: str, items: list[tuple[str, Any]]) -> Group:
     section: list[Any] = [
-        Text.assemble((label, "bold"), "  ", (status, _status_style(status)), overflow="fold")
+        Text.assemble(
+            (label, "bold"), "  ", (status, _status_style(status)), overflow="fold"
+        )
     ]
     for item_label, value in items:
         value_text = _format_status_value(value)
@@ -616,7 +701,11 @@ def _status_section(label: str, status: str, items: list[tuple[str, Any]]) -> Gr
             section.append(Text(f"  {item_label}:", style="dim"))
             section.append(Padding(Text(value_text, overflow="fold"), (0, 0, 0, 4)))
         else:
-            section.append(Text.assemble(("  " + item_label + ": ", "dim"), value_text, overflow="fold"))
+            section.append(
+                Text.assemble(
+                    ("  " + item_label + ": ", "dim"), value_text, overflow="fold"
+                )
+            )
     return Group(*section)
 
 

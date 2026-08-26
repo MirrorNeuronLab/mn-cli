@@ -22,22 +22,22 @@ def _build_runtime_model_prepare_plan(
         if dependencies is not None and dependencies.load_model_catalog is not None
         else load_model_catalog
     )
-    base_config = (
-        config_loader(bundle_dir, config_overrides=config_overrides) or {}
-    )
+    base_config = config_loader(bundle_dir, config_overrides=config_overrides) or {}
     catalog = catalog_loader()
     profile_cluster_resolver = (
         dependencies.resolve_cluster_model
         if dependencies is not None and dependencies.resolve_cluster_model is not None
         else (
-            lambda *, requirement, entry: resolve_cluster_model_placement(
-                entry,
-                resource_report=dependencies.resource_report,
-            )
-            if dependencies is not None and dependencies.resource_report is not None
-            else _resolve_runtime_cluster_model(
-                requirement=requirement,
-                entry=entry,
+            lambda *, requirement, entry: (
+                resolve_cluster_model_placement(
+                    entry,
+                    resource_report=dependencies.resource_report,
+                )
+                if dependencies is not None and dependencies.resource_report is not None
+                else _resolve_runtime_cluster_model(
+                    requirement=requirement,
+                    entry=entry,
+                )
             )
         )
     )
@@ -127,18 +127,8 @@ def _defer_runtime_models_for_run_or_exit(
     if debug:
         _print_runtime_model_deferred_debug_plan(plan, env_overrides=env_overrides)
     summary = _deferred_runtime_model_summary(bundle_dir, manifest, plan)
-    if env_overrides is not None and summary["models"]:
-        llm = plan["config"].get("llm") if isinstance(plan["config"].get("llm"), dict) else {}
-        provider = str(llm.get("provider") or "docker_model_runner").strip().lower()
-        if provider in {"", "docker_model_runner", "docker-model-runner", "dmr"}:
-            env_overrides["MN_RUNTIME_MODEL_MANAGED"] = "1"
-            env_overrides["MN_LLM_PROVIDER"] = "docker_model_runner"
-            env_overrides["LITELLM_PROVIDER"] = "docker_model_runner"
-            env_overrides["MN_LLM_API_BASE"] = "auto"
-            env_overrides["LITELLM_API_BASE"] = "auto"
-        if _blueprint_requests_default_llm(plan["base_config"]):
-            env_overrides["MN_LLM_MODEL"] = "default"
-            env_overrides["LITELLM_MODEL"] = "default"
+    if env_overrides is not None:
+        env_overrides.update(summary.get("env") or {})
     if not quiet:
         console.print(
             "[cyan]Runtime model installation is deferred until each model is first used by the job.[/cyan]"
@@ -187,8 +177,12 @@ def _prepare_runtime_models_for_run_or_exit(
             model_installed=model_installed,
             install_model_entry=install_model_entry,
             resolve_model_endpoint=_resolve_runtime_model_endpoint,
-            notify_model_install_start=None if quiet else _print_runtime_model_install_start,
-            install_model_with_progress=None if quiet else _install_runtime_model_with_progress,
+            notify_model_install_start=None
+            if quiet
+            else _print_runtime_model_install_start,
+            install_model_with_progress=None
+            if quiet
+            else _install_runtime_model_with_progress,
             resolve_cluster_model=_resolve_runtime_cluster_model,
             install_cluster_model=_install_runtime_cluster_model,
         )
@@ -218,12 +212,20 @@ def _prepare_runtime_models_for_run_or_exit(
     if prepared_json and env_overrides is not None:
         env_overrides["MN_PREPARED_RUNTIME_MODELS_JSON"] = prepared_json
     materialized_config = _config_with_runtime_model_endpoints(config, summary)
-    materialized_config = _config_with_runtime_model_fallbacks(materialized_config, summary)
+    materialized_config = _config_with_runtime_model_fallbacks(
+        materialized_config, summary
+    )
     materialized_config = _config_with_runtime_model_profile(materialized_config)
-    materialized_config = _config_with_runtime_model_endpoints(materialized_config, summary)
-    if (config is not base_config or materialized_config is not config) and env_overrides is not None:
+    materialized_config = _config_with_runtime_model_endpoints(
+        materialized_config, summary
+    )
+    if (
+        config is not base_config or materialized_config is not config
+    ) and env_overrides is not None:
         summary["config_overrides"] = materialized_config
-        env_overrides["MN_BLUEPRINT_CONFIG_JSON"] = json.dumps(materialized_config, sort_keys=True)
+        env_overrides["MN_BLUEPRINT_CONFIG_JSON"] = json.dumps(
+            materialized_config, sort_keys=True
+        )
         env_overrides.update(_runtime_model_fallback_llm_env(materialized_config))
     if env_overrides is not None and _blueprint_requests_default_llm(base_config):
         env_overrides["MN_LLM_MODEL"] = "default"
@@ -240,38 +242,25 @@ def _deferred_runtime_model_summary(
     manifest: dict[str, Any],
     plan: dict[str, Any],
 ) -> dict[str, Any]:
-    models: list[dict[str, Any]] = []
-    for item in plan.get("placement_models") or []:
-        if not isinstance(item, dict):
-            continue
-        entry = item.get("entry") if isinstance(item.get("entry"), dict) else {}
-        logical = str(item.get("logical_model") or item.get("requested_model") or entry.get("id") or "").strip()
-        policy = (
-            ["nemotron-3.5-lightning:latest", "gemma4:e2b"]
-            if logical.lower() == "default"
-            else [str(entry.get("id") or logical)]
-        )
-        models.append(
-            {
-                "id": logical or str(entry.get("id") or "runtime model"),
-                "name": str(item.get("requirement_name") or logical or entry.get("id") or "runtime model"),
-                "model": logical or str(entry.get("model") or ""),
-                "runtime_model": str(entry.get("model") or ""),
-                "provider": "docker_model_runner",
-                "status": "deferred_runtime_install",
-                "install_policy": "on_first_model_call",
-                "selection_policy": policy,
-                "source": str(item.get("source") or "config"),
-            }
-        )
+    loaded_document = load_model_catalog_document()
+    document = ModelCatalog(
+        models=plan["catalog"],
+        defaults=loaded_document.defaults,
+    )
+    deferred = build_deferred_runtime_model_plan(
+        plan.get("requirements") or [],
+        catalog=document,
+    )
     return {
-        "ok": True,
+        "ok": not deferred["errors"],
         "deferred": True,
-        "blueprint_id": _runtime_model_blueprint_id(bundle_dir, manifest, plan["config"]),
-        "models": models,
+        "blueprint_id": _runtime_model_blueprint_id(
+            bundle_dir, manifest, plan["config"]
+        ),
+        "models": deferred["models"],
         "services": [],
-        "errors": [],
-        "env": {},
+        "errors": deferred["errors"],
+        "env": deferred["env"],
         "config_overrides": {},
     }
 
@@ -283,9 +272,7 @@ def _print_runtime_model_deferred_debug_plan(
 ) -> None:
     selected_node = "the best compatible cluster node selected on first use"
     placement_models = [
-        item
-        for item in plan.get("placement_models") or []
-        if isinstance(item, dict)
+        item for item in plan.get("placement_models") or [] if isinstance(item, dict)
     ]
     print_info(
         console,
@@ -302,7 +289,7 @@ def _print_runtime_model_deferred_debug_plan(
         effective_entry = fallback or entry
         logical = str(item.get("logical_model") or "").strip().lower()
         chain = (
-            ["default", "nemotron-3.5-lightning:latest", "gemma4:e2b"]
+            ["default", *runtime_model_selection_policy("default")]
             if logical == "default"
             else _runtime_model_debug_chain(item, effective_entry)
         )
@@ -311,7 +298,9 @@ def _print_runtime_model_deferred_debug_plan(
             "action=defer selection and install until first model call"
         )
         if fallback is not None:
-            preferred = str(entry.get("id") or item.get("requested_model") or "preferred model")
+            preferred = str(
+                entry.get("id") or item.get("requested_model") or "preferred model"
+            )
             detail += f"; fallback={preferred} is not runnable on the selected topology"
         print_info(console, detail.strip())
 
@@ -357,7 +346,9 @@ def _print_runtime_model_deferred_debug_response(summary: dict[str, Any]) -> Non
         print_info(console, "No Docker Model Runner models are required.")
         return
     for item in models:
-        fallback = item.get("fallback") if isinstance(item.get("fallback"), dict) else {}
+        fallback = (
+            item.get("fallback") if isinstance(item.get("fallback"), dict) else {}
+        )
         effective = fallback or item
         model = str(effective.get("model") or item.get("model") or "runtime model")
         node = "selected at first use"
@@ -374,11 +365,14 @@ def _print_runtime_model_prepare_debug_plan(
     *,
     env_overrides: Optional[dict[str, str]] = None,
 ) -> None:
-    selected_node = str(
-        (env_overrides or {}).get("MN_SELECTED_RUNTIME_NODE")
-        or os.environ.get("MN_SELECTED_RUNTIME_NODE")
-        or ""
-    ).strip() or "the selected runtime node"
+    selected_node = (
+        str(
+            (env_overrides or {}).get("MN_SELECTED_RUNTIME_NODE")
+            or os.environ.get("MN_SELECTED_RUNTIME_NODE")
+            or ""
+        ).strip()
+        or "the selected runtime node"
+    )
     placement_models = [
         item for item in plan.get("placement_models") or [] if isinstance(item, dict)
     ]
@@ -400,7 +394,9 @@ def _print_runtime_model_prepare_debug_plan(
             "action=inspect selected-node DMR, install if missing"
         )
         if fallback is not None:
-            preferred = str(entry.get("id") or item.get("requested_model") or "preferred model")
+            preferred = str(
+                entry.get("id") or item.get("requested_model") or "preferred model"
+            )
             detail += f"; fallback={preferred} is not runnable on the selected topology"
         print_info(console, detail.strip())
 
@@ -412,7 +408,9 @@ def _print_runtime_model_prepare_debug_response(summary: dict[str, Any]) -> None
         print_info(console, "No Docker Model Runner prepare requests were sent.")
         return
     for item in models:
-        fallback = item.get("fallback") if isinstance(item.get("fallback"), dict) else {}
+        fallback = (
+            item.get("fallback") if isinstance(item.get("fallback"), dict) else {}
+        )
         effective = fallback or item
         model = str(effective.get("model") or item.get("model") or "runtime model")
         node = _runtime_model_ready_node(item) or "the selected runtime node"
@@ -473,8 +471,7 @@ def _sync_litellm_gateway_for_runtime_models(
     )
     local_node_name = (
         dependencies.local_runtime_node_name
-        if dependencies is not None
-        and dependencies.local_runtime_node_name is not None
+        if dependencies is not None and dependencies.local_runtime_node_name is not None
         else _local_runtime_node_name
     )
     gateway_sync = (
@@ -540,7 +537,10 @@ def _local_runtime_model_endpoints(
         prepared_endpoint = (
             item.get("endpoint") if isinstance(item.get("endpoint"), dict) else {}
         )
-        if prepared_endpoint and str(prepared_endpoint.get("source") or "") != "local-dmr":
+        if (
+            prepared_endpoint
+            and str(prepared_endpoint.get("source") or "") != "local-dmr"
+        ):
             continue
         model_ref = str(item.get("id") or item.get("model") or "").strip()
         try:

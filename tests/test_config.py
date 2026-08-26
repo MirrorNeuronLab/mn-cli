@@ -181,6 +181,21 @@ def test_cli_config_prefers_direct_env_admin_token(monkeypatch, tmp_path):
     assert config.grpc_admin_token == "admin-from-env"
 
 
+def test_cli_config_preserves_explicit_blank_token_override(tmp_path):
+    state_dir = tmp_path / ".mn"
+    state_dir.mkdir()
+    (state_dir / "grpc_auth.token").write_text(
+        "auth-from-file\n", encoding="utf-8"
+    )
+
+    config = CliConfig.from_env(
+        env={"HOME": str(tmp_path), "MN_GRPC_AUTH_TOKEN": ""},
+        root=tmp_path,
+    )
+
+    assert config.grpc_auth_token == ""
+
+
 def test_config_loader_is_reusable_for_api_code(tmp_path):
     config = load_config(env={"MN_ENV": "production", "MN_API_PORT": "8080"}, root=tmp_path, app_name="mn-api")
 

@@ -1156,7 +1156,7 @@ def test_record_runtime_model_install_advertises_model_without_compose_override(
     assert not models_override.exists()
 
 
-def test_record_non_default_runtime_model_keeps_default_llm_model_runner_env():
+def test_record_preferred_runtime_model_updates_default_llm_model_runner_env():
     server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
     server_cmds.RUNTIME_COMPOSE_ENV.write_text(
         "COMPOSE_PROJECT_NAME=mirror-neuron\n"
@@ -1174,7 +1174,7 @@ def test_record_non_default_runtime_model_keeps_default_llm_model_runner_env():
 
     env = server_cmds._read_env_file(server_cmds.RUNTIME_COMPOSE_ENV)
     assert env["MN_NODE_RUNTIME_MODELS"] == "nemotron-3.5-lightning:latest"
-    assert env["MN_LLM_MODEL_RUNNER_MODEL"] == "gemma4:e2b"
+    assert env["MN_LLM_MODEL_RUNNER_MODEL"] == "nemotron-3.5-lightning:latest"
 
 
 def test_runtime_base_env_removes_stale_models_override():

@@ -9,11 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from mn_sdk.runtime_config import resolve_mn_home
-from mn_sdk.payload_assets import stage_payload_assets
+from mn_sdk.payload_assets import DEFAULT_INLINE_PAYLOAD_MAX_BYTES, stage_payload_assets
 
 from mn_cli.runtime_state import read_env_file
 
-DEFAULT_INLINE_PAYLOAD_MAX_BYTES = 1_048_576
 DEFAULT_ARTIFACT_PORT = "55660"
 STREAM_COPY_CHUNK_BYTES = 1024 * 1024
 
@@ -38,11 +37,11 @@ def stage_bundle_payload_assets(
     )
 
 
-def blob_store_path(
-    sha256: str, *, runtime_env: dict[str, str] | None = None
-) -> Path:
+def blob_store_path(sha256: str, *, runtime_env: dict[str, str] | None = None) -> Path:
     value = str(sha256 or "").strip().lower()
-    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+    if len(value) != 64 or any(
+        character not in "0123456789abcdef" for character in value
+    ):
         raise ValueError("blob sha256 must contain exactly 64 hexadecimal characters")
     env = _runtime_env_file_values()
     env.update(os.environ)
@@ -62,9 +61,7 @@ def install_blob_file(
     tmp = target.with_name(f"{target.name}.tmp-{os.getpid()}")
     try:
         with source.open("rb") as read_handle, tmp.open("wb") as write_handle:
-            for chunk in iter(
-                lambda: read_handle.read(STREAM_COPY_CHUNK_BYTES), b""
-            ):
+            for chunk in iter(lambda: read_handle.read(STREAM_COPY_CHUNK_BYTES), b""):
                 digest.update(chunk)
                 write_handle.write(chunk)
         if digest.hexdigest() != sha256.lower():
@@ -183,13 +180,25 @@ def _store_payload_file(
 
 
 def _blob_location(sha256: str, env: dict[str, str]) -> dict[str, str] | None:
-    base_url = str(env.get("MN_ARTIFACT_ADVERTISE_URL") or os.getenv("MN_ARTIFACT_ADVERTISE_URL") or "").strip()
+    base_url = str(
+        env.get("MN_ARTIFACT_ADVERTISE_URL")
+        or os.getenv("MN_ARTIFACT_ADVERTISE_URL")
+        or ""
+    ).strip()
     if not base_url:
         host = (
-            str(env.get("MN_NETWORK_ADVERTISE_HOST") or os.getenv("MN_NETWORK_ADVERTISE_HOST") or "").strip()
+            str(
+                env.get("MN_NETWORK_ADVERTISE_HOST")
+                or os.getenv("MN_NETWORK_ADVERTISE_HOST")
+                or ""
+            ).strip()
             or _detect_lan_ip()
         )
-        port = str(env.get("MN_ARTIFACT_PORT") or os.getenv("MN_ARTIFACT_PORT") or DEFAULT_ARTIFACT_PORT).strip()
+        port = str(
+            env.get("MN_ARTIFACT_PORT")
+            or os.getenv("MN_ARTIFACT_PORT")
+            or DEFAULT_ARTIFACT_PORT
+        ).strip()
         if not host or not port:
             return None
         base_url = f"http://{host}:{port}"
@@ -218,11 +227,15 @@ def _host_blob_store_root(env: dict[str, str]) -> Path:
 
 def _runtime_env_file_values() -> dict[str, str]:
     env_file = resolve_mn_home() / "docker-compose.env"
-    return {key.strip(): value.strip() for key, value in read_env_file(env_file).items()}
+    return {
+        key.strip(): value.strip() for key, value in read_env_file(env_file).items()
+    }
 
 
 def _inline_payload_max_bytes() -> int:
-    value = os.getenv("MN_INLINE_PAYLOAD_MAX_BYTES", str(DEFAULT_INLINE_PAYLOAD_MAX_BYTES))
+    value = os.getenv(
+        "MN_INLINE_PAYLOAD_MAX_BYTES", str(DEFAULT_INLINE_PAYLOAD_MAX_BYTES)
+    )
     try:
         return int(value)
     except (TypeError, ValueError):
