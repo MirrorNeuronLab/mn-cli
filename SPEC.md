@@ -106,6 +106,11 @@ those contracts.
   a compact status and summary.
 - Errors use the same JSON envelope with `ok: false` and sanitized
   `code/message/hint/details`. Internal diagnostics appear only with `--debug`.
+- Error messages name the command resource and action when known. Missing
+  resources point to the corresponding list command, and a timed-out mutation
+  states that its outcome is uncertain so operators check current state before
+  retrying. Transport failures are rendered without raw gRPC details, while
+  Core remains responsible for semantic status codes.
 - Exit codes are `0` success, `1` operational/critical diagnostics, `2`
   usage/validation/not-found/confirmation, `13` authorization, and `130`
   interruption except an intentional watcher detach.
@@ -137,6 +142,9 @@ those contracts.
   cancels and clears an active run before detaching it. A federated archive
   accepted while its owner is unavailable is reported as `archive_pending`,
   not as a completed archive, and `mn job list` reflects that pending state.
+- Permanent job and run deletion use the SDK's bounded extended cleanup
+  deadline so the configured 10-second general RPC deadline does not interrupt
+  owner-node forwarding or resource cleanup.
 - `--yes` answers confirmation only, `--force` overrides one documented
   precondition but never supplies consent, and `--dry-run` never mutates.
   Destructive JSON/non-interactive commands require `--yes`.
@@ -268,8 +276,8 @@ render additive `runtime_model_install_progress` events without changing the
 existing lifecycle event names. The interactive monitor has a dedicated Runtime
 model preparation section showing model, source-to-final-tag mapping, node,
 phase, elapsed time, last-update age, and DMR bytes when available. Plain output
-prints the same facts as clear lines. After 60 seconds without a DMR update, the
-monitor shows a yellow “still preparing” warning but fails only when DMR or the
+prints the same facts as clear lines. After 60 seconds without DMR byte progress,
+the monitor shows a yellow “still preparing” warning but fails only when DMR or the
 prepare RPC reports an actual error.
 
 `default` is a logical LiteLLM model group. When a medium route is available it

@@ -101,7 +101,7 @@ For a deferred first-use DMR pull, the run monitor includes a Runtime model
 preparation section. It shows the selected model and node, source artifact →
 final DMR tag, phase, elapsed time, and exact bytes when Docker Model Runner
 reports them. If DMR does not report bytes, the monitor says progress is
-unavailable; after 60 seconds without a DMR update it warns that preparation is
+unavailable; after 60 seconds without DMR byte progress it warns that preparation is
 still in progress without treating that wait as a job failure. `MN_CLI_OUTPUT=plain`
 prints the same facts as stable lines.
 
@@ -204,6 +204,13 @@ before removing the definition and shared data. Run deletion does the same for
 an active run before detaching it. If an archive must wait for an
 unavailable owner runtime, the command and `mn job list` report
 `archive_pending` until federation replay settles it.
+
+Job and run deletion allow up to five minutes for Core cleanup (with a small
+client-side forwarding margin), including when the definition belongs to a
+federated owner node. If any mutating command still times out, the CLI warns
+that the owner may still be processing it; inspect the current job or run state
+before retrying. Missing identifiers are reported directly, with the relevant
+list command instead of a generic execution failure.
 
 Execution status and controls use `mn run ...`; attached blueprint progress
 uses the canonical workflow-progress stream and the same public-step contract as the
