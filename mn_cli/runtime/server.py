@@ -6159,8 +6159,12 @@ def _start_server(
             print_warning(console, f"REST API runtime config changed; restarting API ({mismatch_details}).")
         _start_api_if_installed(
             env,
-            restart_running=bool(api_mismatches),
-            restart_reason="runtime config changed",
+            restart_running=bool(api_mismatches or force_runtime_recreate),
+            restart_reason=(
+                "runtime config changed"
+                if api_mismatches
+                else "Core runtime was recreated"
+            ),
         )
         _reconcile_syncthing_federated_peers(
             env,

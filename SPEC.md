@@ -233,7 +233,8 @@ native runtime preparation boundary.
 Runtime startup makes the host-native SDK gRPC service responsive before it
 starts or recreates Core. Repeated `mn runtime start` calls reuse a responsive
 native service so definition-scoped response engines are not discarded or
-raced during Core recovery.
+raced during Core recovery. Recreating Core also restarts the local API so its
+gRPC credentials and client identity cannot remain stale.
 Prepared HostLocal Python environments retain separate host and Core-visible
 paths; submissions use the configured Core cache mount so console-script
 entrypoints resolve inside a containerized local runtime.

@@ -2996,7 +2996,7 @@ def test_start_server_existing_api_recreates_compose_core_with_stale_grpc_tokens
             "MN_GRPC_ADMIN_TOKEN": "stale-admin-token",
         }.get(key),
     )
-    mocker.patch('mn_cli.server_cmds._start_api_if_installed')
+    start_api = mocker.patch('mn_cli.server_cmds._start_api_if_installed')
     mocker.patch('mn_cli.server_cmds._start_web_ui_if_installed', return_value=False)
     mocker.patch('mn_cli.server_cmds._write_runtime_endpoints_file', return_value={"api": {}})
     mocker.patch('mn_cli.server_cmds._print_service_endpoints')
@@ -3023,6 +3023,11 @@ def test_start_server_existing_api_recreates_compose_core_with_stale_grpc_tokens
     compose_text = compose_env.read_text(encoding="utf-8")
     assert "MN_GRPC_AUTH_TOKEN=mirror_neuron_password" in compose_text
     assert "MN_GRPC_ADMIN_TOKEN=mirror_neuron_password_admin" in compose_text
+    start_api.assert_called_once()
+    assert start_api.call_args.kwargs == {
+        "restart_running": True,
+        "restart_reason": "Core runtime was recreated",
+    }
 
 def test_start_server_existing_api_keeps_compose_core_when_grpc_tokens_current(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")

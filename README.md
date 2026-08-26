@@ -35,6 +35,8 @@ it must be rotated.
 Runtime startup readies the host-native SDK service before Core. Calling
 `mn runtime start` again reuses a healthy native service, preserving warm
 definition-scoped response engines while the remaining runtime is reconciled.
+If reconciliation recreates Core, the CLI also restarts the local API so its
+gRPC client identity matches the recreated runtime.
 
 `mn node list` shows each node's hostname, health, and role (connection mode
 plus job-ownership eligibility) without artifact-only fields such as kind,
