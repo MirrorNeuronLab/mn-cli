@@ -140,7 +140,7 @@ def test_create_prepares_source_bundle_before_stable_submission(monkeypatch, tmp
     monkeypatch.setattr(
         job_definition_cmds,
         "read_bundle",
-        lambda _bundle: ('{"apiVersion":"mn.workflow.source/v2"}', {"source.py": b"raw"}),
+        lambda _bundle: ('{"apiVersion":"mn.workflow.source/unsupported"}', {"source.py": b"raw"}),
     )
     monkeypatch.setattr(
         job_definition_cmds,
