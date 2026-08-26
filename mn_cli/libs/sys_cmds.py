@@ -11,6 +11,7 @@ from mn_cli.banner import format_banner
 from mn_cli.shared import console, logger
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.ui import print_error, print_info, print_success_confirmation, require_confirmation
+from mn_cli.output import record_result
 from mn_cli.terminal import use_progress
 from mn_cli.server_cmds import (
     _start_server,
@@ -152,6 +153,48 @@ def add_node(
         docker_network_mode=docker_network_mode,
         docker_network_name=docker_network_name,
         action="Node add",
+    )
+
+
+def remove_node(
+    node_name: str,
+    yes: bool = typer.Option(False, "--yes", "-y", help="Confirm peer removal."),
+):
+    """Remove one reciprocal federated peer from this runtime."""
+
+    yes = yes is True
+    _confirm_node_removal(node_name, yes=yes)
+    try:
+        from mn_cli.shared import client
+
+        status = client.remove_federated_peer(node_name)
+        result = {"node_name": node_name, "status": status}
+        print_success_confirmation(
+            console,
+            "Node removal",
+            status=status,
+            details={"Node": node_name},
+            next_steps="mn node list",
+        )
+        record_result(result)
+    except Exception as exc:
+        handle_cli_error(
+            exc,
+            console,
+            "node remove",
+            command_context={"node_name": node_name},
+        )
+
+
+def _confirm_node_removal(node_name: str, *, yes: bool) -> None:
+    require_confirmation(
+        console,
+        action="Node removal",
+        prompt=(
+            f"Remove federated peer {node_name}? Existing jobs stay on their "
+            "owner node until the peer is joined again."
+        ),
+        yes=yes,
     )
 
 def stop():

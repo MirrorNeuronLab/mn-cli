@@ -61,6 +61,7 @@ Examples:
   mn node list
   mn node drain <node-name> --reason maintenance --wait
   mn node add <host> --token <token>
+  mn node remove <node-name> --yes
 """
 RUNTIME_HELP = """Start, stop, update, and diagnose the local MirrorNeuron runtime.
 
@@ -199,6 +200,7 @@ run_app.add_typer(human_app, name="human")
 node_app.command(name="list")(job_cmds.nodes)
 node_app.command(name="show")(job_cmds.show_node)
 node_app.command(name="add")(sys_cmds.add_node)
+node_app.command(name="remove")(sys_cmds.remove_node)
 node_app.command(name="reconcile")(job_cmds.reconcile_node)
 node_app.command(name="drain")(job_cmds.drain_node)
 node_app.command(name="undrain")(job_cmds.undrain_node)

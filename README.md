@@ -43,6 +43,15 @@ plus job-ownership eligibility) without artifact-only fields such as kind,
 owner, or update time. Use `mn node show <node>` for the complete endpoint and
 capability record.
 
+Remove a reciprocal federation registration with explicit confirmation:
+
+```bash
+mn node remove mirror_neuron@spark --yes
+```
+
+This detaches the peer from the current Core only; it does not delete the
+peer's owner-local jobs or data.
+
 Static HTML exports use the optional `mirrorneuron-web-ui-skill` package. With
 the MirrorNeuron GAR package index configured, install it with:
 

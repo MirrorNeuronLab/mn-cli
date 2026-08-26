@@ -1,7 +1,60 @@
+import importlib
 from unittest.mock import call
 
 import mn_cli.libs.sys_cmds as sys_cmds
 import mn_cli.server_cmds as server_cmds
+
+
+def test_remove_node_confirms_and_uses_the_sdk_federation_control(monkeypatch):
+    calls = []
+    rendered = []
+    recorded = []
+
+    class Client:
+        def remove_federated_peer(self, node_name):
+            calls.append(node_name)
+            return "removed"
+
+    # Some CLI import-isolation tests reload ``mn_cli.shared``. Resolve the
+    # currently registered module rather than traversing a possibly stale
+    # package attribute, so this test controls the same client the command
+    # imports at call time.
+    shared = importlib.import_module("mn_cli.shared")
+    monkeypatch.setattr(shared, "client", Client())
+    monkeypatch.setattr(
+        sys_cmds,
+        "require_confirmation",
+        lambda _console, **kwargs: rendered.append(kwargs),
+    )
+    monkeypatch.setattr(
+        sys_cmds,
+        "print_success_confirmation",
+        lambda _console, action, **kwargs: rendered.append((action, kwargs)),
+    )
+    monkeypatch.setattr(sys_cmds, "record_result", recorded.append)
+
+    sys_cmds.remove_node("mirror_neuron@spark", yes=True)
+
+    assert calls == ["mirror_neuron@spark"]
+    assert rendered == [
+        {
+            "action": "Node removal",
+            "prompt": (
+                "Remove federated peer mirror_neuron@spark? Existing jobs stay on their "
+                "owner node until the peer is joined again."
+            ),
+            "yes": True,
+        },
+        (
+            "Node removal",
+            {
+                "status": "removed",
+                "details": {"Node": "mirror_neuron@spark"},
+                "next_steps": "mn node list",
+            },
+        ),
+    ]
+    assert recorded == [{"node_name": "mirror_neuron@spark", "status": "removed"}]
 
 
 def test_stop_clears_join_metadata_before_teardown(monkeypatch, mocker, tmp_path):

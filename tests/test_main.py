@@ -161,6 +161,7 @@ def test_job_and_run_commands_have_distinct_resource_semantics():
     assert list(command.commands["run"].commands["human"].commands) == [
         "list", "respond", "ack",
     ]
+    assert "remove" in command.commands["node"].commands
 
 
 def test_runtime_help_includes_sidecar_restart_command():

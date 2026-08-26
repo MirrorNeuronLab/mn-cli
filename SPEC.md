@@ -51,6 +51,11 @@ The advertised local identity is persisted in `$MN_HOME/docker-compose.env` and
 is automatically used by Docker Compose blueprint submission; an explicitly
 exported identity still takes precedence.
 
+`mn node remove NODE --yes` removes that reciprocal federated-peer registration
+from the current Core. It requires the same deliberate confirmation as other
+cluster-membership mutations, does not expose join credentials, and leaves
+owner-local jobs intact until the peer is joined again.
+
 `mn blueprint run --web-ui-host HOST --web-ui-port PORT` projects per-run
 listener overrides into `web_ui.service.host` and `web_ui.service.port`.
 Blueprint manifest/config bindings remain responsible for mapping those
