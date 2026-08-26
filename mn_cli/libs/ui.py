@@ -620,7 +620,7 @@ def _runtime_model_preparation_panel(preparations: list[dict[str, Any]]) -> Tabl
         if update_age is not None:
             details.append(f"last update {_runtime_model_elapsed(update_age)} ago")
         if preparation.get("stalled"):
-            details.append("still preparing — DMR has not supplied an update for 60s")
+            details.append("still preparing — DMR has not supplied byte progress for 60s")
         table.add_row(
             f"[bold]{model}[/bold]",
             node,

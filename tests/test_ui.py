@@ -174,3 +174,4 @@ def test_workflow_monitor_renders_runtime_model_prepare_progress_and_stall_warni
     assert "12.0 GiB / 24.0 GiB (50%)" in rendered
     assert "source_model" not in rendered
     assert "still preparing" in rendered
+    assert "byte progress for 60s" in rendered
