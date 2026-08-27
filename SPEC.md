@@ -240,9 +240,12 @@ diagnostics expose the coordination-store identity and writable-primary state;
 nodes using divergent Redis datasets or a read-only replica are rejected
 before membership or launch.
 
-Context-memory preparation uses the local Compose lifecycle when placement
+Context-memory preparation uses the local runtime lifecycle when placement
 selects the submitting node; only genuinely remote selected nodes use the
-native runtime preparation boundary.
+native runtime preparation boundary. `mn runtime ensure-context-engine` is the
+explicit package-preparation command: it pulls the configured released GAR
+image, while `mn blueprint run` only starts an image already prepared by that
+command or an installer and never builds Membrane source.
 Runtime startup makes the host-native SDK gRPC service responsive before it
 starts or recreates Core. Repeated `mn runtime start` calls reuse a responsive
 native service so definition-scoped response engines are not discarded or

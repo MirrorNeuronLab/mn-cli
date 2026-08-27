@@ -1214,9 +1214,6 @@ def test_record_preferred_runtime_model_updates_default_llm_model_runner_env():
 
 
 def test_ensure_context_engine_runtime_persists_profile_and_starts_compose(mocker, tmp_path):
-    membrane_dir = tmp_path / "Membrane"
-    membrane_dir.mkdir()
-    (membrane_dir / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
     server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
     server_cmds.RUNTIME_COMPOSE_ENV.write_text(
         "COMPOSE_PROJECT_NAME=mirror-neuron\n"
@@ -1224,9 +1221,9 @@ def test_ensure_context_engine_runtime_persists_profile_and_starts_compose(mocke
         encoding="utf-8",
     )
     server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
-    mocker.patch("mn_cli.server_cmds._ensure_context_engine_source", return_value=membrane_dir)
     mocker.patch("mn_cli.server_cmds._ensure_docker_model_runner")
     inspect_model = mocker.patch("mn_cli.server_cmds._docker_model_inspect_ok", return_value=False)
+    mocker.patch("mn_cli.server_cmds._docker_image_inspect_ok", return_value=True)
     mocker.patch("mn_cli.server_cmds._remove_non_mirror_neuron_container")
     mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
     run = mocker.patch(
@@ -1238,7 +1235,6 @@ def test_ensure_context_engine_runtime_persists_profile_and_starts_compose(mocke
 
     env = server_cmds._read_env_file(server_cmds.RUNTIME_COMPOSE_ENV)
     assert env["COMPOSE_PROFILES"] == "openshell,context"
-    assert env["MEMBRANE_DIR"] == str(membrane_dir)
     assert env["ENGINE_IMAGE"] == server_cmds.LOCAL_MEMBRANE_ENGINE_IMAGE
     assert env["MN_MEMBRANE_ENGINE_IMAGE"] == server_cmds.LOCAL_MEMBRANE_ENGINE_IMAGE
     assert env["MN_CONTEXT_MODEL_RUNNER_MODEL"] == server_cmds.DEFAULT_CONTEXT_MODEL_RUNNER_MODEL
@@ -1258,8 +1254,9 @@ def test_ensure_context_engine_runtime_persists_profile_and_starts_compose(mocke
         "--detach",
         server_cmds.DEFAULT_CONTEXT_MODEL_RUNNER_MODEL,
     ]
-    assert run.call_args_list[2].args[0] == runtime_compose_cmd("build", "membrane-context-engine")
-    assert run.call_args_list[3].args[0] == runtime_compose_cmd("up", "-d", "membrane-context-engine")
+    assert run.call_args_list[2].args[0] == runtime_compose_cmd(
+        "up", "-d", "--no-build", "membrane-context-engine"
+    )
 
 def test_ensure_context_engine_runtime_uses_release_image_without_source_clone(mocker, monkeypatch):
     monkeypatch.setenv("PATH", "/usr/local/bin:/usr/bin:/bin")
@@ -1277,9 +1274,12 @@ def test_ensure_context_engine_runtime_uses_release_image_without_source_clone(m
     inspect_model = mocker.patch("mn_cli.server_cmds._docker_model_inspect_ok", return_value=True)
     mocker.patch("mn_cli.server_cmds._remove_non_mirror_neuron_container")
     mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
+    image_inspect = mocker.patch(
+        "mn_cli.server_cmds._docker_image_inspect_ok", side_effect=[False, True]
+    )
     run = mocker.patch("mn_cli.server_cmds.subprocess.run")
 
-    result = server_cmds.ensure_context_engine_runtime()
+    result = server_cmds.ensure_context_engine_runtime(prepare_image=True)
 
     env = server_cmds._read_env_file(server_cmds.RUNTIME_COMPOSE_ENV)
     expected_image = (
@@ -1299,6 +1299,27 @@ def test_ensure_context_engine_runtime_uses_release_image_without_source_clone(m
     assert run.call_args_list[1].args[0] == runtime_compose_cmd("up", "-d", "--no-build", "membrane-context-engine")
     assert run.call_args_list[0].kwargs["env"]["DOCKER_CONFIG"] != str(Path.home() / ".docker")
     assert run.call_args_list[0].kwargs["env"]["PATH"] == "/usr/local/bin:/usr/bin:/bin"
+    assert image_inspect.call_count == 2
+
+def test_ensure_context_engine_runtime_requires_a_prepared_package(mocker):
+    server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
+    server_cmds.RUNTIME_COMPOSE_ENV.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "ENGINE_IMAGE=registry.example/membrane:v1\n",
+        encoding="utf-8",
+    )
+    server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
+    mocker.patch("mn_cli.server_cmds._ensure_docker_model_runner")
+    mocker.patch("mn_cli.server_cmds._docker_model_inspect_ok", return_value=True)
+    mocker.patch("mn_cli.server_cmds._docker_image_inspect_ok", return_value=False)
+    mocker.patch("mn_cli.server_cmds._remove_non_mirror_neuron_container")
+    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
+    run = mocker.patch("mn_cli.server_cmds.subprocess.run")
+
+    with pytest.raises(RuntimeError, match="is not prepared locally"):
+        server_cmds.ensure_context_engine_runtime()
+
+    run.assert_not_called()
 
 def test_public_gar_docker_env_strips_gcloud_helpers(monkeypatch, tmp_path):
     docker_config = tmp_path / "docker-config"

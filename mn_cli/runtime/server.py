@@ -4227,7 +4227,15 @@ def _merge_model_services_json(existing: object, services: list[dict[str, Any]])
     return json.dumps({"services": deduped}, sort_keys=True, separators=(",", ":"))
 
 
-def ensure_context_engine_runtime(*, force: bool = False) -> dict[str, str]:
+def ensure_context_engine_runtime(
+    *, force: bool = False, prepare_image: bool = False
+) -> dict[str, str]:
+    """Start the already-prepared context-engine package without building it.
+
+    Blueprint execution calls this with ``prepare_image=False`` so a workflow
+    cannot unexpectedly compile the Rust engine.  The explicit runtime command
+    opts into preparing a released image before starting the service.
+    """
     if not runtime_compose_available():
         raise RuntimeError(
             "MirrorNeuron runtime Compose files were not found. Run the installer or mn runtime start first."
@@ -4239,26 +4247,19 @@ def ensure_context_engine_runtime(*, force: bool = False) -> dict[str, str]:
         env.get("MN_CONTEXT_MODEL_RUNNER_MODEL") or DEFAULT_CONTEXT_MODEL_RUNNER_MODEL
     )
     engine_image = _context_engine_release_image(env)
-    use_engine_image = _context_engine_image_mode_enabled(env, engine_image)
+    if not engine_image:
+        engine_image = LOCAL_MEMBRANE_ENGINE_IMAGE
     updates = {
         "COMPOSE_PROFILES": profiles,
         "MN_CONTEXT_MODEL_RUNNER_MODEL": model,
+        "ENGINE_IMAGE": engine_image,
+        "MN_MEMBRANE_ENGINE_IMAGE": engine_image,
     }
-    source_dir: Path | None = None
-    if use_engine_image:
-        updates["ENGINE_IMAGE"] = engine_image
-        updates["MN_MEMBRANE_ENGINE_IMAGE"] = engine_image
-        _remove_env_file_keys(RUNTIME_COMPOSE_ENV, {"MEMBRANE_DIR"})
-        env.pop("MEMBRANE_DIR", None)
-    else:
-        source_dir = _ensure_context_engine_source(env)
-        updates.update(
-            {
-                "MEMBRANE_DIR": str(source_dir),
-                "ENGINE_IMAGE": LOCAL_MEMBRANE_ENGINE_IMAGE,
-                "MN_MEMBRANE_ENGINE_IMAGE": LOCAL_MEMBRANE_ENGINE_IMAGE,
-            }
-        )
+    # MEMBRANE_DIR belonged to the legacy in-run Compose build path.  The
+    # engine is now an installed image in every mode, so it is not runtime
+    # configuration any more.
+    _remove_env_file_keys(RUNTIME_COMPOSE_ENV, {"MEMBRANE_DIR"})
+    env.pop("MEMBRANE_DIR", None)
     _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
     env.update(updates)
 
@@ -4268,40 +4269,17 @@ def ensure_context_engine_runtime(*, force: bool = False) -> dict[str, str]:
     model_status = _install_context_engine_model(model)
 
     already_running = _docker_container_running(CONTEXT_ENGINE_CONTAINER)
+    image_status = "already_prepared" if already_running and not force else "unknown"
     if force or not already_running:
-        compose_env = env
-        anonymous_docker_config: Path | None = None
-        if use_engine_image:
-            compose_env, anonymous_docker_config = _anonymous_public_gar_docker_env(
-                env, engine_image
-            )
-        compose_process_env = _compose_subprocess_env(compose_env)
-        try:
-            if use_engine_image:
-                subprocess.run(
-                    runtime_compose_cmd("pull", CONTEXT_ENGINE_SERVICE),
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    env=compose_process_env,
-                )
-                up_args = ("up", "-d", "--no-build", CONTEXT_ENGINE_SERVICE)
-            else:
-                subprocess.run(
-                    runtime_compose_cmd("build", CONTEXT_ENGINE_SERVICE),
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    env=compose_process_env,
-                )
-                up_args = ("up", "-d", CONTEXT_ENGINE_SERVICE)
-            subprocess.run(
-                runtime_compose_cmd(*up_args),
-                check=True,
-                stdout=subprocess.DEVNULL,
-                env=compose_process_env,
-            )
-        finally:
-            if anonymous_docker_config is not None:
-                shutil.rmtree(anonymous_docker_config, ignore_errors=True)
+        image_status = _ensure_context_engine_image_available(
+            env, engine_image, prepare_image=prepare_image
+        )
+        subprocess.run(
+            runtime_compose_cmd("up", "-d", "--no-build", CONTEXT_ENGINE_SERVICE),
+            check=True,
+            stdout=subprocess.DEVNULL,
+            env=_compose_subprocess_env(env),
+        )
         status = "restarted" if already_running and force else "started"
     else:
         status = "already_running"
@@ -4312,13 +4290,60 @@ def ensure_context_engine_runtime(*, force: bool = False) -> dict[str, str]:
         "container": CONTEXT_ENGINE_CONTAINER,
         "model": model,
         "model_status": model_status,
+        "engine_image_status": image_status,
         "compose_profiles": profiles,
-        **(
-            {"engine_image": engine_image}
-            if use_engine_image
-            else {"membrane_dir": str(source_dir)}
-        ),
+        "engine_image": engine_image,
     }
+
+
+def _docker_image_inspect_ok(image: str) -> bool:
+    return bool(image) and _docker_command_ok(["docker", "image", "inspect", image])
+
+
+def _context_engine_source_mode(env: dict[str, str]) -> bool:
+    mode = str(
+        os.getenv("MN_MEMBRANE_SOURCE_MODE")
+        or env.get("MN_MEMBRANE_SOURCE_MODE")
+        or ""
+    ).strip().lower()
+    return mode in {"source", "git", "checkout", "local"}
+
+
+def _ensure_context_engine_image_available(
+    env: dict[str, str], image: str, *, prepare_image: bool
+) -> str:
+    if _docker_image_inspect_ok(image):
+        return "already_prepared"
+    if not prepare_image:
+        raise RuntimeError(
+            f"Context engine package image {image} is not prepared locally. "
+            "Prepare it during installation, then run the blueprint again."
+        )
+    if _context_engine_source_mode(env) or image.startswith(
+        "mirror-neuron-memory-engine:"
+    ):
+        raise RuntimeError(
+            f"Local context engine package image {image} is not prepared. "
+            "Run mn-deploy install --mode local --context-engine to build the local package before starting context memory."
+        )
+
+    compose_env, anonymous_docker_config = _anonymous_public_gar_docker_env(env, image)
+    try:
+        subprocess.run(
+            runtime_compose_cmd("pull", CONTEXT_ENGINE_SERVICE),
+            check=True,
+            stdout=subprocess.DEVNULL,
+            env=_compose_subprocess_env(compose_env),
+        )
+    finally:
+        if anonymous_docker_config is not None:
+            shutil.rmtree(anonymous_docker_config, ignore_errors=True)
+    if not _docker_image_inspect_ok(image):
+        raise RuntimeError(
+            f"Context engine package image {image} was not available after preparation. "
+            "Check the configured image and run the installer again."
+        )
+    return "pulled"
 
 
 def _compose_subprocess_env(env: dict[str, str]) -> dict[str, str]:

@@ -188,8 +188,8 @@ DEFAULT_BLUEPRINT_WEB_UI_PORT_START = 61000
 DEFAULT_BLUEPRINT_WEB_UI_PORT_END = 61049
 DETACHED_AFTER_INTERRUPT_MESSAGE = "Detached from workflow UI. Job is still running."
 CONTEXT_ENGINE_EXPECTATION = (
-    "This blueprint uses context memory. First launch may download the context model "
-    "and start the Membrane context engine; keep Docker running and be patient."
+    "This blueprint uses context memory. It starts the already-prepared Membrane context-engine package; "
+    "the context model may still download on first use."
 )
 FALSE_VALUES = {"0", "false", "no", "off"}
 _HELPER_COMPAT = (

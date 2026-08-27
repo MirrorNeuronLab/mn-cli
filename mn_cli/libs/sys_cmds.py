@@ -45,8 +45,8 @@ from mn_cli.server_cmds import (
 )
 
 CONTEXT_ENGINE_EXPECTATION = (
-    "This runtime service powers blueprint context memory. First launch may download the context model "
-    "and start the Membrane context engine; keep Docker running and be patient."
+    "This runtime service powers blueprint context memory. It prepares the context-engine package "
+    "and Docker Model Runner model before starting the service."
 )
 
 def start(
@@ -328,9 +328,9 @@ def restart_sidecars(
     )
 
 def ensure_context_engine(
-    force: bool = typer.Option(False, "--force", help="Rebuild and recreate the context engine even if it is running."),
+    force: bool = typer.Option(False, "--force", help="Recreate the context engine even if it is running."),
 ):
-    """Ensure the Membrane context engine Compose service is installed and running"""
+    """Prepare and start the packaged Membrane context engine service"""
     try:
         console.print(f"[cyan]{CONTEXT_ENGINE_EXPECTATION}[/cyan]")
         with Progress(
@@ -344,7 +344,7 @@ def ensure_context_engine(
                 "[cyan]Preparing context memory: checking Membrane and Docker Model Runner...",
                 total=None,
             )
-            summary = ensure_context_engine_runtime(force=force)
+            summary = ensure_context_engine_runtime(force=force, prepare_image=True)
             progress.update(task, description="[green]Context memory is ready.")
         details = [
             ("Service", summary["service"]),
