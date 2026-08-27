@@ -1453,7 +1453,7 @@ def test_runtime_model_preflight_ignores_skill_owned_rag_model(mocker, tmp_path)
         },
         "knowledge_rag": {
             "embedding_provider": "docker_model_runner",
-            "embedding_model": "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M",
+            "embedding_model": "huggingface.co/zenmagnets/Nemotron-3-Embed-1B-Q4_K_M-GGUF:Q4_K_M",
         },
     }
     mocker.patch("mn_cli.libs.run_cmds.load_blueprint_config", return_value=config)
