@@ -153,6 +153,7 @@ DEFAULT_MEMBRANE_ENGINE_IMAGE_REPOSITORY = (
     "us-central1-docker.pkg.dev/mirrorneuron-public-packages/"
     "mirrorneuron-runtime/membrane-context-engine"
 )
+LOCAL_MEMBRANE_ENGINE_IMAGE = "mirror-neuron-memory-engine:local"
 PUBLIC_GAR_PROJECT_PATH = "/mirrorneuron-public-packages/"
 CONTEXT_ENGINE_SERVICE = "membrane-context-engine"
 CONTEXT_ENGINE_CONTAINER = "mirror-neuron-context-engine"
@@ -4251,7 +4252,13 @@ def ensure_context_engine_runtime(*, force: bool = False) -> dict[str, str]:
         env.pop("MEMBRANE_DIR", None)
     else:
         source_dir = _ensure_context_engine_source(env)
-        updates["MEMBRANE_DIR"] = str(source_dir)
+        updates.update(
+            {
+                "MEMBRANE_DIR": str(source_dir),
+                "ENGINE_IMAGE": LOCAL_MEMBRANE_ENGINE_IMAGE,
+                "MN_MEMBRANE_ENGINE_IMAGE": LOCAL_MEMBRANE_ENGINE_IMAGE,
+            }
+        )
     _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
     env.update(updates)
 

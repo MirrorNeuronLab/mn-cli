@@ -1195,6 +1195,8 @@ def test_ensure_context_engine_runtime_persists_profile_and_starts_compose(mocke
     env = server_cmds._read_env_file(server_cmds.RUNTIME_COMPOSE_ENV)
     assert env["COMPOSE_PROFILES"] == "openshell,context"
     assert env["MEMBRANE_DIR"] == str(membrane_dir)
+    assert env["ENGINE_IMAGE"] == server_cmds.LOCAL_MEMBRANE_ENGINE_IMAGE
+    assert env["MN_MEMBRANE_ENGINE_IMAGE"] == server_cmds.LOCAL_MEMBRANE_ENGINE_IMAGE
     assert env["MN_CONTEXT_MODEL_RUNNER_MODEL"] == server_cmds.DEFAULT_CONTEXT_MODEL_RUNNER_MODEL
     assert result["status"] == "started"
     assert result["model_status"] == "installed"
