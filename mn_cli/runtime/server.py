@@ -4663,7 +4663,9 @@ def _remove_dockerfile_frontend_directive(dockerfile: Path) -> None:
     )
 
 
-def _remove_non_mirror_neuron_container(name: str) -> None:
+def _remove_non_mirror_neuron_container(
+    name: str, *, expected_compose_service: str | None = None
+) -> None:
     try:
         result = subprocess.run(
             [
@@ -4671,7 +4673,7 @@ def _remove_non_mirror_neuron_container(name: str) -> None:
                 "container",
                 "inspect",
                 "-f",
-                '{{ index .Config.Labels "com.docker.compose.project" }}',
+                '{{ index .Config.Labels "com.docker.compose.project" }}\t{{ index .Config.Labels "com.docker.compose.service" }}',
                 name,
             ],
             capture_output=True,
@@ -4681,13 +4683,28 @@ def _remove_non_mirror_neuron_container(name: str) -> None:
         raise RuntimeError("Docker is not installed or not in PATH.") from exc
     if result.returncode != 0:
         return
-    if result.stdout.strip() == "mirror-neuron":
+    label_text = result.stdout if isinstance(result.stdout, str) else ""
+    project, _, service = label_text.strip().partition("\t")
+    if project == "mirror-neuron" and (
+        expected_compose_service is None or service == expected_compose_service
+    ):
         return
     subprocess.run(
         ["docker", "rm", "-f", name],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+
+
+def _reconcile_compose_core_container() -> None:
+    try:
+        _remove_non_mirror_neuron_container(
+            LOCAL_CORE_CONTAINER,
+            expected_compose_service=LOCAL_CORE_CONTAINER,
+        )
+    except RuntimeError as exc:
+        print_error(console, str(exc))
+        raise typer.Exit(1) from exc
 
 
 def _docker_command_ok(command: list[str]) -> bool:
@@ -7037,6 +7054,8 @@ def _start_server(
             console, "MirrorNeuron API is already running; checking runtime sidecars."
         )
         compose_runtime = runtime_compose_available()
+        if compose_runtime:
+            _reconcile_compose_core_container()
         env = _runtime_base_env(compose_runtime)
         for key, value in _runtime_grpc_tokens_from_running_container().items():
             if value:
@@ -7146,6 +7165,11 @@ def _start_server(
         return
 
     compose_runtime = runtime_compose_available()
+    if compose_runtime:
+        # A prior standalone/legacy Core used the same fixed container name
+        # without belonging to this Compose service. Remove it before starting
+        # Syncthing or native sidecars so Compose can claim the Core name.
+        _reconcile_compose_core_container()
     if not compose_runtime:
         try:
             docker_status = subprocess.run(

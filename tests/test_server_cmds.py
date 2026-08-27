@@ -139,6 +139,50 @@ def test_check_status_missing(tmp_path):
     pid_file = tmp_path / "test.pid"
     assert check_status(pid_file) == 2
 
+def test_remove_non_mirror_neuron_container_removes_legacy_core(mocker):
+    run = mocker.patch(
+        "mn_cli.server_cmds.subprocess.run",
+        side_effect=[
+            subprocess.CompletedProcess([], 0, "mirror-neuron\tlegacy-core\n", ""),
+            subprocess.CompletedProcess([], 0, "", ""),
+        ],
+    )
+
+    server_cmds._remove_non_mirror_neuron_container(
+        "mirror-neuron-core",
+        expected_compose_service="mirror-neuron-core",
+    )
+
+    assert run.call_args_list[0].args[0] == [
+        "docker",
+        "container",
+        "inspect",
+        "-f",
+        '{{ index .Config.Labels "com.docker.compose.project" }}\t{{ index .Config.Labels "com.docker.compose.service" }}',
+        "mirror-neuron-core",
+    ]
+    assert run.call_args_list[1].args[0] == [
+        "docker",
+        "rm",
+        "-f",
+        "mirror-neuron-core",
+    ]
+
+def test_remove_non_mirror_neuron_container_keeps_current_compose_core(mocker):
+    run = mocker.patch(
+        "mn_cli.server_cmds.subprocess.run",
+        return_value=subprocess.CompletedProcess(
+            [], 0, "mirror-neuron\tmirror-neuron-core\n", ""
+        ),
+    )
+
+    server_cmds._remove_non_mirror_neuron_container(
+        "mirror-neuron-core",
+        expected_compose_service="mirror-neuron-core",
+    )
+
+    assert run.call_count == 1
+
 def test_detect_lan_ip_uses_first_interface_lan_ip(mocker):
     mocker.patch("mn_cli.server_cmds._interface_lan_ips", return_value=["192.168.4.35", "10.0.0.12"])
 
@@ -2725,6 +2769,12 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
 
     calls = []
     lifecycle = []
+    reconciled_containers = []
+
+    mocker.patch(
+        "mn_cli.server_cmds._remove_non_mirror_neuron_container",
+        side_effect=lambda name, **kwargs: reconciled_containers.append((name, kwargs)),
+    )
 
     mocker.patch(
         'mn_cli.runtime.server._start_native_sdk_grpc_if_installed',
@@ -2751,6 +2801,10 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
 
     commands = [call[0] for call in calls]
     assert runtime_compose_cmd("up", "-d") in commands
+    assert reconciled_containers[0] == (
+        server_cmds.LOCAL_CORE_CONTAINER,
+        {"expected_compose_service": server_cmds.LOCAL_CORE_CONTAINER},
+    )
     assert lifecycle.index("native-ready") < lifecycle.index("compose-up")
     assert all(cmd[:3] != ["docker", "network", "inspect"] for cmd in commands)
     assert ["docker", "network", "create", "--driver", "bridge", "mirror-neuron-runtime"] not in commands
