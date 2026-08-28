@@ -1980,8 +1980,10 @@ def test_join_network_uses_sdk_federation(mocker, monkeypatch):
     assert call_args.kwargs["grpc_port"] == 50055
     assert call_args.kwargs["local_host"] == "192.168.4.99"
     prerequisite = call_args.kwargs["before_registration"]
-    prerequisite({"device_id": "REMOTEDEVICE"})
+    remote_syncthing = {"device_id": "REMOTEDEVICE"}
+    prerequisite({"syncthing": remote_syncthing})
     syncthing_ready.assert_called_once()
+    assert syncthing_ready.call_args.args[1] == remote_syncthing
     reconcile.assert_called_once_with()
 
 
@@ -2013,7 +2015,9 @@ def test_join_network_does_not_register_federation_when_syncthing_is_unavailable
     )
 
     def fail_before_registration(_client, **kwargs):
-        kwargs["before_registration"]({"enabled": True, "device_id": "REMOTEDEVICE"})
+        kwargs["before_registration"](
+            {"syncthing": {"enabled": True, "device_id": "REMOTEDEVICE"}}
+        )
 
     join = mocker.patch.object(
         mn_sdk, "join_federated_node", side_effect=fail_before_registration

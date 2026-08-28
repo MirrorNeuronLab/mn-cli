@@ -3840,7 +3840,10 @@ def _join_network(
         if local_syncthing.get("enabled"):
             join_options["before_registration"] = (
                 lambda remote_info: _require_syncthing_peer_connection(
-                    local_syncthing, remote_info
+                    local_syncthing,
+                    remote_info.get("syncthing")
+                    if isinstance(remote_info.get("syncthing"), dict)
+                    else {},
                 )
             )
         joined = join_federated_node(local_client, **join_options)
