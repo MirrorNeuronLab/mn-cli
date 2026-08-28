@@ -118,7 +118,7 @@ def test_run_ensures_context_engine_when_blueprint_memory_enabled(mocker, tmp_pa
     assert result.exit_code == 0
     stdout_text = re.sub(r"\s+", " ", result.stdout)
     assert "This blueprint uses context memory" in result.stdout
-    assert "First launch may download the context model" in stdout_text
+    assert "the context model may still download on first use" in stdout_text
     assert "Context memory ready" in result.stdout
     assert "Check runtime resources" in result.stderr
     assert "Package workflow" in result.stderr
@@ -231,11 +231,11 @@ def test_runtime_ensure_context_engine_explains_first_launch(mocker):
     assert result.exit_code == 0
     stdout_text = re.sub(r"\s+", " ", result.stdout)
     assert "This runtime service powers blueprint context memory" in result.stdout
-    assert "First launch may download the context model" in stdout_text
+    assert "Docker Model Runner model before starting the service" in stdout_text
     assert "Context engine" in result.stdout
     assert "hf.co/example/context-model" in result.stdout
     assert "/tmp/Membrane" in result.stdout
-    mock_ensure.assert_called_once_with(force=False)
+    mock_ensure.assert_called_once_with(force=False, prepare_image=True)
 
 def test_runtime_ensure_context_engine_reports_release_image(mocker):
     mock_ensure = mocker.patch(
@@ -255,7 +255,7 @@ def test_runtime_ensure_context_engine_reports_release_image(mocker):
     assert "hf.co/example/context-model" in result.stdout
     assert "Engine image" in result.stdout
     assert "v1.2.14" in result.stdout
-    mock_ensure.assert_called_once_with(force=False)
+    mock_ensure.assert_called_once_with(force=False, prepare_image=True)
 
 def test_run_does_not_ensure_context_engine_when_memory_disabled_by_env(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))

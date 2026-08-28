@@ -1387,7 +1387,7 @@ def test_model_install_syncs_local_dmr_gateway_route(mocker):
     assert result.exit_code == 0
     assert synced
     endpoints = synced[0]["runtime_endpoints"]
-    assert endpoints["gemma4:e2b"]["api_base"] == "http://host.docker.internal:12434/engines/v1"
+    assert endpoints["gemma4:e2b"]["api_base"] == "http://model-runner.docker.internal/engines/v1"
     assert "docker.io/ai/gemma4:E2B" in load_model_ownership()["models"]
 
 
@@ -1433,7 +1433,7 @@ def test_model_install_local_dmr_publishes_status_without_peer_gateway_fanout(mo
     result = runner.invoke(app, ["model", "add", "gemma4:e2b", "--local"])
 
     assert result.exit_code == 0
-    assert local_syncs[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://host.docker.internal:12434/engines/v1"
+    assert local_syncs[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://model-runner.docker.internal/engines/v1"
     peer_client.assert_not_called()
 
 
@@ -1524,7 +1524,7 @@ def test_model_update_refreshes_local_dmr_gateway_route(mocker):
     assert result.exit_code == 0
     assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] in calls
     assert ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"] in calls
-    assert synced[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://host.docker.internal:12434/engines/v1"
+    assert synced[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://model-runner.docker.internal/engines/v1"
     assert "docker.io/ai/gemma4:E2B" in load_model_ownership()["models"]
 
 
