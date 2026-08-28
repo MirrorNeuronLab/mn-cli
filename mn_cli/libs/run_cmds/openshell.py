@@ -1,4 +1,4 @@
-from .common import *
+from mn_sdk.native_resource_registry import register_native_resource
 from mn_sdk.submission_preparation import (
     _ensure_docker_worker_requirements_install,
     _local_skill_dependency_source_records,
@@ -6,7 +6,10 @@ from mn_sdk.submission_preparation import (
     _requirements_text,
     _safe_dependency_source_name,
 )
+
 from mn_cli.runtime_state import mn_home, read_env_file
+
+from .common import *
 
 OPENSHELL_RUNNER_MODULES = {
     "MirrorNeuron.Runner.OpenShell",
@@ -67,6 +70,11 @@ def _prepare_openshell_custom_images(
                 config,
                 job_id=shared_sandbox_job_id,
                 node_id=node.get("node_id") or "openshell",
+            )
+            _record_openshell_native_resource(
+                manifest_dict,
+                sandbox_name=str(config.get("sandbox_name") or ""),
+                job_id=shared_sandbox_job_id,
             )
 
 def _openshell_gateway_endpoint() -> str:
@@ -191,6 +199,17 @@ def _prepare_openshell_shared_sandbox(
     sandbox_name = _openshell_shared_sandbox_name(job_id)
     env = _openshell_env()
     openshell_executable = _openshell_executable()
+    register_native_resource(
+        kind="openshell",
+        scope="definition",
+        external_id=sandbox_name,
+        job_id=job_id,
+        owner_node=str(env.get("MN_NODE_NAME") or ""),
+        cleanup={"command": openshell_executable},
+        state="preparing",
+        mn_home=mn_home(),
+        env=env,
+    )
     existing = subprocess.run(
         [openshell_executable, "sandbox", "get", sandbox_name],
         capture_output=True,
@@ -259,6 +278,41 @@ def _openshell_shared_sandbox_name(job_id: str) -> str:
     digest = hashlib.sha256(raw_job_id.encode("utf-8")).hexdigest()[:10]
     suffix = f"-{digest}"
     return f"{base[: max(63 - len(suffix), 1)].rstrip('-')}{suffix}"
+
+
+def _record_openshell_native_resource(
+    manifest: dict[str, Any], *, sandbox_name: str, job_id: str
+) -> None:
+    if not sandbox_name:
+        return
+    metadata = manifest.setdefault("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+        manifest["metadata"] = metadata
+    native = metadata.setdefault(
+        "mn_native_resources", {"version": 1, "submission_id": "", "resources": []}
+    )
+    if not isinstance(native, dict):
+        native = {"version": 1, "submission_id": "", "resources": []}
+        metadata["mn_native_resources"] = native
+    resources = native.setdefault("resources", [])
+    if not isinstance(resources, list):
+        resources = []
+        native["resources"] = resources
+    descriptor = {
+        "kind": "openshell",
+        "scope": "definition",
+        "external_id": sandbox_name,
+        "owner_node": str(os.getenv("MN_NODE_NAME") or ""),
+        "job_id": job_id,
+    }
+    if not any(
+        isinstance(item, dict)
+        and item.get("kind") == "openshell"
+        and item.get("external_id") == sandbox_name
+        for item in resources
+    ):
+        resources.append(descriptor)
 
 def _openshell_policy_path(bundle_dir: Path, source: Any) -> Path | None:
     if not isinstance(source, str) or not source.strip():

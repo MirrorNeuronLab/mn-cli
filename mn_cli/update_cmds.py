@@ -60,7 +60,37 @@ PYTHON_EXTRA_INDEX_URL = os.getenv(
     "MN_PIP_EXTRA_INDEX_URL",
     os.getenv("MN_PYTHON_EXTRA_INDEX_URL", "https://pypi.org/simple"),
 )
-CORE_INSTALL_PRESERVE_NAMES = frozenset({".pids", ".logs", ".update-check.json"})
+CORE_INSTALL_PRESERVE_NAMES = frozenset(
+    {
+        ".pids",
+        ".logs",
+        ".update-check.json",
+        "native-resources.json",
+        "native-resources.json.lock",
+        "docker-workers.json",
+        "docker-compose.workers.yml",
+        "docker-compose-projects",
+        "docker-compose.env",
+        "docker-compose.cluster.yml",
+        "openshell-state",
+        "job-data",
+        "runs",
+        "shared",
+        "blobs",
+        "blueprint_installs",
+        "federation",
+        "models",
+        "model-remotes.json",
+        "syncthing",
+        "syncthing.api-key",
+        "cluster-join-claim.json",
+        "network.token",
+        "erlang.cookie",
+        "grpc_admin.token",
+        "grpc_auth.token",
+        "redis.password",
+    }
+)
 STABLE_RELEASE_TAG = re.compile(r"^v(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)$")
 WEB_UI_VERSION_PATTERN = re.compile(
     r"MN_WEB_UI_PACKAGE_VERSION:\s*\$\{MN_WEB_UI_PACKAGE_VERSION:-(?P<version>[^}]+)\}"
@@ -270,6 +300,7 @@ def perform_update(available: list[dict[str, str]] | None = None) -> None:
         print_confirmed(console, "MirrorNeuron update", status="up to date")
         return
 
+    _reconcile_native_resources_before_update()
     print_info(console, "Stopping MirrorNeuron components…")
     from mn_cli.libs.sys_cmds import stop
 
@@ -297,6 +328,25 @@ def perform_update(available: list[dict[str, str]] | None = None) -> None:
     )
     print_info(console, "Restarting MirrorNeuron…")
     _start_server()
+
+
+def _reconcile_native_resources_before_update() -> None:
+    try:
+        from mn_sdk.native_resource_registry import reconcile_native_resources
+        from mn_sdk.native_runtime_service import _native_resource_reference_checker
+
+        print_info(console, "Reconciling confirmed native-resource orphans…")
+        reconcile_native_resources(
+            reference_checker=_native_resource_reference_checker(),
+            observation_threshold=1,
+            discover_legacy_resources=True,
+        )
+    except Exception:
+        print_warning(
+            console,
+            "Native-resource reconciliation is unavailable or inconclusive; "
+            "preserving resources and cleanup evidence.",
+        )
 
 
 def _print_updates(updates: list[dict[str, str]]) -> None:

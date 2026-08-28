@@ -5,6 +5,46 @@ import mn_cli.libs.sys_cmds as sys_cmds
 import mn_cli.server_cmds as server_cmds
 
 
+def test_runtime_cleanup_dry_run_reports_confirmed_candidates(monkeypatch):
+    registry = importlib.import_module("mn_sdk.native_resource_registry")
+    native_service = importlib.import_module("mn_sdk.native_runtime_service")
+    calls = []
+    rendered = []
+    recorded = []
+    summary = {
+        "removed": [{"kind": "docker_worker", "external_id": "mn-dw-orphan"}],
+        "removed_count": 1,
+        "preserved": [{"kind": "openshell", "external_id": "mirror-neuron-job-live"}],
+        "deferred": [],
+        "errors": [],
+        "cache": {"removed_count": 1, "reclaimed_bytes": 1024, "errors": []},
+    }
+
+    monkeypatch.setattr(native_service, "_native_resource_reference_checker", lambda: object())
+    monkeypatch.setattr(
+        registry,
+        "reconcile_native_resources",
+        lambda **kwargs: calls.append(kwargs) or summary,
+    )
+    monkeypatch.setattr(
+        sys_cmds,
+        "print_success_confirmation",
+        lambda _console, action, **kwargs: rendered.append((action, kwargs)),
+    )
+    monkeypatch.setattr(sys_cmds, "record_result", recorded.append)
+
+    sys_cmds.cleanup(dry_run=True, yes=False, include_cache=True, json_output=False)
+
+    assert calls[0]["dry_run"] is True
+    assert calls[0]["observation_threshold"] == 1
+    assert calls[0]["discover_legacy_resources"] is True
+    assert recorded[0]["removed_count"] == 1
+    assert recorded[0]["cache_removed_count"] == 1
+    assert recorded[0]["reclaimed_bytes"] == 1024
+    assert recorded[0]["preserved_count"] == 1
+    assert rendered[0][0] == "Native resource cleanup"
+
+
 def test_remove_node_confirms_and_uses_the_sdk_federation_control(monkeypatch):
     calls = []
     rendered = []

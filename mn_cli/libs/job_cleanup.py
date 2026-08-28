@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from mn_sdk import cleanup_docker_worker_services
+from mn_sdk.native_resource_registry import (
+    NativeResourceRegistryError,
+    list_native_resources,
+    release_native_resources,
+)
 from mn_sdk.runtime_config import default_runs_root
 
 from mn_cli.libs.blueprint_resources import (
@@ -250,6 +255,9 @@ def cleanup_prepared_openshell_sandbox(
         return
 
     if existing.returncode != 0:
+        detail = (existing.stderr or existing.stdout).strip().lower()
+        if "not found" in detail or "no such sandbox" in detail:
+            _release_openshell_registry_record(sandbox_name)
         return
 
     try:
@@ -268,11 +276,28 @@ def cleanup_prepared_openshell_sandbox(
 
     if removed.returncode == 0:
         summary["process_removed"].append(sandbox_name)
+        _release_openshell_registry_record(sandbox_name)
     else:
         detail = removed.stderr.strip() or removed.stdout.strip()
         summary["errors"].append(
             f"Failed to delete prepared OpenShell sandbox {sandbox_name}: {detail}"
         )
+
+
+def _release_openshell_registry_record(sandbox_name: str) -> None:
+    try:
+        resource_ids = [
+            str(record.get("resource_id") or "")
+            for record in list_native_resources()
+            if record.get("kind") == "openshell"
+            and str(record.get("external_id") or "") == sandbox_name
+        ]
+        if resource_ids:
+            release_native_resources(resource_ids=resource_ids)
+    except (NativeResourceRegistryError, OSError):
+        # External cleanup is already confirmed. Keep the tombstone so a
+        # later reconciler pass can release it idempotently.
+        return
 
 
 def openshell_sandbox_name(job_id: str) -> str:

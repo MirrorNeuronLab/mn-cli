@@ -1,6 +1,7 @@
 import subprocess
 import os
 import time
+import json
 from typing import Optional
 from pathlib import Path
 
@@ -207,11 +208,11 @@ def stop():
         print_info(console, "Stopping Docker runtime (Compose)…")
         subprocess.run(runtime_compose_cmd("down"), stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
         try:
-            from mn_sdk.native_resources import cleanup_docker_worker_services
+            from mn_sdk.native_resources import stop_docker_worker_services
 
-            cleanup_docker_worker_services(all_services=True)
+            stop_docker_worker_services()
         except Exception:
-            logger.debug("Failed to prune DockerWorker Compose services during runtime stop", exc_info=True)
+            logger.debug("Failed to stop DockerWorker Compose services during runtime stop", exc_info=True)
         subprocess.run(["docker", "rm", "-f", COMPOSE_SENTINEL_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
         subprocess.run(["docker", "rm", "-f", SYNCTHING_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
     else:
@@ -248,6 +249,123 @@ def stop():
         details={"Services": "all"},
         next_steps="mn runtime start",
     )
+
+
+def cleanup(
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Report confirmed cleanup candidates without removing them.",
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Apply cleanup without prompting."),
+    include_cache: bool = typer.Option(
+        False,
+        "--include-cache",
+        help="Also apply the managed DockerWorker image cache policy.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
+):
+    """Safely reconcile node-local Docker and OpenShell resources."""
+
+    from mn_sdk.native_resource_registry import reconcile_native_resources
+    from mn_sdk.native_runtime_service import _native_resource_reference_checker
+
+    try:
+        checker = _native_resource_reference_checker()
+        preview = reconcile_native_resources(
+            reference_checker=checker,
+            dry_run=True,
+            include_cache=include_cache,
+            observation_threshold=1,
+            discover_legacy_resources=True,
+        )
+        if dry_run:
+            result = _native_cleanup_result(preview, dry_run=True)
+        else:
+            candidate_count = int(preview.get("removed_count") or 0)
+            cache_count = int((preview.get("cache") or {}).get("removed_count") or 0)
+            if candidate_count or cache_count:
+                require_confirmation(
+                    console,
+                    action="Native resource cleanup",
+                    prompt=(
+                        f"Remove {candidate_count} confirmed orphan resource(s)"
+                        + (
+                            f" and {cache_count} managed cache image(s)"
+                            if include_cache
+                            else ""
+                        )
+                        + "?"
+                    ),
+                    yes=yes is True,
+                )
+            checker = _native_resource_reference_checker()
+            applied = reconcile_native_resources(
+                reference_checker=checker,
+                dry_run=False,
+                include_cache=include_cache,
+                observation_threshold=1,
+                discover_legacy_resources=True,
+            )
+            result = _native_cleanup_result(applied, dry_run=False)
+
+        if json_output:
+            console.print_json(json.dumps(result, sort_keys=True))
+        else:
+            status = "dry_run" if dry_run else "completed"
+            print_success_confirmation(
+                console,
+                "Native resource cleanup",
+                status=status,
+                details={
+                    "Candidates" if dry_run else "Removed": result["removed_count"],
+                    "Reclaimed bytes": result["reclaimed_bytes"],
+                    "Preserved": result["preserved_count"],
+                    "Deferred": result["deferred_count"],
+                    "Errors": len(result["errors"]),
+                },
+                next_steps=(
+                    "mn runtime cleanup --yes"
+                    if dry_run and result["removed_count"]
+                    else "mn runtime status"
+                ),
+            )
+        record_result(result)
+    except (typer.Exit, typer.Abort):
+        raise
+    except Exception as exc:
+        handle_cli_error(exc, console, "runtime cleanup")
+
+
+def _native_cleanup_result(summary: dict, *, dry_run: bool) -> dict:
+    cache = summary.get("cache") if isinstance(summary.get("cache"), dict) else {}
+    errors = [*_sanitized_cleanup_errors(summary.get("errors"))]
+    errors.extend(_sanitized_cleanup_errors(cache.get("errors")))
+    removed = summary.get("removed") if isinstance(summary.get("removed"), list) else []
+    preserved = summary.get("preserved") if isinstance(summary.get("preserved"), list) else []
+    deferred = summary.get("deferred") if isinstance(summary.get("deferred"), list) else []
+    return {
+        "dry_run": dry_run,
+        "removed_count": len(removed),
+        "cache_removed_count": int(cache.get("removed_count") or 0),
+        "reclaimed_bytes": int(cache.get("reclaimed_bytes") or 0),
+        "removed": removed,
+        "preserved_count": len(preserved),
+        "preserved": preserved,
+        "deferred_count": len(deferred),
+        "deferred": deferred,
+        "errors": errors,
+    }
+
+
+def _sanitized_cleanup_errors(values: object) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    return [
+        "".join(character for character in str(value) if character.isprintable())[:500]
+        for value in values
+    ]
+
 
 def health(
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),

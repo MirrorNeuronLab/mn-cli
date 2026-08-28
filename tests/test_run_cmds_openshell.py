@@ -273,6 +273,20 @@ def test_prepare_openshell_shared_sandbox_injects_prepared_runtime_config(
     assert mock_run.call_args_list[1].kwargs["env"][
         "OPENSHELL_GATEWAY_ENDPOINT"
     ] == "http://127.0.0.1:58080"
+    assert manifest["metadata"]["mn_native_resources"]["resources"] == [
+        {
+            "kind": "openshell",
+            "scope": "definition",
+            "external_id": sandbox_name,
+            "owner_node": "",
+            "job_id": "research-job",
+        }
+    ]
+    registry = json.loads(
+        (Path(os.environ["MN_HOME"]) / "native-resources.json").read_text()
+    )
+    assert registry["resources"][0]["external_id"] == sandbox_name
+    assert registry["resources"][0]["job_id"] == "research-job"
 
 def test_openshell_skill_dependency_context_injects_pinned_gar_install(tmp_path):
     sandbox_dir = tmp_path / "openshell_sandbox"
