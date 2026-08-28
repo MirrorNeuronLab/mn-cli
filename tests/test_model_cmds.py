@@ -160,6 +160,17 @@ def test_model_list_marks_cluster_remote_installed_and_local_route_wins(mocker):
     assert remote_model["kind"] == "dmr"
     assert remote_model["state"] == "ready"
     assert remote_model["node"] == "mirror_neuron@spark"
+    assert remote_model["installations"] == [
+        {
+            "node": "mirror_neuron@spark",
+            "installed": True,
+            "local": False,
+            "model": "nemotron-3.5-lightning:latest",
+            "api_model": "nemotron-3.5-lightning:latest",
+            "api_base": "http://192.168.4.173:12434/engines/v1",
+            "route_source": "remote_litellm_gateway",
+        }
+    ]
 
     installed.add("nemotron-3.5-lightning:latest")
     local_result = runner.invoke(app, ["model", "list", "--json"])
@@ -171,6 +182,8 @@ def test_model_list_marks_cluster_remote_installed_and_local_route_wins(mocker):
     )
     assert local_model["installed"] is True
     assert local_model["state"] == "ready"
+    assert local_model["node"] == "mirror_neuron@local"
+    assert [item["local"] for item in local_model["installations"]] == [True, False]
 
 
 def test_model_list_includes_unregistered_cluster_artifact_as_unmanaged(mocker):
@@ -196,6 +209,17 @@ def test_model_list_includes_unregistered_cluster_artifact_as_unmanaged(mocker):
     assert model["installed"] is True
     assert model["routed"] is True
     assert model["node"] == "spark"
+    assert model["installations"] == [
+        {
+            "node": "spark",
+            "installed": True,
+            "local": False,
+            "model": "nemotron-3.5-lightning:latest",
+            "api_model": "nemotron-3.5-lightning:latest",
+            "api_base": "http://192.168.4.173:4000/v1",
+            "route_source": "remote_litellm_gateway",
+        }
+    ]
 
 
 def test_cluster_model_reconcile_reads_redis_snapshots_and_syncs_only_local_gateway(mocker):
@@ -296,7 +320,6 @@ def test_cluster_model_reconcile_reads_redis_snapshots_and_syncs_only_local_gate
     peer_client.assert_not_called()
     local_result = next(item for item in result["nodes"] if item["node"] == local["name"])
     assert set(local_result["gateway_ack"]["accepted_routes"]) == {
-        "nemotron-3.5-lightning:latest",
         "nemotron-3.5-lightning:latest",
     }
     assert local_result["gateway_ack"]["status_event_ack"]["acked_count"] == 1
@@ -1798,7 +1821,7 @@ def test_model_install_falls_back_to_dmr_rest_when_cli_plugin_missing(mocker):
 
     def fake_run(command, **kwargs):
         calls.append(command)
-        if command[:3] == ["docker", "model", "--help"]:
+        if command[:3] == ["docker", "model", "version"]:
             return _completed(command, returncode=1, stderr="unknown command")
         return _completed(command)
 
@@ -1864,7 +1887,7 @@ def test_model_install_prefers_dmr_rest_pull_when_runner_api_reachable(mocker, m
 
 def test_model_list_reads_dmr_rest_tags_when_cli_plugin_missing(mocker):
     def fake_run(command, **kwargs):
-        if command[:3] == ["docker", "model", "--help"] or command[:3] == ["docker", "model", "list"]:
+        if command[:3] == ["docker", "model", "version"] or command[:3] == ["docker", "model", "list"]:
             return _completed(command, returncode=1, stderr="unknown command")
         return _completed(command)
 
@@ -1962,7 +1985,7 @@ def test_model_install_failure_does_not_record_manual_ownership(mocker, tmp_path
 
     def fake_run(command, **kwargs):
         calls.append(command)
-        if command[:3] == ["docker", "model", "--help"]:
+        if command[:3] == ["docker", "model", "version"]:
             return _completed(command)
         if command[:4] == ["docker", "model", "status", "--json"]:
             return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
@@ -1994,7 +2017,7 @@ def test_model_install_rest_failure_does_not_record_manual_ownership(
     requests = []
 
     def fake_run(command, **kwargs):
-        if command[:3] == ["docker", "model", "--help"]:
+        if command[:3] == ["docker", "model", "version"]:
             return _completed(command, returncode=1, stderr="unknown command")
         return _completed(command)
 

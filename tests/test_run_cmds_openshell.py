@@ -217,6 +217,29 @@ def test_run_prebuilds_legacy_openshell_from_directory(mocker, tmp_path, monkeyp
     manifest = json.loads(mock_submit.call_args.args[0])
     assert manifest["agents"]["nodes"][0]["config"]["from"] == "openshell/sandbox-from:456"
 
+
+def test_prepare_openshell_builds_conventional_context_for_local_image(
+    mocker, tmp_path
+):
+    bundle_dir = tmp_path / "run_bundle"
+    sandbox_dir = bundle_dir / "payloads" / "openshell_image"
+    sandbox_dir.mkdir(parents=True)
+    (sandbox_dir / "Dockerfile").write_text("FROM base\n", encoding="utf-8")
+    config = {
+        "runner_module": "MirrorNeuron.Runner.OpenShell",
+        "from": "mirror-neuron/example-sandbox:local",
+    }
+    manifest = {"flow": {"nodes": [{"node_id": "sandbox", "config": config}]}}
+    build = mocker.patch(
+        "mn_cli.libs.run_cmds._build_openshell_from_image",
+        return_value="openshell/sandbox-from:prepared",
+    )
+
+    run_cmds._prepare_openshell_custom_images(bundle_dir, manifest)
+
+    build.assert_called_once_with(sandbox_dir.resolve(), "sandbox")
+    assert config["from"] == "openshell/sandbox-from:prepared"
+
 def test_prepare_openshell_shared_sandbox_injects_prepared_runtime_config(
     mocker, tmp_path, monkeypatch
 ):

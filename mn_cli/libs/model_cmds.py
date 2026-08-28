@@ -59,8 +59,8 @@ from mn_sdk import (
     run_hardware_requirements_validation,
     runtime_model_prepare_timeout_seconds,
     save_model_registry,
-    set_registered_default_model,
     save_model_remotes,
+    set_registered_default_model,
     sync_litellm_gateway,
     upsert_litellm_external_routes,
     validate_litellm_gateway_config_file,
@@ -82,6 +82,8 @@ from mn_sdk import (
 )
 from mn_sdk import (
     model_name_candidates as sdk_model_name_candidates,
+)
+from mn_sdk import (
     parse_model_list as sdk_parse_model_list,
 )
 from mn_sdk import (
@@ -949,6 +951,7 @@ def _registered_model_payload(
         {key for value in route_keys if value for key in docker_model_match_keys(value)}
         & {key for value in routed_names for key in docker_model_match_keys(value)}
     )
+    installations: list[dict[str, Any]] = []
     if kind == "provider":
         installed = False
         node = ""
@@ -959,15 +962,29 @@ def _registered_model_payload(
             for installed_model in installed_models
             for key in docker_model_match_keys(installed_model)
         }
-        installed = bool(
+        locally_installed = bool(
             docker_model_match_keys(str(record.get("model") or "")) & installed_keys
         )
         remote_installations = _remote_installations_for_model(record, remote_records)
-        installed = installed or bool(remote_installations)
+        local_node = _local_runtime_node_name() or "local"
+        if locally_installed:
+            installations.append(
+                {
+                    "node": local_node,
+                    "installed": True,
+                    "local": True,
+                    "model": record.get("model") or model_id,
+                    "api_model": record.get("api_model") or model_id,
+                    "route_source": "local_dmr",
+                }
+            )
+        installations.extend(remote_installations)
+        installed = locally_installed or bool(remote_installations)
         node = str(
-            record.get("selected_node")
+            (local_node if locally_installed else "")
+            or record.get("selected_node")
             or (remote_installations[0].get("node") if remote_installations else "")
-            or _local_runtime_node_name()
+            or local_node
             or "local"
         )
         state = "ready" if installed and routed else "degraded"
@@ -988,6 +1005,7 @@ def _registered_model_payload(
         "cataloged": bool(record.get("cataloged")),
         "verification": record.get("verification") or "unverified",
         "default": bool(record.get("default")),
+        "installations": installations,
     }
 
 
@@ -1039,6 +1057,7 @@ def _unmanaged_dmr_payload(model: str, *, routed_names: set[str]) -> dict[str, A
         None,
     )
     model_id = str((entry or {}).get("id") or model)
+    local_node = _local_runtime_node_name() or "local"
     return {
         "id": model_id,
         "name": str((entry or {}).get("name") or model_id),
@@ -1048,7 +1067,7 @@ def _unmanaged_dmr_payload(model: str, *, routed_names: set[str]) -> dict[str, A
         "registered": False,
         "installed": True,
         "routed": routed,
-        "node": _local_runtime_node_name() or "local",
+        "node": local_node,
         "model": model,
         "docker_model": model,
         "api_model": model,
@@ -1058,6 +1077,16 @@ def _unmanaged_dmr_payload(model: str, *, routed_names: set[str]) -> dict[str, A
             (entry or {}).get("verification") or ("catalog" if entry else "unverified")
         ),
         "default": False,
+        "installations": [
+            {
+                "node": local_node,
+                "installed": True,
+                "local": True,
+                "model": model,
+                "api_model": model,
+                "route_source": "local_dmr",
+            }
+        ],
     }
 
 
@@ -1090,6 +1119,9 @@ def _unmanaged_remote_dmr_payload(
         {key for value in route_keys if value for key in docker_model_match_keys(value)}
         & {key for value in routed_names for key in docker_model_match_keys(value)}
     )
+    node = str(remote.get("node") or "remote")
+    api_model = str(remote.get("api_model") or model)
+    base_url = str(remote.get("base_url") or "")
     return {
         "id": model_id,
         "name": str((entry or {}).get("name") or model_id),
@@ -1099,16 +1131,27 @@ def _unmanaged_remote_dmr_payload(
         "registered": False,
         "installed": True,
         "routed": routed,
-        "node": str(remote.get("node") or "remote"),
+        "node": node,
         "model": model,
         "docker_model": model,
-        "api_model": str(remote.get("api_model") or model),
+        "api_model": api_model,
         "backend": str((entry or {}).get("backend") or "unknown"),
         "cataloged": entry is not None,
         "verification": str(
             (entry or {}).get("verification") or ("catalog" if entry else "unverified")
         ),
         "default": False,
+        "installations": [
+            {
+                "node": node,
+                "installed": True,
+                "local": False,
+                "model": model,
+                "api_model": api_model,
+                "api_base": base_url,
+                "route_source": REMOTE_LITELLM_GATEWAY_SOURCE,
+            }
+        ],
     }
 
 
@@ -1132,6 +1175,7 @@ def _available_model_payload(entry: dict[str, Any]) -> dict[str, Any]:
         "default": False,
         "verification": entry.get("verification") or "catalog",
         "requirements": entry.get("requirements") or {},
+        "installations": [],
     }
 
 

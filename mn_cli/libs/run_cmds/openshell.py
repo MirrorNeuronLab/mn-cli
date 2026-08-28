@@ -53,6 +53,10 @@ def _prepare_openshell_custom_images(
                 raise typer.Exit(1)
         else:
             source_path = _openshell_local_from_path(bundle_dir, config.get("from"))
+            if source_path is None:
+                source_path = _openshell_conventional_local_image_context(
+                    bundle_dir, config.get("from")
+                )
 
         if source_path is not None:
             build_source = _openshell_skill_dependency_context(source_path, manifest_dict)
@@ -187,6 +191,19 @@ def _openshell_local_from_path(bundle_dir: Path, source: Any) -> Path | None:
             return candidate
         if candidate.is_file() and candidate.name == "Dockerfile":
             return candidate
+    return None
+
+
+def _openshell_conventional_local_image_context(
+    bundle_dir: Path, image: Any
+) -> Path | None:
+    """Resolve the portable fallback context for a local-only image tag."""
+
+    if not isinstance(image, str) or not image.strip().endswith(":local"):
+        return None
+    context = (bundle_dir / "payloads" / "openshell_image").resolve()
+    if context.is_dir() and (context / "Dockerfile").is_file():
+        return context
     return None
 
 def _prepare_openshell_shared_sandbox(
