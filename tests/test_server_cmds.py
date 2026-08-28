@@ -630,6 +630,7 @@ def test_connect_syncthing_peers_configures_both_nodes(mocker):
             return {"ignore": ignores[(host, port)], "expanded": []}
         if method == "PUT" and path == "/rest/config":
             puts.append((host, port, api_key, body))
+            configs[(host, port)] = body
             return None
         if method == "POST" and path.startswith("/rest/db/ignores?"):
             ignore_posts.append((host, port, api_key, body))
@@ -733,6 +734,23 @@ def test_reconcile_syncthing_federated_peers_rehydrates_registered_peer(mocker):
     local_info, remote_info = connect.call_args.args
     assert local_info["device_id"] == "MINIDEVICE"
     assert remote_info["device_id"] == "SPARKDEVICE"
+
+
+def test_connect_syncthing_peers_rejects_different_shared_folders():
+    local = {
+        "enabled": True,
+        "device_id": "LOCALDEVICE",
+        "api_key": "local-key",
+        "api_host": "127.0.0.1",
+        "host": "192.168.4.23",
+        "gui_port": 58384,
+        "sync_port": 22000,
+        "folder_id": "mirror-neuron-shared",
+        "folder_path": server_cmds.SYNCTHING_FOLDER_PATH,
+    }
+    remote = {**local, "device_id": "REMOTEDEVICE", "folder_id": "other-folder"}
+
+    assert server_cmds._connect_syncthing_peers(local, remote) is False
 
 
 def test_ensure_syncthing_folder_updates_existing_settings_and_preserves_peers_and_ignores(
@@ -1923,10 +1941,16 @@ def test_join_network_uses_sdk_federation(mocker, monkeypatch):
     mocker.patch("mn_cli.server_cmds._ensure_local_cluster_runtime_for_join")
     mocker.patch(
         "mn_cli.server_cmds._ensure_syncthing_for_runtime",
-        side_effect=lambda env, **_kwargs: env,
+        side_effect=lambda env, **_kwargs: {
+            **env,
+            "MN_SYNCTHING_ENABLED": "auto",
+            "MN_SYNCTHING_DEVICE_ID": "LOCALDEVICE",
+            "MN_SYNCTHING_API_KEY": "local-key",
+            "MN_SYNCTHING_ADVERTISE_HOST": "192.168.4.99",
+        },
     )
-    connect_syncthing = mocker.patch(
-        "mn_cli.server_cmds._connect_syncthing_peers", return_value=True
+    syncthing_ready = mocker.patch(
+        "mn_cli.server_cmds._require_syncthing_peer_connection"
     )
     reconcile = mocker.patch(
         "mn_cli.server_cmds._reconcile_cluster_models_after_membership_change",
@@ -1948,15 +1972,58 @@ def test_join_network_uses_sdk_federation(mocker, monkeypatch):
     result = _join_network("192.168.4.20", "join-token", grpc_port=50055)
 
     assert result["status"] == "federated"
-    join.assert_called_once_with(
-        mn_cli.shared.client,
-        host="192.168.4.20",
-        token="join-token",
-        grpc_port=50055,
-        local_host="192.168.4.99",
-    )
-    connect_syncthing.assert_called_once()
+    join.assert_called_once()
+    call_args = join.call_args
+    assert call_args.args == (mn_cli.shared.client,)
+    assert call_args.kwargs["host"] == "192.168.4.20"
+    assert call_args.kwargs["token"] == "join-token"
+    assert call_args.kwargs["grpc_port"] == 50055
+    assert call_args.kwargs["local_host"] == "192.168.4.99"
+    prerequisite = call_args.kwargs["before_registration"]
+    prerequisite({"device_id": "REMOTEDEVICE"})
+    syncthing_ready.assert_called_once()
     reconcile.assert_called_once_with()
+
+
+def test_join_network_does_not_register_federation_when_syncthing_is_unavailable(
+    mocker, monkeypatch
+):
+    import mn_sdk
+    from mn_sdk.errors import AppError
+
+    monkeypatch.setattr(server_cmds, "_detect_lan_ip", lambda: "192.168.4.99")
+    mocker.patch("mn_cli.server_cmds._ensure_local_cluster_runtime_for_join")
+    mocker.patch(
+        "mn_cli.server_cmds._ensure_syncthing_for_runtime",
+        side_effect=lambda env, **_kwargs: {
+            **env,
+            "MN_SYNCTHING_ENABLED": "auto",
+            "MN_SYNCTHING_DEVICE_ID": "LOCALDEVICE",
+            "MN_SYNCTHING_API_KEY": "local-key",
+            "MN_SYNCTHING_ADVERTISE_HOST": "192.168.4.99",
+        },
+    )
+    mocker.patch(
+        "mn_cli.server_cmds._require_syncthing_peer_connection",
+        side_effect=AppError(
+            "MN_SHARED_STORAGE_UNAVAILABLE",
+            "Syncthing shared storage could not be connected for this node join.",
+            http_status=503,
+        ),
+    )
+
+    def fail_before_registration(_client, **kwargs):
+        kwargs["before_registration"]({"enabled": True, "device_id": "REMOTEDEVICE"})
+
+    join = mocker.patch.object(
+        mn_sdk, "join_federated_node", side_effect=fail_before_registration
+    )
+
+    with pytest.raises(AppError) as captured:
+        _join_network("192.168.4.20", "join-token", grpc_port=50055)
+
+    assert captured.value.code == "MN_SHARED_STORAGE_UNAVAILABLE"
+    join.assert_called_once()
 
 
 def test_join_network_propagates_sdk_readiness_failure(mocker):

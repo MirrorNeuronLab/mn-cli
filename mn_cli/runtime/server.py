@@ -1838,20 +1838,88 @@ def _connect_syncthing_peers(
 ) -> bool:
     if not local_info.get("enabled") or not remote_info.get("enabled"):
         return False
-    if not local_info.get("device_id") or not remote_info.get("device_id"):
+    required_fields = (
+        "device_id",
+        "api_key",
+        "host",
+        "gui_port",
+        "sync_port",
+        "folder_id",
+        "folder_path",
+    )
+    if any(not local_info.get(field) for field in required_fields) or any(
+        not remote_info.get(field) for field in required_fields
+    ):
+        return False
+    if str(local_info["folder_id"]) != str(remote_info["folder_id"]):
         return False
     try:
         _ensure_syncthing_folder(local_info, (remote_info,))
         remote_api_info = dict(remote_info)
         remote_api_info["api_host"] = str(remote_info.get("host") or "")
-        if remote_api_info["api_host"]:
-            _ensure_syncthing_folder(remote_api_info, (local_info,))
+        _ensure_syncthing_folder(remote_api_info, (local_info,))
+        if not _syncthing_peer_is_registered(local_info, remote_info) or not _syncthing_peer_is_registered(
+            remote_api_info, local_info
+        ):
+            raise RuntimeError(
+                "Syncthing did not retain reciprocal shared-storage device registration"
+            )
         return True
     except Exception as exc:
         print_warning(
             console, f"Could not connect Syncthing shared-storage peers: {exc}"
         )
         return False
+
+
+def _syncthing_peer_is_registered(
+    info: dict[str, Any], peer_info: dict[str, Any]
+) -> bool:
+    host = str(info["api_host"])
+    port = int(info["gui_port"])
+    api_key = str(info["api_key"])
+    config = _syncthing_request(host, port, api_key, "GET", "/rest/config")
+    if not isinstance(config, dict):
+        return False
+    peer_id = str(peer_info.get("device_id") or "").strip()
+    local_id = str(info.get("device_id") or "").strip()
+    folder_id = str(info.get("folder_id") or "").strip()
+    if not peer_id or not local_id or not folder_id:
+        return False
+    device_ids = {
+        str(device.get("deviceID") or "").strip()
+        for device in config.get("devices") or []
+        if isinstance(device, dict)
+    }
+    folder = next(
+        (
+            value
+            for value in config.get("folders") or []
+            if isinstance(value, dict) and value.get("id") == folder_id
+        ),
+        None,
+    )
+    folder_devices = {
+        str(device.get("deviceID") or "").strip()
+        for device in (folder or {}).get("devices") or []
+        if isinstance(device, dict)
+    }
+    return peer_id in device_ids and {local_id, peer_id}.issubset(folder_devices)
+
+
+def _require_syncthing_peer_connection(
+    local_info: dict[str, Any], remote_info: dict[str, Any]
+) -> None:
+    if _connect_syncthing_peers(local_info, remote_info):
+        return
+    from mn_sdk.errors import AppError
+
+    raise AppError(
+        "MN_SHARED_STORAGE_UNAVAILABLE",
+        "Syncthing shared storage could not be connected for this node join.",
+        hint="Check that both runtimes expose healthy Syncthing sidecars, then retry 'mn node add'.",
+        http_status=503,
+    )
 
 
 def _reconcile_syncthing_federated_peers(
@@ -3742,6 +3810,7 @@ def _join_network(
     env = _runtime_base_env(runtime_compose_available())
     env.update(_shared_storage_env_from_runtime_env(env))
     env = _ensure_syncthing_for_runtime(env, advertised_host=local_host)
+    local_syncthing = _syncthing_node_info(env, local_host)
     local_node_name = _network_node_name(local_host)
     if requested_mode != "disabled":
         _ensure_network_docker_network(requested_mode, network_name)
@@ -3762,25 +3831,25 @@ def _join_network(
         )
     print_info(console, f"Establishing federated peer relationship with {target}…")
     try:
-        joined = join_federated_node(
-            local_client,
-            host=seed_host,
-            token=token,
-            grpc_port=grpc_port,
-            local_host=_running_core_advertised_host(local_client) or local_host,
-        )
+        join_options: dict[str, Any] = {
+            "host": seed_host,
+            "token": token,
+            "grpc_port": grpc_port,
+            "local_host": _running_core_advertised_host(local_client) or local_host,
+        }
+        if local_syncthing.get("enabled"):
+            join_options["before_registration"] = (
+                lambda remote_info: _require_syncthing_peer_connection(
+                    local_syncthing, remote_info
+                )
+            )
+        joined = join_federated_node(local_client, **join_options)
     except Exception as exc:
         if getattr(exc, "code", None):
             raise
         _raise_join_handshake_error(exc, target)
 
     remote_node = str(joined.get("node_name") or _network_node_name(seed_host))
-    peer = joined.get("peer") if isinstance(joined.get("peer"), dict) else {}
-    remote_syncthing = (
-        peer.get("syncthing") if isinstance(peer.get("syncthing"), dict) else {}
-    )
-    _connect_syncthing_peers(_syncthing_node_info(env, local_host), remote_syncthing)
-
     details: list[tuple[str, str]] = [("Node", remote_node)]
     details.append(("Mode", "federated"))
     model_reconcile = _reconcile_cluster_models_after_membership_change()
