@@ -944,10 +944,28 @@ def test_model_add_registers_provider_definition(tmp_path, mocker, monkeypatch):
     assert model["registered"] is True
 
 
-def test_model_add_provider_file_can_become_custom_default(mocker):
+def test_model_add_provider_file_can_become_custom_default(tmp_path, mocker):
     mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", return_value={"status": "running"})
     mocker.patch("mn_cli.libs.model_cmds._sync_external_litellm_config_across_cluster", return_value=[])
-    definition = Path(__file__).parents[2] / "mn-docs" / "examples" / "muse-glimmer-gomokubench-config.json"
+    definition = tmp_path / "providers.json"
+    definition.write_text(
+        json.dumps(
+            {
+                "provider": {
+                    "openai-compatible": {
+                        "options": {"baseURL": "https://example.test/v1"},
+                        "models": {
+                            "muse-glimmer-nvfp4-dflash": {
+                                "model": "muse-glimmer-30b",
+                                "extra_body": {"top_k": 64},
+                            }
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
 
     result = runner.invoke(
         app,
@@ -1404,6 +1422,10 @@ def test_model_install_syncs_local_dmr_gateway_route(mocker):
         "mn_sdk.model_runtime.detect_host_hardware",
         return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
     )
+    mocker.patch(
+        "mn_cli.libs.model_cmds.detect_host_hardware",
+        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+    )
 
     result = runner.invoke(app, ["model", "add", "gemma4:e2b"])
 
@@ -1450,6 +1472,10 @@ def test_model_install_local_dmr_publishes_status_without_peer_gateway_fanout(mo
     mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", side_effect=lambda **kwargs: local_syncs.append(kwargs) or {})
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
+        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds.detect_host_hardware",
         return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
     )
 
@@ -1537,6 +1563,10 @@ def test_model_update_refreshes_local_dmr_gateway_route(mocker):
     mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", side_effect=lambda **kwargs: synced.append(kwargs) or {})
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
+        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds.detect_host_hardware",
         return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
     )
     entry = resolve_model_entry("gemma4:e2b")
