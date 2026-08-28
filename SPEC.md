@@ -50,6 +50,10 @@ a usage error with a migration hint to use `mn runtime start`.
 The advertised local identity is persisted in `$MN_HOME/docker-compose.env` and
 is automatically used by Docker Compose blueprint submission; an explicitly
 exported identity still takes precedence.
+When Syncthing shared storage is enabled (the default), `mn node add` treats
+reciprocal Syncthing device and shared-folder registration as a precondition of
+Core federation. It verifies both sidecars after configuration; a failure
+creates no new Core peer registration.
 
 `mn node remove NODE --yes` removes that reciprocal federated-peer registration
 from the current Core. It requires the same deliberate confirmation as other
@@ -121,6 +125,8 @@ those contracts.
   interruption except an intentional watcher detach.
 - Interactive monitors must preserve keyboard accessibility and clearly show
   selection without relying on reverse-video backgrounds.
+- The workflow monitor header shows workflow, run, and job identity without
+  rendering the blueprint description above live progress.
 - Durable group operations render item completion in arrival order. Ctrl+C
   detaches while leaving Core work active and prints the operation ID. A
   `cancellation_pending` item is accepted success with queued remote cleanup;
@@ -281,12 +287,11 @@ in runtime events only when invoked. Runtime events report the actual model,
 selected node, install/reuse state, fallback reason, and duration.
 While a lazy DMR install is in progress, `mn blueprint run` and `mn run watch`
 render additive `runtime_model_install_progress` events without changing the
-existing lifecycle event names. The interactive monitor has a dedicated Runtime
-model preparation section showing model, source-to-final-tag mapping, node,
-phase, elapsed time, last-update age, and DMR bytes when available. Plain output
-prints the same facts as clear lines. After 60 seconds without DMR byte progress,
-the monitor shows a yellow “still preparing” warning but fails only when DMR or the
-prepare RPC reports an actual error.
+existing lifecycle event names. The interactive monitor renders only a compact
+`Preparing <model> on <node>…` status below the workflow and agent progress grid.
+The underlying events retain phase, timing, source-to-final-tag mapping, and DMR
+byte telemetry for logs and structured consumers. Missing byte progress does not
+fail the job; only an actual DMR or prepare-RPC error does.
 
 `default` is a logical LiteLLM model group. When a medium route is available it
 aliases to Nemotron and has Gemma as its fallback; without a medium route it

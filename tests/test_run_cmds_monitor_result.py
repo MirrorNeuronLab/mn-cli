@@ -137,6 +137,7 @@ def test_workflow_monitor_shows_run_and_stable_job_ids():
                     "run_id": "run-123",
                     "stable_job_id": "job-456",
                     "workflow_id": "test-workflow",
+                    "description": "A long blueprint description should not displace progress.",
                     "status": "running",
                     "steps": [],
                 }
@@ -147,6 +148,7 @@ def test_workflow_monitor_shows_run_and_stable_job_ids():
     output = console.export_text()
     assert "Run ID: run-123" in output
     assert "Job ID: job-456" in output
+    assert "A long blueprint description" not in output
 
 
 def test_job_monitor_ignores_legacy_shortcuts_and_accepts_only_shared_keys():

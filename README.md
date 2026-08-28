@@ -32,6 +32,11 @@ advertised host, gRPC port, node identity, a join token, and the exact
 credential, keep terminal output private, and use `mn node refresh-token` when
 it must be rotated.
 
+With the default Syncthing shared storage enabled, `mn node add` configures and
+verifies both sidecars before registering the Core federation pair. A failed
+shared-storage connection creates no new Core federation pair and tells the
+operator to correct the sidecars before retrying.
+
 Runtime startup readies the host-native SDK service before Core. Calling
 `mn runtime start` again reuses a healthy native service, preserving warm
 definition-scoped response engines while the remaining runtime is reconciled.
@@ -106,13 +111,14 @@ Those events report the selected model/node, fallback reason, and install/reuse 
 also prints DockerWorker build commands and complete captured build output,
 including builds performed through a remote node's native SDK service.
 
-For a deferred first-use DMR pull, the run monitor includes a Runtime model
-preparation section. It shows the selected model and node, source artifact →
-final DMR tag, phase, elapsed time, and exact bytes when Docker Model Runner
-reports them. If DMR does not report bytes, the monitor says progress is
-unavailable; after 60 seconds without DMR byte progress it warns that preparation is
-still in progress without treating that wait as a job failure. `MN_CLI_OUTPUT=plain`
-prints the same facts as stable lines.
+The run monitor header keeps the workflow, run, and job identity but omits the
+blueprint description so progress begins immediately below it.
+
+For a deferred first-use DMR pull, the run monitor keeps model preparation to a
+single compact `Preparing <model> on <node>…` status below the workflow and agent
+progress grid. Model events still carry detailed phase, timing, and byte telemetry
+for logs and structured consumers; a lack of byte progress does not itself fail the
+job.
 
 Live Spark checks are a separate, opt-in boundary smoke after this injected
 gate passes; they are not the development loop for placement policy.
