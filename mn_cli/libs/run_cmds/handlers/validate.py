@@ -9,7 +9,6 @@ from mn_cli.libs.run_cmds.model_config import (
     _prepared_model_installed_resolver,
 )
 from mn_cli.libs.workflow_validation import (
-    _is_workflow_manifest,
     _manifest_workflow_id,
     _validate_workflow_manifest_issues,
     _validate_workflow_schema_issues,
