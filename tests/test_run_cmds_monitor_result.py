@@ -69,8 +69,22 @@ def test_monitor_success(mocker):
     mocker.patch(
         "mn_cli.libs.run_public.client.get_run",
         side_effect=[
-            json.dumps({"run_id": "run-123", "job_id": "job-123", "status": "completed"}),
-            json.dumps({"run_id": "run-123", "job_id": "job-123", "status": "completed"}),
+            json.dumps(
+                {
+                    "run_id": "run-123",
+                    "job_id": "job-123",
+                    "runtime_job_id": "runtime-789",
+                    "status": "completed",
+                }
+            ),
+            json.dumps(
+                {
+                    "run_id": "run-123",
+                    "job_id": "job-123",
+                    "runtime_job_id": "runtime-789",
+                    "status": "completed",
+                }
+            ),
         ],
     )
     mocker.patch("sys.stdin.isatty", return_value=False)
@@ -81,6 +95,8 @@ def test_monitor_success(mocker):
     assert "Workflow Job Monitor" in result.stdout
     assert "keys: ↑/↓ select agent" in result.stdout
     assert "Job summary" in result.stdout
+    assert "Job ID: job-123" in result.stdout
+    assert "Run ID: run-123" in result.stdout
 
 
 def test_job_monitor_keyboard_state_and_agent_detail():

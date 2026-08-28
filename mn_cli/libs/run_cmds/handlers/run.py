@@ -200,7 +200,8 @@ def run_bundle(
     """Run a bundle after applying optional runtime metadata and environment."""
     pre_launch_process: subprocess.Popen[Any] | None = None
     pre_launch_run_dir: Path | None = None
-    submitted_job_id: str | None = None
+    submitted_run_id: str | None = None
+    submitted_stable_job_id: str | None = None
     submitted_log_writer: JobLogWriter | None = None
     submitted_bundle_dir: Path | None = None
     submitted_manifest: dict[str, Any] | None = None
@@ -576,7 +577,8 @@ def run_bundle(
             )
         )
         execution_id = str(started["run_id"])
-        submitted_job_id = execution_id
+        submitted_run_id = execution_id
+        submitted_stable_job_id = stable_job_id
         log_writer = JobLogWriter(execution_id, run_dir=blueprint_run_dir)
         submitted_log_writer = log_writer
         if blueprint_run_id:
@@ -601,12 +603,12 @@ def run_bundle(
         console.print(
             generate_run_submitted_panel(
                 bundle_name=bundle_dir.name,
-                job_id=execution_id,
+                job_id=stable_job_id,
+                run_id=execution_id,
                 payload_count=len(payloads),
                 log_dir=log_writer.log_dir,
                 follow_seconds=resolved_follow_seconds,
                 run_mode=_run_mode_label(manifest_dict),
-                blueprint_run_id=blueprint_run_id,
                 blueprint_revision=submission_metadata.get("blueprint_revision"),
                 web_ui_url=web_ui_url,
                 detached=detached,
@@ -629,6 +631,7 @@ def run_bundle(
                     log_writer.log_dir,
                     "submitted",
                     log_writer.event_count,
+                    job_id=stable_job_id,
                     web_ui_url=log_writer.web_ui_url or web_ui_url,
                 )
             )
@@ -640,6 +643,7 @@ def run_bundle(
             resolved_follow_seconds,
             web_ui_url=web_ui_url,
             manifest=manifest_dict,
+            stable_job_id=stable_job_id,
         )
         if final_status in FINAL_STATUSES:
             materialized_shared = _materialize_shared_storage_outputs(
@@ -678,13 +682,13 @@ def run_bundle(
         )
         raise
     except (KeyboardInterrupt, EOFError):
-        if submitted_job_id:
+        if submitted_run_id:
             log_writer = submitted_log_writer or JobLogWriter(
-                submitted_job_id, run_dir=submitted_run_dir
+                submitted_run_id, run_dir=submitted_run_dir
             )
             status = "running"
             try:
-                status, _data = _follow_job_events(submitted_job_id, log_writer, 0)
+                status, _data = _follow_job_events(submitted_run_id, log_writer, 0)
                 if status == "unknown":
                     status = "running"
             except Exception:
@@ -698,7 +702,7 @@ def run_bundle(
                 _start_background_event_relay_if_needed(
                     submitted_bundle_dir,
                     submitted_manifest,
-                    submitted_job_id,
+                    submitted_run_id,
                     submitted_run_dir,
                     status,
                     config_overrides=submitted_config_overrides,
@@ -706,10 +710,11 @@ def run_bundle(
                 )
             console.print(
                 generate_detached_panel(
-                    submitted_job_id,
+                    submitted_run_id,
                     log_writer.log_dir,
                     status,
                     log_writer.event_count,
+                    job_id=submitted_stable_job_id,
                     web_ui_url=log_writer.web_ui_url or submitted_web_ui_url,
                 )
             )
@@ -723,7 +728,7 @@ def run_bundle(
     except Exception as e:
         if (
             prepared_submission is not None
-            and submitted_job_id is None
+            and submitted_run_id is None
             and not definition_committed
         ):
             submission_id = str(

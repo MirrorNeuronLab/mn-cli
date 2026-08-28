@@ -127,7 +127,9 @@ def test_run_success(mocker, tmp_path, monkeypatch):
     
     assert result.exit_code == 0
     assert "Job submitted" in result.stdout
-    assert "run-bundle-auto" in result.stdout
+    assert "Job ID: job-123" in result.stdout
+    assert "Run ID: run-bundle-auto" in result.stdout
+    assert "Blueprint Run ID" not in result.stdout
     assert "Type" in result.stdout
     assert "Batch" in result.stdout
     assert "Status: Completed" in result.stdout
@@ -1006,6 +1008,10 @@ def test_run_detached_starts_without_live_workflow_ui(flag, mocker, tmp_path, mo
     assert result.exit_code == 0
     assert "Detached immediately" in result.stdout
     assert "Run detached" in result.stdout
+    assert re.search(r"Job ID:\s+job-detached", result.stdout)
+    assert re.search(
+        rf"Run ID:\s+detached-{flag.strip('-')}", result.stdout
+    )
     assert "Submitted" in result.stdout
     mock_submit.assert_called_once()
     mock_stream.assert_not_called()

@@ -551,14 +551,6 @@ def generate_workflow_progress_layout(
     monitor_warning = progress.get("monitor_warning")
     if monitor_warning:
         footer.append(f"\n! Warning: {monitor_warning}", style="yellow")
-    run_tokens = progress.get("resource_tokens")
-    if run_tokens:
-        footer.append(f"\nrun tokens (resource): {_format_tokens(run_tokens)}", style="dim")
-
-    token_summary = _workflow_agent_token_summary(agents)
-    if token_summary:
-        footer.append(f"\n{token_summary}", style="dim")
-
     renderables = [header, subtitle, body]
     if preparations:
         renderables.append(_runtime_model_preparation_status(preparations))
@@ -596,46 +588,6 @@ def _runtime_model_preparation_status(
 
 def _runtime_model_display_name(value: str) -> str:
     return value.replace("-", " ").replace(":latest", "").title()
-
-
-def _workflow_agent_token_summary(agents: list[dict[str, Any]]) -> str:
-    total_used = 0
-    total_budget = 0
-    for agent in agents:
-        tokens_used = _agent_token_count(agent, used=True)
-        if tokens_used is not None:
-            total_used += tokens_used
-        token_budget = _agent_token_count(agent, budget=True)
-        if token_budget is not None:
-            total_budget += token_budget
-
-    if total_used:
-        if total_budget and total_budget != total_used:
-            return f"run used {_format_tokens(total_used)} / budget {_format_tokens(total_budget)} tok"
-        return f"run used {_format_tokens(total_used)} tok"
-    if total_budget:
-        return f"run budget {_format_tokens(total_budget)} tok"
-    return ""
-
-
-def _agent_token_count(agent: dict[str, Any], *, used: bool = False, budget: bool = False) -> int | None:
-    if used:
-        value = agent.get("tokens_used")
-        if value is not None:
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                pass
-        return None
-    if budget:
-        for key in ("token_budget",):
-            value = agent.get(key)
-            if value is not None:
-                try:
-                    return int(value)
-                except (TypeError, ValueError):
-                    pass
-    return None
 
 
 def _workflow_summary_step_counts(
@@ -696,11 +648,9 @@ def _workflow_agent_table(
     table.add_column("agent", no_wrap=True)
     table.add_column("working on")
     table.add_column("progress", justify="right", no_wrap=True, width=26)
-    table.add_column("tokens", justify="right", no_wrap=True)
-    table.add_column("mail", justify="right", no_wrap=True)
 
     if not agents:
-        table.add_row("-", "none", "No agents reported by the runtime yet.", "-", "-", "-")
+        table.add_row("-", "none", "No agents reported by the runtime yet.", "-")
         return table
 
     start = 0 if selected_index < 20 else selected_index - 19
@@ -715,8 +665,6 @@ def _workflow_agent_table(
             _agent_id(agent),
             _workflow_agent_summary(agent),
             _progress_renderable(agent),
-            _agent_token_column(agent),
-            str(_int_value(agent, "mailbox_depth", "queue_depth", "mailbox")),
             style=row_style,
         )
     return table
@@ -724,25 +672,6 @@ def _workflow_agent_table(
 
 def _workflow_agent_summary(agent: dict[str, Any]) -> str:
     return _working_on(agent)
-
-
-def _agent_token_column(agent: dict[str, Any]) -> str:
-    tokens_used = agent.get("tokens_used")
-    token_budget = agent.get("token_budget")
-    if tokens_used is not None:
-        text = _format_tokens(tokens_used)
-        if token_budget is not None and token_budget != tokens_used:
-            return f"{text}/{_format_tokens(token_budget)} tok"
-        return f"{text} tok"
-    if token_budget is not None:
-        return f"{_format_tokens(token_budget)} tok budget"
-    return "-"
-
-
-def _format_tokens(value: float) -> str:
-    if value >= 1000:
-        return f"{value / 1000:.1f}k".replace(".0k", "k")
-    return str(int(value))
 
 
 def _sorted_agents(raw_agents: Any) -> list[dict[str, Any]]:
@@ -799,10 +728,9 @@ def _agent_table(agents: list[dict[str, Any]], selected_index: int) -> Table:
     table.add_column("status", no_wrap=True)
     table.add_column("working on")
     table.add_column("progress", justify="right", no_wrap=True, width=26)
-    table.add_column("mail", justify="right", no_wrap=True)
 
     if not agents:
-        table.add_row("-", "none", "unknown", "No agents reported by the runtime yet.", "-", "-")
+        table.add_row("-", "none", "unknown", "No agents reported by the runtime yet.", "-")
         return table
 
     start = 0 if selected_index < 20 else selected_index - 19
@@ -815,7 +743,6 @@ def _agent_table(agents: list[dict[str, Any]], selected_index: int) -> Table:
             status,
             _working_on(agent),
             _progress_renderable(agent),
-            str(_int_value(agent, "mailbox_depth", "queue_depth", "mailbox")),
             style=f"bold {_status_color(status)}" if index == selected_index else _status_color(status),
         )
     return table
@@ -834,7 +761,6 @@ def _agent_detail_panel(agent: dict[str, Any] | None) -> Panel:
         ("Status", str(agent.get("status") or "unknown")),
         ("Node", str(agent.get("node_id") or agent.get("node") or "-")),
         ("Working On", _working_on(agent)),
-        ("Tokens", _agent_token_column(agent)),
         ("Progress", _progress_text(agent)),
         ("Processed", str(_int_value(agent, "processed_messages", "messages_processed", "processed"))),
         ("Mailbox", str(_int_value(agent, "mailbox_depth", "queue_depth", "mailbox"))),
@@ -847,10 +773,29 @@ def _agent_detail_panel(agent: dict[str, Any] | None) -> Panel:
         rows.append(("Error", _fit_text(str(error), 120)))
     resources = agent.get("resources") or agent.get("resource_usage") or agent.get("stats")
     if isinstance(resources, dict):
-        rows.append(("Resources", _fit_text(json.dumps(resources, sort_keys=True), 120)))
+        rows.append(
+            (
+                "Resources",
+                _fit_text(json.dumps(_without_token_metrics(resources), sort_keys=True), 120),
+            )
+        )
     for label, value in rows:
         table.add_row(label, _fit_text(value, 160))
     return Panel(table, title=f"Agent Detail  {_agent_id(agent)}", border_style=_status_color(str(agent.get("status") or "")), box=box.ROUNDED)
+
+
+def _without_token_metrics(value: Any) -> Any:
+    """Keep monitor telemetry useful without presenting non-authoritative token totals."""
+
+    if isinstance(value, dict):
+        return {
+            key: _without_token_metrics(item)
+            for key, item in value.items()
+            if "token" not in str(key).lower()
+        }
+    if isinstance(value, list):
+        return [_without_token_metrics(item) for item in value]
+    return value
 
 
 def _agent_id(agent: dict[str, Any]) -> str:
@@ -1050,7 +995,13 @@ def _result_panel(
     )
 
 
-def generate_summary_panel(job_id: str, status: str, log_dir) -> Panel:
+def generate_summary_panel(
+    run_id: str,
+    status: str,
+    log_dir,
+    *,
+    job_id: str | None = None,
+) -> Panel:
     status_text = "Unknown"
     status_color = "yellow"
     if status == "completed":
@@ -1062,9 +1013,15 @@ def generate_summary_panel(job_id: str, status: str, log_dir) -> Panel:
 
     rows: list[tuple[str, Any]] = [
         ("Status", f"[{status_color}]{status_text}[/{status_color}]"),
-        ("Job ID", f"[bold cyan]{job_id}[/bold cyan]"),
-        ("Logs", log_dir / "events.log"),
     ]
+    if job_id:
+        rows.append(("Job ID", f"[bold cyan]{job_id}[/bold cyan]"))
+    rows.extend(
+        [
+            ("Run ID", f"[bold green]{run_id}[/bold green]"),
+            ("Logs", log_dir / "events.log"),
+        ]
+    )
     if (log_dir / "result.txt").exists():
         rows.append(("Result", log_dir / "result.txt"))
     if (log_dir / "result_stream.txt").exists():
@@ -1076,11 +1033,11 @@ def generate_run_submitted_panel(
     *,
     bundle_name: str,
     job_id: str,
+    run_id: str,
     payload_count: int,
     log_dir,
     follow_seconds: float,
     run_mode: str = "Batch",
-    blueprint_run_id: Optional[str] = None,
     blueprint_revision: Optional[str] = None,
     web_ui_url: Optional[str] = None,
     detached: bool = False,
@@ -1088,9 +1045,8 @@ def generate_run_submitted_panel(
     rows: list[tuple[str, Any]] = [
         ("Bundle", bundle_name),
         ("Job ID", f"[bold cyan]{job_id}[/bold cyan]"),
+        ("Run ID", f"[bold green]{run_id}[/bold green]"),
     ]
-    if blueprint_run_id:
-        rows.append(("Blueprint Run ID", f"[bold green]{blueprint_run_id}[/bold green]"))
     if blueprint_revision:
         rows.append(("Blueprint Revision", blueprint_revision[:12]))
     rows.append(("Type", run_mode))
@@ -1108,11 +1064,12 @@ def generate_run_submitted_panel(
 
 
 def generate_detached_panel(
-    job_id: str,
+    run_id: str,
     log_dir,
     status: str,
     event_count: int,
     *,
+    job_id: str | None = None,
     web_ui_url: Optional[str] = None,
 ) -> Panel:
     status_color = (
@@ -1126,14 +1083,20 @@ def generate_detached_panel(
 
     rows: list[tuple[str, Any]] = [
         ("Status", f"[{status_color}]{status_label}[/{status_color}]"),
-        ("Job ID", f"[bold cyan]{job_id}[/bold cyan]"),
-        ("Events Logged", str(event_count)),
-        ("Raw Events", log_dir / "events.log"),
-        ("Run Log", log_dir / "run.log"),
     ]
+    if job_id:
+        rows.append(("Job ID", f"[bold cyan]{job_id}[/bold cyan]"))
+    rows.extend(
+        [
+            ("Run ID", f"[bold green]{run_id}[/bold green]"),
+            ("Events Logged", str(event_count)),
+            ("Raw Events", log_dir / "events.log"),
+            ("Run Log", log_dir / "run.log"),
+        ]
+    )
     if web_ui_url:
         rows.append(("Web UI", f"[bold green]{web_ui_url}[/bold green]"))
-    rows.append(("Watch", f"mn run watch {job_id}"))
+    rows.append(("Watch", f"mn run watch {run_id}"))
 
     message = "Final job state reached." if status in {"completed", "failed", "cancelled"} else "Detached while job is still scheduled or running."
     return _result_panel(

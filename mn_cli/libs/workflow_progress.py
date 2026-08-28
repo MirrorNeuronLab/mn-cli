@@ -313,14 +313,6 @@ def _agent_metrics(agent: AgentProgress) -> str:
     items_total = getattr(agent, "items_total", None)
     if items_total:
         parts.append(f"{getattr(agent, 'items_done', 0) or 0}/{items_total} items")
-    tokens_used = getattr(agent, "tokens_used", None)
-    token_budget = getattr(agent, "token_budget", None)
-    if tokens_used and token_budget:
-        parts.append(f"{_format_tokens(tokens_used)}/{_format_tokens(token_budget)} tok")
-    elif tokens_used:
-        parts.append(f"{_format_tokens(tokens_used)} tok")
-    elif token_budget:
-        parts.append(f"{_format_tokens(token_budget)} tok budget")
     if agent.tools is not None:
         parts.append(f"{agent.tools} tools")
     if agent.started_at is not None:
@@ -333,12 +325,6 @@ def _agent_progress_detail(agent: AgentProgress) -> str:
     if agent.model:
         return f"{agent.model} · {metrics}" if metrics else agent.model
     return metrics
-
-
-def _format_tokens(value: float) -> str:
-    if value >= 1000:
-        return f"{value / 1000:.1f}k".replace(".0k", "k")
-    return str(int(value))
 
 
 def _extract_workflow_agent_ids(payload: Any) -> set[str]:

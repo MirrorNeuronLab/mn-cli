@@ -914,7 +914,12 @@ def _live_monitor(
         # Save results and print final summary
         fetch_and_save_results(job_id, data)
         log_dir = Path(f"/tmp/mn_{job_id}")
-        panel = generate_summary_panel(job_id, final_status, log_dir)
+        panel = generate_summary_panel(
+            run_id or job_id,
+            final_status,
+            log_dir,
+            job_id=stable_job_id,
+        )
         console.print(panel)
     else:
         console.print(f"\n[yellow]Exited live monitor for {job_id}[/yellow]")

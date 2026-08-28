@@ -8,6 +8,7 @@ def _stream_and_format_events(
     follow_seconds: Optional[float] = None,
     web_ui_url: Optional[str] = None,
     manifest: Optional[dict[str, Any]] = None,
+    stable_job_id: str | None = None,
 ) -> str:
     if manifest is not None and _is_workflow_manifest(manifest):
         return _stream_and_format_workflow_events(
@@ -16,6 +17,7 @@ def _stream_and_format_events(
             log_writer=log_writer,
             follow_seconds=follow_seconds,
             web_ui_url=web_ui_url,
+            stable_job_id=stable_job_id,
         )
     log_writer = log_writer or JobLogWriter(job_id)
     if web_ui_url:
@@ -169,9 +171,10 @@ def _stream_and_format_events(
         }.get(status_text)
         if terminal_status:
             panel = generate_summary_panel(
-                job_id=job_id,
+                run_id=job_id,
                 status=terminal_status,
                 log_dir=log_dir,
+                job_id=stable_job_id,
             )
             console.print(panel)
         else:
@@ -200,6 +203,7 @@ def _stream_and_format_events(
                     log_dir,
                     status,
                     log_writer.event_count,
+                    job_id=stable_job_id,
                     web_ui_url=log_writer.web_ui_url,
                 )
             )
@@ -214,6 +218,7 @@ def _stream_and_format_events(
                 log_dir,
                 status,
                 log_writer.event_count,
+                job_id=stable_job_id,
                 web_ui_url=log_writer.web_ui_url,
             )
         )
@@ -234,6 +239,7 @@ def _stream_and_format_workflow_events(
     log_writer: Optional[JobLogWriter] = None,
     follow_seconds: Optional[float] = None,
     web_ui_url: Optional[str] = None,
+    stable_job_id: str | None = None,
 ) -> str:
     log_writer = log_writer or JobLogWriter(job_id)
     if web_ui_url:
@@ -432,9 +438,10 @@ def _stream_and_format_workflow_events(
     if status_text in FINAL_STATUSES:
         console.print(
             generate_summary_panel(
-                job_id=job_id,
+                run_id=job_id,
                 status=status_text,
                 log_dir=log_dir,
+                job_id=stable_job_id,
             )
         )
     else:
@@ -444,6 +451,7 @@ def _stream_and_format_workflow_events(
                 log_dir,
                 status_text,
                 log_writer.event_count,
+                job_id=stable_job_id,
                 web_ui_url=log_writer.web_ui_url,
             )
         )

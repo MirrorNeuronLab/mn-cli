@@ -1,10 +1,16 @@
+import re
 from contextlib import contextmanager
 from io import StringIO
 
 from rich.console import Console
 
 from mn_cli.libs.ui import (
+    JobMonitorState,
     activity,
+    generate_detached_panel,
+    generate_run_submitted_panel,
+    generate_summary_panel,
+    generate_live_layout,
     generate_workflow_progress_layout,
     print_confirmed,
     print_error,
@@ -138,6 +144,49 @@ def test_activity_skips_transient_output_in_plain_mode(monkeypatch):
         pass
 
 
+def test_run_identity_panels_keep_job_and_run_ids_distinct_at_supported_widths(
+    tmp_path, monkeypatch
+):
+    for output_mode in ("rich", "plain"):
+        monkeypatch.setenv("MN_CLI_OUTPUT", output_mode)
+        for width in (60, 120):
+            monkeypatch.setenv("COLUMNS", str(width))
+            console, stream = _capture_console(width=width)
+            console.print(
+                generate_run_submitted_panel(
+                    bundle_name="vc_assistant",
+                    job_id="job-vc-assistant",
+                    run_id="vc-assistant-run-1",
+                    payload_count=721,
+                    log_dir=tmp_path,
+                    follow_seconds=30,
+                )
+            )
+            console.print(
+                generate_detached_panel(
+                    "vc-assistant-run-1",
+                    tmp_path,
+                    "running",
+                    117,
+                    job_id="job-vc-assistant",
+                )
+            )
+            console.print(
+                generate_summary_panel(
+                    "vc-assistant-run-1",
+                    "completed",
+                    tmp_path,
+                    job_id="job-vc-assistant",
+                )
+            )
+
+            output = stream.getvalue()
+            assert len(re.findall(r"Job ID:\s+job-vc-assistant", output)) == 3
+            assert len(re.findall(r"Run ID:\s+vc-assistant-run-1", output)) == 3
+            assert "Blueprint Run ID" not in output
+            assert "mn run watch vc-assistant-run-1" in output
+
+
 def test_workflow_monitor_renders_minimal_runtime_model_status_below_agent_progress():
     for width in (80, 160):
         console = Console(record=True, width=width)
@@ -177,3 +226,95 @@ def test_workflow_monitor_renders_minimal_runtime_model_status_below_agent_progr
         assert "Runtime model preparation" not in rendered
         assert "12.0 GiB / 24.0 GiB (50%)" not in rendered
         assert "still preparing" not in rendered
+
+
+def test_workflow_monitor_omits_token_counts_in_overview_and_agent_detail():
+    progress = {
+        "workflow_id": "metered-workflow",
+        "status": "running",
+        "elapsed_seconds": 9,
+        "resource_tokens": 333,
+        "steps": [
+            {
+                "id": "work",
+                "label": "Work",
+                "status": "running",
+                "current": True,
+                "total_count": 1,
+                "agents": [
+                    {
+                        "id": "worker",
+                        "status": "running",
+                        "progress": 0.5,
+                        "tokens_used": 42,
+                        "token_budget": 100,
+                        "resources": {
+                            "cpu_percent": 5,
+                            "total_tokens": 999,
+                            "nested": {"input_tokens": 22, "memory_mb": 3},
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    overview = Console(record=True, width=160)
+    overview.print(generate_workflow_progress_layout("run-metered", progress))
+    overview_text = overview.export_text()
+    assert "tokens" not in overview_text.lower()
+    assert "333" not in overview_text
+    assert "42" not in overview_text
+
+    state = JobMonitorState()
+    state.detail_mode = True
+    detail = Console(record=True, width=160)
+    detail.print(generate_workflow_progress_layout("run-metered", progress, state=state))
+    detail_text = detail.export_text()
+    assert "tokens" not in detail_text.lower()
+    assert "999" not in detail_text
+    assert "22" not in detail_text
+    assert '"cpu_percent": 5' in detail_text
+    assert '"memory_mb": 3' in detail_text
+
+
+def test_monitor_agent_tables_omit_mail_column():
+    agent = {
+        "id": "worker",
+        "status": "running",
+        "progress": 0.5,
+        "mailbox_depth": 7,
+    }
+    workflow_progress = {
+        "workflow_id": "clean-workflow",
+        "status": "running",
+        "steps": [
+            {
+                "id": "work",
+                "label": "Work",
+                "status": "running",
+                "current": True,
+                "total_count": 1,
+                "agents": [agent],
+            }
+        ],
+    }
+
+    workflow_console = Console(record=True, width=160)
+    workflow_console.print(
+        generate_workflow_progress_layout("run-workflow", workflow_progress)
+    )
+    assert "mail" not in workflow_console.export_text().lower()
+
+    live_console = Console(record=True, width=160)
+    live_console.print(
+        generate_live_layout(
+            "run-live",
+            {
+                "job": {"name": "Live job"},
+                "summary": {"status": "running"},
+                "agents": [agent],
+            },
+        )
+    )
+    assert "mail" not in live_console.export_text().lower()

@@ -116,6 +116,9 @@ including builds performed through a remote node's native SDK service.
 
 The run monitor header keeps the workflow, run, and job identity but omits the
 blueprint description so progress begins immediately below it.
+The interactive monitor intentionally omits LLM token totals and budgets because
+runtime event counters are not authoritative; resource telemetry remains
+available to its dedicated commands and structured consumers.
 
 For a deferred first-use DMR pull, the run monitor keeps model preparation to a
 single compact `Preparing <model> on <node>…` status below the workflow and agent
@@ -195,7 +198,8 @@ execution and the identity used for control, logs, output, retention, and run
 deletion. Starting the same job again creates another run; retrying a run does
 not. Use `mn blueprint run --job-id <job-id>` to run an existing definition.
 Without that option, blueprint run creates a durable job and starts
-its first run.
+its first run. Human-readable submission, detach, summary, and watch output
+labels the durable Job ID and execution Run ID separately.
 
 `mn job list` shows each definition's canonical Type (`service` or `batch`) and
 its Node. Node is the Core runtime (`owner_node`, such as

@@ -45,7 +45,7 @@ def isolated_mn_home(tmp_path, monkeypatch):
         lambda **_kwargs: {"status": "running", "api_base": "http://mn-litellm-proxy:4000/v1"},
     )
 
-def test_cli_agent_progress_detail_marks_estimates_and_token_budgets():
+def test_cli_agent_progress_detail_omits_token_usage_and_budgets():
     estimated = AgentProgress(
         id="worker",
         status="running",
@@ -64,9 +64,9 @@ def test_cli_agent_progress_detail_marks_estimates_and_token_budgets():
     )
 
     assert "35% est." in _agent_progress_detail(estimated)
-    assert "12k tok budget" in _agent_progress_detail(estimated)
+    assert "tok" not in _agent_progress_detail(estimated)
     assert "42% est." not in _agent_progress_detail(explicit)
-    assert "1.3k/12k tok" in _agent_progress_detail(explicit)
+    assert "tok" not in _agent_progress_detail(explicit)
 
 def test_run_displays_live_job_type_and_follow_status(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
@@ -192,7 +192,7 @@ def test_run_displays_workflow_steps_and_agents(mocker, tmp_path):
     assert "Research" in result.stdout
     assert "Research" in result.stdout
     assert "Research  |  2 agents" in result.stdout
-    assert "1.8k" in result.stdout
+    assert "1.8k" not in result.stdout
 
 
 def test_workflow_progress_resolves_lowered_start_node_to_public_binding():
@@ -444,8 +444,10 @@ def test_workflow_renderer_shared_between_live_monitor_and_blueprint_run_paths()
     assert "0/1" in job_monitor_view
     assert "Research" in workflow_view
     assert "Research" in job_monitor_view
-    assert "run used 100 tok" in workflow_view
-    assert "run used 100 tok" in job_monitor_view
+    assert "run used" not in workflow_view
+    assert "run used" not in job_monitor_view
+    assert "100 tok" not in workflow_view
+    assert "100 tok" not in job_monitor_view
     controls = "keys: ↑/↓ select agent, Enter details, Backspace overview, q or Ctrl+C detach"
     assert controls in workflow_view
     assert controls in job_monitor_view
@@ -542,7 +544,8 @@ def test_workflow_token_tracking_prefers_usage_fields_and_ignores_budget_only_pa
     )
     console.print(generate_live_layout("job-token", {"workflow_progress": view.snapshot()}, JobMonitorState()))
     output = console.export_text()
-    assert "run used 50 tok" in output
+    assert "run used" not in output
+    assert "50 tok" not in output
 
 def test_workflow_monitor_state_controls_with_shared_renderer():
     state = JobMonitorState()

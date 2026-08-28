@@ -129,6 +129,11 @@ those contracts.
   selection without relying on reverse-video backgrounds.
 - The workflow monitor header shows workflow, run, and job identity without
   rendering the blueprint description above live progress.
+- Interactive run monitors omit LLM token totals and budgets. The CLI preserves
+  the underlying resource telemetry for dedicated commands and structured
+  consumers.
+- Human-readable run submission, detach, terminal-summary, and watch output
+  labels the durable Job ID and execution Run ID separately.
 - Durable group operations render item completion in arrival order. Ctrl+C
   detaches while leaving Core work active and prints the operation ID. A
   `cancellation_pending` item is accepted success with queued remote cleanup;
