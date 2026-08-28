@@ -154,7 +154,11 @@ those contracts.
   cancelling and clearing any attached active runs first. Run delete likewise
   cancels and clears an active run before detaching it. A federated archive
   accepted while its owner is unavailable is reported as `archive_pending`,
-  not as a completed archive, and `mn job list` reflects that pending state.
+  not as a completed archive, and `mn job list` reflects that pending state. A
+  confirmed federated delete accepted while its owner is unavailable is reported
+  as `delete_pending`; the CLI does not attempt submitter-local cleanup, the
+  stale job disappears from normal lists, and owner cleanup replays when that
+  runtime reconnects.
 - Permanent job and run deletion use the SDK's bounded extended cleanup
   deadline so the configured 10-second general RPC deadline does not interrupt
   owner-node forwarding or resource cleanup.

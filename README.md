@@ -222,6 +222,9 @@ before removing the definition and shared data. Run deletion does the same for
 an active run before detaching it. If an archive must wait for an
 unavailable owner runtime, the command and `mn job list` report
 `archive_pending` until federation replay settles it.
+If a confirmed deletion must wait for an unavailable owner, `mn job delete`
+reports `delete_pending` and skips submitter-local cleanup; the stale job is
+hidden from normal lists while Core replays the owner cleanup on reconnect.
 
 Job and run deletion allow up to five minutes for Core cleanup (with a small
 client-side forwarding margin), including when the definition belongs to a

@@ -166,6 +166,14 @@ def delete(
     try:
         run_ids = _job_run_ids(job_id)
         result = json.loads(client.delete_job(job_id, confirmed=True))
+        if result.get("status") == "delete_pending":
+            print_info(
+                console,
+                f"Job deletion accepted for {job_id}; waiting for its owner runtime to finish cleanup.",
+            )
+            record_result(result)
+            return
+
         cleanup_errors = [
             str(error) for error in result.get("resource_cleanup_errors") or []
         ]

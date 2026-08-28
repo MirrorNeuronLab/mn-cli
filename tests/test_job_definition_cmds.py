@@ -308,6 +308,48 @@ def test_archive_pending_is_reported_as_pending_not_successful(monkeypatch):
     assert printed == [{"job_id": "stable-job", "status": "archive_pending"}]
 
 
+def test_delete_pending_is_reported_without_local_cleanup(monkeypatch):
+    cleaned = []
+    info = []
+    success = []
+    printed = []
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "client",
+        SimpleNamespace(
+            list_runs=lambda _job_id: json.dumps({"items": [{"run_id": "run-remote"}]}),
+            delete_job=lambda job_id, confirmed: json.dumps(
+                {"job_id": job_id, "status": "delete_pending"}
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "cleanup_job_resources",
+        lambda job_id, **_kwargs: cleaned.append(job_id),
+    )
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "print_info",
+        lambda _console, message: info.append(message),
+    )
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "print_success_confirmation",
+        lambda *_args, **_kwargs: success.append(True),
+    )
+    monkeypatch.setattr(job_definition_cmds, "record_result", printed.append)
+
+    job_definition_cmds.delete("stable-job", yes=True)
+
+    assert cleaned == []
+    assert info == [
+        "Job deletion accepted for stable-job; waiting for its owner runtime to finish cleanup."
+    ]
+    assert success == []
+    assert printed == [{"job_id": "stable-job", "status": "delete_pending"}]
+
+
 def test_delete_cleans_historical_runs_from_v2_items_response(monkeypatch):
     cleaned = []
     printed = []
