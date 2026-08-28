@@ -32,6 +32,9 @@ advertised host, gRPC port, node identity, a join token, and the exact
 credential, keep terminal output private, and use `mn node refresh-token` when
 it must be rotated.
 
+The command omits `--grpc-port` when the advertised endpoint uses the default
+port (`55051`); it includes the option when a non-default port is required.
+
 With the default Syncthing shared storage enabled, `mn node add` configures and
 verifies both sidecars before registering the Core federation pair. A failed
 shared-storage connection creates no new Core federation pair and tells the

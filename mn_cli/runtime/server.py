@@ -3476,6 +3476,9 @@ def _print_runtime_join_ready(
     node_name = str(env.get("MN_NODE_NAME") or "").strip() or _network_node_name(
         advertised_host
     )
+    next_steps = f"mn node add {advertised_host} --token {join_token}"
+    if advertised_port != int(DEFAULT_GRPC_PORT):
+        next_steps += f" --grpc-port {advertised_port}"
     printer = print_confirmed if already_running else print_success_confirmation
     printer(
         console,
@@ -3487,7 +3490,7 @@ def _print_runtime_join_ready(
             ("Node", node_name),
             ("Token", join_token),
         ),
-        next_steps=f"mn node add {advertised_host} --token {join_token} --grpc-port {advertised_port}",
+        next_steps=next_steps,
     )
 
 

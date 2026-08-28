@@ -1477,8 +1477,29 @@ def test_runtime_start_prints_federation_join_token_and_exact_add_command(
     output = capsys.readouterr().out
     assert "Runtime node ready successful." in output
     assert "Token: join-token" in output
+    assert "Next: mn node add 192.168.4.20 --token join-token" in output
+    assert "--grpc-port" not in output
+
+
+def test_runtime_start_includes_non_default_grpc_port_in_add_command(
+    monkeypatch, capsys
+):
+    monkeypatch.setenv("MN_CLI_OUTPUT", "plain")
+
+    _print_runtime_join_ready(
+        {
+            "MN_NETWORK_ADVERTISE_HOST": "192.168.4.20",
+            "MN_GRPC_ADVERTISE_PORT": "56051",
+            "MN_NODE_NAME": "mirror_neuron@192.168.4.20",
+        },
+        host=None,
+        grpc_port=55051,
+        token="join-token",
+    )
+
+    output = capsys.readouterr().out
     assert (
-        "Next: mn node add 192.168.4.20 --token join-token --grpc-port 55051"
+        "Next: mn node add 192.168.4.20 --token join-token --grpc-port 56051"
         in output
     )
 
