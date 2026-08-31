@@ -179,11 +179,13 @@ mn blueprint run ./cctv_operator --web-ui \
 reachable peers; the blueprint is responsible for its authentication and
 network-safety contract.
 
-When a blueprint declares a `web_ui` service, `--web-ui` reports the local
-`/jobs/<job_id>/ui` dashboard route. Docker Compose service handles include an
-allowlist for the dashboard's declared video and WebSocket companions, so the
-local Web UI server can proxy a selected remote node without sending the
-browser directly to that node's LAN IP.
+When a blueprint declares a `web_ui` service or a deferred job-scoped Web UI,
+`--web-ui` reports the local `/jobs/<job_id>/ui` dashboard route. Deferred
+handles may appear after job submission, but the reported route is stable.
+Docker Compose service handles include an allowlist for the dashboard's
+declared video and WebSocket companions, so the local Web UI server can proxy
+a selected remote node without sending the browser directly to that node's LAN
+IP.
 
 ## Stable jobs and execution runs
 

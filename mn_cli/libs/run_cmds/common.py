@@ -76,6 +76,7 @@ from mn_sdk import (
 )
 from mn_sdk.blueprint_support.shared_outputs import (
     materialize_shared_storage_outputs as _sdk_materialize_shared_storage_outputs,
+    materialize_shared_storage_outputs_until_stable as _sdk_materialize_shared_storage_outputs_until_stable,
 )
 from mn_sdk.context_engine import blueprint_requires_context_engine
 from mn_sdk.run_store import (

@@ -66,10 +66,12 @@ owner-local jobs intact until the peer is joined again.
 listener overrides into `web_ui.service.host` and `web_ui.service.port`.
 Blueprint manifest/config bindings remain responsible for mapping those
 settings into the executable service declaration.
-For a declared `web_ui` service, `--web-ui` reports the local job dashboard
-route. The persisted service handle declares the dashboard's permitted HTTP
-and WebSocket companion ports so the local Web UI server can proxy a selected
-remote node without exposing its LAN URL to the browser.
+For a declared `web_ui` service or deferred job-scoped UI handle, `--web-ui`
+reports the local job dashboard route. A deferred handle can appear after job
+submission, but its canonical local route is stable. The persisted service
+handle declares the dashboard's permitted HTTP and WebSocket companion ports
+so the local Web UI server can proxy a selected remote node without exposing
+its LAN URL to the browser.
 
 ## Behavior Boundary
 

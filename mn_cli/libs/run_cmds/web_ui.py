@@ -11,7 +11,12 @@ def _console_web_ui_url(
     registered_url = _console_web_ui_url_from_job_data(job_id)
     if registered_url:
         return _local_job_web_ui_url(job_id) or registered_url
-    return _console_web_ui_url_from_manifest(manifest_dict)
+    declared_url = _console_web_ui_url_from_manifest(manifest_dict)
+    if declared_url:
+        return declared_url
+    if _declares_job_scoped_web_ui(manifest_dict):
+        return _local_job_web_ui_url(job_id)
+    return None
 
 
 def _register_manifest_web_ui_handle(
@@ -84,6 +89,15 @@ def _console_web_ui_url_from_manifest(
 ) -> Optional[str]:
     service = _manifest_web_ui_service(manifest_dict)
     return _web_ui_url_from_service(service) if service is not None else None
+
+
+def _declares_job_scoped_web_ui(manifest_dict: dict[str, Any]) -> bool:
+    """Whether a worker will register a deferred job-scoped UI handle."""
+
+    metadata = manifest_dict.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    web_ui = metadata.get("web_ui")
+    return isinstance(web_ui, dict) and web_ui.get("enabled") is True
 
 
 def _manifest_web_ui_service(manifest_dict: dict[str, Any]) -> Optional[dict[str, Any]]:

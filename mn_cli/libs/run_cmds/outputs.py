@@ -402,7 +402,15 @@ def _materialize_completed_blueprint_outputs(
 def _materialize_shared_storage_outputs(storage: dict[str, Any]) -> bool:
     if not isinstance(storage, dict):
         return False
-    result = _sdk_materialize_shared_storage_outputs(storage) or {}
+    output_copy = storage.get("output_copy")
+    if isinstance(output_copy, list) and len(output_copy) > 1:
+        result = _sdk_materialize_shared_storage_outputs_until_stable(
+            storage,
+            poll_seconds=0.25,
+            timeout_seconds=_shared_output_copy_timeout_seconds(),
+        ) or {}
+    else:
+        result = _sdk_materialize_shared_storage_outputs(storage) or {}
     for warning in result.get("warnings") or []:
         logger.warning("Shared output materialization warning: %s", warning)
     for error in result.get("errors") or []:
@@ -410,6 +418,13 @@ def _materialize_shared_storage_outputs(storage: dict[str, Any]) -> bool:
     for target in result.get("target_paths") or []:
         console.print(f"[green]Materialized shared outputs:[/green] {target}")
     return bool(result.get("copied"))
+
+
+def _shared_output_copy_timeout_seconds() -> float:
+    try:
+        return max(float(os.getenv("MN_OUTPUT_COPY_TIMEOUT_SECONDS", "30")), 0.1)
+    except (TypeError, ValueError):
+        return 30.0
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

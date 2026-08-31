@@ -63,6 +63,19 @@ def test_console_web_ui_url_uses_local_job_route_for_registered_handle(tmp_path,
     assert _console_web_ui_url({}, "job-1") == "http://localhost:55173/jobs/job-1/ui"
 
 
+def test_console_web_ui_url_uses_job_route_for_deferred_worker_handle(mocker):
+    mocker.patch(
+        "mn_cli.libs.run_cmds.web_ui.RuntimeConfig.from_env",
+        return_value=SimpleNamespace(
+            web_ui_url="http://localhost:55173", web_ui_advertised=True
+        ),
+    )
+
+    assert _console_web_ui_url(
+        {"metadata": {"web_ui": {"enabled": True}}}, "job-dynamic-ui"
+    ) == "http://localhost:55173/jobs/job-dynamic-ui/ui"
+
+
 def test_register_manifest_web_ui_handle_uses_resolved_service_configuration(tmp_path, monkeypatch):
     monkeypatch.setenv("MN_JOB_DATA_ROOT", str(tmp_path / "job-data"))
     manifest = {

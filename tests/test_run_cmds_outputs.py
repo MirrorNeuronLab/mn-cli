@@ -485,6 +485,57 @@ def test_materialize_shared_storage_outputs_retains_submission_after_copy(tmp_pa
     assert submission.exists()
 
 
+def test_materialize_shared_storage_outputs_waits_for_delayed_user_output(
+    monkeypatch, tmp_path
+):
+    host_root = tmp_path / "shared"
+    submission = host_root / "submissions" / "sub-delayed"
+    run_source = submission / "outputs" / "runs" / "run-1"
+    user_source = submission / "outputs" / "user"
+    run_target = tmp_path / "runs" / "run-1"
+    user_target = tmp_path / "Downloads" / "software_architecture_advisor"
+    run_source.mkdir(parents=True)
+    user_source.mkdir(parents=True)
+    (run_source / "events.jsonl").write_text('{"type": "job_completed"}\n')
+    sleep_calls = 0
+
+    def complete_user_source(_seconds):
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls == 1:
+            (user_source / "architecture_report.md").write_text("# Report\n")
+
+    monkeypatch.setenv("MN_OUTPUT_COPY_TIMEOUT_SECONDS", "1")
+    monkeypatch.setattr(
+        "mn_sdk.blueprint_support.shared_outputs.time.sleep",
+        complete_user_source,
+    )
+
+    copied = run_cmds._materialize_shared_storage_outputs(
+        {
+            "host_root": str(host_root),
+            "runtime_root": "/runtime/shared",
+            "output_copy": [
+                {
+                    "source_path": "/runtime/shared/submissions/sub-delayed/outputs/runs/run-1",
+                    "target_path": str(run_target),
+                    "kind": "directory",
+                },
+                {
+                    "source_path": "/runtime/shared/submissions/sub-delayed/outputs/user",
+                    "target_path": str(user_target),
+                    "kind": "directory",
+                },
+            ],
+        }
+    )
+
+    assert copied is True
+    assert sleep_calls >= 2
+    assert (run_target / "events.jsonl").exists()
+    assert (user_target / "architecture_report.md").read_text() == "# Report\n"
+
+
 def test_detached_batch_run_starts_output_event_relay_for_shared_storage(
     mocker, tmp_path, monkeypatch
 ):
