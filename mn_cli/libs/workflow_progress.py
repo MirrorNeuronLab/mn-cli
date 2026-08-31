@@ -15,6 +15,9 @@ from mn_cli.libs.ui import generate_workflow_progress_layout
 from mn_cli.libs.ui import JobMonitorState
 
 
+_EVENT_HISTORY_LIMIT = 200
+
+
 class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
     def _steps_from_manifest(self, manifest: dict[str, Any]) -> list[StepProgress]:
         workflow = (
@@ -91,6 +94,9 @@ class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
         self._monitor_state: JobMonitorState | None = None
         self._workflow_token_usage: dict[str, int] = {}
         self._resource_token_total: int | None = None
+        # The monitor only renders the newest entries, but retaining a modest
+        # history lets the fixed-size display keep its context as it scrolls.
+        self._recent_events: list[dict[str, Any]] = []
 
     def set_monitor_state(self, state: JobMonitorState | None) -> None:
         self._monitor_state = state
@@ -120,6 +126,8 @@ class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
         snapshot = super().snapshot()
         if self._resource_token_total is not None:
             snapshot["resource_tokens"] = self._resource_token_total
+        if self._recent_events:
+            snapshot["recent_events"] = list(self._recent_events)
         if not self._workflow_token_usage:
             return snapshot
         _attach_workflow_token_usage(snapshot, self._workflow_token_usage)
@@ -171,6 +179,10 @@ class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
         """
 
         event_type = str(event.get("type") or "") if isinstance(event, dict) else ""
+        if event_type not in {"heartbeat", "stream_heartbeat"}:
+            self._recent_events.append(dict(event))
+            if len(self._recent_events) > _EVENT_HISTORY_LIMIT:
+                del self._recent_events[:-_EVENT_HISTORY_LIMIT]
         if event_type in {"workflow_step_attempt_started", "workflow_step_beacon"}:
             payload = event.get("payload") if isinstance(event.get("payload"), dict) else event
             step_id = str(payload.get("step") or payload.get("step_id") or "")

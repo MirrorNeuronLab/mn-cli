@@ -116,6 +116,8 @@ including builds performed through a remote node's native SDK service.
 
 The run monitor header keeps the workflow, run, and job identity but omits the
 blueprint description so progress begins immediately below it.
+Its lower section includes a fixed-height, timestamped event tail that follows
+the newest workflow events without growing the monitor.
 The interactive monitor intentionally omits LLM token totals and budgets because
 runtime event counters are not authoritative; resource telemetry remains
 available to its dedicated commands and structured consumers.
@@ -151,6 +153,12 @@ mn blueprint run ./vc_assistant \
 
 Repeat `--set` for multiple values. Values use JSON types when possible and
 otherwise remain strings.
+
+Normal `mn blueprint run` commands validate declared required inputs from the
+merged configuration before submitting a job. For
+`input_validation.required: ["input_folder"]`, supply
+`--set inputs.payload.input_folder=/path/to/source` or configure a non-empty
+default. `--force` intentionally bypasses input validation.
 
 For a blueprint-owned web service, override the listener without editing its
 checked-in config:

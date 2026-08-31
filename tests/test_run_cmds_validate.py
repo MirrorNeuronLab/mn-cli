@@ -520,6 +520,32 @@ def test_validate_runs_manifest_input_validation(tmp_path):
     assert "Field" in result.stdout
     assert "Fix" in result.stdout
 
+
+def test_validate_reports_missing_generic_required_input(tmp_path):
+    bundle_dir = tmp_path / "missing_required_input"
+    bundle_dir.mkdir()
+    (bundle_dir / "config").mkdir()
+    (bundle_dir / "config" / "default.json").write_text(
+        json.dumps({"inputs": {"payload": {"input_folder": ""}}})
+    )
+    manifest = _workflow_manifest_fixture()
+    manifest["input_validation"] = {
+        "required": ["input_folder"],
+        "rules": [],
+    }
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
+
+    result = runner.invoke(app, ["blueprint", "validate", str(bundle_dir), "--json"])
+
+    assert result.exit_code == 2
+    report = cli_data(result)
+    issue = report["issues"][0]
+    assert issue["code"] == "config.required"
+    assert issue["message"] == "Required input 'input_folder' is missing."
+    assert issue["location"]["path"] == "inputs.payload.input_folder"
+    assert "--set inputs.payload.input_folder" in issue["help"]
+
+
 def test_validate_does_not_run_required_service_probes(tmp_path):
     bundle_dir = tmp_path / "service_validated_inputs"
     bundle_dir.mkdir()

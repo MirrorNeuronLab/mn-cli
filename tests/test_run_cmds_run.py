@@ -263,6 +263,29 @@ def test_run_records_lazy_runtime_models_before_model_validation(mocker, tmp_pat
     assert order == ["services", "defer_models", "validate_models", "inputs"]
 
 
+def test_run_does_not_submit_when_a_required_input_is_missing(mocker, tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    submit = mocker.patch("mn_cli.libs.run_cmds.client.create_job")
+    bundle_dir = tmp_path / "required_input_bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "config").mkdir()
+    (bundle_dir / "config" / "default.json").write_text(
+        json.dumps({"inputs": {"payload": {"input_folder": ""}}})
+    )
+    manifest = _workflow_manifest({"nodes": []})
+    manifest["input_validation"] = {
+        "required": ["input_folder"],
+        "rules": [],
+    }
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
+
+    with pytest.raises(typer.Exit) as error:
+        run_cmds.run_bundle(str(bundle_dir), follow_seconds=0)
+
+    assert error.value.exit_code == 1
+    submit.assert_not_called()
+
+
 def test_run_defers_injected_cluster_model_selection_preparation_and_gateway(
     mocker,
     tmp_path,

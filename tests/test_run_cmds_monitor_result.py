@@ -330,6 +330,25 @@ def test_monitor_normalizes_flat_grpc_job_payload_and_hides_runtime_nodes(mocker
     assert [agent["id"] for agent in progress["current_step"]["agents"]] == ["research"]
 
 
+def test_monitor_projects_stream_events_into_the_event_tail(mocker):
+    event = {
+        "timestamp": "2026-08-29T10:24:00Z",
+        "type": "task_resumed",
+    }
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor.client.stream_events",
+        return_value=[json.dumps(event)],
+    )
+
+    progress = _workflow_progress_for_monitor(
+        "runtime-event-tail",
+        {"job_id": "runtime-event-tail", "status": "running"},
+    )
+
+    assert progress is not None
+    assert progress["recent_events"] == [event]
+
+
 def test_monitor_recovers_public_steps_from_compact_runtime_agents(mocker):
     """Stable-job runs omit their manifest and topology from ``GetJob``."""
 

@@ -292,6 +292,64 @@ def test_workflow_monitor_renders_service_idle_and_ready_counts():
     assert "Visual Detector" in rendered
 
 
+def test_workflow_monitor_event_tail_is_timestamped_and_keeps_latest_rows():
+    events = [
+        {
+            "timestamp": f"2026-08-29T10:{minute:02d}:00Z",
+            "type": f"task_{minute}",
+        }
+        for minute in range(10)
+    ]
+    progress = {
+        "workflow_id": "event-tail-workflow",
+        "status": "running",
+        "steps": [],
+        "recent_events": events,
+    }
+
+    console = Console(record=True, width=120)
+    console.print(
+        generate_live_layout(
+            "job-event-tail",
+            {"workflow_progress": progress},
+            JobMonitorState(),
+        )
+    )
+    rendered = console.export_text()
+
+    assert "Events · latest" in rendered
+    assert "10:02:00 TASK_2" in rendered
+    assert "10:09:00 TASK_9" in rendered
+    assert "10:00:00 TASK_0" not in rendered
+    assert "10:01:00 TASK_1" not in rendered
+
+
+def test_blueprint_workflow_progress_records_events_for_the_shared_monitor_tail():
+    manifest = {
+        "apiVersion": "mn.workflow/v1",
+        "kind": "Workflow",
+        "workflow": {"steps": []},
+    }
+    view = BlueprintWorkflowProgress(manifest, job_id="job-events")
+
+    view.update(
+        {
+            "timestamp": "2026-08-29T10:24:00Z",
+            "type": "worker_assigned",
+            "payload": {"worker": "worker-2"},
+        }
+    )
+
+    snapshot = view.snapshot()
+    assert snapshot["recent_events"] == [
+        {
+            "timestamp": "2026-08-29T10:24:00Z",
+            "type": "worker_assigned",
+            "payload": {"worker": "worker-2"},
+        }
+    ]
+
+
 def test_workflow_monitor_labels_running_service_live_and_downstream_pending_waiting():
     progress = {
         "workflow_id": "warehouse_service",

@@ -435,6 +435,7 @@ def _workflow_progress_for_monitor(
             "steps": [],
             "edges": [],
             "layers": [],
+            "recent_events": events[-200:],
         }
     try:
         progress = build_workflow_progress_snapshot(
@@ -610,7 +611,14 @@ def _local_progress_from_run_store(
 def _merge_api_progress_metadata(
     progress: dict[str, Any], snapshot: dict[str, Any]
 ) -> dict[str, Any]:
-    for key in ("messages", "resource_tokens", "observability_summary", "trace_id"):
+    for key in (
+        "messages",
+        "recent_events",
+        "events",
+        "resource_tokens",
+        "observability_summary",
+        "trace_id",
+    ):
         if key not in progress and key in snapshot:
             progress[key] = snapshot[key]
     stream_status = str(snapshot.get("status") or "").lower()

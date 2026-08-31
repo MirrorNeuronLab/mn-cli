@@ -6,6 +6,7 @@ import time
 import textwrap
 from contextlib import contextmanager
 from collections.abc import Iterator
+from datetime import datetime
 
 from rich import box
 from rich.console import Group
@@ -21,6 +22,13 @@ from mn_cli.terminal import truncate_for_width, ui_width
 
 
 ConfirmationDetails = Union[Mapping[str, Any], Iterable[tuple[str, Any]]]
+
+
+# The panel includes two border/title rows, leaving eight event rows visible.
+# Keeping this independent of terminal width stops a busy event stream from
+# pushing the workflow and agent progress off-screen.
+_EVENT_FEED_HEIGHT = 10
+_EVENT_FEED_ROWS = _EVENT_FEED_HEIGHT - 2
 
 
 class JobMonitorState:
@@ -464,8 +472,12 @@ def generate_live_layout(job_id: str, data: Dict[str, Any], state: Optional[JobM
     if monitor_warning:
         footer.append(f"\n! Warning: {monitor_warning}", style="yellow")
 
+    event_feed = _event_feed_panel(
+        data.get("recent_events") or summary.get("recent_events") or data.get("events"),
+        fallback_message=last_event,
+    )
     return Panel(
-        Group(header, subtitle, body, footer),
+        Group(header, subtitle, body, event_feed, footer),
         title=f"Live Job Monitor  {job_id}",
         border_style=color,
         box=box.ROUNDED,
@@ -554,6 +566,12 @@ def generate_workflow_progress_layout(
     renderables = [header, subtitle, body]
     if preparations:
         renderables.append(_runtime_model_preparation_status(preparations))
+    renderables.append(
+        _event_feed_panel(
+            progress.get("recent_events") or progress.get("events"),
+            fallback_message=messages[-1] if messages else None,
+        )
+    )
     renderables.append(footer)
     return Panel(
         Group(*renderables),
@@ -588,6 +606,130 @@ def _runtime_model_preparation_status(
 
 def _runtime_model_display_name(value: str) -> str:
     return value.replace("-", " ").replace(":latest", "").title()
+
+
+def _event_feed_panel(events: Any, *, fallback_message: Any = None) -> Panel:
+    """Render the newest event records in a fixed-height monitor panel.
+
+    The source event stream is append-only. Selecting its tail on every live
+    refresh is the terminal equivalent of an auto-scrolling log view: new
+    events replace the oldest visible row without growing the monitor.
+    """
+
+    records = [event for event in events or [] if isinstance(event, Mapping)]
+    if not records and fallback_message:
+        records = [{"type": "event", "detail": fallback_message}]
+    records = records[-_EVENT_FEED_ROWS:]
+
+    table = Table.grid(expand=True, padding=(0, 1))
+    table.add_column("Time", width=8, no_wrap=True, style="dim")
+    table.add_column("Event", ratio=1, no_wrap=True, overflow="ellipsis")
+
+    if not records:
+        table.add_row(
+            "",
+            Text(
+                "Waiting for workflow events…",
+                style="dim",
+                no_wrap=True,
+                overflow="ellipsis",
+            ),
+        )
+        remaining_rows = _EVENT_FEED_ROWS - 1
+    else:
+        for event in records:
+            table.add_row(_event_time_text(event), _event_summary_text(event))
+        remaining_rows = _EVENT_FEED_ROWS - len(records)
+    for _ in range(remaining_rows):
+        table.add_row("", "")
+
+    return Panel(
+        table,
+        title="Events · latest",
+        height=_EVENT_FEED_HEIGHT,
+        border_style="dim",
+        box=box.SIMPLE,
+    )
+
+
+def _event_time_text(event: Mapping[str, Any]) -> str:
+    """Return a compact event time without converting ISO timestamps' zone."""
+
+    payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+    for mapping in (event, payload):
+        for key in (
+            "timestamp",
+            "ts",
+            "time",
+            "created_at",
+            "started_at",
+            "occurred_at",
+        ):
+            value = mapping.get(key)
+            if isinstance(value, (int, float)):
+                epoch = float(value)
+                if epoch > 10_000_000_000:
+                    epoch /= 1_000
+                try:
+                    return datetime.fromtimestamp(epoch).strftime("%H:%M:%S")
+                except (OverflowError, OSError, ValueError):
+                    continue
+            if isinstance(value, str) and value.strip():
+                try:
+                    parsed = datetime.fromisoformat(
+                        value.strip().replace("Z", "+00:00")
+                    )
+                    return parsed.strftime("%H:%M:%S")
+                except ValueError:
+                    continue
+    return "--:--:--"
+
+
+def _event_summary_text(event: Mapping[str, Any]) -> Text:
+    event_type = _monitor_safe_text(event.get("type") or event.get("event") or "event")
+    label = event_type.replace("-", "_").replace(" ", "_").upper()
+    detail = _event_detail_text(event)
+    text = Text(label, style="cyan")
+    if detail:
+        text.append(f" {detail}", style="")
+    text.no_wrap = True
+    text.overflow = "ellipsis"
+    return text
+
+
+def _event_detail_text(event: Mapping[str, Any]) -> str:
+    payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+    for mapping in (event, payload):
+        direct = mapping.get("detail")
+        if direct not in (None, ""):
+            return _monitor_safe_text(direct)
+        for key in (
+            "worker",
+            "worker_id",
+            "agent",
+            "agent_id",
+            "step",
+            "step_id",
+            "node",
+            "node_id",
+            "model",
+            "phase",
+        ):
+            value = mapping.get(key)
+            if value not in (None, ""):
+                return _monitor_safe_text(value)
+    return ""
+
+
+def _monitor_safe_text(value: Any, *, limit: int = 160) -> str:
+    """Keep untrusted runtime event fields single-line and terminal-safe."""
+
+    text = "".join(
+        character
+        for character in str(value)
+        if character >= " " and character != "\x7f"
+    )
+    return text.strip()[:limit]
 
 
 def _workflow_summary_step_counts(

@@ -129,6 +129,9 @@ those contracts.
   selection without relying on reverse-video backgrounds.
 - The workflow monitor header shows workflow, run, and job identity without
   rendering the blueprint description above live progress.
+- Interactive workflow monitors show a fixed-height, timestamped event tail at
+  the bottom. The tail automatically advances to the newest workflow events
+  without displacing progress or agent details.
 - Interactive run monitors omit LLM token totals and budgets. The CLI preserves
   the underlying resource telemetry for dedicated commands and structured
   consumers.
