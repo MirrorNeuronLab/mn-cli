@@ -228,6 +228,30 @@ def test_workflow_monitor_renders_minimal_runtime_model_status_below_agent_progr
         assert "still preparing" not in rendered
 
 
+def test_workflow_monitor_shows_owner_staged_input_waiting_phase():
+    console = Console(record=True, width=120)
+    console.print(
+        generate_workflow_progress_layout(
+            "remote-source-run",
+            {
+                "workflow_id": "remote_source",
+                "status": "pending",
+                "steps": [],
+                "recent_events": [
+                    {
+                        "type": "submission_storage_waiting",
+                        "node": "mirror_neuron@spark",
+                        "remaining_files": 72,
+                        "remaining_bytes": 2_853_181,
+                    }
+                ],
+            },
+        )
+    )
+
+    assert "Waiting for staged inputs on mirror_neuron@spark" in console.export_text()
+
+
 def test_workflow_monitor_omits_token_counts_in_overview_and_agent_detail():
     progress = {
         "workflow_id": "metered-workflow",

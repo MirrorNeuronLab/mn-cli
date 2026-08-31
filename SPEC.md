@@ -132,6 +132,9 @@ those contracts.
 - Interactive workflow monitors show a fixed-height, timestamped event tail at
   the bottom. The tail automatically advances to the newest workflow events
   without displacing progress or agent details.
+- While Core verifies an SDK-staged local-input inventory on a remote owner,
+  the workflow monitor renders `Waiting for staged inputs on <node>` from its
+  `submission_storage_waiting` event rather than implying source-agent work.
 - Interactive run monitors omit LLM token totals and budgets. The CLI preserves
   the underlying resource telemetry for dedicated commands and structured
   consumers.

@@ -118,6 +118,8 @@ The run monitor header keeps the workflow, run, and job identity but omits the
 blueprint description so progress begins immediately below it.
 Its lower section includes a fixed-height, timestamped event tail that follows
 the newest workflow events without growing the monitor.
+When a remote owner is verifying SDK-staged local inputs, the same monitor
+shows `Waiting for staged inputs on <node>` until Core dispatches the workflow.
 The interactive monitor intentionally omits LLM token totals and budgets because
 runtime event counters are not authoritative; resource telemetry remains
 available to its dedicated commands and structured consumers.

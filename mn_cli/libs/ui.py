@@ -555,6 +555,7 @@ def generate_workflow_progress_layout(
         for item in progress.get("runtime_model_preparations", [])
         if isinstance(item, dict)
     ]
+    staged_input_wait = _staged_input_wait_status(progress)
 
     footer = Text(_monitor_footer_text(state), style="dim")
     messages = [str(message) for message in progress.get("messages", []) if message]
@@ -564,6 +565,8 @@ def generate_workflow_progress_layout(
     if monitor_warning:
         footer.append(f"\n! Warning: {monitor_warning}", style="yellow")
     renderables = [header, subtitle, body]
+    if staged_input_wait:
+        renderables.append(Text(staged_input_wait, style="cyan"))
     if preparations:
         renderables.append(_runtime_model_preparation_status(preparations))
     renderables.append(
@@ -579,6 +582,33 @@ def generate_workflow_progress_layout(
         border_style=color,
         box=box.ROUNDED,
     )
+
+
+def _staged_input_wait_status(progress: Mapping[str, Any]) -> str | None:
+    """Render Core's owner-local submission-readiness phase without guessing.
+
+    Only the Core verifies shared storage.  The CLI projects its latest
+    readiness event so operators see an actionable pending state instead of a
+    source agent that appears stalled at 0%.
+    """
+
+    events = progress.get("recent_events")
+    if not isinstance(events, list):
+        return None
+
+    for event in reversed(events):
+        if not isinstance(event, Mapping):
+            continue
+        event_type = str(event.get("type") or "")
+        payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else event
+        node = str(payload.get("node") or event.get("node") or "owner node").strip()
+
+        if event_type == "submission_storage_waiting":
+            return f"Waiting for staged inputs on {node}"
+        if event_type in {"submission_storage_ready", "submission_storage_timeout"}:
+            return None
+
+    return None
 
 
 def _generate_workflow_progress_layout(job_id: str, progress: dict[str, Any], state: Optional[JobMonitorState] = None) -> Panel:
