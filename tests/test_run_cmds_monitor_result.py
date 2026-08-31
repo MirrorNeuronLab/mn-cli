@@ -475,6 +475,103 @@ def test_monitor_prefers_source_manifest_from_local_run_store(mocker, tmp_path):
     ]
 
 
+def test_monitor_uses_exact_saved_projection_when_blueprint_id_is_missing(
+    mocker, tmp_path
+):
+    runs_root = tmp_path / "runs"
+    run_dir = runs_root / "architecture-run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "job.json").write_text(
+        json.dumps(
+            {
+                "job_id": "job-architecture",
+                "run_id": "architecture-run",
+                "blueprint_run_id": "architecture-run",
+                "blueprint_id": None,
+            }
+        )
+    )
+    # This saved launch projection intentionally omits the contract/agents
+    # sections required for resubmission. It still owns the exact public
+    # workflow shown by this run's monitor.
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "apiVersion": "mn.workflow/v1",
+                "kind": "Workflow",
+                "id": "software_architecture_advisor",
+                "name": "Software Architecture Advisor",
+                "graph_id": "software_architecture_advisor_v3",
+                "workflow": {
+                    "workflow_id": "software_architecture_advisor_v3",
+                    "steps": [
+                        {
+                            "id": "resolve_software_source",
+                            "run": "resolve_software_source",
+                        },
+                        {
+                            "id": "publish_architecture_advice",
+                            "run": "publish_architecture_advice",
+                        },
+                    ],
+                },
+                "runtime": {
+                    "bindings": {
+                        "resolve_software_source": {
+                            "worker": {"id": "source_intake", "role": "Source Intake"}
+                        },
+                        "publish_architecture_advice": {
+                            "worker": {"id": "publisher", "role": "Publisher"}
+                        },
+                    }
+                },
+            }
+        )
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor.default_runs_root",
+        return_value=runs_root,
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor.client.stream_events",
+        return_value=[
+            json.dumps(
+                {
+                    "type": "workflow_step_completed",
+                    "payload": {"step_id": "resolve_software_source"},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "workflow_step_attempt_started",
+                    "payload": {
+                        "step_id": "publish_architecture_advice",
+                        "worker": "publisher",
+                    },
+                }
+            ),
+        ],
+    )
+
+    progress = _workflow_progress_for_monitor(
+        "architecture-run",
+        {
+            "job_id": "job-architecture",
+            "run_id": "architecture-run",
+            "graph_id": "software_architecture_advisor_v3",
+            "status": "running",
+        },
+    )
+
+    assert progress["name"] == "Software Architecture Advisor"
+    assert progress["workflow_id"] == "software_architecture_advisor_v3"
+    assert [step["id"] for step in progress["steps"]] == [
+        "resolve_software_source",
+        "publish_architecture_advice",
+    ]
+    assert progress["current_step"]["id"] == "publish_architecture_advice"
+
+
 def test_monitor_retries_transient_deadline_fetch(mocker, monkeypatch):
     class DeadlineError(Exception):
         def code(self):
@@ -764,7 +861,9 @@ def test_monitor_stream_timeout_covers_transient_deadlines(monkeypatch):
     assert _monitor_api_stream_timeout_seconds() >= 30
 
 
-def test_monitor_falls_back_when_api_stream_fails_after_local_snapshot(mocker, monkeypatch):
+def test_monitor_falls_back_when_api_stream_fails_after_local_snapshot(
+    mocker, monkeypatch
+):
     class StaticLive:
         def __init__(self, *_args, **_kwargs):
             pass
@@ -903,7 +1002,8 @@ def test_result_error(mocker):
         return_value=json.dumps({"run_id": "run-888", "runtime_job_id": "job-888"}),
     )
     mocker.patch(
-        "mn_cli.libs.run_public.run_cmds.fetch_and_save_results", side_effect=Exception("DB Error")
+        "mn_cli.libs.run_public.run_cmds.fetch_and_save_results",
+        side_effect=Exception("DB Error"),
     )
 
     result = runner.invoke(app, ["run", "result", "run-888"])

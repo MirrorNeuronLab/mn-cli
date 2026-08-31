@@ -129,6 +129,9 @@ those contracts.
   selection without relying on reverse-video backgrounds.
 - The workflow monitor header shows workflow, run, and job identity without
   rendering the blueprint description above live progress.
+- Reattachment prefers the exact saved run manifest/projection even when it is
+  intentionally too sanitized for resubmission. A missing blueprint ID must
+  never cause the monitor to select an unrelated first catalog entry.
 - Interactive workflow monitors show a fixed-height, timestamped event tail at
   the bottom. The tail automatically advances to the newest workflow events
   without displacing progress or agent details.

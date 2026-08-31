@@ -270,8 +270,14 @@ def _read_monitor_manifest(path: Path) -> dict[str, Any] | None:
         if is_manifest_source(candidate):
             candidate = expand_manifest_source(candidate, root_dir=path.parent)
     except Exception:
-        logger.exception("Failed to expand monitor manifest at %s", path)
-        return None
+        # Launch-time run stores may contain the sanitized executable
+        # projection rather than a complete source manifest. It is not valid
+        # for resubmission, but its public workflow and bindings are the exact
+        # monitor contract for this run and are safer than guessing from a
+        # catalog entry.
+        if not _workflow_step_ids(candidate):
+            logger.exception("Failed to expand monitor manifest at %s", path)
+            return None
     _MONITOR_MANIFEST_CACHE[cache_key] = (
         stat.st_mtime_ns,
         stat.st_size,
@@ -326,10 +332,15 @@ def _blueprint_manifest_from_mapping(
             )
             if not isinstance(raw_blueprints, list) and isinstance(index, list):
                 raw_blueprints = index
-            for entry in raw_blueprints if isinstance(raw_blueprints, list) else []:
+            catalog_entries = (
+                raw_blueprints
+                if blueprint_id and isinstance(raw_blueprints, list)
+                else []
+            )
+            for entry in catalog_entries:
                 if not isinstance(entry, dict):
                     continue
-                if blueprint_id and str(entry.get("id") or "") != blueprint_id:
+                if str(entry.get("id") or "") != blueprint_id:
                     continue
                 relative = str(entry.get("path") or "").strip()
                 if relative:
