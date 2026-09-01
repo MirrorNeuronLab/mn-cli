@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from mn_sdk import (
     HostHardwareProfile,
+    ModelCapabilityReport,
     add_registered_models,
     dmr_registration,
     get_registered_model,
@@ -30,6 +31,26 @@ def cli_data(result):
     assert payload["schema"] == "mn.cli/v1"
     assert payload["ok"] is True
     return payload["data"]
+
+
+def _capability_report(
+    capabilities,
+    *,
+    catalog_path="",
+):
+    required = tuple(capabilities)
+    return ModelCapabilityReport(
+        model_id="gemma4:e2b",
+        required=required,
+        capabilities=dict(capabilities),
+        unsupported=tuple(
+            capability
+            for capability, supported in capabilities.items()
+            if supported is False
+        ),
+        evaluated=required,
+        catalog_path=catalog_path,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -725,6 +746,242 @@ def test_model_show_help_does_not_offer_runtime_compatibility_probe():
     assert "model doctor" in result.stdout
 
 
+def test_model_probe_checks_local_dmr_and_litellm_then_persists_proxy_matrix(
+    mocker,
+):
+    matrix = {
+        "embeddings": False,
+        "image_input": True,
+        "structured_output": True,
+        "streaming": True,
+        "thinking": True,
+    }
+    probe = mocker.patch(
+        "mn_cli.libs.model_probe.ensure_model_capabilities",
+        side_effect=[
+            _capability_report(matrix),
+            _capability_report(matrix, catalog_path="/tmp/catalog.json"),
+        ],
+    )
+    mocker.patch("mn_cli.libs.model_probe.model_installed", return_value=True)
+    mocker.patch(
+        "mn_cli.libs.model_cmds._local_runtime_node_name",
+        return_value="mirror_neuron@mini",
+    )
+    mocker.patch(
+        "mn_cli.libs.model_probe.litellm_gateway_health",
+        return_value={
+            "ok": True,
+            "url": "http://127.0.0.1:4000/v1/models",
+            "models": ["gemma4:e2b"],
+        },
+    )
+
+    result = runner.invoke(app, ["model", "probe", "gemma4:e2b", "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    payload = cli_data(result)
+    assert payload["status"] == "verified"
+    assert payload["capabilities"] == matrix
+    assert payload["parity"] is True
+    assert payload["catalog_path"] == "/tmp/catalog.json"
+    assert payload["paths"]["direct"]["endpoint"]["api_base"] == (
+        "http://localhost:12434/engines/v1"
+    )
+    assert payload["paths"]["proxy"]["endpoint"]["api_base"] == (
+        "http://127.0.0.1:4000/v1"
+    )
+    assert payload["paths"]["proxy"]["complete"] is True
+    assert payload["paths"]["proxy"]["satisfies_required"] is False
+    assert probe.call_count == 2
+    assert probe.call_args_list[0].kwargs["force"] is True
+    assert probe.call_args_list[0].kwargs["persist"] is False
+    assert probe.call_args_list[1].kwargs["force"] is True
+    assert probe.call_args_list[1].kwargs["persist"] is True
+
+
+def test_model_probe_can_probe_remote_route_through_litellm_only(mocker):
+    matrix = {"structured_output": True, "streaming": True}
+    probe = mocker.patch(
+        "mn_cli.libs.model_probe.ensure_model_capabilities",
+        return_value=_capability_report(matrix, catalog_path="/tmp/catalog.json"),
+    )
+    mocker.patch(
+        "mn_cli.libs.model_probe.get_registered_model",
+        return_value={
+            "id": "gemma4:e2b",
+            "kind": "dmr",
+            "model": "docker.io/ai/gemma4:E2B",
+            "api_model": "gemma4:e2b",
+            "selected_node": "mirror_neuron@spark",
+        },
+    )
+    mocker.patch(
+        "mn_cli.libs.model_probe.litellm_gateway_health",
+        return_value={
+            "ok": True,
+            "url": "http://127.0.0.1:4000/v1/models",
+            "models": ["gemma4:e2b"],
+        },
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "model",
+            "probe",
+            "gemma4:e2b",
+            "--capabilities",
+            "json-schema,stream",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = cli_data(result)
+    assert payload["required"] == ["structured_output", "streaming"]
+    assert payload["parity"] is None
+    assert payload["paths"]["direct"]["status"] == "not_run"
+    assert probe.call_count == 1
+    assert probe.call_args.kwargs["persist"] is True
+
+
+def test_model_probe_plain_output_is_readable(mocker):
+    matrix = {"structured_output": True}
+    mocker.patch(
+        "mn_cli.libs.model_probe.ensure_model_capabilities",
+        return_value=_capability_report(matrix, catalog_path="/tmp/catalog.json"),
+    )
+    mocker.patch(
+        "mn_cli.libs.model_probe.get_registered_model",
+        return_value={
+            "id": "gemma4:e2b",
+            "kind": "dmr",
+            "model": "docker.io/ai/gemma4:E2B",
+            "api_model": "gemma4:e2b",
+            "selected_node": "mirror_neuron@spark",
+        },
+    )
+    mocker.patch(
+        "mn_cli.libs.model_probe.litellm_gateway_health",
+        return_value={
+            "ok": True,
+            "url": "http://127.0.0.1:4000/v1/models",
+            "models": ["gemma4:e2b"],
+        },
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "model",
+            "probe",
+            "gemma4:e2b",
+            "--capabilities",
+            "json-schema",
+        ],
+        env={"MN_CLI_OUTPUT": "plain", "NO_COLOR": "1"},
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "Model probe" in result.stdout
+    assert "Structured Output" in result.stdout
+    assert "yes" in result.stdout
+    assert "Direct DMR comparison" in result.stderr
+    assert "\x1b[" not in result.stdout
+
+
+def test_model_probe_fails_when_litellm_changes_local_capabilities(mocker):
+    direct = _capability_report({"structured_output": True})
+    proxy = _capability_report(
+        {"structured_output": False},
+        catalog_path="/tmp/catalog.json",
+    )
+    mocker.patch(
+        "mn_cli.libs.model_probe.ensure_model_capabilities",
+        side_effect=[direct, proxy],
+    )
+    mocker.patch("mn_cli.libs.model_probe.model_installed", return_value=True)
+    mocker.patch("mn_cli.libs.model_cmds._local_runtime_node_name", return_value="mini")
+    mocker.patch(
+        "mn_cli.libs.model_probe.litellm_gateway_health",
+        return_value={
+            "ok": True,
+            "url": "http://127.0.0.1:4000/v1/models",
+            "models": ["gemma4:e2b"],
+        },
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "model",
+            "probe",
+            "gemma4:e2b",
+            "--capabilities",
+            "structured-output",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "MN_MODEL_CAPABILITY_MISMATCH"
+    assert payload["error"]["details"]["differences"] == ["structured_output"]
+
+
+def test_model_probe_fails_when_a_live_result_is_unknown(mocker):
+    report = ModelCapabilityReport(
+        model_id="gemma4:e2b",
+        required=("streaming",),
+        capabilities={},
+        unknown=("streaming",),
+        evaluated=(),
+        errors={"streaming": "gateway timed out"},
+    )
+    mocker.patch(
+        "mn_cli.libs.model_probe.ensure_model_capabilities",
+        return_value=report,
+    )
+    mocker.patch(
+        "mn_cli.libs.model_probe.get_registered_model",
+        return_value={
+            "id": "gemma4:e2b",
+            "kind": "dmr",
+            "model": "docker.io/ai/gemma4:E2B",
+            "api_model": "gemma4:e2b",
+            "selected_node": "mirror_neuron@spark",
+        },
+    )
+    mocker.patch(
+        "mn_cli.libs.model_probe.litellm_gateway_health",
+        return_value={
+            "ok": True,
+            "url": "http://127.0.0.1:4000/v1/models",
+            "models": ["gemma4:e2b"],
+        },
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "model",
+            "probe",
+            "gemma4:e2b",
+            "--capabilities",
+            "streaming",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["error"]["code"] == "MN_MODEL_PROBE_FAILED"
+    assert payload["error"]["details"]["status"] == "incomplete"
+    assert payload["error"]["details"]["unknown"] == ["streaming"]
+
+
 def test_removed_model_commands_are_rejected():
     for command in ("install", "proxy", "remote"):
         result = runner.invoke(app, ["model", command, "--help"])
@@ -735,16 +992,19 @@ def test_model_help_exposes_only_unified_operations():
     result = runner.invoke(app, ["model", "--help"])
 
     assert result.exit_code == 0
-    for command in ("list", "add", "show", "update", "remove", "doctor"):
+    commands = ("list", "add", "show", "probe", "update", "remove", "doctor")
+    for command in commands:
         assert command in result.stdout
     for command in ("install", "proxy", "remote"):
         assert command not in result.stdout
     command_rows = [
         line.strip(" │")
         for line in result.stdout.splitlines()
-        if any(line.strip(" │").startswith(f"{command} ") for command in ("list", "add", "show", "update", "remove", "doctor"))
+        if any(
+            line.strip(" │").startswith(f"{command} ") for command in commands
+        )
     ]
-    assert [row.split(maxsplit=1)[0] for row in command_rows] == ["list", "add", "show", "update", "remove", "doctor"]
+    assert [row.split(maxsplit=1)[0] for row in command_rows] == list(commands)
 
 
 @pytest.mark.parametrize("columns", [48, 140])

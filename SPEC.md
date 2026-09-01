@@ -30,7 +30,7 @@ blueprint  list add show update remove run validate doctor cleanup export
 job        list create show start archive reset-data delete
 run        list show watch logs result resources compare pause resume cancel delete
 run human  list respond ack
-model      list add show update remove doctor
+model      list add show probe update remove doctor
 runtime    start stop status doctor cleanup restart-sidecars ensure-context-engine update
 node       list show add remove reconcile drain undrain maintenance refresh-token
 operation  show watch
@@ -215,7 +215,7 @@ operator deletes the run.
 
 ## Runtime-Model Launch Contract
 
-The public `mn model` command surface is exactly `list`, `add`, `show`,
+The public `mn model` command surface is exactly `list`, `add`, `show`, `probe`,
 `update`, `remove`, and `doctor`. `add` accepts either one catalog/arbitrary DMR
 reference or one canonical provider JSON file. DMR placement chooses the best
 eligible cluster node unless `--local` or `--node` is supplied. Provider files
@@ -223,6 +223,15 @@ are validated in full, including required environment references, before the
 SDK registry changes. If the requested DMR artifact is already installed on an
 eligible local or cluster node, `add` adopts that artifact and registers it
 without reinstalling it.
+
+`probe` force-tests embeddings, image input, strict JSON Schema output, SSE
+streaming, and thinking against the model's managed LiteLLM route, then stores
+the effective matrix in the SDK model-catalog overlay. `--capabilities` accepts
+a comma-separated subset using the SDK's canonical names or aliases. For a DMR
+artifact selected on the local node, the command first runs the same contract
+directly against Docker Model Runner and fails if LiteLLM changes any result.
+For provider or remote-owner routes, the direct path is reported as not run;
+the command does not bypass a remote owner's loopback-only DMR endpoint.
 
 `list` renders registered models and discovered unmanaged DMR artifacts;
 `--available` also includes catalog-only choices. Machine records expose

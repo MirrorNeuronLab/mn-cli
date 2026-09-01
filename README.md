@@ -69,8 +69,8 @@ the MirrorNeuron GAR package index configured, install it with:
 
 ## Model operations
 
-`mn model` exposes one type-aware workflow: `list`, `add`, `show`, `update`,
-`remove`, and `doctor`. Add a catalog or arbitrary DMR reference with
+`mn model` exposes one type-aware workflow: `list`, `add`, `show`, `probe`,
+`update`, `remove`, and `doctor`. Add a catalog or arbitrary DMR reference with
 `mn model add <MODEL>`, or register canonical provider JSON with
 `mn model add --file <definition.json>`. Registrations are stored in
 `$MN_HOME/models/registry.json`; provider secrets remain environment-variable
@@ -81,6 +81,21 @@ used with `--default` must contain exactly one model.
 When the requested DMR artifact is already installed locally or on a cluster
 node, `mn model add` reuses it and creates the same managed registry record
 without pulling a second copy.
+
+Force a live capability evaluation and save the effective LiteLLM-facing
+matrix in the SDK model-catalog overlay:
+
+```bash
+mn model probe gemma4:e2b
+mn model probe nemotron-3.5-lightning:latest --json
+mn model probe gemma4:e2b --capabilities image,json-schema,stream,thinking
+```
+
+The default probe covers embeddings, image input, strict JSON Schema output,
+SSE streaming, and thinking. When the selected DMR artifact is local, the CLI
+runs the identical probe directly against Docker Model Runner and fails if the
+LiteLLM result differs. Remote-owner and provider models are tested through the
+managed LiteLLM route without exposing or bypassing the owner's direct endpoint.
 
 ## Fast runtime-model orchestration tests
 

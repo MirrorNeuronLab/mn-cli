@@ -98,6 +98,7 @@ _ACTION_WORDS = {
     "logs": ("load logs for", "loading logs for"),
     "maintenance": ("change maintenance mode for", "changing maintenance mode for"),
     "pause": ("pause", "pausing"),
+    "probe": ("probe", "probing"),
     "reconcile": ("reconcile", "reconciling"),
     "remove": ("remove", "removing"),
     "reset-data": ("reset data for", "resetting data for"),

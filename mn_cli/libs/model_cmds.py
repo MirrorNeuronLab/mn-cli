@@ -92,6 +92,7 @@ from mn_sdk import (
 from mn_sdk.model_access import runtime_model_gateway_name
 
 from mn_cli.error_handler import handle_cli_error
+from mn_cli.libs.model_probe import run_model_probe
 from mn_cli.libs.model_rendering import (
     print_compatibility as _print_compatibility,
 )
@@ -460,6 +461,47 @@ def add_model(
 
 
 model_app.command(name="show")(show_model)
+
+
+@model_app.command(name="probe")
+def probe_model(
+    model: Annotated[
+        str,
+        typer.Argument(
+            help="Registered model id, catalog id, alias, or DMR reference."
+        ),
+    ] = DEFAULT_MODEL_ID,
+    capabilities: Annotated[
+        str,
+        typer.Option(
+            "--capabilities",
+            help=(
+                "Comma-separated capability subset. Defaults to embeddings, image "
+                "input, structured output, streaming, and thinking."
+            ),
+        ),
+    ] = "",
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Print machine-readable JSON.")
+    ] = False,
+):
+    """Live-probe model capabilities through LiteLLM and cache the result."""
+    try:
+        payload = run_model_probe(
+            model,
+            capabilities or None,
+            local_node=_local_runtime_node_name(),
+            mn_home=os.environ.get("MN_HOME"),
+        )
+        if json_output:
+            record_result(payload)
+            return
+        _print_model_probe(payload)
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        _handle_model_error(exc, "model probe", model=model)
+        raise typer.Exit(getattr(exc, "exit_code", 1))
 
 
 @model_app.command(name="update")
@@ -873,6 +915,36 @@ def doctor_model(
     except Exception as exc:
         _handle_model_error(exc, "model doctor", model=model)
         raise typer.Exit(1)
+
+
+def _print_model_probe(payload: dict[str, Any]) -> None:
+    capabilities = payload.get("capabilities") or {}
+    details: list[tuple[str, Any]] = [
+        ("Model", payload.get("model")),
+        ("LiteLLM parity", _probe_parity_label(payload.get("parity"))),
+    ]
+    details.extend(
+        (capability.replace("_", " ").title(), "yes" if supported else "no")
+        for capability, supported in capabilities.items()
+    )
+    if payload.get("catalog_path"):
+        details.append(("Catalog", payload["catalog_path"]))
+    print_success_confirmation(
+        console,
+        "Model probe",
+        status=str(payload.get("status") or "verified"),
+        details=details,
+        next_steps=f"mn model show {payload.get('model')}",
+    )
+    direct = (payload.get("paths") or {}).get("direct") or {}
+    if direct.get("status") == "not_run":
+        print_warning(console, str(direct.get("reason") or "Direct probe was not run."))
+
+
+def _probe_parity_label(value: Any) -> str:
+    if value is None:
+        return "not compared"
+    return "preserved" if value else "changed"
 
 
 def _cluster_managed_remote_records() -> list[dict[str, Any]]:
