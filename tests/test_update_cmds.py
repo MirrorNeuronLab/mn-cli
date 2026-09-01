@@ -25,7 +25,7 @@ def isolated_install_state(mocker, tmp_path):
     )
 
 
-def test_update_check_only_prints_available_updates(mocker):
+def test_upgrade_check_only_prints_available_updates(mocker):
     mocker.patch(
         "mn_cli.update_cmds.get_available_updates",
         return_value=[
@@ -37,16 +37,16 @@ def test_update_check_only_prints_available_updates(mocker):
             }
         ],
     )
-    mock_perform = mocker.patch("mn_cli.update_cmds.perform_update")
+    mock_perform = mocker.patch("mn_cli.update_cmds.perform_upgrade")
 
-    result = runner.invoke(app, ["runtime", "update", "--check-only"])
+    result = runner.invoke(app, ["runtime", "upgrade", "--check-only"])
 
     assert result.exit_code == 0
     assert "mirrorneuron-cli: 1.0.0 -> 1.1.0" in result.stdout
     mock_perform.assert_not_called()
 
 
-def test_update_requires_yes_in_non_interactive_mode(mocker):
+def test_upgrade_requires_yes_in_non_interactive_mode(mocker):
     mocker.patch(
         "mn_cli.update_cmds.get_available_updates",
         return_value=[
@@ -58,12 +58,12 @@ def test_update_requires_yes_in_non_interactive_mode(mocker):
             }
         ],
     )
-    mock_perform = mocker.patch("mn_cli.update_cmds.perform_update")
+    mock_perform = mocker.patch("mn_cli.update_cmds.perform_upgrade")
 
-    result = runner.invoke(app, ["runtime", "update"])
+    result = runner.invoke(app, ["runtime", "upgrade"])
 
     assert result.exit_code == 2
-    assert "Updating will stop all MirrorNeuron components" in result.stderr
+    assert "Upgrading will stop all MirrorNeuron components" in result.stderr
     assert "requires --yes" in result.stderr
     mock_perform.assert_not_called()
 
@@ -74,7 +74,7 @@ def test_update_skips_release_flow_for_local_source_install(mocker, tmp_path):
     mocker.patch("mn_cli.update_cmds.INSTALL_METADATA_FILE", metadata_file)
     mock_get_updates = mocker.patch("mn_cli.update_cmds.get_available_updates")
 
-    result = runner.invoke(app, ["runtime", "update"])
+    result = runner.invoke(app, ["runtime", "upgrade"])
 
     assert result.exit_code == 0
     assert "Local source install detected" in result.stdout
@@ -103,7 +103,35 @@ def test_check_due_treats_invalid_or_non_numeric_check_file_as_due():
     assert update_cmds._check_due() is True
 
 
-def test_update_yes_stops_updates_and_restarts(mocker, capsys):
+def test_runtime_start_upgrade_check_only_reminds_without_prompting(mocker):
+    updates = [
+        {
+            "component": "mirrorneuron-cli",
+            "current": "1.0.0",
+            "latest": "1.1.0",
+            "kind": "python",
+        }
+    ]
+    mocker.patch("mn_cli.update_cmds._local_source_install", return_value=False)
+    mocker.patch("mn_cli.update_cmds._check_due", return_value=True)
+    mocker.patch("mn_cli.update_cmds._record_check")
+    mocker.patch("mn_cli.update_cmds.sys.stdin.isatty", return_value=True)
+    mocker.patch("mn_cli.update_cmds.is_ci", return_value=False)
+    mocker.patch("mn_cli.update_cmds.get_available_updates", return_value=updates)
+    warning = mocker.patch("mn_cli.update_cmds.print_warning")
+    info = mocker.patch("mn_cli.update_cmds.print_info")
+    confirm = mocker.patch("mn_cli.update_cmds.typer.confirm")
+    perform = mocker.patch("mn_cli.update_cmds.perform_upgrade")
+
+    update_cmds.notify_if_upgrade_available()
+
+    assert "mn runtime upgrade" in warning.call_args.args[1]
+    assert info.call_args.args[1] == "mirrorneuron-cli: 1.0.0 -> 1.1.0"
+    confirm.assert_not_called()
+    perform.assert_not_called()
+
+
+def test_upgrade_yes_stops_updates_and_restarts(mocker, capsys):
     updates = [
         {
             "component": "mirrorneuron-cli",
@@ -131,10 +159,10 @@ def test_update_yes_stops_updates_and_restarts(mocker, capsys):
     mock_record = mocker.patch("mn_cli.update_cmds._record_check")
     mock_start = mocker.patch("mn_cli.update_cmds._start_server")
 
-    update_cmds.perform_update(updates)
+    update_cmds.perform_upgrade(updates)
 
     output = capsys.readouterr().out
-    assert "MirrorNeuron update successful." in output
+    assert "MirrorNeuron upgrade successful." in output
     assert "installed" in output
     mock_stop.assert_called_once()
     mock_python.assert_called_once_with([updates[0]])

@@ -44,6 +44,7 @@ REMOVED_COMMANDS: dict[tuple[str, ...], str] = {
     ("run", "monitor"): "mn run watch",
     ("runtime", "health"): "mn runtime status (or mn runtime doctor for diagnostics)",
     ("runtime", "metrics"): "mn resource usage",
+    ("runtime", "update"): "mn runtime upgrade",
     ("node", "join"): "mn node add HOST --token TOKEN",
     ("node", "expose"): "mn runtime start",
     ("node", "leave"): "mn node remove",

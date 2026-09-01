@@ -27,7 +27,6 @@ from mn_cli.libs import (
 )
 from mn_cli.output import RemediatingTyperGroup, instrument_typer
 from mn_cli.runtime_mode import local_runtime_mode
-from mn_cli.terminal import is_ci, is_interactive
 
 PACKAGE_NAME = "mirrorneuron-cli"
 FALLBACK_VERSION = "0.0.0"
@@ -63,10 +62,11 @@ Examples:
   mn node add <host> --token <token>
   mn node remove <node-name> --yes
 """
-RUNTIME_HELP = """Start, stop, update, and diagnose the local MirrorNeuron runtime.
+RUNTIME_HELP = """Start, stop, upgrade, and diagnose the local MirrorNeuron runtime.
 
 Examples:
   mn runtime start
+  mn runtime upgrade
   mn runtime status
   mn runtime doctor
   mn runtime doctor --json
@@ -147,8 +147,6 @@ def main(
             typer.echo(mode)
         typer.echo(ctx.get_help())
         raise typer.Exit()
-    if "--json" not in sys.argv and not is_ci() and is_interactive():
-        update_cmds.maybe_prompt_for_update(ctx.invoked_subcommand)
 
 
 def _runtime_mode_line(*, capitalize: bool = True) -> str | None:
@@ -219,7 +217,7 @@ runtime_app.command(name="doctor")(sys_cmds.doctor)
 runtime_app.command(name="cleanup")(sys_cmds.cleanup)
 runtime_app.command(name="restart-sidecars")(sys_cmds.restart_sidecars)
 runtime_app.command(name="ensure-context-engine")(sys_cmds.ensure_context_engine)
-runtime_app.command(name="update")(update_cmds.update)
+runtime_app.command(name="upgrade")(update_cmds.upgrade)
 
 # Resource commands
 resource_app.command(name="show")(resource_cmds.list_resources)

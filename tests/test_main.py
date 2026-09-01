@@ -21,13 +21,11 @@ def no_local_runtime_mode(mocker):
 
 def test_version_prints_installed_package_version(mocker):
     mocker.patch("mn_cli.main.metadata.version", return_value="1.2.3")
-    mock_update_prompt = mocker.patch("mn_cli.update_cmds.maybe_prompt_for_update")
 
     result = runner.invoke(app, ["--version"])
 
     assert result.exit_code == 0
     assert result.stdout == f"{format_banner('MirrorNeuron CLI')}\nversion 1.2.3\n"
-    mock_update_prompt.assert_not_called()
 
 
 def test_version_uses_fallback_when_package_metadata_is_missing(mocker):
@@ -80,8 +78,6 @@ def test_short_version_prints_worker_mode(mocker, no_local_runtime_mode):
 
 
 def test_no_args_prints_banner_above_help(mocker):
-    mock_update_prompt = mocker.patch("mn_cli.update_cmds.maybe_prompt_for_update")
-
     result = runner.invoke(app, [])
 
     assert result.exit_code == 0
@@ -90,7 +86,6 @@ def test_no_args_prints_banner_above_help(mocker):
     assert "Examples:" in result.stdout
     assert "mn blueprint list" in result.stdout
     assert "MN_GRPC_TARGET" in result.stdout
-    mock_update_prompt.assert_not_called()
 
 
 def test_no_args_help_remains_readable_on_narrow_terminal(monkeypatch):
@@ -105,7 +100,6 @@ def test_no_args_help_remains_readable_on_narrow_terminal(monkeypatch):
 
 def test_no_args_prints_worker_mode_above_help(mocker, no_local_runtime_mode):
     no_local_runtime_mode.return_value = "worker"
-    mock_update_prompt = mocker.patch("mn_cli.update_cmds.maybe_prompt_for_update")
 
     result = runner.invoke(app, [])
 
@@ -114,7 +108,6 @@ def test_no_args_prints_worker_mode_above_help(mocker, no_local_runtime_mode):
         f"{format_banner('MirrorNeuron CLI')}\nRuntime mode: worker\n"
     )
     assert "Usage:" in result.stdout
-    mock_update_prompt.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -169,8 +162,29 @@ def test_runtime_help_includes_sidecar_restart_command():
 
     assert result.exit_code == 0
     assert "status" in result.stdout
+    assert "upgrade" in result.stdout
     assert "ensure-context-engine" in result.stdout
     assert "restart-sidecars" in result.stdout
+
+
+def test_runtime_start_checks_for_available_upgrade(mocker):
+    start_server = mocker.patch("mn_cli.libs.sys_cmds._start_server")
+    notify = mocker.patch("mn_cli.libs.sys_cmds.update_cmds.notify_if_upgrade_available")
+
+    result = runner.invoke(app, ["runtime", "start"])
+
+    assert result.exit_code == 0
+    start_server.assert_called_once_with(host=None, grpc_port=55051)
+    notify.assert_called_once_with()
+
+
+def test_runtime_update_returns_upgrade_migration_hint():
+    result = runner.invoke(app, ["runtime", "update", "--json"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["error"]["code"] == "MN_USAGE_ERROR"
+    assert "mn runtime upgrade" in payload["error"]["message"]
 
 
 def test_unknown_command_suggests_close_match():

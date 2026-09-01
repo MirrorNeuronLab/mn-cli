@@ -16,7 +16,7 @@ import urllib.request
 from importlib import metadata
 from pathlib import Path
 from pathlib import PurePosixPath
-from typing import Any, Optional, TypedDict
+from typing import Any, TypedDict
 from urllib.parse import quote
 
 import typer
@@ -24,7 +24,7 @@ import typer
 from mn_cli.libs.ui import print_confirmed, print_error, print_info, print_success_confirmation, print_warning
 from mn_cli.output import json_enabled, record_result
 from mn_cli.shared import console
-from mn_cli.terminal import is_interactive
+from mn_cli.terminal import is_ci, is_interactive
 from mn_cli.runtime_state import read_json_object
 from mn_cli.server_cmds import (
     DIR,
@@ -161,14 +161,18 @@ CMD ["bin/mirror_neuron", "foreground"]
 """
 
 
-def maybe_prompt_for_update(command_name: Optional[str] = None) -> None:
-    if command_name in {"update", "stop"}:
-        return
+def notify_if_upgrade_available() -> None:
+    """Remind an interactive runtime-start operator about a newer release.
+
+    This is deliberately advisory: runtime startup never installs an update or
+    prompts for confirmation.  The explicit ``mn runtime upgrade`` command is
+    the only path that performs an installation.
+    """
     if _local_source_install():
         return
     if os.getenv("MN_DISABLE_UPDATE_CHECK", "").lower() in {"1", "true", "yes"}:
         return
-    if os.getenv("CI", "").lower() == "true":
+    if is_ci():
         return
     if not sys.stdin.isatty():
         return
@@ -184,30 +188,25 @@ def maybe_prompt_for_update(command_name: Optional[str] = None) -> None:
     if not available:
         return
 
-    console.print("\n[yellow]A MirrorNeuron update is available.[/yellow]")
-    _print_updates(available)
-    console.print(
-        "[bold red]Updating will stop all MirrorNeuron components and all running jobs.[/bold red]"
+    print_warning(
+        console,
+        "A newer MirrorNeuron version is available. "
+        "Run `mn runtime upgrade` when no important jobs are running.",
     )
-    console.print(
-        "[yellow]Please update only when no important jobs are running. "
-        "Backward compatibility is not guaranteed between releases.[/yellow]"
-    )
-    if typer.confirm("Do you want to update now?", default=False):
-        perform_update(available)
+    _print_updates(available, status=True)
 
 
-def update(
-    yes: bool = typer.Option(False, "--yes", "-y", help="Update without prompting."),
+def upgrade(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Upgrade without prompting."),
     check_only: bool = typer.Option(
-        False, "--check-only", help="Only check for updates; do not install them."
+        False, "--check-only", help="Only check for upgrades; do not install them."
     ),
 ) -> None:
-    """Check for released package updates and optionally install them."""
+    """Install available release-pinned runtime upgrades."""
 
     if _local_source_install():
         console.print(
-            "[yellow]Local source install detected; release updates are skipped. "
+            "[yellow]Local source install detected; release upgrades are skipped. "
             "Run mn-deploy/install.sh --mode local from your checkout to refresh local components.[/yellow]"
         )
         return
@@ -215,35 +214,35 @@ def update(
     try:
         available = get_available_updates()
     except Exception as exc:
-        print_error(console, f"Could not check for updates: {exc}")
+        print_error(console, f"Could not check for upgrades: {exc}")
         raise typer.Exit(1) from exc
 
     if not available:
-        print_confirmed(console, "MirrorNeuron update", status="up to date")
+        print_confirmed(console, "MirrorNeuron upgrade", status="up to date")
         return
 
-    print_warning(console, "A MirrorNeuron update is available.")
+    print_warning(console, "A newer MirrorNeuron version is available.")
     _print_updates(available)
 
     if check_only:
         record_result({"updates": available, "count": len(available), "mutation": False})
         return
 
-    print_warning(console, "Updating will stop all MirrorNeuron components and all running jobs.")
+    print_warning(console, "Upgrading will stop all MirrorNeuron components and all running jobs.")
     print_warning(
         console,
-        "Update only when no important jobs are running; backward compatibility is not guaranteed between releases.",
+        "Upgrade only when no important jobs are running; backward compatibility is not guaranteed between releases.",
     )
 
     if not yes:
         if json_enabled() or not is_interactive():
-            print_error(console, "Runtime update requires --yes in JSON or non-interactive mode.", code="MN_CONFIRMATION_REQUIRED")
+            print_error(console, "Runtime upgrade requires --yes in JSON or non-interactive mode.", code="MN_CONFIRMATION_REQUIRED")
             raise typer.Exit(2)
-        if not typer.confirm("Do you want to update now?", default=False):
-            print_error(console, "Runtime update was not confirmed.", code="MN_CONFIRMATION_REQUIRED")
+        if not typer.confirm("Do you want to upgrade now?", default=False):
+            print_error(console, "Runtime upgrade was not confirmed.", code="MN_CONFIRMATION_REQUIRED")
             raise typer.Exit(2)
 
-    perform_update(available)
+    perform_upgrade(available)
 
 
 def get_available_updates() -> list[dict[str, str]]:
@@ -294,13 +293,13 @@ def get_available_updates() -> list[dict[str, str]]:
     return updates
 
 
-def perform_update(available: list[dict[str, str]] | None = None) -> None:
+def perform_upgrade(available: list[dict[str, str]] | None = None) -> None:
     available = available if available is not None else get_available_updates()
     if not available:
-        print_confirmed(console, "MirrorNeuron update", status="up to date")
+        print_confirmed(console, "MirrorNeuron upgrade", status="up to date")
         return
 
-    _reconcile_native_resources_before_update()
+    _reconcile_native_resources_before_upgrade()
     print_info(console, "Stopping MirrorNeuron components…")
     from mn_cli.libs.sys_cmds import stop
 
@@ -321,7 +320,7 @@ def perform_update(available: list[dict[str, str]] | None = None) -> None:
     _record_check()
     print_success_confirmation(
         console,
-        "MirrorNeuron update",
+        "MirrorNeuron upgrade",
         status="installed",
         details={"Components": ", ".join(item["component"] for item in available)},
         next_steps="mn runtime status",
@@ -330,7 +329,7 @@ def perform_update(available: list[dict[str, str]] | None = None) -> None:
     _start_server()
 
 
-def _reconcile_native_resources_before_update() -> None:
+def _reconcile_native_resources_before_upgrade() -> None:
     try:
         from mn_sdk.native_resource_registry import reconcile_native_resources
         from mn_sdk.native_runtime_service import _native_resource_reference_checker
@@ -349,9 +348,13 @@ def _reconcile_native_resources_before_update() -> None:
         )
 
 
-def _print_updates(updates: list[dict[str, str]]) -> None:
+def _print_updates(updates: list[dict[str, str]], *, status: bool = False) -> None:
     for item in updates:
-        console.print(f"  - {item['component']}: {item['current']} -> {item['latest']}")
+        message = f"{item['component']}: {item['current']} -> {item['latest']}"
+        if status:
+            print_info(console, message)
+        else:
+            console.print(f"  - {message}")
 
 
 def _stable_version_key(version: str) -> tuple[int, int, int] | None:

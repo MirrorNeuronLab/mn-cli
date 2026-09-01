@@ -18,7 +18,7 @@ The root command registers these operator-facing families:
 - `run`: listing, inspection, and lifecycle control of executions;
 - `node`: cluster membership, drain, reconcile, and maintenance;
 - `operation`: durable group-operation inspection and reattachment;
-- `runtime`: start, stop, aggregate status, doctor, sidecars, and updates;
+- `runtime`: start, stop, aggregate status, doctor, sidecars, and upgrades;
 - `resource`, `service`, and `model`: local and cluster capability management.
 
 `mn_cli/main.py` and each Typer sub-application are authoritative for exact
@@ -31,7 +31,7 @@ job        list create show start archive reset-data delete
 run        list show watch logs result resources compare pause resume cancel delete
 run human  list respond ack
 model      list add show probe update remove doctor
-runtime    start stop status doctor cleanup restart-sidecars ensure-context-engine update
+runtime    start stop status doctor cleanup restart-sidecars ensure-context-engine upgrade
 node       list show add remove reconcile drain undrain maintenance refresh-token
 operation  show watch
 resource   show usage set
@@ -364,13 +364,20 @@ Public workflow reconstruction and activity compaction call the SDK projection
 helpers. Terminal ordering may supply observed events, but the CLI does not
 maintain a separate workflow-policy implementation.
 
-Release updates resolve a versioned package plan from the newest stable
+After a successful interactive `mn runtime start`, the CLI checks whether a
+newer release is available and, when one is found, prints an advisory that
+names `mn runtime upgrade`. This check never prompts for or installs an
+upgrade, and it is not run for other commands. `mn runtime upgrade` is the
+explicit, confirmation-protected installation path; the former `mn runtime
+update` command returns a migration hint.
+
+Release upgrades resolve a versioned package plan from the newest stable
 `mn-deploy/install_support/v*` snapshot, not from component-repository source
 branches or package-manager `latest` aliases. The plan pins the Core release
 tag, Python package versions, and Web UI version. Python updates use the
 configured GAR Python index (with a configurable extra index for dependencies);
 the Web UI receives its pinned npm version through the installed Compose
-environment. An update is offered only when the release-plan component version
+environment. An upgrade is offered only when the release-plan component version
 is strictly newer than the installed stable version; a stale snapshot cannot
 offer or install a downgrade. `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
 `MN_PIP_INDEX_URL`, and `MN_PIP_EXTRA_INDEX_URL` are the supported

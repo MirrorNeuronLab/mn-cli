@@ -14,6 +14,7 @@ from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.ui import print_error, print_info, print_success_confirmation, require_confirmation
 from mn_cli.output import record_result
 from mn_cli.terminal import use_progress
+from mn_cli import update_cmds
 from mn_cli.server_cmds import (
     _start_server,
     _start_network_seed,
@@ -61,6 +62,7 @@ def start(
     """Start a federation-capable MirrorNeuron runtime"""
     console.print(format_banner("MirrorNeuron Local Runtime"))
     _start_server(host=host, grpc_port=grpc_port)
+    update_cmds.notify_if_upgrade_available()
 
 def join(
     host: str,

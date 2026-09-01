@@ -348,16 +348,21 @@ environment variables or uncommitted `.env` files instead.
 
 ## Release Updates
 
-`mn runtime update` and the periodic interactive update check use the newest
-stable `install_support/v*` snapshot in `MirrorNeuronLab/mn-deploy` as their
-release plan. The snapshot pins the Core release tag, the SDK/CLI/API Python
-package versions, and the Web UI npm version. The updater installs the exact
+After a successful interactive `mn runtime start`, the CLI checks the newest
+stable `install_support/v*` snapshot in `MirrorNeuronLab/mn-deploy`. If a newer
+release is available, it only prints a reminder to run `mn runtime upgrade`; it
+never prompts for or installs an upgrade during startup or any other command.
+
+`mn runtime upgrade` is the explicit, confirmation-protected installation
+command. Its release plan pins the Core release tag, the SDK/CLI/API Python
+package versions, and the Web UI npm version. The upgrader installs the exact
 Python package versions from the public GAR `agent-skills` index and configures
 the exact Web UI npm version for Docker Compose; it does not follow a source
 branch, package-manager `latest` tag, or the Core repository's latest-release
-endpoint. A component is shown as an update only when the snapshot version is
+endpoint. A component is shown as an upgrade only when the snapshot version is
 strictly newer than the installed stable version, so a stale snapshot cannot
-offer a downgrade.
+offer a downgrade. The former `mn runtime update` command now points to
+`mn runtime upgrade`.
 
 The Core remains a versioned GitHub Release binary because it is not a Python
 or npm package. Its release asset URL is constructed from the same support
