@@ -417,6 +417,9 @@ snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
   membership. It then rebuilds gateway routes from the current live node
   address; this avoids treating an unverified `.local` name as a cluster
   endpoint.
+- See [Cross-node model routing through LiteLLM](docs/cross-node-litellm-routing.md)
+  for the complete proxy topology, node join/departure reconciliation,
+  replica load-balancing, admission limits, and operator diagnostics.
 - `--debug` retains complete Docker build diagnostics and prints deferred model
   policies. Actual model/node selection appears later in runtime events.
 

@@ -353,6 +353,10 @@ catalog precedence applies, so `$MN_HOME/models/catalog.json` and
 `MN_MODEL_CATALOG_PATH` can replace route aliases and fallback metadata without
 changing CLI code.
 
+The operator-facing topology, registration and departure sequence, grace
+periods, admission formula, queue scope, and diagnostics are documented in
+[Cross-node model routing through LiteLLM](docs/cross-node-litellm-routing.md).
+
 The orchestration boundary is injectable through `RuntimeModelDependencies`.
 Fast tests must provide a catalog, resource report, system summary,
 `BlueprintModelOps`, and LiteLLM gateway effects and execute the real planning
