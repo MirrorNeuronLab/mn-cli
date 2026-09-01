@@ -218,7 +218,11 @@ operator deletes the run.
 The public `mn model` command surface is exactly `list`, `add`, `show`, `probe`,
 `update`, `remove`, and `doctor`. `add` accepts either one catalog/arbitrary DMR
 reference or one canonical provider JSON file. DMR placement chooses the best
-eligible cluster node unless `--local` or `--node` is supplied. Provider files
+eligible cluster node unless `--local` or one or more repeatable `--node`
+targets are supplied. `--local` and `--node` may be combined to install one
+logical model on multiple eligible nodes. All targets are preflighted before
+installation. Successful replicas remain registered after a partial execution
+failure, and retrying an already recorded target is idempotent. Provider files
 are validated in full, including required environment references, before the
 SDK registry changes. If the requested DMR artifact is already installed on an
 eligible local or cluster node, `add` adopts that artifact and registers it
@@ -236,10 +240,14 @@ the command does not bypass a remote owner's loopback-only DMR endpoint.
 `list` renders registered models and discovered unmanaged DMR artifacts;
 `--available` also includes catalog-only choices. Machine records expose
 explicit kind, state, registration, installation, routing, node, catalog, and
-verification facts. Mutating commands support `--json`. `remove` is ID-based,
-requires confirmation or `--yes`, preserves blueprint ownership unless
-`--force`, and deletes a DMR artifact unless `--keep-artifact` is used.
-Provider removal never deletes its source JSON.
+verification facts, including one health record per physical installation.
+Mutating commands support `--json`. `update` targets all recorded DMR
+installations by default and accepts `--local` and repeatable `--node`
+selection. `remove` is ID-based, requires confirmation or `--yes`, preserves
+blueprint ownership unless `--force`, and deletes a DMR artifact unless
+`--keep-artifact` is used. A replicated model requires `--local`, repeatable
+`--node`, or explicit `--all-nodes`; an untargeted removal remains valid for a
+single installation. Provider removal never deletes its source JSON.
 
 The removed `install`, `proxy`, and `remote` command trees have no compatibility
 aliases. Reusable provider parsing, registry persistence, resolution, and
@@ -260,12 +268,15 @@ each consumer may choose the best compatible cluster node independently.
 it accepts a compatible deferred model while still rejecting unknown models or
 models with no feasible hardware/fallback path.
 
-The selected node's cluster-reachable LiteLLM endpoint is the submitter
-gateway's upstream. The selected-node gateway owns the direct route to its
-node-local DMR. Worker configuration receives only a local LiteLLM endpoint and
-logical aliases, never a remote node's DMR URL as the worker-facing API base.
-Already-installed and newly-installed models follow the same routing
-projection.
+Every node's LiteLLM gateway projects the merged healthy cluster model
+inventory. A public logical group contains one deployment per physical
+installation, ordered local first and balanced with LiteLLM's `least-busy`
+router. Each deployment forwards to a private owner-qualified route on the
+selected node's gateway; only that route reaches the owner-local DMR endpoint.
+Public-to-public proxy forwarding is rejected to prevent routing loops. Worker
+configuration receives only its local LiteLLM endpoint and logical aliases,
+never private route names or a remote node's DMR URL. Already-installed and
+newly-installed models follow the same routing projection.
 
 Workflows that use node-local runners are pinned to one feasible runtime node
 before submission. Accelerator requirements select by available accelerator

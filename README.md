@@ -82,6 +82,20 @@ When the requested DMR artifact is already installed locally or on a cluster
 node, `mn model add` reuses it and creates the same managed registry record
 without pulling a second copy.
 
+A DMR model may be installed on more than one eligible node. Repeat `--node`
+and combine it with `--local` to add all requested replicas in one operation:
+
+```bash
+mn model add small --local --node spark
+mn model add medium --node spark --node gpu-2
+```
+
+The CLI preflights every target before installation, records successful
+replicas if a later target fails, and makes retries idempotent. `mn model list
+--json` and `mn model doctor` report each installation separately. An
+untargeted `model update` updates all recorded replicas. Removing a replicated
+model requires `--local`, one or more `--node` values, or `--all-nodes`.
+
 Force a live capability evaluation and save the effective LiteLLM-facing
 matrix in the SDK model-catalog overlay:
 

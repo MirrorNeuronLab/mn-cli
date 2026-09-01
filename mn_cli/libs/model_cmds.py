@@ -89,7 +89,7 @@ from mn_sdk import (
 from mn_sdk import (
     remove_model_ref as sdk_remove_model_ref,
 )
-from mn_sdk.model_access import runtime_model_gateway_name
+from mn_sdk.model_access import is_private_owner_route, runtime_model_owner_route_name
 
 from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.model_probe import run_model_probe
@@ -127,6 +127,13 @@ REMOTE_LITELLM_GATEWAY_SOURCE = "remote_litellm_gateway"
 CLUSTER_REMOTE_MODEL_SOURCES = {
     REMOTE_LITELLM_GATEWAY_SOURCE,
 }
+
+
+def _normalized_node_options(value: list[str] | str | None) -> list[str]:
+    values = [value] if isinstance(value, str) else list(value or [])
+    return list(
+        dict.fromkeys(str(node).strip() for node in values if str(node).strip())
+    )
 
 
 def _handle_model_error(
@@ -276,7 +283,11 @@ def add_model(
         typer.Option("--force", help="Add even when hardware compatibility fails."),
     ] = False,
     node: Annotated[
-        str | None, typer.Option("--node", help="Add on a named runtime cluster node.")
+        list[str] | None,
+        typer.Option(
+            "--node",
+            help="Add on a named runtime cluster node. Repeat for multiple replicas.",
+        ),
     ] = None,
     local: Annotated[
         bool, typer.Option("--local", help="Force local Docker Model Runner placement.")
@@ -307,10 +318,10 @@ def add_model(
                 definition_file, json_output=json_output, make_default=default
             )
             return
-        if local and node:
-            raise ValueError("--local and --node cannot be used together")
+        requested_nodes = _normalized_node_options(node)
         requested = str(model or "").strip()
-        if get_registered_model(requested) is not None:
+        existing_record = get_registered_model(requested)
+        if existing_record is not None and not (local or requested_nodes):
             raise ValueError(
                 f"model {requested!r} is already registered; run 'mn model remove {requested}' before adding it again"
             )
@@ -323,9 +334,59 @@ def add_model(
                 requested, backend=backend, context_size=context_size
             )
             cataloged = False
+        if existing_record is not None and existing_record.get("kind") != "dmr":
+            raise ValueError(f"model {requested!r} is already registered as a provider")
+        if (local and requested_nodes) or len(requested_nodes) > 1 or existing_record:
+            payload = _add_dmr_replicas(
+                entry,
+                record=existing_record,
+                nodes=requested_nodes,
+                include_local=local,
+                backend=backend,
+                context_size=context_size,
+                force=force,
+                cataloged=cataloged,
+                make_default=default,
+                json_output=json_output,
+            )
+            if json_output:
+                record_result(payload)
+            else:
+                for result in payload["results"]:
+                    if result.get("status") == "error":
+                        print_warning(
+                            console,
+                            f"Could not add {entry.get('id')!r} on {result.get('node')}: {result.get('error')}",
+                        )
+                if payload.get("status") == "ready":
+                    print_success_confirmation(
+                        console,
+                        "Model add",
+                        status="ready",
+                        details=[
+                            ("Model", entry.get("id")),
+                            (
+                                "Nodes",
+                                ", ".join(
+                                    result["node"] for result in payload["results"]
+                                ),
+                            ),
+                            ("Default", "yes" if default else "no"),
+                        ],
+                        next_steps=f"mn model doctor {entry.get('id')}",
+                    )
+            if payload.get("status") != "ready":
+                raise typer.Exit(1)
+            return
         target = docker_model_name(entry)
         requested_node = (
-            "" if local else str(node or _selected_model_install_node() or "")
+            ""
+            if local
+            else str(
+                (requested_nodes[0] if requested_nodes else "")
+                or _selected_model_install_node()
+                or ""
+            )
         )
         local_artifact_installed = (
             _model_installed(target) if not requested_node else False
@@ -460,6 +521,199 @@ def add_model(
         raise typer.Exit(1)
 
 
+def _add_dmr_replicas(
+    entry: dict[str, Any],
+    *,
+    record: dict[str, Any] | None,
+    nodes: list[str],
+    include_local: bool,
+    backend: str,
+    context_size: int | None,
+    force: bool,
+    cataloged: bool,
+    make_default: bool,
+    json_output: bool,
+) -> dict[str, Any]:
+    local_node = _local_runtime_node_name() or "local"
+    existing_installations = [
+        item
+        for item in (record or {}).get("installations") or []
+        if isinstance(item, dict)
+    ]
+    local_target = (
+        "local"
+        if any(
+            str(item.get("node") or "").strip() == "local"
+            for item in existing_installations
+        )
+        else local_node
+    )
+    targets = list(dict.fromkeys([*([local_target] if include_local else []), *nodes]))
+    if not targets:
+        raise ValueError("at least one --local or --node target is required")
+
+    recorded = {
+        str(item.get("node") or "").strip(): item
+        for item in existing_installations
+        if str(item.get("node") or "").strip()
+    }
+    preflight: dict[str, dict[str, Any]] = {}
+    for target_node in targets:
+        if target_node in recorded:
+            preflight[target_node] = {"recorded": True}
+            continue
+        if target_node in {"local", local_node}:
+            compatibility = assess_model_compatibility(
+                entry, backend=backend, force=force
+            )
+            if not compatibility.ok:
+                raise ValueError(
+                    f"{target_node} is not compatible with {entry.get('id')!r}: "
+                    f"{compatibility.message}"
+                )
+            preflight[target_node] = {
+                "local": True,
+                "compatibility": compatibility.to_dict(),
+            }
+            continue
+        node_endpoint = _cluster_node_endpoint(target_node)
+        compatibility = _remote_node_compatibility(
+            entry,
+            selected_node=target_node,
+            node=node_endpoint.get("node") or {},
+        )
+        if compatibility.get("ok") is False and not force:
+            raise ValueError(str(compatibility.get("message") or "incompatible node"))
+        preflight[target_node] = {
+            "local": False,
+            "compatibility": compatibility,
+        }
+
+    target_model = docker_model_name(entry)
+    results: list[dict[str, Any]] = []
+    installations = [
+        dict(item)
+        for item in (record or {}).get("installations") or []
+        if isinstance(item, dict)
+    ]
+    installed_nodes = {str(item.get("node") or "").strip() for item in installations}
+    now = datetime.now(UTC).isoformat()
+    for target_node in targets:
+        if preflight[target_node].get("recorded"):
+            results.append({"node": target_node, "status": "ready", "reused": True})
+            continue
+        try:
+            if preflight[target_node].get("local"):
+                if _model_installed(target_model):
+                    result = {
+                        "entry": entry,
+                        "docker_model": target_model,
+                        "compatibility": preflight[target_node]["compatibility"],
+                        "reused": True,
+                    }
+                elif json_output:
+                    result = install_model_entry(
+                        entry,
+                        backend=backend,
+                        context_size=context_size,
+                        force=force,
+                    )
+                else:
+                    result = install_model_entry_with_progress(
+                        entry,
+                        backend=backend,
+                        context_size=context_size,
+                        force=force,
+                    )
+                resolved_backend = str(
+                    (result.get("compatibility") or {}).get("backend")
+                    or backend
+                    or "auto"
+                )
+                record_manual_model_install(entry, backend=resolved_backend)
+                _sync_installed_model_gateway_route(
+                    entry, result=result, node=None, strict=True
+                )
+                _record_runtime_model_install(entry)
+            else:
+                result = _install_model_on_cluster_node(
+                    entry,
+                    node=target_node,
+                    backend=backend,
+                    context_size=context_size,
+                    force=force,
+                )
+                resolved_backend = str(
+                    (result.get("compatibility") or {}).get("backend")
+                    or backend
+                    or "auto"
+                )
+            if target_node not in installed_nodes:
+                installations.append(
+                    {
+                        "node": target_node,
+                        "model": target_model,
+                        "api_model": str(entry.get("api_model") or target_model),
+                        "backend": resolved_backend,
+                        "status": "ready",
+                        "installed_at": now,
+                        "updated_at": now,
+                    }
+                )
+                installed_nodes.add(target_node)
+            results.append(
+                {
+                    "node": target_node,
+                    "status": "ready",
+                    "reused": bool(result.get("reused")),
+                }
+            )
+        except Exception as exc:
+            results.append({"node": target_node, "status": "error", "error": str(exc)})
+
+    if installations:
+        selected_node = (
+            local_node
+            if local_node in installed_nodes
+            else str((record or {}).get("selected_node") or "")
+            or str(installations[0].get("node") or "")
+        )
+        registration = dmr_registration(
+            entry,
+            selected_node=selected_node,
+            installations=installations,
+            cataloged=bool((record or {}).get("cataloged", cataloged)),
+            verification=str(
+                (record or {}).get("verification")
+                or ("catalog" if cataloged else "unverified")
+            ),
+        )
+        if record is None:
+            added, registry_path = add_registered_models([registration])
+            stored = added[0]
+        else:
+            registration["created_at"] = record.get("created_at")
+            stored, registry_path = replace_registered_model(registration)
+        if make_default:
+            stored, registry_path = set_registered_default_model(stored["id"])
+            sync_litellm_gateway(restart=True)
+            _sync_default_model_across_cluster(restart=True, quiet=json_output)
+    else:
+        stored = record or dmr_registration(entry, cataloged=cataloged)
+        registry_path = default_model_registry_path()
+
+    failures = [result for result in results if result.get("status") == "error"]
+    return {
+        "status": "partial" if failures else "ready",
+        "model": stored,
+        "docker_model": target_model,
+        "nodes": targets,
+        "results": results,
+        "registry": str(registry_path),
+        "default": bool(make_default),
+    }
+
+
 model_app.command(name="show")(show_model)
 
 
@@ -514,6 +768,16 @@ def update_model(
         bool,
         typer.Option("--force", help="Update even when hardware compatibility fails."),
     ] = False,
+    node: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--node",
+            help="Update the installation on a named node. Repeat as needed.",
+        ),
+    ] = None,
+    local: Annotated[
+        bool, typer.Option("--local", help="Update only the local installation.")
+    ] = False,
     json_output: Annotated[
         bool, typer.Option("--json", help="Print machine-readable JSON.")
     ] = False,
@@ -523,6 +787,7 @@ def update_model(
         if bool(model) == bool(all_models):
             raise ValueError("provide one registered MODEL or --all")
         records = registered_model_records()
+        requested_nodes = _normalized_node_options(node)
         selected = records if all_models else [get_registered_model(str(model or ""))]
         selected = [record for record in selected if isinstance(record, dict)]
         if not selected:
@@ -531,18 +796,27 @@ def update_model(
         provider_cache: dict[str, list[dict[str, Any]]] = {}
         for record in selected:
             if record.get("kind") == "provider":
+                if local or requested_nodes:
+                    raise ValueError("node targeting applies only to DMR models")
                 results.append(
                     _update_provider_registration(record, provider_cache=provider_cache)
                 )
             else:
                 results.append(
                     _update_dmr_registration(
-                        record, force=force, json_output=json_output
+                        record,
+                        force=force,
+                        json_output=json_output,
+                        nodes=requested_nodes,
+                        include_local=local,
                     )
                 )
         payload = {"updated": len(results), "models": results}
+        degraded = any(result.get("state") == "degraded" for result in results)
         if json_output:
             record_result(payload)
+            if degraded:
+                raise typer.Exit(1)
             return
         for result in results:
             print_success_confirmation(
@@ -556,6 +830,8 @@ def update_model(
                 ],
                 next_steps=f"mn model doctor {result.get('id')}",
             )
+        if degraded:
+            raise typer.Exit(1)
     except typer.Exit:
         raise
     except Exception as exc:
@@ -581,6 +857,20 @@ def remove_model(
             help="Unregister a DMR model without deleting its artifact.",
         ),
     ] = False,
+    node: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--node",
+            help="Remove the installation on a named node. Repeat as needed.",
+        ),
+    ] = None,
+    local: Annotated[
+        bool, typer.Option("--local", help="Remove the local installation.")
+    ] = False,
+    all_nodes: Annotated[
+        bool,
+        typer.Option("--all-nodes", help="Remove every recorded installation."),
+    ] = False,
     yes: Annotated[
         bool, typer.Option("--yes", "-y", help="Confirm removal without prompting.")
     ] = False,
@@ -595,6 +885,11 @@ def remove_model(
     try:
         record = get_registered_model(model)
         kind = str(record.get("kind") or "dmr") if record else "dmr"
+        requested_nodes = _normalized_node_options(node)
+        if all_nodes and (local or requested_nodes):
+            raise ValueError("--all-nodes cannot be combined with --local or --node")
+        if kind == "provider" and (all_nodes or local or requested_nodes):
+            raise ValueError("node targeting applies only to DMR models")
         if kind == "provider" and keep_artifact:
             raise ValueError("--keep-artifact applies only to DMR models")
         if dry_run:
@@ -620,6 +915,42 @@ def remove_model(
             prompt=f"Remove model {model!r}?",
             yes=yes,
         )
+        recorded_installations = [
+            item
+            for item in (record or {}).get("installations") or []
+            if isinstance(item, dict) and str(item.get("node") or "").strip()
+        ]
+        if (
+            kind == "dmr"
+            and record is not None
+            and (
+                all_nodes or local or requested_nodes or len(recorded_installations) > 1
+            )
+        ):
+            payload = _remove_dmr_installations(
+                record,
+                nodes=requested_nodes,
+                include_local=local,
+                all_nodes=all_nodes,
+                force=force,
+                keep_artifact=keep_artifact,
+                json_output=json_output,
+            )
+            if json_output:
+                record_result(payload)
+            else:
+                print_success_confirmation(
+                    console,
+                    "Model remove",
+                    status=str(payload.get("status") or "removed"),
+                    details={
+                        "Model": payload["id"],
+                        "Nodes": ", ".join(payload["nodes"]),
+                        "Remaining replicas": str(payload["remaining"]),
+                    },
+                    next_steps="mn model list",
+                )
+            return
         if kind == "provider":
             snapshot = load_model_registry()
             removed, registry_path = remove_registered_model(model)
@@ -758,6 +1089,103 @@ def remove_model(
     except Exception as exc:
         _handle_model_error(exc, "model remove", model=model)
         raise typer.Exit(1)
+
+
+def _remove_dmr_installations(
+    record: dict[str, Any],
+    *,
+    nodes: list[str],
+    include_local: bool,
+    all_nodes: bool,
+    force: bool,
+    keep_artifact: bool,
+    json_output: bool,
+) -> dict[str, Any]:
+    installations = [
+        dict(item)
+        for item in record.get("installations") or []
+        if isinstance(item, dict) and str(item.get("node") or "").strip()
+    ]
+    if not installations:
+        raise ValueError(f"model {record.get('id')!r} has no recorded installations")
+    local_node = _local_runtime_node_name() or "local"
+    local_target = (
+        "local"
+        if any(str(item.get("node") or "").strip() == "local" for item in installations)
+        else local_node
+    )
+    targets = (
+        [str(item["node"]) for item in installations]
+        if all_nodes
+        else list(dict.fromkeys([*([local_target] if include_local else []), *nodes]))
+    )
+    if not targets:
+        if len(installations) > 1:
+            raise ValueError(
+                "model has multiple installations; use --local, --node, or --all-nodes"
+            )
+        targets = [str(installations[0]["node"])]
+    recorded_nodes = {str(item["node"]) for item in installations}
+    missing = sorted(set(targets) - recorded_nodes)
+    if missing:
+        raise ValueError("model is not recorded on: " + ", ".join(missing))
+
+    entry = _dmr_entry_for_record_or_ref(record, str(record.get("id") or ""))
+    target_model = docker_model_name(entry)
+    owners = _model_owner_ids(target_model)
+    if owners and not force:
+        raise ValueError(
+            f"model is still owned by blueprints: {', '.join(owners)}; use --force to remove it"
+        )
+    results: list[dict[str, Any]] = []
+    for target_node in targets:
+        if not keep_artifact:
+            if target_node not in {"local", local_node}:
+                _remove_runtime_model_on_cluster_node(
+                    target_model, node=target_node, force=force
+                )
+            elif _model_installed(target_model):
+                remove_model_ref(target_model, force=force)
+        _remove_remote_model_records(
+            str(record.get("id") or target_model), node=target_node
+        )
+        results.append(
+            {
+                "node": target_node,
+                "status": "removed",
+                "artifact_removed": not keep_artifact,
+            }
+        )
+
+    remaining = [
+        item for item in installations if str(item.get("node") or "") not in targets
+    ]
+    was_default = bool(record.get("default"))
+    if remaining:
+        replacement = dict(record)
+        replacement.pop("default", None)
+        replacement["installations"] = remaining
+        remaining_nodes = {str(item.get("node") or "") for item in remaining}
+        if str(replacement.get("selected_node") or "") not in remaining_nodes:
+            replacement["selected_node"] = str(remaining[0].get("node") or "")
+        replace_registered_model(replacement)
+    else:
+        if any(target in {"local", local_node} for target in targets):
+            remove_model_record(target_model)
+        remove_registered_model(str(record.get("id") or target_model))
+    sync_litellm_gateway(restart=True)
+    reconcile_cluster_model_routes(restart=True)
+    if was_default and not remaining:
+        _sync_default_model_across_cluster(restart=True, quiet=json_output)
+    return {
+        "status": "removed" if not remaining else "ready",
+        "id": str(record.get("id") or target_model),
+        "kind": "dmr",
+        "nodes": targets,
+        "results": results,
+        "remaining": len(remaining),
+        "artifact_removed": not keep_artifact,
+    }
 
 
 @model_app.command(name="doctor")
@@ -904,6 +1332,35 @@ def doctor_model(
                 and routed
             ),
         }
+        recorded_installations = [
+            item
+            for item in (record or {}).get("installations") or []
+            if isinstance(item, dict) and str(item.get("node") or "").strip()
+        ]
+        installation_nodes = [
+            str(item.get("node") or "") for item in recorded_installations
+        ] or [selected_node]
+        installation_health = [
+            _dmr_installation_health(entry, node_name)
+            for node_name in dict.fromkeys(installation_nodes)
+        ]
+        healthy_count = sum(
+            item.get("health") == "healthy" for item in installation_health
+        )
+        payload["installations"] = installation_health
+        payload["aggregate_status"] = (
+            "usable"
+            if healthy_count == len(installation_health)
+            else "degraded"
+            if healthy_count
+            else "unavailable"
+        )
+        payload["ok"] = bool(
+            healthy_count
+            and gateway_health.get("ok")
+            and routed
+            and payload["litellm_gateway"]["config_ok"]
+        )
         if json_output:
             record_result(payload)
             return
@@ -915,6 +1372,63 @@ def doctor_model(
     except Exception as exc:
         _handle_model_error(exc, "model doctor", model=model)
         raise typer.Exit(1)
+
+
+def _dmr_installation_health(entry: dict[str, Any], node_name: str) -> dict[str, Any]:
+    target = docker_model_name(entry)
+    local_node = _local_runtime_node_name() or "local"
+    if node_name in {"", "local", local_node}:
+        compatibility = assess_model_compatibility(entry).to_dict()
+        installed = _model_installed(target)
+        status = _docker_status()
+        running = bool(status.get("running")) or "running" in json.dumps(status).lower()
+        healthy = bool(compatibility.get("ok") is not False and installed and running)
+        return {
+            "node": node_name or local_node,
+            "local": True,
+            "installed": installed,
+            "running": running,
+            "compatibility": compatibility,
+            "health": "healthy" if healthy else "unavailable",
+        }
+    try:
+        endpoint = next(
+            item
+            for item in _cluster_runtime_status_endpoints(quiet=True)
+            if str(item.get("node_name") or "") == node_name
+        )
+        inventory = _runtime_model_inventory_for_node(endpoint)
+        installed = any(
+            docker_model_match_keys(target) & _model_payload_match_keys(candidate)
+            for candidate in inventory
+        )
+        node_status = str(
+            (endpoint.get("node") or {}).get("status") or "healthy"
+        ).lower()
+        running = node_status in {"healthy", "joining"}
+        compatibility = _remote_node_compatibility(
+            entry,
+            selected_node=node_name,
+            node=endpoint.get("node") or {},
+        )
+        healthy = bool(installed and running and compatibility.get("ok") is not False)
+        return {
+            "node": node_name,
+            "local": False,
+            "installed": installed,
+            "running": running,
+            "compatibility": compatibility,
+            "health": "healthy" if healthy else "unavailable",
+        }
+    except (RuntimeError, StopIteration) as exc:
+        return {
+            "node": node_name,
+            "local": False,
+            "installed": False,
+            "running": False,
+            "health": "unavailable",
+            "error": str(exc),
+        }
 
 
 def _print_model_probe(payload: dict[str, Any]) -> None:
@@ -1039,7 +1553,40 @@ def _registered_model_payload(
         )
         remote_installations = _remote_installations_for_model(record, remote_records)
         local_node = _local_runtime_node_name() or "local"
-        if locally_installed:
+        recorded_installations = [
+            item for item in record.get("installations") or [] if isinstance(item, dict)
+        ]
+        seen_nodes: set[str] = set()
+        for recorded in recorded_installations:
+            recorded_node = str(recorded.get("node") or "").strip()
+            if not recorded_node:
+                continue
+            is_local = recorded_node in {"local", local_node}
+            if is_local:
+                live = locally_installed
+                live_item: dict[str, Any] = {}
+            else:
+                live_item = next(
+                    (
+                        item
+                        for item in remote_installations
+                        if str(item.get("node") or "") == recorded_node
+                    ),
+                    {},
+                )
+                live = bool(live_item)
+            installations.append(
+                {
+                    **recorded,
+                    **live_item,
+                    "node": recorded_node,
+                    "installed": live,
+                    "local": is_local,
+                    "health": "healthy" if live else "unavailable",
+                }
+            )
+            seen_nodes.add(recorded_node)
+        if locally_installed and local_node not in seen_nodes:
             installations.append(
                 {
                     "node": local_node,
@@ -1048,10 +1595,22 @@ def _registered_model_payload(
                     "model": record.get("model") or model_id,
                     "api_model": record.get("api_model") or model_id,
                     "route_source": "local_dmr",
+                    "health": "healthy",
                 }
             )
-        installations.extend(remote_installations)
+            seen_nodes.add(local_node)
+        for remote_installation in remote_installations:
+            remote_node = str(remote_installation.get("node") or "")
+            if remote_node in seen_nodes:
+                continue
+            installations.append({**remote_installation, "health": "healthy"})
         installed = locally_installed or bool(remote_installations)
+        installations.sort(
+            key=lambda item: (
+                0 if item.get("local") else 1,
+                str(item.get("node") or ""),
+            )
+        )
         node = str(
             (local_node if locally_installed else "")
             or record.get("selected_node")
@@ -1111,6 +1670,9 @@ def _stored_registered_model_payload(record: dict[str, Any]) -> dict[str, Any]:
         "default": bool(record.get("default")),
         "created_at": record.get("created_at") or "",
         "updated_at": record.get("updated_at") or "",
+        "installations": list(record.get("installations") or [])
+        if kind == "dmr"
+        else [],
     }
 
 
@@ -1192,7 +1754,7 @@ def _unmanaged_remote_dmr_payload(
         & {key for value in routed_names for key in docker_model_match_keys(value)}
     )
     node = str(remote.get("node") or "remote")
-    api_model = str(remote.get("api_model") or model)
+    api_model = _public_remote_api_model(remote, fallback=model_id or model)
     base_url = str(remote.get("base_url") or "")
     return {
         "id": model_id,
@@ -1431,49 +1993,94 @@ def _update_provider_registration(
 
 
 def _update_dmr_registration(
-    record: dict[str, Any], *, force: bool, json_output: bool
+    record: dict[str, Any],
+    *,
+    force: bool,
+    json_output: bool,
+    nodes: list[str] | None = None,
+    include_local: bool = False,
 ) -> dict[str, Any]:
     entry = _dmr_entry_for_record_or_ref(record, str(record.get("id") or ""))
-    node = str(record.get("selected_node") or "")
-    if node and node not in {"local", _local_runtime_node_name()}:
-        result = _install_model_on_cluster_node(
-            entry,
-            node=node,
-            backend=str(record.get("backend") or "auto"),
-            context_size=record.get("context_size"),
-            force=force,
-            update=True,
+    local_node = _local_runtime_node_name() or "local"
+    recorded_installations = [
+        dict(item)
+        for item in record.get("installations") or []
+        if isinstance(item, dict) and str(item.get("node") or "").strip()
+    ]
+    local_target = (
+        "local"
+        if any(
+            str(item.get("node") or "").strip() == "local"
+            for item in recorded_installations
         )
-    else:
-        result = install_model_entry(
-            entry,
-            backend=str(record.get("backend") or "auto"),
-            context_size=record.get("context_size"),
-            force=force,
-        )
-        record_manual_model_install(
-            entry,
-            backend=str(
-                result.get("compatibility", {}).get("backend")
-                or record.get("backend")
-                or "auto"
-            ),
-        )
+        else local_node
+    )
+    explicit_targets = list(
+        dict.fromkeys([*([local_target] if include_local else []), *(nodes or [])])
+    )
+    targets = (
+        explicit_targets
+        or [str(item.get("node") or "") for item in recorded_installations]
+        or [str(record.get("selected_node") or local_node)]
+    )
+    recorded_nodes = {str(item.get("node") or "") for item in recorded_installations}
+    missing = sorted(set(targets) - recorded_nodes) if explicit_targets else []
+    if missing:
+        raise ValueError("model is not recorded on: " + ", ".join(missing))
+
+    results: list[dict[str, Any]] = []
+    for node in targets:
         try:
-            _sync_installed_model_gateway_route(
-                entry, result=result, node=None, strict=True
-            )
+            if node and node not in {"local", local_node}:
+                result = _install_model_on_cluster_node(
+                    entry,
+                    node=node,
+                    backend=str(record.get("backend") or "auto"),
+                    context_size=record.get("context_size"),
+                    force=force,
+                    update=True,
+                )
+            else:
+                result = install_model_entry(
+                    entry,
+                    backend=str(record.get("backend") or "auto"),
+                    context_size=record.get("context_size"),
+                    force=force,
+                )
+                record_manual_model_install(
+                    entry,
+                    backend=str(
+                        result.get("compatibility", {}).get("backend")
+                        or record.get("backend")
+                        or "auto"
+                    ),
+                )
+                _sync_installed_model_gateway_route(
+                    entry, result=result, node=None, strict=True
+                )
+            results.append({"node": node or local_node, "status": "ready"})
         except Exception as exc:
-            raise AppError(
-                "MN_MODEL_ROUTE_FAILED",
-                f"DMR model {record.get('id')!r} was updated but route reconciliation failed.",
-                internal_message=str(exc),
-                hint=f"Run 'mn model doctor {record.get('id')}' and retry the update.",
-                cause=exc,
-            ) from exc
+            results.append(
+                {"node": node or local_node, "status": "error", "error": str(exc)}
+            )
+
+    failures = [result for result in results if result.get("status") == "error"]
+    for installation in recorded_installations:
+        if str(installation.get("node") or "") in targets:
+            installation["updated_at"] = datetime.now(UTC).isoformat()
+            installation["status"] = (
+                "degraded"
+                if any(
+                    result.get("node") == installation.get("node")
+                    and result.get("status") == "error"
+                    for result in results
+                )
+                else "ready"
+            )
     replacement = dmr_registration(
         entry,
-        selected_node=node or _local_runtime_node_name() or "local",
+        selected_node=str(record.get("selected_node") or local_node),
+        installations=recorded_installations,
         cataloged=bool(record.get("cataloged")),
         verification=str(record.get("verification") or "unverified"),
     )
@@ -1482,8 +2089,10 @@ def _update_dmr_registration(
     return {
         "id": replacement["id"],
         "kind": "dmr",
-        "node": replacement["selected_node"],
-        "state": "ready",
+        "node": ", ".join(targets),
+        "nodes": targets,
+        "results": results,
+        "state": "degraded" if failures else "ready",
     }
 
 
@@ -2373,6 +2982,7 @@ def reconcile_cluster_model_routes(
             gateway = sync_litellm_gateway(
                 runtime_endpoints=local_routes,
                 restart=restart,
+                local_node=local_node,
             )
             gateway_status = str(gateway.get("status") or "configured").strip().lower()
             if gateway_status not in {"configured", "ok", "running"}:
@@ -2492,6 +3102,13 @@ def _reconcile_stale_local_model_registrations(
         if not (_model_payload_match_keys(record) & installed_keys):
             continue
         record["selected_node"] = local_node
+        for installation in record.get("installations") or []:
+            if (
+                isinstance(installation, dict)
+                and str(installation.get("node") or "") == previous_node
+            ):
+                installation["node"] = local_node
+                installation["updated_at"] = datetime.now(UTC).isoformat()
         record["updated_at"] = datetime.now(UTC).isoformat()
         reconciled.append(
             {
@@ -2675,18 +3292,16 @@ def _cluster_routes_from_inventories(
             except Exception:
                 continue
             model_id = str(entry.get("id") or runtime_model).strip()
-            owner_gateway_model = runtime_model_gateway_name(
-                entry,
-                fallback=model_id,
-            )
             route_keys = _model_route_keys(entry)
             explicit_aliases = entry.get("route_aliases")
+            api_base = _node_litellm_gateway_api_base(node_endpoint)
+            owner_route = runtime_model_owner_route_name(owner, runtime_model)
             endpoint = {
                 "provider": str(entry.get("provider") or "docker_model_runner"),
-                "model": owner_gateway_model,
+                "model": owner_route,
                 "runtime_model": runtime_model,
-                "api_model": owner_gateway_model,
-                "api_base": _node_litellm_gateway_api_base(node_endpoint),
+                "api_model": owner_route,
+                "api_base": api_base,
                 "api_key": "not-needed",
                 "node": owner,
                 "source": REMOTE_LITELLM_GATEWAY_SOURCE,
@@ -2701,8 +3316,10 @@ def _cluster_routes_from_inventories(
                     else sorted(route_keys)
                 ),
             }
-            for key in sorted(route_keys):
-                routes.setdefault(key, endpoint)
+            deployment_key = hashlib.sha256(
+                f"{owner}\0{runtime_model}\0{api_base}".encode()
+            ).hexdigest()[:16]
+            routes[f"cluster:{deployment_key}"] = endpoint
     return routes
 
 
@@ -2751,29 +3368,8 @@ def _runtime_endpoints_for_local_gateway(
     *,
     local_installed_models: set[str],
 ) -> dict[str, dict[str, Any]]:
-    installed_keys = {
-        key
-        for model in local_installed_models
-        for key in docker_model_match_keys(model)
-    }
-    candidates = _runtime_endpoints_for_gateway_node(runtime_endpoints, node_endpoint)
-
-    return {
-        alias: endpoint
-        for alias, endpoint in candidates.items()
-        if not (
-            docker_model_match_keys(alias)
-            | docker_model_match_keys(
-                str(
-                    endpoint.get("runtime_model")
-                    or endpoint.get("model")
-                    or endpoint.get("api_model")
-                    or ""
-                )
-            )
-        )
-        & installed_keys
-    }
+    del local_installed_models
+    return _runtime_endpoints_for_gateway_node(runtime_endpoints, node_endpoint)
 
 
 def _remove_gateway_route_on_cluster_node(
@@ -2899,7 +3495,10 @@ def _remote_installations_for_model(
                 "installed": True,
                 "local": False,
                 "model": runtime_model,
-                "api_model": remote.get("api_model") or runtime_model,
+                "api_model": _public_remote_api_model(
+                    remote,
+                    fallback=str(model.get("id") or runtime_model),
+                ),
                 "api_base": base_url,
                 "route_source": REMOTE_LITELLM_GATEWAY_SOURCE
                 if node
@@ -2910,6 +3509,13 @@ def _remote_installations_for_model(
         installations,
         key=lambda item: (str(item.get("node") or ""), str(item.get("model") or "")),
     )
+
+
+def _public_remote_api_model(remote: dict[str, Any], *, fallback: str) -> str:
+    api_model = str(remote.get("api_model") or "").strip()
+    if not api_model or is_private_owner_route(api_model):
+        return str(fallback or remote.get("model") or "").strip()
+    return api_model
 
 
 def _model_payload_match_keys(model: dict[str, Any]) -> set[str]:

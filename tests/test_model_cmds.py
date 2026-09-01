@@ -2,6 +2,7 @@ import json
 import subprocess
 import urllib.error
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from mn_sdk import (
@@ -61,9 +62,16 @@ def isolate_model_ownership(monkeypatch, tmp_path):
     monkeypatch.setenv("MN_MODEL_PROXIES_PATH", str(tmp_path / "model-proxies.json"))
     monkeypatch.setattr("mn_cli.libs.model_cmds._endpoint_responds", lambda: False)
     monkeypatch.setattr("mn_sdk.model_service.endpoint_responds", lambda: False)
-    monkeypatch.setattr("mn_cli.libs.model_cmds._selected_model_install_node", lambda: None)
-    monkeypatch.setattr("mn_cli.libs.model_cmds._record_runtime_model_install", lambda _entry: None)
-    monkeypatch.setattr("mn_cli.libs.model_cmds.litellm_gateway_health", lambda: {"ok": True, "models": []})
+    monkeypatch.setattr(
+        "mn_cli.libs.model_cmds._selected_model_install_node", lambda: None
+    )
+    monkeypatch.setattr(
+        "mn_cli.libs.model_cmds._record_runtime_model_install", lambda _entry: None
+    )
+    monkeypatch.setattr(
+        "mn_cli.libs.model_cmds.litellm_gateway_health",
+        lambda: {"ok": True, "models": []},
+    )
 
 
 def _completed(command, returncode=0, stdout="", stderr=""):
@@ -122,7 +130,7 @@ def test_model_list_defaults_to_added_and_available_includes_catalog(mocker):
 
     result = runner.invoke(app, ["model", "list", "--json"])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.stdout
     assert cli_data(result)["models"] == []
 
     available = runner.invoke(app, ["model", "list", "--available", "--json"])
@@ -158,7 +166,9 @@ def test_model_list_marks_cluster_remote_installed_and_local_route_wins(mocker):
     remotes["remotes"][remote_key]["managed_by"] = "mirror-neuron-cluster"
     save_model_remotes(remotes)
     entry = resolve_model_entry("nemotron-3.5-lightning:latest")
-    add_registered_models([dmr_registration(entry, selected_node="mirror_neuron@spark")])
+    add_registered_models(
+        [dmr_registration(entry, selected_node="mirror_neuron@spark")]
+    )
     installed = set()
     mocker.patch(
         "mn_cli.libs.model_cmds._installed_model_names",
@@ -168,7 +178,10 @@ def test_model_list_marks_cluster_remote_installed_and_local_route_wins(mocker):
         "mn_cli.libs.model_cmds._local_runtime_node_name",
         return_value="mirror_neuron@local",
     )
-    mocker.patch("mn_cli.libs.model_cmds.litellm_gateway_health", return_value={"ok": True, "models": ["nemotron-3.5-lightning:latest"]})
+    mocker.patch(
+        "mn_cli.libs.model_cmds.litellm_gateway_health",
+        return_value={"ok": True, "models": ["nemotron-3.5-lightning:latest"]},
+    )
 
     remote_result = runner.invoke(app, ["model", "list", "--json"])
     assert remote_result.exit_code == 0
@@ -181,17 +194,13 @@ def test_model_list_marks_cluster_remote_installed_and_local_route_wins(mocker):
     assert remote_model["kind"] == "dmr"
     assert remote_model["state"] == "ready"
     assert remote_model["node"] == "mirror_neuron@spark"
-    assert remote_model["installations"] == [
-        {
-            "node": "mirror_neuron@spark",
-            "installed": True,
-            "local": False,
-            "model": "nemotron-3.5-lightning:latest",
-            "api_model": "nemotron-3.5-lightning:latest",
-            "api_base": "http://192.168.4.173:12434/engines/v1",
-            "route_source": "remote_litellm_gateway",
-        }
-    ]
+    assert len(remote_model["installations"]) == 1
+    installation = remote_model["installations"][0]
+    assert installation["installed"] is True
+    assert installation["local"] is False
+    assert installation["health"] == "healthy"
+    assert installation["node"] == "mirror_neuron@spark"
+    assert installation["api_base"] == ("http://192.168.4.173:12434/engines/v1")
 
     installed.add("nemotron-3.5-lightning:latest")
     local_result = runner.invoke(app, ["model", "list", "--json"])
@@ -219,12 +228,19 @@ def test_model_list_includes_unregistered_cluster_artifact_as_unmanaged(mocker):
     remotes["remotes"]["spark-nemotron"]["managed_by"] = "mirror-neuron-cluster"
     save_model_remotes(remotes)
     mocker.patch("mn_cli.libs.model_cmds._installed_model_names", return_value=set())
-    mocker.patch("mn_cli.libs.model_cmds.litellm_gateway_health", return_value={"ok": True, "models": ["nemotron-3.5-lightning:latest"]})
+    mocker.patch(
+        "mn_cli.libs.model_cmds.litellm_gateway_health",
+        return_value={"ok": True, "models": ["nemotron-3.5-lightning:latest"]},
+    )
 
     result = runner.invoke(app, ["model", "list", "--json"])
 
     assert result.exit_code == 0
-    model = next(item for item in cli_data(result)["models"] if item["id"] == "nemotron-3.5-lightning:latest")
+    model = next(
+        item
+        for item in cli_data(result)["models"]
+        if item["id"] == "nemotron-3.5-lightning:latest"
+    )
     assert model["state"] == "unmanaged"
     assert model["registered"] is False
     assert model["installed"] is True
@@ -243,7 +259,49 @@ def test_model_list_includes_unregistered_cluster_artifact_as_unmanaged(mocker):
     ]
 
 
-def test_cluster_model_reconcile_reads_redis_snapshots_and_syncs_only_local_gateway(mocker):
+def test_model_list_hides_private_owner_route_names(mocker):
+    owner_route = model_cmds.runtime_model_owner_route_name(
+        "spark", "docker.io/ai/gemma4:E2B"
+    )
+    upsert_model_remote(
+        "spark-gemma",
+        "docker.io/ai/gemma4:E2B",
+        "http://192.168.4.173:4000/v1",
+        api_model=owner_route,
+        node="spark",
+    )
+    remotes = load_model_remotes()
+    next(iter(remotes["remotes"].values()))["managed_by"] = "mirror-neuron-cluster"
+    save_model_remotes(remotes)
+    entry = resolve_model_entry("small")
+    add_registered_models(
+        [
+            dmr_registration(
+                entry,
+                selected_node="spark",
+                installations=[{"node": "spark"}],
+            )
+        ]
+    )
+    mocker.patch("mn_cli.libs.model_cmds._installed_model_names", return_value=set())
+    mocker.patch(
+        "mn_cli.libs.model_cmds.litellm_gateway_health",
+        return_value={"ok": True, "models": ["small", "gemma4:e2b"]},
+    )
+
+    result = runner.invoke(app, ["model", "list", "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "__mn_owner__/" not in result.stdout
+    model = next(
+        item for item in cli_data(result)["models"] if item["id"] == "gemma4:e2b"
+    )
+    assert model["installations"][0]["api_model"] == "gemma4:e2b"
+
+
+def test_cluster_model_reconcile_reads_redis_snapshots_and_syncs_only_local_gateway(
+    mocker,
+):
     local = _cluster_node("mirror_neuron@local", "10.0.0.1", self_node=True)
     spark = _cluster_node("mirror_neuron@spark", "10.0.0.2")
     spark["runtime_status"] = {
@@ -276,12 +334,12 @@ def test_cluster_model_reconcile_reads_redis_snapshots_and_syncs_only_local_gate
                 "self": True,
                 "status_event_ids": ["1-0"],
             },
-                {
-                    "node": spark,
-                    "node_name": spark["name"],
-                    "host": spark["grpc_host"],
-                    "self": False,
-                },
+            {
+                "node": spark,
+                "node_name": spark["name"],
+                "host": spark["grpc_host"],
+                "self": False,
+            },
         ],
     )
     mocker.patch(
@@ -310,8 +368,9 @@ def test_cluster_model_reconcile_reads_redis_snapshots_and_syncs_only_local_gate
     )
     mocker.patch(
         "mn_cli.libs.model_cmds.reconcile_cluster_model_remotes",
-        side_effect=lambda endpoints, **kwargs: persisted.append((endpoints, kwargs))
-        or {"remotes": {}},
+        side_effect=lambda endpoints, **kwargs: (
+            persisted.append((endpoints, kwargs)) or {"remotes": {}}
+        ),
     )
     mocker.patch(
         "mn_cli.libs.model_cmds.sync_litellm_gateway",
@@ -325,24 +384,22 @@ def test_cluster_model_reconcile_reads_redis_snapshots_and_syncs_only_local_gate
     assert result["models"] == 2
     assert len(synced) == 1
     assert synced[0]["restart"] is False
-    assert synced[0]["runtime_endpoints"]["nemotron-3.5-lightning:latest"]["node"] == "mirror_neuron@spark"
-    assert (
-        synced[0]["runtime_endpoints"]["nemotron-3.5-lightning:latest"]["api_base"]
-        == "http://10.0.0.2:4000/v1"
+    remote_endpoint = next(iter(synced[0]["runtime_endpoints"].values()))
+    assert remote_endpoint["node"] == "mirror_neuron@spark"
+    assert remote_endpoint["api_base"] == "http://10.0.0.2:4000/v1"
+    assert remote_endpoint["source"] == "remote_litellm_gateway"
+    assert remote_endpoint["api_model"] == model_cmds.runtime_model_owner_route_name(
+        "mirror_neuron@spark", "nemotron-3.5-lightning:latest"
     )
-    assert (
-        synced[0]["runtime_endpoints"]["nemotron-3.5-lightning:latest"]["source"]
-        == "remote_litellm_gateway"
-    )
-    assert synced[0]["runtime_endpoints"]["nemotron-3.5-lightning:latest"]["api_model"] == "nemotron-3.5-lightning:latest"
     assert "gemma4:e2b" not in synced[0]["runtime_endpoints"]
     assert persisted[0][1]["replace"] is True
     assert persisted[0][1]["local_node"] == "mirror_neuron@local"
     peer_client.assert_not_called()
-    local_result = next(item for item in result["nodes"] if item["node"] == local["name"])
-    assert set(local_result["gateway_ack"]["accepted_routes"]) == {
-        "nemotron-3.5-lightning:latest",
-    }
+    local_result = next(
+        item for item in result["nodes"] if item["node"] == local["name"]
+    )
+    assert len(local_result["gateway_ack"]["accepted_routes"]) == 1
+    assert local_result["gateway_ack"]["accepted_routes"][0].startswith("cluster:")
     assert local_result["gateway_ack"]["status_event_ack"]["acked_count"] == 1
     event_ack.assert_called_once_with(["1-0"])
 
@@ -388,8 +445,9 @@ def test_cluster_model_reconcile_prunes_departed_runtime_status_snapshots(mocker
     )
     mocker.patch(
         "mn_cli.libs.model_cmds.reconcile_cluster_model_remotes",
-        side_effect=lambda endpoints, **kwargs: persisted.append((endpoints, kwargs))
-        or {"remotes": {}},
+        side_effect=lambda endpoints, **kwargs: (
+            persisted.append((endpoints, kwargs)) or {"remotes": {}}
+        ),
     )
     mocker.patch(
         "mn_cli.libs.model_cmds.sync_litellm_gateway",
@@ -432,7 +490,10 @@ def test_cluster_model_reconcile_rehomes_local_dmr_registration_after_address_ch
             "node": "mirror_neuron@172.20.10.8",
         }
     ]
-    assert get_registered_model("gemma4:e2b")["selected_node"] == "mirror_neuron@172.20.10.8"
+    assert (
+        get_registered_model("gemma4:e2b")["selected_node"]
+        == "mirror_neuron@172.20.10.8"
+    )
 
 
 def test_cluster_model_reconcile_does_not_rehome_a_live_remote_owner():
@@ -478,7 +539,10 @@ def test_cluster_model_reconcile_requires_matching_publish_ack(mocker):
         "mn_cli.libs.model_cmds.reconcile_cluster_model_remotes",
         return_value={"remotes": {}},
     )
-    mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", return_value={"status": "running"})
+    mocker.patch(
+        "mn_cli.libs.model_cmds.sync_litellm_gateway",
+        return_value={"status": "running"},
+    )
 
     result = model_cmds.reconcile_cluster_model_routes(restart=False)
 
@@ -562,9 +626,7 @@ def test_cluster_model_reconcile_retries_incomplete_stream_ack(mocker):
     )
     mocker.patch(
         "mn_cli.libs.model_cmds.client.ack_runtime_status_events",
-        return_value=json.dumps(
-            {"status": "acked", "event_ids": [], "acked_count": 0}
-        ),
+        return_value=json.dumps({"status": "acked", "event_ids": [], "acked_count": 0}),
     )
 
     result = model_cmds.reconcile_cluster_model_routes(restart=False)
@@ -593,7 +655,7 @@ def test_cluster_model_reconcile_preserves_routes_when_peer_snapshot_is_missing(
                 "node_name": spark["name"],
                 "host": spark["grpc_host"],
                 "self": False,
-            }
+            },
         ],
     )
     mocker.patch(
@@ -612,10 +674,14 @@ def test_cluster_model_reconcile_preserves_routes_when_peer_snapshot_is_missing(
     )
     mocker.patch(
         "mn_cli.libs.model_cmds.reconcile_cluster_model_remotes",
-        side_effect=lambda endpoints, **kwargs: persisted.append((endpoints, kwargs))
-        or {"remotes": {}},
+        side_effect=lambda endpoints, **kwargs: (
+            persisted.append((endpoints, kwargs)) or {"remotes": {}}
+        ),
     )
-    mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", return_value={"status": "running"})
+    mocker.patch(
+        "mn_cli.libs.model_cmds.sync_litellm_gateway",
+        return_value={"status": "running"},
+    )
 
     result = model_cmds.reconcile_cluster_model_routes(restart=False)
 
@@ -649,11 +715,16 @@ def test_cluster_route_reconcile_moves_duplicate_model_to_remaining_owner():
         [(local, []), (spark, [nemotron])]
     )
 
-    assert duplicate_routes["nemotron-3.5-lightning:latest"]["node"] == "mirror_neuron@local"
-    assert remaining_routes["nemotron-3.5-lightning:latest"]["node"] == "mirror_neuron@spark"
+    assert {route["node"] for route in duplicate_routes.values()} == {
+        "mirror_neuron@local",
+        "mirror_neuron@spark",
+    }
+    assert {route["node"] for route in remaining_routes.values()} == {
+        "mirror_neuron@spark"
+    }
 
 
-def test_local_gateway_ignores_remote_route_when_same_model_is_installed_locally():
+def test_local_gateway_keeps_remote_replica_when_same_model_is_installed_locally():
     local = {
         "node_name": "mirror_neuron@local",
         "host": "10.0.0.1",
@@ -661,24 +732,30 @@ def test_local_gateway_ignores_remote_route_when_same_model_is_installed_locally
     routes = {
         "nemotron-3.5-lightning:latest": {
             "runtime_model": "nemotron-3.5-lightning:latest",
-            "api_model": "nemotron-3.5-lightning:latest",
-            "api_base": "http://10.0.0.2:12434/engines/v1",
+            "api_model": model_cmds.runtime_model_owner_route_name(
+                "mirror_neuron@spark", "nemotron-3.5-lightning:latest"
+            ),
+            "api_base": "http://10.0.0.2:4000/v1",
             "node": "mirror_neuron@spark",
-            "source": "remote-dmr",
+            "source": "remote_litellm_gateway",
         }
     }
 
-    assert model_cmds._runtime_endpoints_for_local_gateway(
-        routes,
-        local,
-        local_installed_models={"nemotron-3.5-lightning:latest"},
-    ) == {}
+    assert (
+        model_cmds._runtime_endpoints_for_local_gateway(
+            routes,
+            local,
+            local_installed_models={"nemotron-3.5-lightning:latest"},
+        )
+        == routes
+    )
 
 
 def test_cluster_litellm_api_base_supports_ipv6_owner():
-    assert model_cmds._node_litellm_gateway_api_base(
-        {"host": "2001:db8::10"}
-    ) == "http://[2001:db8::10]:4000/v1"
+    assert (
+        model_cmds._node_litellm_gateway_api_base({"host": "2001:db8::10"})
+        == "http://[2001:db8::10]:4000/v1"
+    )
 
 
 def test_model_show_resolves_gemme_alias(mocker):
@@ -723,10 +800,22 @@ def test_registered_model_show_is_static_and_leaves_live_state_unchecked(mocker)
             "updated_at": "2026-08-14T01:00:00Z",
         },
     )
-    mocker.patch("mn_cli.libs.model_cmds._installed_model_names", side_effect=AssertionError("inventory probe"))
-    mocker.patch("mn_cli.libs.model_cmds._cluster_managed_remote_records", side_effect=AssertionError("cluster probe"))
-    mocker.patch("mn_cli.libs.model_cmds.litellm_gateway_health", side_effect=AssertionError("gateway probe"))
-    mocker.patch("mn_cli.libs.model_cmds.detect_host_hardware", side_effect=AssertionError("hardware probe"))
+    mocker.patch(
+        "mn_cli.libs.model_cmds._installed_model_names",
+        side_effect=AssertionError("inventory probe"),
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds._cluster_managed_remote_records",
+        side_effect=AssertionError("cluster probe"),
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds.litellm_gateway_health",
+        side_effect=AssertionError("gateway probe"),
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds.detect_host_hardware",
+        side_effect=AssertionError("hardware probe"),
+    )
 
     result = runner.invoke(app, ["model", "show", "private-chat", "--json"])
 
@@ -1000,16 +1089,16 @@ def test_model_help_exposes_only_unified_operations():
     command_rows = [
         line.strip(" │")
         for line in result.stdout.splitlines()
-        if any(
-            line.strip(" │").startswith(f"{command} ") for command in commands
-        )
+        if any(line.strip(" │").startswith(f"{command} ") for command in commands)
     ]
     assert [row.split(maxsplit=1)[0] for row in command_rows] == list(commands)
 
 
 @pytest.mark.parametrize("columns", [48, 140])
 def test_model_help_is_readable_at_narrow_and_wide_widths(columns):
-    result = runner.invoke(app, ["model", "--help"], env={"COLUMNS": str(columns), "NO_COLOR": "1"})
+    result = runner.invoke(
+        app, ["model", "--help"], env={"COLUMNS": str(columns), "NO_COLOR": "1"}
+    )
 
     assert result.exit_code == 0
     assert "Manage Docker Model Runner" in result.stdout
@@ -1024,7 +1113,9 @@ def test_cluster_node_is_local_uses_local_host_alias(monkeypatch):
         "port": "55052",
         "self": False,
     }
-    monkeypatch.setattr("mn_cli.libs.model_cmds._local_host_addresses", lambda: {"192.168.6.28"})
+    monkeypatch.setattr(
+        "mn_cli.libs.model_cmds._local_host_addresses", lambda: {"192.168.6.28"}
+    )
 
     assert model_cmds._cluster_node_is_local(node_endpoint) is True
 
@@ -1093,13 +1184,19 @@ def test_cluster_node_is_not_local_for_remote_host(monkeypatch):
         "port": "55052",
         "self": False,
     }
-    monkeypatch.setattr("mn_cli.libs.model_cmds._local_host_addresses", lambda: {"192.168.6.28"})
+    monkeypatch.setattr(
+        "mn_cli.libs.model_cmds._local_host_addresses", lambda: {"192.168.6.28"}
+    )
 
     assert model_cmds._cluster_node_is_local(node_endpoint) is False
 
 
 def test_install_model_on_cluster_node_uses_local_runtime_client_for_local_host(mocker):
-    model = {"id": "gemma4:e2b", "model": "docker.io/ai/gemma4:E2B", "provider": "docker_model_runner"}
+    model = {
+        "id": "gemma4:e2b",
+        "model": "docker.io/ai/gemma4:E2B",
+        "provider": "docker_model_runner",
+    }
     node = "mirror_neuron@192.168.6.28"
 
     def fake_cluster_node_endpoint(_node_name: str):
@@ -1111,8 +1208,13 @@ def test_install_model_on_cluster_node_uses_local_runtime_client_for_local_host(
             "node_name": node,
         }
 
-    mocker.patch("mn_cli.libs.model_cmds._cluster_node_endpoint", side_effect=fake_cluster_node_endpoint)
-    mocker.patch("mn_cli.libs.model_cmds._local_host_addresses", return_value={"192.168.6.28"})
+    mocker.patch(
+        "mn_cli.libs.model_cmds._cluster_node_endpoint",
+        side_effect=fake_cluster_node_endpoint,
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds._local_host_addresses", return_value={"192.168.6.28"}
+    )
     mocker.patch(
         "mn_cli.libs.model_cmds.Client",
         side_effect=AssertionError("should use local runtime client for local host"),
@@ -1128,7 +1230,10 @@ def test_install_model_on_cluster_node_uses_local_runtime_client_for_local_host(
     mocker.patch("mn_cli.libs.model_cmds.client", fake_runtime_client)
     mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway")
     mocker.patch("mn_cli.libs.model_cmds._installed_model_names", return_value=set())
-    mocker.patch("mn_cli.libs.model_cmds._local_runtime_node_name", return_value="mirror_neuron@local")
+    mocker.patch(
+        "mn_cli.libs.model_cmds._local_runtime_node_name",
+        return_value="mirror_neuron@local",
+    )
     mocker.patch(
         "mn_cli.libs.model_cmds._cluster_gateway_endpoint",
         return_value={
@@ -1144,7 +1249,9 @@ def test_install_model_on_cluster_node_uses_local_runtime_client_for_local_host(
         },
     )
 
-    result = model_cmds._install_model_on_cluster_node(model, node=node, backend="llama.cpp", context_size=None, force=False)
+    result = model_cmds._install_model_on_cluster_node(
+        model, node=node, backend="llama.cpp", context_size=None, force=False
+    )
 
     assert result["entry"] == model
     assert result["transport"] == "runtime_node_grpc"
@@ -1157,8 +1264,14 @@ def test_install_model_on_cluster_node_uses_local_runtime_client_for_local_host(
 def test_model_add_registers_provider_definition(tmp_path, mocker, monkeypatch):
     mocker.patch("mn_cli.libs.model_cmds._installed_model_names", return_value=set())
     monkeypatch.setenv("OPENAI_API_KEY", "secret-value")
-    mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", return_value={"status": "running"})
-    mocker.patch("mn_cli.libs.model_cmds._sync_external_litellm_config_across_cluster", return_value=[])
+    mocker.patch(
+        "mn_cli.libs.model_cmds.sync_litellm_gateway",
+        return_value={"status": "running"},
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds._sync_external_litellm_config_across_cluster",
+        return_value=[],
+    )
     config = tmp_path / "openai-compatible.json"
     config.write_text(
         json.dumps(
@@ -1191,12 +1304,21 @@ def test_model_add_registers_provider_definition(tmp_path, mocker, monkeypatch):
     payload = cli_data(result)
     assert payload["status"] == "ready"
     assert payload["models"][0]["id"] == "openai/gpt-5.4-mini"
-    assert get_registered_model("openai/gpt-5.4-mini")["litellm_entry"]["litellm_params"]["api_key"] == "os.environ/OPENAI_API_KEY"
+    assert (
+        get_registered_model("openai/gpt-5.4-mini")["litellm_entry"]["litellm_params"][
+            "api_key"
+        ]
+        == "os.environ/OPENAI_API_KEY"
+    )
     assert "secret-value" not in json.dumps(load_model_registry())
 
     listed = runner.invoke(app, ["model", "list", "--json"])
     assert listed.exit_code == 0
-    proxy_models = [model for model in cli_data(listed)["models"] if model["id"] == "openai/gpt-5.4-mini"]
+    proxy_models = [
+        model
+        for model in cli_data(listed)["models"]
+        if model["id"] == "openai/gpt-5.4-mini"
+    ]
     assert len(proxy_models) == 1
     model = proxy_models[0]
     assert model["id"] == "openai/gpt-5.4-mini"
@@ -1205,8 +1327,14 @@ def test_model_add_registers_provider_definition(tmp_path, mocker, monkeypatch):
 
 
 def test_model_add_provider_file_can_become_custom_default(tmp_path, mocker):
-    mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", return_value={"status": "running"})
-    mocker.patch("mn_cli.libs.model_cmds._sync_external_litellm_config_across_cluster", return_value=[])
+    mocker.patch(
+        "mn_cli.libs.model_cmds.sync_litellm_gateway",
+        return_value={"status": "running"},
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds._sync_external_litellm_config_across_cluster",
+        return_value=[],
+    )
     definition = tmp_path / "providers.json"
     definition.write_text(
         json.dumps(
@@ -1252,9 +1380,7 @@ def test_provider_fanout_persists_default_marker_locally_before_cluster_sync(
         "mn_cli.libs.model_cmds._cluster_node_endpoints",
         return_value=[],
     )
-    upsert = mocker.patch(
-        "mn_cli.libs.model_cmds.upsert_litellm_external_routes"
-    )
+    upsert = mocker.patch("mn_cli.libs.model_cmds.upsert_litellm_external_routes")
     sync = mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway")
 
     result = model_cmds._sync_external_litellm_config_across_cluster(
@@ -1277,7 +1403,9 @@ def test_provider_fanout_persists_default_marker_locally_before_cluster_sync(
     sync.assert_called_once_with(restart=True)
 
 
-def test_model_add_default_rejects_multi_model_provider_file_atomically(tmp_path, mocker):
+def test_model_add_default_rejects_multi_model_provider_file_atomically(
+    tmp_path, mocker
+):
     definition = tmp_path / "providers.json"
     definition.write_text(
         json.dumps(
@@ -1308,13 +1436,20 @@ def test_model_add_default_rejects_multi_model_provider_file_atomically(tmp_path
 
 
 def test_model_add_adopts_unknown_installed_dmr_as_unverified(mocker):
-    mocker.patch("mn_cli.libs.model_cmds._automatic_model_install_node", return_value="")
+    mocker.patch(
+        "mn_cli.libs.model_cmds._automatic_model_install_node", return_value=""
+    )
     mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=True)
-    mocker.patch("mn_cli.libs.model_cmds.install_model_entry", side_effect=AssertionError("must reuse installed artifact"))
+    mocker.patch(
+        "mn_cli.libs.model_cmds.install_model_entry",
+        side_effect=AssertionError("must reuse installed artifact"),
+    )
     mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
     mocker.patch("mn_cli.libs.model_cmds.record_manual_model_install")
 
-    result = runner.invoke(app, ["model", "add", "hf.co/acme/custom-7b:Q4_K_M", "--local", "--json"])
+    result = runner.invoke(
+        app, ["model", "add", "hf.co/acme/custom-7b:Q4_K_M", "--local", "--json"]
+    )
 
     assert result.exit_code == 0, result.stdout
     payload = cli_data(result)
@@ -1326,11 +1461,16 @@ def test_model_add_adopts_unknown_installed_dmr_as_unverified(mocker):
 
 
 def test_model_add_dmr_can_become_custom_default(mocker):
-    mocker.patch("mn_cli.libs.model_cmds._automatic_model_install_node", return_value="")
+    mocker.patch(
+        "mn_cli.libs.model_cmds._automatic_model_install_node", return_value=""
+    )
     mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=True)
     mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
     mocker.patch("mn_cli.libs.model_cmds.record_manual_model_install")
-    mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", return_value={"status": "running"})
+    mocker.patch(
+        "mn_cli.libs.model_cmds.sync_litellm_gateway",
+        return_value={"status": "running"},
+    )
     fanout = mocker.patch(
         "mn_cli.libs.model_cmds._sync_default_model_across_cluster",
         return_value=[],
@@ -1338,7 +1478,14 @@ def test_model_add_dmr_can_become_custom_default(mocker):
 
     result = runner.invoke(
         app,
-        ["model", "add", "hf.co/acme/default-chat:Q4_K_M", "--local", "--default", "--json"],
+        [
+            "model",
+            "add",
+            "hf.co/acme/default-chat:Q4_K_M",
+            "--local",
+            "--default",
+            "--json",
+        ],
     )
 
     assert result.exit_code == 0, result.stdout
@@ -1348,11 +1495,16 @@ def test_model_add_dmr_can_become_custom_default(mocker):
 
 
 def test_model_add_default_rolls_back_registry_when_cluster_fanout_fails(mocker):
-    mocker.patch("mn_cli.libs.model_cmds._automatic_model_install_node", return_value="")
+    mocker.patch(
+        "mn_cli.libs.model_cmds._automatic_model_install_node", return_value=""
+    )
     mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=True)
     mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
     mocker.patch("mn_cli.libs.model_cmds.record_manual_model_install")
-    mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", return_value={"status": "running"})
+    mocker.patch(
+        "mn_cli.libs.model_cmds.sync_litellm_gateway",
+        return_value={"status": "running"},
+    )
     mocker.patch(
         "mn_cli.libs.model_cmds._sync_default_model_across_cluster",
         side_effect=[
@@ -1363,7 +1515,14 @@ def test_model_add_default_rolls_back_registry_when_cluster_fanout_fails(mocker)
 
     result = runner.invoke(
         app,
-        ["model", "add", "hf.co/acme/default-chat:Q4_K_M", "--local", "--default", "--json"],
+        [
+            "model",
+            "add",
+            "hf.co/acme/default-chat:Q4_K_M",
+            "--local",
+            "--default",
+            "--json",
+        ],
     )
 
     assert result.exit_code == 1
@@ -1410,7 +1569,9 @@ def test_model_add_uses_automatic_best_node_by_default(mocker):
         "mn_cli.libs.model_cmds._installed_cluster_model_node",
         return_value=None,
     )
-    selected = mocker.patch("mn_cli.libs.model_cmds._automatic_model_install_node", return_value="spark")
+    selected = mocker.patch(
+        "mn_cli.libs.model_cmds._automatic_model_install_node", return_value="spark"
+    )
     install = mocker.patch(
         "mn_cli.libs.model_cmds._install_model_on_cluster_node",
         return_value={
@@ -1441,7 +1602,11 @@ def test_automatic_model_install_node_ranks_compatible_cluster_capacity(mocker):
                         "status": "healthy",
                         "scheduling_eligible": True,
                         "devices": [
-                            {"kind": "gpu", "memory_total_mb": 16384, "memory_free_mb": 8192}
+                            {
+                                "kind": "gpu",
+                                "memory_total_mb": 16384,
+                                "memory_free_mb": 8192,
+                            }
                         ],
                     },
                     {
@@ -1449,7 +1614,11 @@ def test_automatic_model_install_node_ranks_compatible_cluster_capacity(mocker):
                         "status": "healthy",
                         "scheduling_eligible": True,
                         "devices": [
-                            {"kind": "gpu", "memory_total_mb": 32768, "memory_free_mb": 24576}
+                            {
+                                "kind": "gpu",
+                                "memory_total_mb": 32768,
+                                "memory_free_mb": 24576,
+                            }
                         ],
                     },
                 ]
@@ -1472,16 +1641,153 @@ def test_automatic_model_install_node_ranks_compatible_cluster_capacity(mocker):
     assert selected == "worker"
 
 
-def test_model_add_rejects_duplicate_before_install(mocker):
+def test_model_add_same_node_is_idempotent(mocker):
     entry = resolve_model_entry("gemma4:e2b")
     add_registered_models([dmr_registration(entry, selected_node="local")])
+    mocker.patch("mn_cli.libs.model_cmds._local_runtime_node_name", return_value="mini")
     install = mocker.patch("mn_cli.libs.model_cmds.install_model_entry")
 
-    result = runner.invoke(app, ["model", "add", "gemme4:e2b", "--local", "--json"])
+    result = runner.invoke(app, ["model", "add", "gemma4:e2b", "--local", "--json"])
+
+    assert result.exit_code == 0
+    payload = cli_data(result)
+    assert payload["results"] == [{"node": "local", "status": "ready", "reused": True}]
+    install.assert_not_called()
+
+
+def test_model_add_supports_local_and_repeated_node_replicas(mocker):
+    entry = resolve_model_entry("gemma4:e2b")
+    mocker.patch("mn_cli.libs.model_cmds._local_runtime_node_name", return_value="mini")
+    mocker.patch(
+        "mn_cli.libs.model_cmds.assess_model_compatibility",
+        return_value=SimpleNamespace(
+            ok=True,
+            message="compatible",
+            to_dict=lambda: {"ok": True, "backend": "llama.cpp"},
+        ),
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds._cluster_node_endpoint",
+        side_effect=lambda node: {"node_name": node, "node": {}},
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds._remote_node_compatibility",
+        return_value={"ok": True, "status": "compatible"},
+    )
+    mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=True)
+    mocker.patch("mn_cli.libs.model_cmds.record_manual_model_install")
+    mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
+    install = mocker.patch(
+        "mn_cli.libs.model_cmds._install_model_on_cluster_node",
+        return_value={
+            "entry": entry,
+            "docker_model": "docker.io/ai/gemma4:E2B",
+            "compatibility": {"backend": "llama.cpp"},
+        },
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "model",
+            "add",
+            "gemma4:e2b",
+            "--local",
+            "--node",
+            "spark",
+            "--node",
+            "spark",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert [item["node"] for item in cli_data(result)["results"]] == ["mini", "spark"]
+    assert [
+        item["node"] for item in get_registered_model("gemma4:e2b")["installations"]
+    ] == [
+        "mini",
+        "spark",
+    ]
+    install.assert_called_once()
+
+
+def test_model_add_multi_node_preflights_every_target_before_install(mocker):
+    mocker.patch(
+        "mn_cli.libs.model_cmds._cluster_node_endpoint",
+        side_effect=lambda node: {"node_name": node, "node": {}},
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds._remote_node_compatibility",
+        side_effect=[
+            {"ok": True, "status": "compatible"},
+            {"ok": False, "message": "weak is incompatible"},
+        ],
+    )
+    install = mocker.patch("mn_cli.libs.model_cmds._install_model_on_cluster_node")
+
+    result = runner.invoke(
+        app,
+        [
+            "model",
+            "add",
+            "gemma4:e2b",
+            "--node",
+            "spark",
+            "--node",
+            "weak",
+            "--json",
+        ],
+    )
 
     assert result.exit_code == 2
-    assert "mn model remove" in " ".join(result.stdout.split())
     install.assert_not_called()
+    assert load_model_registry()["models"] == {}
+
+
+def test_model_add_multi_node_retains_successful_partial_install(mocker):
+    entry = resolve_model_entry("gemma4:e2b")
+    mocker.patch(
+        "mn_cli.libs.model_cmds._cluster_node_endpoint",
+        side_effect=lambda node: {"node_name": node, "node": {}},
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds._remote_node_compatibility",
+        return_value={"ok": True, "status": "compatible"},
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds._install_model_on_cluster_node",
+        side_effect=[
+            {
+                "entry": entry,
+                "docker_model": "docker.io/ai/gemma4:E2B",
+                "compatibility": {"backend": "llama.cpp"},
+            },
+            RuntimeError("node unavailable"),
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "model",
+            "add",
+            "gemma4:e2b",
+            "--node",
+            "spark",
+            "--node",
+            "moon",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)["error"]["details"]
+    assert payload["status"] == "partial"
+    assert [item["status"] for item in payload["results"]] == ["ready", "error"]
+    assert [
+        item["node"] for item in get_registered_model("gemma4:e2b")["installations"]
+    ] == ["spark"]
 
 
 def test_model_add_provider_missing_environment_is_atomic(tmp_path, mocker):
@@ -1491,7 +1797,10 @@ def test_model_add_provider_missing_environment_is_atomic(tmp_path, mocker):
             {
                 "provider": {
                     "openai-compatible": {
-                        "options": {"baseURL": "https://example.test/v1", "apiKeyEnv": "MISSING_API_KEY"},
+                        "options": {
+                            "baseURL": "https://example.test/v1",
+                            "apiKeyEnv": "MISSING_API_KEY",
+                        },
                         "models": {
                             "example/one": {"model": "upstream-one"},
                             "example/two": {"model": "upstream-two"},
@@ -1527,12 +1836,17 @@ def test_model_add_provider_rolls_back_when_cluster_sync_fails(tmp_path, mocker)
         ),
         encoding="utf-8",
     )
-    mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", return_value={"status": "running"})
+    mocker.patch(
+        "mn_cli.libs.model_cmds.sync_litellm_gateway",
+        return_value={"status": "running"},
+    )
     mocker.patch(
         "mn_cli.libs.model_cmds._sync_external_litellm_config_across_cluster",
         return_value=[{"node": "spark", "status": "error", "error": "unreachable"}],
     )
-    mocker.patch("mn_cli.libs.model_cmds._remove_gateway_route_across_cluster", return_value=[])
+    mocker.patch(
+        "mn_cli.libs.model_cmds._remove_gateway_route_across_cluster", return_value=[]
+    )
 
     result = runner.invoke(app, ["model", "add", "--file", str(config), "--json"])
 
@@ -1542,10 +1856,15 @@ def test_model_add_provider_rolls_back_when_cluster_sync_fails(tmp_path, mocker)
 
 
 def test_model_add_retains_artifact_as_unmanaged_when_route_finalization_fails(mocker):
-    mocker.patch("mn_cli.libs.model_cmds._automatic_model_install_node", return_value="")
+    mocker.patch(
+        "mn_cli.libs.model_cmds._automatic_model_install_node", return_value=""
+    )
     mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=True)
     mocker.patch("mn_cli.libs.model_cmds.record_manual_model_install")
-    mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", side_effect=RuntimeError("gateway unavailable"))
+    mocker.patch(
+        "mn_cli.libs.model_cmds.sync_litellm_gateway",
+        side_effect=RuntimeError("gateway unavailable"),
+    )
 
     result = runner.invoke(app, ["model", "add", "gemma4:e2b", "--local", "--json"])
 
@@ -1566,7 +1885,10 @@ def test_model_update_reloads_provider_source(tmp_path, mocker, monkeypatch):
                 {
                     "provider": {
                         "openai-compatible": {
-                            "options": {"baseURL": "https://example.test/v1", "apiKeyEnv": "PROVIDER_API_KEY"},
+                            "options": {
+                                "baseURL": "https://example.test/v1",
+                                "apiKeyEnv": "PROVIDER_API_KEY",
+                            },
                             "models": {"example/chat": {"model": source_model}},
                         }
                     }
@@ -1576,9 +1898,18 @@ def test_model_update_reloads_provider_source(tmp_path, mocker, monkeypatch):
         )
 
     write_definition("upstream-v1")
-    mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", return_value={"status": "running"})
-    mocker.patch("mn_cli.libs.model_cmds._sync_external_litellm_config_across_cluster", return_value=[])
-    assert runner.invoke(app, ["model", "add", "--file", str(config), "--json"]).exit_code == 0
+    mocker.patch(
+        "mn_cli.libs.model_cmds.sync_litellm_gateway",
+        return_value={"status": "running"},
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds._sync_external_litellm_config_across_cluster",
+        return_value=[],
+    )
+    assert (
+        runner.invoke(app, ["model", "add", "--file", str(config), "--json"]).exit_code
+        == 0
+    )
     write_definition("upstream-v2")
 
     result = runner.invoke(app, ["model", "update", "example/chat", "--json"])
@@ -1588,7 +1919,9 @@ def test_model_update_reloads_provider_source(tmp_path, mocker, monkeypatch):
     assert params["model"].endswith("upstream-v2")
 
 
-def test_model_add_syncs_provider_definition_to_all_cluster_nodes(tmp_path, mocker, monkeypatch):
+def test_model_add_syncs_provider_definition_to_all_cluster_nodes(
+    tmp_path, mocker, monkeypatch
+):
     local_syncs = []
     node_syncs = []
     mocker.patch("mn_cli.libs.model_cmds._installed_model_names", return_value=set())
@@ -1602,8 +1935,10 @@ def test_model_add_syncs_provider_definition_to_all_cluster_nodes(tmp_path, mock
     )
     mocker.patch(
         "mn_cli.libs.model_cmds.sync_litellm_gateway",
-        side_effect=lambda **kwargs: local_syncs.append(kwargs)
-        or {"status": "registered", "config_path": str(tmp_path / "gateway.yaml")},
+        side_effect=lambda **kwargs: (
+            local_syncs.append(kwargs)
+            or {"status": "registered", "config_path": str(tmp_path / "gateway.yaml")}
+        ),
     )
 
     mocker.patch(
@@ -1616,8 +1951,13 @@ def test_model_add_syncs_provider_definition_to_all_cluster_nodes(tmp_path, mock
             {
                 "provider": {
                     "openai-compatible": {
-                        "options": {"baseURL": "https://api.openai.com/v1", "apiKeyEnv": "OPENAI_API_KEY"},
-                        "models": {"openai/gpt-5.4-mini": {"model": "openai/gpt-5.4-mini"}},
+                        "options": {
+                            "baseURL": "https://api.openai.com/v1",
+                            "apiKeyEnv": "OPENAI_API_KEY",
+                        },
+                        "models": {
+                            "openai/gpt-5.4-mini": {"model": "openai/gpt-5.4-mini"}
+                        },
                     }
                 }
             }
@@ -1641,7 +1981,12 @@ def test_model_install_pulls_and_runs_compatible_model(mocker):
     def fake_run(command, **kwargs):
         calls.append(command)
         if command[:4] == ["docker", "model", "status", "--json"]:
-            return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
+            return _completed(
+                command,
+                stdout=json.dumps(
+                    {"running": True, "backends": {"llama.cpp": "Running"}}
+                ),
+            )
         if command[:4] == ["docker", "model", "run", "--help"]:
             return _completed(command, stdout="Options:\n      --context-size int\n")
         return _completed(command)
@@ -1650,16 +1995,32 @@ def test_model_install_pulls_and_runs_compatible_model(mocker):
     mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
-        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+        return_value=HostHardwareProfile(
+            "darwin",
+            "arm64",
+            total_memory_gb=16,
+            unified_memory_gb=16,
+            has_apple_silicon=True,
+        ),
     )
 
-    result = runner.invoke(app, ["model", "add", "gemma4:e2b", "--context-size", "8192"])
+    result = runner.invoke(
+        app, ["model", "add", "gemma4:e2b", "--context-size", "8192"]
+    )
 
     assert result.exit_code == 0
     assert "Model add successful." in result.stdout
     assert "gemma4:e2b" in result.stdout
     assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] in calls
-    assert ["docker", "model", "run", "--detach", "--context-size", "8192", "docker.io/ai/gemma4:E2B"] in calls
+    assert [
+        "docker",
+        "model",
+        "run",
+        "--detach",
+        "--context-size",
+        "8192",
+        "docker.io/ai/gemma4:E2B",
+    ] in calls
 
 
 def test_model_install_syncs_local_dmr_gateway_route(mocker):
@@ -1667,24 +2028,45 @@ def test_model_install_syncs_local_dmr_gateway_route(mocker):
 
     def fake_run(command, **kwargs):
         if command[:4] == ["docker", "model", "status", "--json"]:
-            return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
+            return _completed(
+                command,
+                stdout=json.dumps(
+                    {"running": True, "backends": {"llama.cpp": "Running"}}
+                ),
+            )
         if command[:4] == ["docker", "model", "run", "--help"]:
             return _completed(command, stdout="Options:\n")
         return _completed(command)
 
     def fake_sync(**kwargs):
         synced.append(kwargs)
-        return {"status": "running", "config_path": "config.yaml", "models": ["gemma4:e2b"]}
+        return {
+            "status": "running",
+            "config_path": "config.yaml",
+            "models": ["gemma4:e2b"],
+        }
 
     mocker.patch("subprocess.run", side_effect=fake_run)
     mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", side_effect=fake_sync)
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
-        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+        return_value=HostHardwareProfile(
+            "darwin",
+            "arm64",
+            total_memory_gb=16,
+            unified_memory_gb=16,
+            has_apple_silicon=True,
+        ),
     )
     mocker.patch(
         "mn_cli.libs.model_cmds.detect_host_hardware",
-        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+        return_value=HostHardwareProfile(
+            "darwin",
+            "arm64",
+            total_memory_gb=16,
+            unified_memory_gb=16,
+            has_apple_silicon=True,
+        ),
     )
 
     result = runner.invoke(app, ["model", "add", "gemma4:e2b"])
@@ -1692,7 +2074,10 @@ def test_model_install_syncs_local_dmr_gateway_route(mocker):
     assert result.exit_code == 0
     assert synced
     endpoints = synced[0]["runtime_endpoints"]
-    assert endpoints["gemma4:e2b"]["api_base"] == "http://model-runner.docker.internal/engines/v1"
+    assert (
+        endpoints["gemma4:e2b"]["api_base"]
+        == "http://model-runner.docker.internal/engines/v1"
+    )
     assert "docker.io/ai/gemma4:E2B" in load_model_ownership()["models"]
 
 
@@ -1701,7 +2086,12 @@ def test_model_install_local_dmr_publishes_status_without_peer_gateway_fanout(mo
 
     def fake_run(command, **kwargs):
         if command[:4] == ["docker", "model", "status", "--json"]:
-            return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
+            return _completed(
+                command,
+                stdout=json.dumps(
+                    {"running": True, "backends": {"llama.cpp": "Running"}}
+                ),
+            )
         if command[:4] == ["docker", "model", "run", "--help"]:
             return _completed(command, stdout="Options:\n")
         return _completed(command)
@@ -1729,20 +2119,38 @@ def test_model_install_local_dmr_publishes_status_without_peer_gateway_fanout(mo
         "mn_cli.libs.model_cmds.reconcile_cluster_model_remotes",
         return_value={"remotes": {}},
     )
-    mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", side_effect=lambda **kwargs: local_syncs.append(kwargs) or {})
+    mocker.patch(
+        "mn_cli.libs.model_cmds.sync_litellm_gateway",
+        side_effect=lambda **kwargs: local_syncs.append(kwargs) or {},
+    )
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
-        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+        return_value=HostHardwareProfile(
+            "darwin",
+            "arm64",
+            total_memory_gb=16,
+            unified_memory_gb=16,
+            has_apple_silicon=True,
+        ),
     )
     mocker.patch(
         "mn_cli.libs.model_cmds.detect_host_hardware",
-        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+        return_value=HostHardwareProfile(
+            "darwin",
+            "arm64",
+            total_memory_gb=16,
+            unified_memory_gb=16,
+            has_apple_silicon=True,
+        ),
     )
 
     result = runner.invoke(app, ["model", "add", "gemma4:e2b", "--local"])
 
     assert result.exit_code == 0
-    assert local_syncs[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://model-runner.docker.internal/engines/v1"
+    assert (
+        local_syncs[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"]
+        == "http://model-runner.docker.internal/engines/v1"
+    )
     peer_client.assert_not_called()
 
 
@@ -1760,7 +2168,9 @@ def test_model_install_node_uses_prepare_runtime_model_not_ssh(mocker):
                 {
                     "status": "installed",
                     "docker_model": "docker.io/ai/gemma4:E2B",
-                    "install": {"compatibility": {"backend": "llama.cpp", "warnings": []}},
+                    "install": {
+                        "compatibility": {"backend": "llama.cpp", "warnings": []}
+                    },
                     "gateway": {"host_api_base": "http://127.0.0.1:4000/v1"},
                     "endpoint": {
                         "provider": "docker_model_runner",
@@ -1782,16 +2192,26 @@ def test_model_install_node_uses_prepare_runtime_model_not_ssh(mocker):
                         "name": "spark",
                         "grpc_host": "192.168.4.173",
                         "grpc_port": 55051,
-                        "native_sdk_grpc": {"target": "192.168.4.173:55052", "host": "192.168.4.173", "port": 55052},
+                        "native_sdk_grpc": {
+                            "target": "192.168.4.173:55052",
+                            "host": "192.168.4.173",
+                            "port": 55052,
+                        },
                     }
                 ]
             }
         ),
     )
     mocker.patch("mn_cli.libs.model_cmds.Client", FakeClient)
-    mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", side_effect=lambda **kwargs: synced.append(kwargs) or {})
+    mocker.patch(
+        "mn_cli.libs.model_cmds.sync_litellm_gateway",
+        side_effect=lambda **kwargs: synced.append(kwargs) or {},
+    )
     mocker.patch("mn_cli.libs.model_cmds._installed_model_names", return_value=set())
-    mocker.patch("subprocess.run", side_effect=AssertionError("remote install must not shell out"))
+    mocker.patch(
+        "subprocess.run",
+        side_effect=AssertionError("remote install must not shell out"),
+    )
 
     result = runner.invoke(app, ["model", "add", "gemma4:e2b", "--node", "spark"])
 
@@ -1799,8 +2219,14 @@ def test_model_install_node_uses_prepare_runtime_model_not_ssh(mocker):
     prepare_payload = [payload for kind, payload in calls if kind == "prepare"][0]
     assert prepare_payload["model"] == "docker.io/ai/gemma4:E2B"
     assert prepare_payload["source"] == "mn-cli"
-    assert synced[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://192.168.4.173:4000/v1"
-    assert synced[0]["runtime_endpoints"]["gemma4:e2b"]["source"] == "remote_litellm_gateway"
+    assert (
+        synced[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"]
+        == "http://192.168.4.173:4000/v1"
+    )
+    assert (
+        synced[0]["runtime_endpoints"]["gemma4:e2b"]["source"]
+        == "remote_litellm_gateway"
+    )
     assert load_model_ownership()["models"] == {}
     remotes = load_model_remotes()["remotes"]
     remote = next(iter(remotes.values()))
@@ -1816,18 +2242,38 @@ def test_model_update_refreshes_local_dmr_gateway_route(mocker):
     def fake_run(command, **kwargs):
         calls.append(command)
         if command[:4] == ["docker", "model", "status", "--json"]:
-            return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
+            return _completed(
+                command,
+                stdout=json.dumps(
+                    {"running": True, "backends": {"llama.cpp": "Running"}}
+                ),
+            )
         return _completed(command)
 
     mocker.patch("subprocess.run", side_effect=fake_run)
-    mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", side_effect=lambda **kwargs: synced.append(kwargs) or {})
+    mocker.patch(
+        "mn_cli.libs.model_cmds.sync_litellm_gateway",
+        side_effect=lambda **kwargs: synced.append(kwargs) or {},
+    )
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
-        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+        return_value=HostHardwareProfile(
+            "darwin",
+            "arm64",
+            total_memory_gb=16,
+            unified_memory_gb=16,
+            has_apple_silicon=True,
+        ),
     )
     mocker.patch(
         "mn_cli.libs.model_cmds.detect_host_hardware",
-        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+        return_value=HostHardwareProfile(
+            "darwin",
+            "arm64",
+            total_memory_gb=16,
+            unified_memory_gb=16,
+            has_apple_silicon=True,
+        ),
     )
     entry = resolve_model_entry("gemma4:e2b")
     add_registered_models([dmr_registration(entry, selected_node="local")])
@@ -1837,7 +2283,10 @@ def test_model_update_refreshes_local_dmr_gateway_route(mocker):
     assert result.exit_code == 0
     assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] in calls
     assert ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"] in calls
-    assert synced[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://model-runner.docker.internal/engines/v1"
+    assert (
+        synced[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"]
+        == "http://model-runner.docker.internal/engines/v1"
+    )
     assert "docker.io/ai/gemma4:E2B" in load_model_ownership()["models"]
 
 
@@ -1853,7 +2302,9 @@ def test_model_update_refreshes_remote_dmr_instead_of_adopting_it(mocker):
             "docker_model": "docker.io/ai/gemma4:E2B",
         },
     )
-    mocker.patch("mn_cli.libs.model_cmds._local_runtime_node_name", return_value="local")
+    mocker.patch(
+        "mn_cli.libs.model_cmds._local_runtime_node_name", return_value="local"
+    )
     mocker.patch("mn_cli.libs.model_cmds.replace_registered_model")
 
     model_cmds._update_dmr_registration(record, force=False, json_output=True)
@@ -1877,7 +2328,9 @@ def test_model_install_node_syncs_only_the_calling_nodes_gateway(mocker):
                 {
                     "status": "installed",
                     "docker_model": "docker.io/ai/gemma4:E2B",
-                    "install": {"compatibility": {"backend": "llama.cpp", "warnings": []}},
+                    "install": {
+                        "compatibility": {"backend": "llama.cpp", "warnings": []}
+                    },
                     "gateway": {"host_api_base": "http://127.0.0.1:4000/v1"},
                     "endpoint": {"api_model": "gemma4:E2B"},
                 }
@@ -1895,15 +2348,24 @@ def test_model_install_node_syncs_only_the_calling_nodes_gateway(mocker):
         ),
     )
     mocker.patch("mn_cli.libs.model_cmds.Client", FakeClient)
-    mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", side_effect=lambda **kwargs: local_syncs.append(kwargs) or {})
+    mocker.patch(
+        "mn_cli.libs.model_cmds.sync_litellm_gateway",
+        side_effect=lambda **kwargs: local_syncs.append(kwargs) or {},
+    )
     mocker.patch("mn_cli.libs.model_cmds._installed_model_names", return_value=set())
-    mocker.patch("subprocess.run", side_effect=AssertionError("remote install must not shell out"))
+    mocker.patch(
+        "subprocess.run",
+        side_effect=AssertionError("remote install must not shell out"),
+    )
 
     result = runner.invoke(app, ["model", "add", "gemma4:e2b", "--node", "spark"])
 
     assert result.exit_code == 0
     assert calls[0][1] == "192.168.4.173:55052"
-    assert local_syncs[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"] == "http://192.168.4.173:4000/v1"
+    assert (
+        local_syncs[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"]
+        == "http://192.168.4.173:4000/v1"
+    )
     assert (
         local_syncs[0]["runtime_endpoints"]["gemma4:e2b"]["source"]
         == "remote_litellm_gateway"
@@ -1952,8 +2414,7 @@ def test_cluster_runtime_endpoint_sync_excludes_each_route_owner(mocker):
     )
 
     routes_by_target = {
-        target: set(payload["runtime_endpoints"])
-        for target, payload in node_syncs
+        target: set(payload["runtime_endpoints"]) for target, payload in node_syncs
     }
     assert routes_by_target == {
         "192.168.4.173:55052": {"small"},
@@ -1967,7 +2428,12 @@ def test_model_install_streams_pull_progress(mocker):
     def fake_run(command, **kwargs):
         calls.append((command, kwargs))
         if command[:4] == ["docker", "model", "status", "--json"]:
-            return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
+            return _completed(
+                command,
+                stdout=json.dumps(
+                    {"running": True, "backends": {"llama.cpp": "Running"}}
+                ),
+            )
         if command[:4] == ["docker", "model", "run", "--help"]:
             return _completed(command, stdout="Options:\n")
         return _completed(command)
@@ -1976,7 +2442,13 @@ def test_model_install_streams_pull_progress(mocker):
     mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
-        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+        return_value=HostHardwareProfile(
+            "darwin",
+            "arm64",
+            total_memory_gb=16,
+            unified_memory_gb=16,
+            has_apple_silicon=True,
+        ),
     )
 
     result = runner.invoke(app, ["model", "add", "gemma4:e2b"])
@@ -1998,13 +2470,20 @@ def test_model_install_retries_transient_pull_failure(mocker):
         nonlocal pull_attempts
         calls.append(command)
         if command[:4] == ["docker", "model", "status", "--json"]:
-            return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
+            return _completed(
+                command,
+                stdout=json.dumps(
+                    {"running": True, "backends": {"llama.cpp": "Running"}}
+                ),
+            )
         if command[:4] == ["docker", "model", "run", "--help"]:
             return _completed(command, stdout="Options:\n")
         if command == ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"]:
             pull_attempts += 1
             if pull_attempts == 1:
-                return _completed(command, returncode=1, stderr="writing blob: blob digest mismatch")
+                return _completed(
+                    command, returncode=1, stderr="writing blob: blob digest mismatch"
+                )
         if command == ["docker", "model", "inspect", "docker.io/ai/gemma4:E2B"]:
             return _completed(command, returncode=1)
         return _completed(command)
@@ -2013,7 +2492,13 @@ def test_model_install_retries_transient_pull_failure(mocker):
     mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
-        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+        return_value=HostHardwareProfile(
+            "darwin",
+            "arm64",
+            total_memory_gb=16,
+            unified_memory_gb=16,
+            has_apple_silicon=True,
+        ),
     )
 
     result = runner.invoke(app, ["model", "add", "gemma4:e2b"])
@@ -2026,7 +2511,12 @@ def test_model_install_retries_transient_pull_failure(mocker):
 def test_model_install_persists_manual_ownership_record(mocker):
     def fake_run(command, **kwargs):
         if command[:4] == ["docker", "model", "status", "--json"]:
-            return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
+            return _completed(
+                command,
+                stdout=json.dumps(
+                    {"running": True, "backends": {"llama.cpp": "Running"}}
+                ),
+            )
         if command[:4] == ["docker", "model", "run", "--help"]:
             return _completed(command, stdout="Options:\n      --context-size int\n")
         return _completed(command)
@@ -2035,7 +2525,13 @@ def test_model_install_persists_manual_ownership_record(mocker):
     mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
-        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+        return_value=HostHardwareProfile(
+            "darwin",
+            "arm64",
+            total_memory_gb=16,
+            unified_memory_gb=16,
+            has_apple_silicon=True,
+        ),
     )
 
     result = runner.invoke(app, ["model", "add", "gemma4:e2b"])
@@ -2052,18 +2548,31 @@ def test_model_install_persists_manual_ownership_record(mocker):
 def test_model_install_state_can_be_listed_after_install(mocker):
     def fake_run(command, **kwargs):
         if command[:4] == ["docker", "model", "status", "--json"]:
-            return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
+            return _completed(
+                command,
+                stdout=json.dumps(
+                    {"running": True, "backends": {"llama.cpp": "Running"}}
+                ),
+            )
         if command[:4] == ["docker", "model", "run", "--help"]:
             return _completed(command, stdout="Options:\n      --context-size int\n")
         if command[:4] == ["docker", "model", "list", "--format"]:
-            return _completed(command, stdout=json.dumps([{"name": "docker.io/ai/gemma4:E2B"}]))
+            return _completed(
+                command, stdout=json.dumps([{"name": "docker.io/ai/gemma4:E2B"}])
+            )
         return _completed(command)
 
     mocker.patch("subprocess.run", side_effect=fake_run)
     mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
-        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+        return_value=HostHardwareProfile(
+            "darwin",
+            "arm64",
+            total_memory_gb=16,
+            unified_memory_gb=16,
+            has_apple_silicon=True,
+        ),
     )
 
     install_result = runner.invoke(app, ["model", "add", "gemma4:e2b"])
@@ -2086,7 +2595,12 @@ def test_model_install_skips_context_size_when_docker_cli_does_not_support_it(mo
     def fake_run(command, **kwargs):
         calls.append(command)
         if command[:4] == ["docker", "model", "status", "--json"]:
-            return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
+            return _completed(
+                command,
+                stdout=json.dumps(
+                    {"running": True, "backends": {"llama.cpp": "Running"}}
+                ),
+            )
         if command[:4] == ["docker", "model", "run", "--help"]:
             return _completed(command, stdout="Options:\n  -d, --detach\n")
         return _completed(command)
@@ -2095,14 +2609,30 @@ def test_model_install_skips_context_size_when_docker_cli_does_not_support_it(mo
     mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
-        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+        return_value=HostHardwareProfile(
+            "darwin",
+            "arm64",
+            total_memory_gb=16,
+            unified_memory_gb=16,
+            has_apple_silicon=True,
+        ),
     )
 
-    result = runner.invoke(app, ["model", "add", "gemma4:e2b", "--context-size", "8192"])
+    result = runner.invoke(
+        app, ["model", "add", "gemma4:e2b", "--context-size", "8192"]
+    )
 
     assert result.exit_code == 0
     assert ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"] in calls
-    assert ["docker", "model", "run", "--detach", "--context-size", "8192", "docker.io/ai/gemma4:E2B"] not in calls
+    assert [
+        "docker",
+        "model",
+        "run",
+        "--detach",
+        "--context-size",
+        "8192",
+        "docker.io/ai/gemma4:E2B",
+    ] not in calls
 
 
 def test_model_install_falls_back_to_dmr_rest_when_cli_plugin_missing(mocker):
@@ -2126,19 +2656,32 @@ def test_model_install_falls_back_to_dmr_rest_when_cli_plugin_missing(mocker):
     mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
-        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+        return_value=HostHardwareProfile(
+            "darwin",
+            "arm64",
+            total_memory_gb=16,
+            unified_memory_gb=16,
+            has_apple_silicon=True,
+        ),
     )
 
     result = runner.invoke(app, ["model", "add", "gemma4:e2b"])
 
     assert result.exit_code == 0
     assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] not in calls
-    assert any(url.endswith("/models/create") and method == "POST" for url, method, _data in requests)
-    payloads = [json.loads(data.decode("utf-8")) for _url, _method, data in requests if data]
+    assert any(
+        url.endswith("/models/create") and method == "POST"
+        for url, method, _data in requests
+    )
+    payloads = [
+        json.loads(data.decode("utf-8")) for _url, _method, data in requests if data
+    ]
     assert {"from": "docker.io/ai/gemma4:E2B"} in payloads
 
 
-def test_model_install_prefers_dmr_rest_pull_when_runner_api_reachable(mocker, monkeypatch):
+def test_model_install_prefers_dmr_rest_pull_when_runner_api_reachable(
+    mocker, monkeypatch
+):
     calls = []
     requests = []
     monkeypatch.setattr("mn_cli.libs.model_cmds._endpoint_responds", lambda: True)
@@ -2148,7 +2691,12 @@ def test_model_install_prefers_dmr_rest_pull_when_runner_api_reachable(mocker, m
     def fake_run(command, **kwargs):
         calls.append(command)
         if command[:4] == ["docker", "model", "status", "--json"]:
-            return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
+            return _completed(
+                command,
+                stdout=json.dumps(
+                    {"running": True, "backends": {"llama.cpp": "Running"}}
+                ),
+            )
         if command[:4] == ["docker", "model", "run", "--help"]:
             return _completed(command, stdout="Options:\n")
         return _completed(command)
@@ -2162,7 +2710,13 @@ def test_model_install_prefers_dmr_rest_pull_when_runner_api_reachable(mocker, m
     mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
-        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+        return_value=HostHardwareProfile(
+            "darwin",
+            "arm64",
+            total_memory_gb=16,
+            unified_memory_gb=16,
+            has_apple_silicon=True,
+        ),
     )
 
     result = runner.invoke(app, ["model", "add", "gemma4:e2b"])
@@ -2170,21 +2724,32 @@ def test_model_install_prefers_dmr_rest_pull_when_runner_api_reachable(mocker, m
     assert result.exit_code == 0
     assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] not in calls
     assert ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"] in calls
-    assert any(url.endswith("/models/create") and method == "POST" for url, method, _data, _timeout in requests)
-    payloads = [json.loads(data.decode("utf-8")) for _url, _method, data, _timeout in requests if data]
+    assert any(
+        url.endswith("/models/create") and method == "POST"
+        for url, method, _data, _timeout in requests
+    )
+    payloads = [
+        json.loads(data.decode("utf-8"))
+        for _url, _method, data, _timeout in requests
+        if data
+    ]
     assert {"from": "docker.io/ai/gemma4:E2B"} in payloads
 
 
 def test_model_list_reads_dmr_rest_tags_when_cli_plugin_missing(mocker):
     def fake_run(command, **kwargs):
-        if command[:3] == ["docker", "model", "version"] or command[:3] == ["docker", "model", "list"]:
+        if command[:3] == ["docker", "model", "version"] or command[:3] == [
+            "docker",
+            "model",
+            "list",
+        ]:
             return _completed(command, returncode=1, stderr="unknown command")
         return _completed(command)
 
     def fake_urlopen(request, timeout=0):
-        return FakeResponse(json.dumps([
-            {"id": "sha256:one", "tags": ["docker.io/ai/gemma4:E2B"]}
-        ]))
+        return FakeResponse(
+            json.dumps([{"id": "sha256:one", "tags": ["docker.io/ai/gemma4:E2B"]}])
+        )
 
     mocker.patch("subprocess.run", side_effect=fake_run)
     mocker.patch("urllib.request.urlopen", side_effect=fake_urlopen)
@@ -2207,14 +2772,32 @@ def test_model_doctor_reports_corrupted_gateway_config(tmp_path, monkeypatch, mo
     config_path = tmp_path / "litellm-config.yaml"
     config_path.write_text("{broken", encoding="utf-8")
     monkeypatch.setenv("MN_LITELLM_GATEWAY_CONFIG_PATH", str(config_path))
-    mocker.patch("mn_cli.libs.model_cmds.assess_model_compatibility", return_value=FakeCompatibility())
-    mocker.patch("mn_cli.libs.model_cmds._docker_status", return_value={"running": True})
+    mocker.patch(
+        "mn_cli.libs.model_cmds.assess_model_compatibility",
+        return_value=FakeCompatibility(),
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds._docker_status", return_value={"running": True}
+    )
     mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=True)
     mocker.patch("mn_cli.libs.model_cmds._endpoint_responds", return_value=True)
-    mocker.patch("mn_cli.libs.model_cmds.litellm_gateway_health", return_value={"ok": True, "url": "http://127.0.0.1:4000/v1/models", "models": ["gemma4:e2b"]})
+    mocker.patch(
+        "mn_cli.libs.model_cmds.litellm_gateway_health",
+        return_value={
+            "ok": True,
+            "url": "http://127.0.0.1:4000/v1/models",
+            "models": ["gemma4:e2b"],
+        },
+    )
     mocker.patch(
         "mn_cli.libs.model_cmds.detect_host_hardware",
-        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+        return_value=HostHardwareProfile(
+            "darwin",
+            "arm64",
+            total_memory_gb=16,
+            unified_memory_gb=16,
+            has_apple_silicon=True,
+        ),
     )
 
     result = runner.invoke(app, ["model", "doctor", "gemma4:e2b", "--json"])
@@ -2259,7 +2842,13 @@ def test_model_install_blocks_incompatible_hardware_before_pull(mocker):
     mocker.patch("subprocess.run", side_effect=fake_run)
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
-        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=8, unified_memory_gb=8, has_apple_silicon=True),
+        return_value=HostHardwareProfile(
+            "darwin",
+            "arm64",
+            total_memory_gb=8,
+            unified_memory_gb=8,
+            has_apple_silicon=True,
+        ),
     )
 
     result = runner.invoke(app, ["model", "add", "gemma4:e2b"])
@@ -2268,7 +2857,9 @@ def test_model_install_blocks_incompatible_hardware_before_pull(mocker):
     assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] not in calls
 
 
-def test_model_install_failure_does_not_record_manual_ownership(mocker, tmp_path, monkeypatch):
+def test_model_install_failure_does_not_record_manual_ownership(
+    mocker, tmp_path, monkeypatch
+):
     ledger_path = tmp_path / "ownership.json"
     monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(ledger_path))
     calls = []
@@ -2278,7 +2869,12 @@ def test_model_install_failure_does_not_record_manual_ownership(mocker, tmp_path
         if command[:3] == ["docker", "model", "version"]:
             return _completed(command)
         if command[:4] == ["docker", "model", "status", "--json"]:
-            return _completed(command, stdout=json.dumps({"running": True, "backends": {"llama.cpp": "Running"}}))
+            return _completed(
+                command,
+                stdout=json.dumps(
+                    {"running": True, "backends": {"llama.cpp": "Running"}}
+                ),
+            )
         if command[:3] == ["docker", "model", "pull"]:
             return _completed(command, returncode=1, stderr="pull failed")
         if command[:3] == ["docker", "model", "inspect"]:
@@ -2289,7 +2885,13 @@ def test_model_install_failure_does_not_record_manual_ownership(mocker, tmp_path
     mocker.patch("mn_sdk.model_service.model_installed", return_value=False)
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
-        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+        return_value=HostHardwareProfile(
+            "darwin",
+            "arm64",
+            total_memory_gb=16,
+            unified_memory_gb=16,
+            has_apple_silicon=True,
+        ),
     )
 
     result = runner.invoke(app, ["model", "add", "gemma4:e2b"])
@@ -2319,13 +2921,22 @@ def test_model_install_rest_failure_does_not_record_manual_ownership(
     mocker.patch("urllib.request.urlopen", side_effect=fake_urlopen)
     mocker.patch(
         "mn_sdk.model_runtime.detect_host_hardware",
-        return_value=HostHardwareProfile("darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True),
+        return_value=HostHardwareProfile(
+            "darwin",
+            "arm64",
+            total_memory_gb=16,
+            unified_memory_gb=16,
+            has_apple_silicon=True,
+        ),
     )
 
     result = runner.invoke(app, ["model", "add", "gemma4:e2b"])
 
     assert result.exit_code == 1
-    assert any(url.endswith("/models/create") and method == "POST" for url, method, _data in requests)
+    assert any(
+        url.endswith("/models/create") and method == "POST"
+        for url, method, _data in requests
+    )
     assert load_model_ownership()["models"] == {}
 
 
@@ -2394,7 +3005,9 @@ def test_model_remove_force_overrides_blueprint_owner_guard(mocker):
     mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway")
     mocker.patch("mn_cli.libs.model_cmds.reconcile_cluster_model_routes")
 
-    result = runner.invoke(app, ["model", "remove", "gemma4:e2b", "--force", "--yes", "--json"])
+    result = runner.invoke(
+        app, ["model", "remove", "gemma4:e2b", "--force", "--yes", "--json"]
+    )
 
     assert result.exit_code == 0, result.stdout
     assert get_registered_model("gemma4:e2b") is None
@@ -2403,7 +3016,10 @@ def test_model_remove_force_overrides_blueprint_owner_guard(mocker):
 def test_model_remove_keep_artifact_leaves_unmanaged_dmr(mocker):
     entry = resolve_model_entry("gemma4:e2b")
     add_registered_models([dmr_registration(entry, selected_node="local")])
-    mocker.patch("mn_cli.libs.model_cmds._installed_model_names", return_value={"docker.io/ai/gemma4:E2B"})
+    mocker.patch(
+        "mn_cli.libs.model_cmds._installed_model_names",
+        return_value={"docker.io/ai/gemma4:E2B"},
+    )
     remove_artifact = mocker.patch("mn_cli.libs.model_cmds.remove_model_ref")
     mocker.patch("mn_cli.libs.model_cmds.remove_litellm_gateway_route")
     mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway")
@@ -2419,7 +3035,9 @@ def test_model_remove_keep_artifact_leaves_unmanaged_dmr(mocker):
     assert get_registered_model("gemma4:e2b") is None
     remove_artifact.assert_not_called()
     listed = runner.invoke(app, ["model", "list", "--json"])
-    model = next(item for item in cli_data(listed)["models"] if item["id"] == "gemma4:e2b")
+    model = next(
+        item for item in cli_data(listed)["models"] if item["id"] == "gemma4:e2b"
+    )
     assert model["state"] == "unmanaged"
     assert model["registered"] is False
 
@@ -2430,7 +3048,10 @@ def test_model_remove_retains_degraded_registration_when_route_cleanup_fails(moc
     mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=True)
     remove_artifact = mocker.patch("mn_cli.libs.model_cmds.remove_model_ref")
     mocker.patch("mn_cli.libs.model_cmds.remove_litellm_gateway_route")
-    mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", side_effect=RuntimeError("gateway unavailable"))
+    mocker.patch(
+        "mn_cli.libs.model_cmds.sync_litellm_gateway",
+        side_effect=RuntimeError("gateway unavailable"),
+    )
 
     result = runner.invoke(app, ["model", "remove", "gemma4:e2b", "--yes", "--json"])
 
@@ -2444,7 +3065,10 @@ def test_model_remove_artifact_failure_retains_registration_and_routes(mocker):
     entry = resolve_model_entry("gemma4:e2b")
     add_registered_models([dmr_registration(entry, selected_node="local")])
     mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=True)
-    mocker.patch("mn_cli.libs.model_cmds.remove_model_ref", side_effect=RuntimeError("artifact busy"))
+    mocker.patch(
+        "mn_cli.libs.model_cmds.remove_model_ref",
+        side_effect=RuntimeError("artifact busy"),
+    )
     remove_route = mocker.patch("mn_cli.libs.model_cmds.remove_litellm_gateway_route")
     sync = mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway")
 
@@ -2474,10 +3098,21 @@ def test_model_remove_provider_deletes_one_registration_not_source(tmp_path, moc
         ),
         encoding="utf-8",
     )
-    mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", return_value={"status": "running"})
-    mocker.patch("mn_cli.libs.model_cmds._sync_external_litellm_config_across_cluster", return_value=[])
-    mocker.patch("mn_cli.libs.model_cmds._remove_gateway_route_across_cluster", return_value=[])
-    assert runner.invoke(app, ["model", "add", "--file", str(config), "--json"]).exit_code == 0
+    mocker.patch(
+        "mn_cli.libs.model_cmds.sync_litellm_gateway",
+        return_value={"status": "running"},
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds._sync_external_litellm_config_across_cluster",
+        return_value=[],
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds._remove_gateway_route_across_cluster", return_value=[]
+    )
+    assert (
+        runner.invoke(app, ["model", "add", "--file", str(config), "--json"]).exit_code
+        == 0
+    )
 
     result = runner.invoke(app, ["model", "remove", "example/one", "--yes", "--json"])
 
@@ -2487,7 +3122,9 @@ def test_model_remove_provider_deletes_one_registration_not_source(tmp_path, moc
     assert config.is_file()
 
 
-def test_model_remove_provider_restores_registration_on_gateway_failure(tmp_path, mocker):
+def test_model_remove_provider_restores_registration_on_gateway_failure(
+    tmp_path, mocker
+):
     config = tmp_path / "provider.json"
     config.write_text(
         json.dumps(
@@ -2504,10 +3141,20 @@ def test_model_remove_provider_restores_registration_on_gateway_failure(tmp_path
     )
     sync = mocker.patch(
         "mn_cli.libs.model_cmds.sync_litellm_gateway",
-        side_effect=[{"status": "running"}, RuntimeError("gateway unavailable"), {"status": "running"}],
+        side_effect=[
+            {"status": "running"},
+            RuntimeError("gateway unavailable"),
+            {"status": "running"},
+        ],
     )
-    mocker.patch("mn_cli.libs.model_cmds._sync_external_litellm_config_across_cluster", return_value=[])
-    assert runner.invoke(app, ["model", "add", "--file", str(config), "--json"]).exit_code == 0
+    mocker.patch(
+        "mn_cli.libs.model_cmds._sync_external_litellm_config_across_cluster",
+        return_value=[],
+    )
+    assert (
+        runner.invoke(app, ["model", "add", "--file", str(config), "--json"]).exit_code
+        == 0
+    )
 
     result = runner.invoke(app, ["model", "remove", "example/chat", "--yes", "--json"])
 
@@ -2543,7 +3190,10 @@ def test_model_remove_local_dmr_uses_status_reconcile_without_peer_route_calls(m
             _cluster_node("spark", "10.0.0.2"),
         ),
     )
-    mocker.patch("mn_cli.libs.model_cmds.remove_litellm_gateway_route", side_effect=lambda model: local_removed.append(model))
+    mocker.patch(
+        "mn_cli.libs.model_cmds.remove_litellm_gateway_route",
+        side_effect=lambda model: local_removed.append(model),
+    )
     mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway")
     mocker.patch("mn_cli.libs.model_cmds.reconcile_cluster_model_routes")
 
@@ -2579,11 +3229,100 @@ def test_model_remove_registered_remote_dmr_calls_node_runtime(mocker):
     mocker.patch("mn_cli.libs.model_cmds.remove_litellm_gateway_route")
     mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway")
     mocker.patch("mn_cli.libs.model_cmds.reconcile_cluster_model_routes")
-    mocker.patch("subprocess.run", side_effect=AssertionError("remote route removal must not shell out"))
+    mocker.patch(
+        "subprocess.run",
+        side_effect=AssertionError("remote route removal must not shell out"),
+    )
 
     result = runner.invoke(app, ["model", "remove", "gemma4:e2b", "--force", "--yes"])
 
     assert result.exit_code == 0
-    assert [(target, payload["model"], payload["action"]) for target, payload in removed] == [
+    assert [
+        (target, payload["model"], payload["action"]) for target, payload in removed
+    ] == [
         ("192.168.4.173:55052", "docker.io/ai/gemma4:E2B", "remove"),
     ]
+
+
+def test_model_remove_requires_target_for_replicated_model(mocker):
+    entry = resolve_model_entry("gemma4:e2b")
+    add_registered_models(
+        [
+            dmr_registration(
+                entry,
+                selected_node="mini",
+                installations=[{"node": "mini"}, {"node": "spark"}],
+            )
+        ]
+    )
+
+    result = runner.invoke(
+        app, ["model", "remove", "gemma4:e2b", "--force", "--yes", "--json"]
+    )
+
+    assert result.exit_code == 2
+    assert "multiple installations" in result.stdout
+
+
+def test_model_remove_target_keeps_other_replica_registered(mocker):
+    entry = resolve_model_entry("gemma4:e2b")
+    add_registered_models(
+        [
+            dmr_registration(
+                entry,
+                selected_node="mini",
+                installations=[{"node": "mini"}, {"node": "spark"}],
+            )
+        ]
+    )
+    removed = mocker.patch(
+        "mn_cli.libs.model_cmds._remove_runtime_model_on_cluster_node"
+    )
+    mocker.patch("mn_cli.libs.model_cmds._remove_remote_model_records")
+    mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway")
+    mocker.patch("mn_cli.libs.model_cmds.reconcile_cluster_model_routes")
+
+    result = runner.invoke(
+        app,
+        [
+            "model",
+            "remove",
+            "gemma4:e2b",
+            "--node",
+            "spark",
+            "--force",
+            "--yes",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert [
+        item["node"] for item in get_registered_model("gemma4:e2b")["installations"]
+    ] == ["mini"]
+    removed.assert_called_once_with("docker.io/ai/gemma4:E2B", node="spark", force=True)
+
+
+def test_model_update_defaults_to_all_recorded_replicas(mocker):
+    entry = resolve_model_entry("gemma4:e2b")
+    record = dmr_registration(
+        entry,
+        selected_node="mini",
+        installations=[{"node": "mini"}, {"node": "spark"}],
+    )
+    install = mocker.patch(
+        "mn_cli.libs.model_cmds._install_model_on_cluster_node",
+        return_value={
+            "docker_model": "docker.io/ai/gemma4:E2B",
+            "compatibility": {"backend": "llama.cpp"},
+        },
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds._local_runtime_node_name", return_value="local"
+    )
+    add_registered_models([record])
+
+    result = runner.invoke(app, ["model", "update", "gemma4:e2b", "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    assert [call.kwargs["node"] for call in install.call_args_list] == ["mini", "spark"]
