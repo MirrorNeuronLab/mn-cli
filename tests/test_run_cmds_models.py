@@ -925,6 +925,18 @@ def test_default_llm_alias_detection_is_explicit():
         run_cmds._blueprint_requests_default_llm({"llm": {"model": "gemma4:e2b"}})
         is False
     )
+    assert (
+        run_cmds._blueprint_requests_default_llm(
+            {
+                "llm": {
+                    "model": "default",
+                    "default_config": "primary",
+                    "configs": {"primary": {"model": "nemotron3:q4_K_M"}},
+                }
+            }
+        )
+        is False
+    )
 
 
 def test_default_manifest_model_is_satisfied_by_prepared_fallback():
@@ -1571,6 +1583,7 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
     assert set(plan["catalog"]) == {
         "gemma4:e2b",
         "nemotron-3.5-lightning:latest",
+        "nemotron3:q4_K_M",
     }
     placement = run_cmds._preflight_and_apply_runtime_model_placement(
         manifest,

@@ -226,7 +226,7 @@ def test_run_stream_error_falls_back_to_status_polling(mocker, tmp_path, monkeyp
     mock_get.assert_called_once()
     mock_get.assert_called_with("run-stream-fallback")
 
-def test_run_records_lazy_runtime_models_before_model_validation(mocker, tmp_path, monkeypatch):
+def test_run_prepares_runtime_models_before_model_validation(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="run-order")
     mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-order"}))
@@ -240,8 +240,8 @@ def test_run_records_lazy_runtime_models_before_model_validation(mocker, tmp_pat
         side_effect=lambda *args, **kwargs: order.append("services") or {"ok": True},
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds._defer_runtime_models_for_run_or_exit",
-        side_effect=lambda *args, **kwargs: order.append("defer_models") or {"ok": True},
+        "mn_cli.libs.run_cmds._prepare_runtime_models_for_run_or_exit",
+        side_effect=lambda *args, **kwargs: order.append("prepare_models") or {"ok": True},
     )
     mocker.patch(
         "mn_cli.libs.run_cmds._validate_manifest_models_or_exit",
@@ -260,7 +260,7 @@ def test_run_records_lazy_runtime_models_before_model_validation(mocker, tmp_pat
 
     run_cmds.run_bundle(str(bundle_dir), follow_seconds=0)
 
-    assert order == ["services", "defer_models", "validate_models", "inputs"]
+    assert order == ["services", "prepare_models", "validate_models", "inputs"]
 
 
 def test_run_does_not_submit_when_a_required_input_is_missing(mocker, tmp_path, monkeypatch):
@@ -286,7 +286,7 @@ def test_run_does_not_submit_when_a_required_input_is_missing(mocker, tmp_path, 
     submit.assert_not_called()
 
 
-def test_run_defers_injected_cluster_model_selection_preparation_and_gateway(
+def test_run_prepares_explicit_runtime_model_and_gateway_before_submission(
     mocker,
     tmp_path,
     monkeypatch,
@@ -297,8 +297,14 @@ def test_run_defers_injected_cluster_model_selection_preparation_and_gateway(
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     cluster = fake_runtime_model_cluster_factory(include_spark=True)
     dependencies = cluster.dependencies()
+    def create_after_preparation(*_args, **_kwargs):
+        assert cluster.prepare_calls, "model preparation must finish before create_job"
+        assert cluster.gateway_syncs, "LiteLLM route must be published before create_job"
+        return json.dumps({"job_id": "job-injected-models"})
+
     submit = mocker.patch(
-        "mn_cli.libs.run_cmds.client.create_job", return_value=json.dumps({"job_id": "job-injected-models"})
+        "mn_cli.libs.run_cmds.client.create_job",
+        side_effect=create_after_preparation,
     )
     mocker.patch(
         "mn_cli.libs.run_cmds.client.stream_events",
@@ -339,7 +345,7 @@ def test_run_defers_injected_cluster_model_selection_preparation_and_gateway(
                     "configs": {
                         "primary": {
                             "provider": "docker_model_runner",
-                            "model": "medium",
+                            "model": "nemotron3:q4_K_M",
                         }
                     },
                 },
@@ -361,17 +367,23 @@ def test_run_defers_injected_cluster_model_selection_preparation_and_gateway(
         runtime_model_dependencies=dependencies,
     )
 
-    assert cluster.prepare_calls == []
-    assert cluster.gateway_syncs == []
+    assert [{key: call[key] for key in ("node", "runtime_model", "status")} for call in cluster.prepare_calls] == [
+        {
+            "node": "mirror_neuron@spark",
+            "runtime_model": "nemotron3:q4_K_M",
+            "status": "installed",
+        }
+    ]
+    assert len(cluster.gateway_syncs) == 1
     submitted_manifest = json.loads(submit.call_args.args[0])
     assistant = submitted_manifest["agents"]["nodes"][0]
-    assert (
-        assistant["config"]["environment"]["MN_LLM_PROVIDER"]
-        == "docker_model_runner"
+    assert assistant["config"]["environment"]["MN_LLM_PROVIDER"] == "litellm"
+    assert assistant["config"]["environment"]["MN_LLM_MODEL"] == "nemotron3:q4_K_M"
+    assert assistant["config"]["environment"]["MN_LLM_API_BASE"].endswith(":4000/v1")
+    assert "10.0.0.2" not in assistant["config"]["environment"]["MN_LLM_API_BASE"]
+    assert "nemotron3:q4_K_M" in json.loads(
+        assistant["config"]["environment"]["MN_PREPARED_RUNTIME_MODELS_JSON"]
     )
-    assert assistant["config"]["environment"]["MN_LLM_MODEL"] == "default"
-    assert assistant["config"]["environment"]["MN_LLM_API_BASE"] == "auto"
-    assert assistant["config"]["environment"]["MN_RUNTIME_MODEL_MANAGED"] == "1"
 
 
 def test_run_auto_schedule_creates_resource_wait_schedule(mocker, tmp_path, monkeypatch):

@@ -150,7 +150,7 @@ def _prepare_runtime_models_for_run_or_exit(
     runtime_model_plan: Optional[dict[str, Any]] = None,
     dependencies: RuntimeModelDependencies | None = None,
 ) -> dict[str, Any]:
-    """Eager compatibility helper used by explicit prepare/doctor workflows."""
+    """Prepare declared runtime models before a blueprint job is submitted."""
 
     plan = runtime_model_plan or _build_runtime_model_prepare_plan(
         bundle_dir,
@@ -439,7 +439,19 @@ def _runtime_model_prepare_response_status(
 
 def _blueprint_requests_default_llm(config: dict[str, Any]) -> bool:
     llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
-    return str(llm.get("model") or "").strip().lower() == "default"
+    config_name = str(llm.get("default_config") or "primary")
+    configs = llm.get("configs") if isinstance(llm.get("configs"), dict) else {}
+    primary = (
+        configs.get(config_name) if isinstance(configs.get(config_name), dict) else {}
+    )
+    active_model = str(
+        primary.get("runtime_model")
+        or primary.get("model")
+        or llm.get("runtime_model")
+        or llm.get("model")
+        or ""
+    ).strip()
+    return active_model.lower() == "default"
 
 
 def _sync_litellm_gateway_for_runtime_models(

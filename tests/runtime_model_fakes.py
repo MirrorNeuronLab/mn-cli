@@ -44,6 +44,25 @@ def fake_model_catalog() -> dict[str, dict[str, Any]]:
                 "min_unified_memory_gb": 48,
             },
         },
+        {
+            "id": "nemotron3:q4_K_M",
+            "provider": "docker_model_runner",
+            "model": "nemotron3:q4_K_M",
+            "api_model": "nemotron3:q4_K_M",
+            "route_aliases": ["nemotron3:q4_K_M"],
+            "aliases": [
+                "nemotron3",
+                "ai/nemotron3:q4_K_M",
+                "docker.io/ai/nemotron3:q4_K_M",
+            ],
+            "backend": "llama.cpp",
+            "context_size": 8192,
+            "requirements": {
+                "min_vram_gb": 48,
+                "min_unified_memory_gb": 48,
+                "min_cpu_ram_gb": 64,
+            },
+        },
     ]
     return {entry["id"]: entry for entry in entries}
 

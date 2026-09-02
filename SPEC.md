@@ -268,13 +268,14 @@ The selected route precedes Nemotron and Gemma; the built-ins remain ordered
 fallbacks. Selecting another default does not remove the earlier registration,
 and removing the selected registration restores built-in selection.
 
-`mn blueprint run` validates the effective blueprint-declared foundational LLM
-models without installing or routing them. RAG and OCR model specifications are
-not launch declarations; their skills pass them to the SDK on first use, so
-each consumer may choose the best compatible cluster node independently.
-`mn blueprint validate` applies that same first-use policy without side effects:
-it accepts a compatible deferred model while still rejecting unknown models or
-models with no feasible hardware/fallback path.
+`mn blueprint run` blocks before job submission until every effective
+blueprint-declared runtime model is selected, installed or reused, and routed
+through the selected node's LiteLLM gateway. This applies equally to logical
+defaults and explicit catalog IDs such as `nemotron3:q4_K_M`. RAG and OCR
+models that are supplied dynamically by a skill remain first-use SDK requests;
+the SDK holds that call while it prepares the requested model. `mn blueprint
+validate` remains side-effect free and only checks declaration validity and
+hardware/fallback feasibility.
 
 Every node's LiteLLM gateway projects the merged healthy cluster model
 inventory. A public logical group contains one deployment per physical
@@ -326,22 +327,23 @@ Detached output relays remain active until the run becomes terminal unless
 `MN_RUN_EVENT_RELAY_MAX_SECONDS` explicitly supplies an operator limit. A
 blueprint's stream-duration budget does not truncate output materialization.
 
-The blueprint run adapter must not prepare models. A logical `default`
-declaration remains blueprint-owned intent; the runtime SDK first uses the
+The blueprint run adapter prepares declared models before it submits a job. A
+logical `default` remains blueprint-owned intent; launch uses the
 operator-selected registry default, then chooses Nemotron on a healthy 48
 GB-or-above accelerator node or Gemma when no compatible Nemotron node exists.
-Debug launch output reports the effective deferred fallback policy and complete
+Explicit catalog declarations keep their exact artifact identity. Debug launch
+output reports the selected model, node, install/reuse result, and complete
 DockerWorker build command/output details.
 Skill-owned RAG/OCR model details are absent from launch preparation and appear
-in runtime events only when invoked. Runtime events report the actual model,
-selected node, install/reuse state, fallback reason, and duration.
-While a lazy DMR install is in progress, `mn blueprint run` and `mn run watch`
-render additive `runtime_model_install_progress` events without changing the
-existing lifecycle event names. The interactive monitor renders only a compact
-`Preparing <model> on <node>…` status below the workflow and agent progress grid.
-The underlying events retain phase, timing, source-to-final-tag mapping, and DMR
-byte telemetry for logs and structured consumers. Missing byte progress does not
-fail the job; only an actual DMR or prepare-RPC error does.
+in runtime events only when invoked. The first-use SDK path holds the requesting
+call while the model is prepared, then reports the actual model, selected node,
+install/reuse state, fallback reason, and duration. `mn blueprint run` and
+`mn run watch` render additive `runtime_model_install_progress` events without
+changing existing lifecycle event names. The interactive monitor renders a
+compact `Preparing <model> on <node>…` status below the workflow and agent
+progress grid. The underlying events retain phase, timing, source-to-final-tag
+mapping, and DMR byte telemetry for logs and structured consumers. Missing byte
+progress does not fail the job; only an actual DMR or prepare-RPC error does.
 
 `default` is a logical LiteLLM model group. When a medium route is available it
 aliases to Nemotron and has Gemma as its fallback; without a medium route it

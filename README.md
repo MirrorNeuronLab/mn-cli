@@ -138,13 +138,14 @@ The runtime-selection scenarios are:
 - a local-only 16 GB Apple node validates the portable Gemma fallback policy;
 - adding a healthy 128 GB CUDA node validates that Nemotron is feasible;
 - already-installed remote models remain usable without a second install;
-- the first SDK model call selects and prepares the owner node, then uses that
-  node's reachable LiteLLM gateway route.
+- blueprint launch selects and prepares the owner node before job submission,
+  then workers use that node's reachable LiteLLM gateway route.
 
-`mn blueprint run --debug` prints the deferred policy for blueprint-declared
-foundational LLMs. RAG and OCR model details are owned by their skills and
-appear only in runtime events when those skills first call the SDK wrapper.
-Those events report the selected model/node, fallback reason, and install/reuse state. Debug mode
+`mn blueprint run --debug` prints the selected model and preparation result for
+blueprint-declared foundational LLMs. RAG and OCR model details are owned by
+their skills and appear only in runtime events when those skills first call the
+SDK wrapper. Those events report the selected model/node, fallback reason, and
+install/reuse state. Debug mode
 also prints DockerWorker build commands and complete captured build output,
 including builds performed through a remote node's native SDK service.
 
@@ -161,11 +162,11 @@ The interactive monitor intentionally omits LLM token totals and budgets because
 runtime event counters are not authoritative; resource telemetry remains
 available to its dedicated commands and structured consumers.
 
-For a deferred first-use DMR pull, the run monitor keeps model preparation to a
-single compact `Preparing <model> on <node>…` status below the workflow and agent
-progress grid. Model events still carry detailed phase, timing, and byte telemetry
-for logs and structured consumers; a lack of byte progress does not itself fail the
-job.
+While a model is prepared at launch, the run monitor keeps preparation to a
+single compact `Preparing <model> on <node>…` status below the workflow and
+agent progress grid. Model events still carry detailed phase, timing, and byte
+telemetry for logs and structured consumers; a lack of byte progress does not
+itself fail the job.
 
 Live Spark checks are a separate, opt-in boundary smoke after this injected
 gate passes; they are not the development loop for placement policy.
@@ -429,8 +430,8 @@ snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
 - See [Cross-node model routing through LiteLLM](docs/cross-node-litellm-routing.md)
   for the complete proxy topology, node join/departure reconciliation,
   replica load-balancing, admission limits, and operator diagnostics.
-- `--debug` retains complete Docker build diagnostics and prints deferred model
-  policies. Actual model/node selection appears later in runtime events.
+- `--debug` retains complete Docker build diagnostics and prints model
+  preparation results, including selected node and install/reuse state.
 
 Shared configuration parsing and defaults are owned by `mn_sdk.config`.
 `mn_cli.config` remains a source-compatible facade that composes CLI-only keys

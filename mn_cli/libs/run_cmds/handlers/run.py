@@ -265,7 +265,6 @@ def run_bundle(
             manifest_dict,
             config_overrides=config_overrides,
             dependencies=runtime_model_dependencies,
-            lazy=True,
         )
         runtime_resource_report = (
             runtime_model_dependencies.resource_report()
@@ -292,7 +291,7 @@ def run_bundle(
         )
         placement = _preflight_and_apply_runtime_model_placement(
             manifest_dict,
-            runtime_model_requirements=[],
+            runtime_model_requirements=runtime_model_plan["placement_models"],
             resource_report=runtime_resource_report,
             system_summary=runtime_system_summary,
             env={**os.environ, **env_overrides},
@@ -348,9 +347,9 @@ def run_bundle(
             )
             _print_launch_progress(
                 "Prepare runtime models",
-                "validating lazy model policies; installation is deferred until first use.",
+                "resolving declared models and installing any missing artifacts before the job starts.",
             )
-            model_install_summary = _defer_runtime_models_for_run_or_exit(
+            model_install_summary = _prepare_runtime_models_for_run_or_exit(
                 bundle_dir,
                 manifest_dict,
                 env_overrides=env_overrides,
@@ -379,13 +378,13 @@ def run_bundle(
             _record_prevalidated_command_rules(manifest_dict, input_validation_report)
         else:
             console.print(
-                "[yellow]Validation skipped because --force was provided; runtime models will still be selected and prepared lazily on first use.[/yellow]"
+                "[yellow]Validation skipped because --force was provided; required runtime models will still be prepared before the job is scheduled.[/yellow]"
             )
             _print_launch_progress(
                 "Prepare runtime models",
-                "recording lazy model policies; installation is deferred until first use.",
+                "resolving declared models and installing any missing artifacts before the job starts.",
             )
-            model_install_summary = _defer_runtime_models_for_run_or_exit(
+            model_install_summary = _prepare_runtime_models_for_run_or_exit(
                 bundle_dir,
                 manifest_dict,
                 env_overrides=env_overrides,
@@ -416,7 +415,7 @@ def run_bundle(
         if placement is None:
             placement = _preflight_and_apply_runtime_model_placement(
                 manifest_dict,
-                runtime_model_requirements=[],
+                runtime_model_requirements=runtime_model_plan["placement_models"],
                 resource_report=runtime_resource_report,
                 system_summary=runtime_system_summary,
                 env={**os.environ, **env_overrides},
