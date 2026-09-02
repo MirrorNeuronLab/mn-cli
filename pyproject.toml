@@ -13,12 +13,8 @@ dependencies = [
     "click>=8.1.0",
     "jsonschema>=4.25",
     "typer>=0.9.0",
-    "rich>=13.0.0"
-]
-
-[project.optional-dependencies]
-web-ui = [
     "mirrorneuron-web-ui-skill",
+    "rich>=13.0.0"
 ]
 
 [project.scripts]

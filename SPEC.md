@@ -68,10 +68,10 @@ Blueprint manifest/config bindings remain responsible for mapping those
 settings into the executable service declaration.
 For a declared `web_ui` service or deferred job-scoped UI handle, `--web-ui`
 reports the local job dashboard route. A deferred handle can appear after job
-submission, but its canonical local route is stable. The persisted service
-handle declares the dashboard's permitted HTTP and WebSocket companion ports
-so the local Web UI server can proxy a selected remote node without exposing
-its LAN URL to the browser.
+submission, but its canonical local route is stable. Both declaration paths
+use `mirrorneuron-web-ui-skill` to persist the service handle and its permitted
+HTTP and WebSocket companion ports, so the local Web UI server can proxy a
+selected remote node without exposing its LAN URL to the browser.
 
 ## Behavior Boundary
 

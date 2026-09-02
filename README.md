@@ -60,12 +60,8 @@ mn node remove mirror_neuron@spark --yes
 This detaches the peer from the current Core only; it does not delete the
 peer's owner-local jobs or data.
 
-Static HTML exports use the optional `mirrorneuron-web-ui-skill` package. With
-the MirrorNeuron GAR package index configured, install it with:
-
-```bash
-.venv/bin/python -m pip install "mirrorneuron-cli[web-ui]"
-```
+The CLI uses `mirrorneuron-web-ui-skill` for static HTML exports and for the
+job-scoped iframe handle that forwards a blueprint-owned web service.
 
 ## Model operations
 

@@ -22,7 +22,7 @@ def test_console_web_ui_url_comes_from_blueprint_declared_service():
                         {
                             "name": "product-ui",
                             "port": 61000,
-                            "tags": ["web_ui", "json-render"],
+                            "tags": ["web_ui", "external-url"],
                         }
                     ],
                 }
@@ -76,7 +76,7 @@ def test_console_web_ui_url_uses_job_route_for_deferred_worker_handle(mocker):
     ) == "http://localhost:55173/jobs/job-dynamic-ui/ui"
 
 
-def test_register_manifest_web_ui_handle_uses_resolved_service_configuration(tmp_path, monkeypatch):
+def test_register_manifest_web_ui_handle_uses_shared_claimer(tmp_path, monkeypatch):
     monkeypatch.setenv("MN_JOB_DATA_ROOT", str(tmp_path / "job-data"))
     manifest = {
         "metadata": {"web_ui": {"title": "Warehouse AMR Monitor", "node_id": "warehouse"}},
@@ -98,6 +98,16 @@ def test_register_manifest_web_ui_handle_uses_resolved_service_configuration(tmp
         },
     }
 
+    claimed = {}
+
+    def claim(job_data_dir, **kwargs):
+        claimed["job_data_dir"] = job_data_dir
+        claimed.update(kwargs)
+
+    monkeypatch.setattr(
+        "mn_cli.libs.run_cmds.web_ui._load_web_ui_claimer", lambda: claim
+    )
+
     url = _register_manifest_web_ui_handle(
         manifest,
         "job-1",
@@ -105,13 +115,16 @@ def test_register_manifest_web_ui_handle_uses_resolved_service_configuration(tmp
     )
 
     assert url == "http://10.0.4.26:8088"
-    handle = json.loads((tmp_path / "job-data" / "job-1" / "web_ui.json").read_text(encoding="utf-8"))
-    assert handle["job_id"] == "job-1"
-    assert handle["url"] == "http://10.0.4.26:8088"
-    assert handle["metadata"]["proxy"] == {
-        "schema_version": "mn.web_ui.proxy.v1",
+    assert claimed == {
+        "job_data_dir": tmp_path / "job-data" / "job-1",
+        "job_id": "job-1",
+        "title": "Warehouse AMR Monitor",
+        "url": "http://10.0.4.26:8088",
+        "service_name": "warehouse-ui",
+        "node_id": "warehouse",
         "http_ports": [8080, 8088],
         "websocket_ports": [9090],
+        "metadata": {"source": "manifest_service"},
     }
 
 

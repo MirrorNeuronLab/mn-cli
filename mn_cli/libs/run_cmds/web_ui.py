@@ -1,7 +1,23 @@
 from .common import *
 from .run_state import *
 from mn_sdk import job_data_dir_from_id
+from typing import Any, Callable, Optional
 from urllib.parse import quote, urlparse
+
+
+def _load_web_ui_claimer() -> Callable[..., Any]:
+    """Load the shared UI-handle contract used by all blueprints."""
+
+    try:
+        from mn_web_ui_skill import claim_web_ui
+    except ModuleNotFoundError as exc:
+        if exc.name != "mn_web_ui_skill":
+            raise
+        raise RuntimeError(
+            "Blueprint Web UI registration requires mirrorneuron-web-ui-skill. "
+            "Install a current mirrorneuron-cli package."
+        ) from exc
+    return claim_web_ui
 
 
 def _console_web_ui_url(
@@ -57,30 +73,18 @@ def _register_manifest_web_ui_handle(
     ).strip()
     service_name = str(service.get("name") or "").strip()
     node_id = str(web_ui_metadata.get("node_id") or "").strip()
-    handle_metadata = {
-        "source": "manifest_service",
-        **({"service_name": service_name} if service_name else {}),
-        **({"node_id": node_id} if node_id else {}),
-        "proxy": _web_ui_proxy_policy(manifest_dict, url),
-    }
-    ui = {
-        "schema_version": "mn.web_ui.external.v1",
-        "renderer": "external-url",
-        "job_id": job_id,
-        "title": title,
-        "metadata": handle_metadata,
-    }
-    web_ui = {
-        "kind": "service",
-        "adapter": "external-url",
-        "status": "running",
-        "title": title,
-        "url": url,
-        "job_id": job_id,
-        "metadata": handle_metadata,
-    }
-    _write_json_atomically(job_data_dir / "ui.json", ui)
-    _write_json_atomically(job_data_dir / "web_ui.json", web_ui)
+    proxy_policy = _web_ui_proxy_policy(manifest_dict, url)
+    _load_web_ui_claimer()(
+        job_data_dir,
+        job_id=job_id,
+        title=title,
+        url=url,
+        service_name=service_name or "blueprint-web-ui",
+        node_id=node_id or "manifest_web_ui",
+        http_ports=proxy_policy["http_ports"],
+        websocket_ports=proxy_policy["websocket_ports"],
+        metadata={"source": "manifest_service"},
+    )
     return url
 
 
@@ -227,12 +231,6 @@ def _usable_port(value: Any) -> bool:
 def _http_url(host: str, port: int) -> str:
     display_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
     return f"http://{display_host}:{port}"
-
-
-def _write_json_atomically(path: Path, value: dict[str, Any]) -> None:
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temporary.replace(path)
 
 
 def _web_ui_proxy_policy(manifest_dict: dict[str, Any], url: str) -> dict[str, Any]:

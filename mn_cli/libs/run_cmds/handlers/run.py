@@ -549,7 +549,7 @@ def run_bundle(
                 )
                 or {},
             )
-        except OSError as exc:
+        except (OSError, RuntimeError) as exc:
             console.print(
                 "[yellow]Warning:[/yellow] Could not register the blueprint Web UI "
                 f"for the local dashboard: {exc}"
