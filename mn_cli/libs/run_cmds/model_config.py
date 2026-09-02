@@ -16,15 +16,25 @@ from mn_sdk.model_preparation import (
 
 def _prepared_model_installed_resolver(model_install_summary: Optional[dict[str, Any]]):
     prepared = _prepared_runtime_model_keys(model_install_summary)
+    prepared_match_keys = {
+        match_key
+        for reference in prepared
+        for match_key in docker_model_match_keys(reference)
+    }
 
     def resolver(model_name: str, requirement: dict[str, Any]) -> bool:
-        keys = {
+        references = {
             str(model_name or "").strip(),
             str(requirement.get("model") or "").strip(),
             str(requirement.get("runtime_model") or "").strip(),
             str(requirement.get("name") or "").strip(),
         }
-        if any(key and key in prepared for key in keys):
+        candidate_match_keys = {
+            match_key
+            for reference in references
+            for match_key in docker_model_match_keys(reference)
+        }
+        if candidate_match_keys & prepared_match_keys:
             return True
         return model_installed(model_name)
 

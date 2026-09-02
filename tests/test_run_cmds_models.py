@@ -81,6 +81,30 @@ def test_manifest_for_model_validation_filters_dmr_models_for_fake_llm():
     assert set(manifest["runtime"]["models"]) == {"primary", "secondary", "external"}
 
 
+def test_deferred_model_resolver_accepts_the_first_use_fallback():
+    summary = {
+        "models": [
+            {
+                "id": "default",
+                "model": "default",
+                "runtime_model": "nemotron-3.5-lightning:latest",
+                "status": "deferred_runtime_install",
+                "selection_policy": [
+                    "nemotron-3.5-lightning:latest",
+                    "gemma4:e2b",
+                ],
+            }
+        ]
+    }
+
+    resolver = run_cmds._prepared_model_installed_resolver(summary)
+
+    assert resolver(
+        "docker.io/ai/gemma4:E2B",
+        {"runtime_model": "docker.io/ai/gemma4:E2B"},
+    )
+
+
 def _mac_and_spark_resources(*, spark_memory_mb=126000):
     return {
         "nodes": [
