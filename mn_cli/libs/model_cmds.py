@@ -65,6 +65,7 @@ from mn_sdk import (
     upsert_litellm_external_routes,
     validate_litellm_gateway_config_file,
 )
+from mn_sdk.errors import normalize_exception
 from mn_sdk import (
     docker_status as sdk_docker_status,
 )
@@ -127,6 +128,8 @@ REMOTE_LITELLM_GATEWAY_SOURCE = "remote_litellm_gateway"
 CLUSTER_REMOTE_MODEL_SOURCES = {
     REMOTE_LITELLM_GATEWAY_SOURCE,
 }
+RUNTIME_STATUS_PEER_TIMEOUT_SECONDS = 5.0
+RUNTIME_STATUS_PEER_STALE_SECONDS = 120.0
 
 
 def _normalized_node_options(value: list[str] | str | None) -> list[str]:
@@ -170,61 +173,7 @@ def list_models(
 ):
     """List registered models and discovered DMR artifacts."""
     try:
-        try:
-            installed_models = _installed_model_names()
-        except Exception:
-            installed_models = set()
-        registry = load_model_registry()
-        records = registered_model_records(registry)
-        remote_records = [
-            remote
-            for remote in (load_model_remotes().get("remotes") or {}).values()
-            if isinstance(remote, dict)
-            and str(remote.get("managed_by") or "") == "mirror-neuron-cluster"
-        ]
-        gateway = litellm_gateway_health()
-        routed_names = {str(name) for name in gateway.get("models") or []}
-        models = [
-            _registered_model_payload(
-                record,
-                installed_models=installed_models,
-                remote_records=remote_records,
-                routed_names=routed_names,
-            )
-            for record in records
-        ]
-        registered_dmr_keys = {
-            key
-            for record in records
-            if record.get("kind") == "dmr"
-            for key in docker_model_match_keys(str(record.get("model") or ""))
-        }
-        for installed_model in sorted(installed_models):
-            if docker_model_match_keys(installed_model) & registered_dmr_keys:
-                continue
-            models.append(
-                _unmanaged_dmr_payload(installed_model, routed_names=routed_names)
-            )
-        known_model_keys = {
-            key for item in models for key in _model_payload_match_keys(item)
-        }
-        for remote in remote_records:
-            if _remote_record_match_keys(remote) & known_model_keys:
-                continue
-            unmanaged = _unmanaged_remote_dmr_payload(remote, routed_names=routed_names)
-            models.append(unmanaged)
-            known_model_keys.update(_model_payload_match_keys(unmanaged))
-        if available:
-            existing_ids = {str(model.get("id") or "") for model in models}
-            for entry in list_model_entries(load_model_catalog()):
-                model_id = str(entry.get("id") or "")
-                if not model_id or model_id in existing_ids:
-                    continue
-                models.append(_available_model_payload(entry))
-        payload = {
-            "models": sorted(models, key=lambda item: str(item.get("id") or "")),
-            "registry": str(default_model_registry_path()),
-        }
+        payload = _runtime_model_list_payload(available=available)
         if json_output:
             record_result(payload)
             return
@@ -232,6 +181,60 @@ def list_models(
     except Exception as exc:
         _handle_model_error(exc, "model list")
         raise typer.Exit(1)
+
+
+def _runtime_model_list_payload(*, available: bool = False) -> dict[str, Any]:
+    """Build the federation-wide inventory shared by list and batch probe."""
+    try:
+        installed_models = _installed_model_names()
+    except Exception:
+        installed_models = set()
+    registry = load_model_registry()
+    records = registered_model_records(registry)
+    remote_records = _cluster_model_records_for_list()
+    gateway = litellm_gateway_health()
+    routed_names = {str(name) for name in gateway.get("models") or []}
+    models = [
+        _registered_model_payload(
+            record,
+            installed_models=installed_models,
+            remote_records=remote_records,
+            routed_names=routed_names,
+        )
+        for record in records
+    ]
+    registered_dmr_keys = {
+        key
+        for record in records
+        if record.get("kind") == "dmr"
+        for key in docker_model_match_keys(str(record.get("model") or ""))
+    }
+    for installed_model in sorted(installed_models):
+        if docker_model_match_keys(installed_model) & registered_dmr_keys:
+            continue
+        models.append(
+            _discovered_dmr_payload(installed_model, routed_names=routed_names)
+        )
+    known_model_keys = {
+        key for item in models for key in _model_payload_match_keys(item)
+    }
+    for remote in remote_records:
+        if _remote_record_match_keys(remote) & known_model_keys:
+            continue
+        discovered = _discovered_remote_dmr_payload(remote, routed_names=routed_names)
+        models.append(discovered)
+        known_model_keys.update(_model_payload_match_keys(discovered))
+    if available:
+        existing_ids = {str(model.get("id") or "") for model in models}
+        for entry in list_model_entries(load_model_catalog()):
+            model_id = str(entry.get("id") or "")
+            if not model_id or model_id in existing_ids:
+                continue
+            models.append(_available_model_payload(entry))
+    return {
+        "models": sorted(models, key=lambda item: str(item.get("id") or "")),
+        "registry": str(default_model_registry_path()),
+    }
 
 
 def show_model(
@@ -720,11 +723,14 @@ model_app.command(name="show")(show_model)
 @model_app.command(name="probe")
 def probe_model(
     model: Annotated[
-        str,
+        str | None,
         typer.Argument(
-            help="Registered model id, catalog id, alias, or DMR reference."
+            help=(
+                "Registered model id, catalog id, alias, or DMR reference. "
+                "Omit to probe every model in `mn model list`."
+            )
         ),
-    ] = DEFAULT_MODEL_ID,
+    ] = None,
     capabilities: Annotated[
         str,
         typer.Option(
@@ -739,8 +745,30 @@ def probe_model(
         bool, typer.Option("--json", help="Print machine-readable JSON.")
     ] = False,
 ):
-    """Live-probe model capabilities through LiteLLM and cache the result."""
+    """Live-probe one or all runtime models through LiteLLM and cache results."""
     try:
+        if model is None:
+            payload = _probe_runtime_model_inventory(capabilities or None)
+            if json_output:
+                record_result(payload)
+            else:
+                _print_model_probe_batch(payload)
+            if payload["failed"]:
+                raise AppError(
+                    "MN_MODEL_PROBE_BATCH_FAILED",
+                    (
+                        f"{payload['failed']} of {payload['total']} runtime model "
+                        "probes failed."
+                    ),
+                    hint=(
+                        "Review each failed model in the batch details, then retry "
+                        "that model with `mn model probe MODEL`."
+                    ),
+                    details=payload,
+                    exit_code=1,
+                    http_status=502,
+                )
+            return
         payload = run_model_probe(
             model,
             capabilities or None,
@@ -1455,6 +1483,92 @@ def _print_model_probe(payload: dict[str, Any]) -> None:
         print_warning(console, str(direct.get("reason") or "Direct probe was not run."))
 
 
+def _probe_runtime_model_inventory(capabilities: str | None) -> dict[str, Any]:
+    inventory = _runtime_model_list_payload()["models"]
+    model_ids = list(
+        dict.fromkeys(
+            str(item.get("id") or "").strip()
+            for item in inventory
+            if str(item.get("id") or "").strip()
+        )
+    )
+    local_node = _local_runtime_node_name()
+    results: list[dict[str, Any]] = []
+    verified = 0
+    for model_id in model_ids:
+        try:
+            result = run_model_probe(
+                model_id,
+                capabilities,
+                local_node=local_node,
+                mn_home=os.environ.get("MN_HOME"),
+            )
+            results.append({"ok": True, **result})
+            verified += 1
+        except Exception as exc:
+            error = normalize_exception(
+                exc,
+                context={"command": "model probe", "model": model_id},
+            )
+            results.append(
+                {
+                    "ok": False,
+                    "model": model_id,
+                    "status": "failed",
+                    "error": {
+                        "code": error.code,
+                        "message": error.user_message,
+                        "hint": error.hint or "",
+                        "details": dict(error.details or {}),
+                    },
+                }
+            )
+    failed = len(model_ids) - verified
+    status = (
+        "empty"
+        if not model_ids
+        else "verified"
+        if not failed
+        else "failed"
+        if not verified
+        else "partial"
+    )
+    return {
+        "status": status,
+        "total": len(model_ids),
+        "verified": verified,
+        "failed": failed,
+        "models": model_ids,
+        "results": results,
+    }
+
+
+def _print_model_probe_batch(payload: dict[str, Any]) -> None:
+    results = payload.get("results") or []
+    if not results:
+        print_warning(console, "No runtime models are available to probe.")
+        return
+    for result in results:
+        if result.get("ok"):
+            _print_model_probe(result)
+            continue
+        error = result.get("error") or {}
+        print_warning(
+            console,
+            f"{result.get('model')}: {error.get('message') or 'Probe failed.'}",
+        )
+    if not payload.get("failed"):
+        print_success_confirmation(
+            console,
+            "Runtime model probes",
+            status="verified",
+            details=[
+                ("Models", payload.get("total")),
+                ("Verified", payload.get("verified")),
+            ],
+        )
+
+
 def _probe_parity_label(value: Any) -> str:
     if value is None:
         return "not compared"
@@ -1468,6 +1582,54 @@ def _cluster_managed_remote_records() -> list[dict[str, Any]]:
         if isinstance(record, dict)
         and str(record.get("managed_by") or "") == "mirror-neuron-cluster"
     ]
+
+
+def _cluster_model_records_for_list() -> list[dict[str, Any]]:
+    """Return the live federation inventory, with saved routes as fallback.
+
+    A successfully read peer snapshot is authoritative for that peer. This
+    makes additions and removals visible without waiting for the local route
+    ledger to reconcile, while an unavailable peer still retains its last
+    known inventory.
+    """
+
+    persisted = _cluster_managed_remote_records()
+    discovered: list[dict[str, Any]] = []
+    authoritative_nodes: set[str] = set()
+    for endpoint in _cluster_runtime_status_endpoints(quiet=True):
+        if _cluster_node_is_local(endpoint):
+            continue
+        node_name = str(endpoint.get("node_name") or "").strip()
+        if not node_name:
+            continue
+        try:
+            entries = _runtime_model_inventory_for_node(endpoint)
+        except RuntimeError:
+            continue
+        authoritative_nodes.add(node_name)
+        api_base = _node_litellm_gateway_api_base(endpoint)
+        for entry in entries:
+            try:
+                runtime_model = docker_model_name(entry)
+            except Exception:
+                continue
+            discovered.append(
+                {
+                    "name": str(entry.get("name") or entry.get("id") or runtime_model),
+                    "model": runtime_model,
+                    "api_model": str(entry.get("api_model") or runtime_model),
+                    "cluster_model_id": str(entry.get("id") or runtime_model),
+                    "base_url": api_base,
+                    "node": node_name,
+                    "managed_by": "mirror-neuron-cluster",
+                }
+            )
+
+    return [
+        remote
+        for remote in persisted
+        if str(remote.get("node") or "").strip() not in authoritative_nodes
+    ] + discovered
 
 
 def _remote_node_compatibility(
@@ -1676,7 +1838,7 @@ def _stored_registered_model_payload(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _unmanaged_dmr_payload(model: str, *, routed_names: set[str]) -> dict[str, Any]:
+def _discovered_dmr_payload(model: str, *, routed_names: set[str]) -> dict[str, Any]:
     routed = bool(
         docker_model_match_keys(model)
         & {key for name in routed_names for key in docker_model_match_keys(name)}
@@ -1697,7 +1859,7 @@ def _unmanaged_dmr_payload(model: str, *, routed_names: set[str]) -> dict[str, A
         "name": str((entry or {}).get("name") or model_id),
         "kind": "dmr",
         "source": "docker_model_runner",
-        "state": "unmanaged",
+        "state": "ready" if routed else "installed",
         "registered": False,
         "installed": True,
         "routed": routed,
@@ -1724,7 +1886,7 @@ def _unmanaged_dmr_payload(model: str, *, routed_names: set[str]) -> dict[str, A
     }
 
 
-def _unmanaged_remote_dmr_payload(
+def _discovered_remote_dmr_payload(
     remote: dict[str, Any], *, routed_names: set[str]
 ) -> dict[str, Any]:
     model = str(remote.get("model") or remote.get("api_model") or "").strip()
@@ -1761,7 +1923,7 @@ def _unmanaged_remote_dmr_payload(
         "name": str((entry or {}).get("name") or model_id),
         "kind": "dmr",
         "source": "docker_model_runner",
-        "state": "unmanaged",
+        "state": "ready" if routed else "installed",
         "registered": False,
         "installed": True,
         "routed": routed,
@@ -2493,6 +2655,17 @@ def _cluster_runtime_status_endpoints(*, quiet: bool = False) -> list[dict[str, 
             else {}
         )
         snapshot = snapshots.get(node_name, {})
+        if _model_status_needs_peer_refresh(snapshot) and not live_endpoint.get(
+            "self"
+        ):
+            try:
+                snapshot = _authoritative_peer_runtime_status_node(live_endpoint)
+            except Exception as exc:
+                if not quiet:
+                    print_warning(
+                        console,
+                        f"Could not read authoritative model status from {node_name}: {exc}",
+                    )
         node = {**snapshot, **live_node}
         if isinstance(snapshot.get("runtime_status"), dict):
             node["runtime_status"] = snapshot["runtime_status"]
@@ -2507,6 +2680,53 @@ def _cluster_runtime_status_endpoints(*, quiet: bool = False) -> list[dict[str, 
             endpoint["status_event_ids"] = event_ids
         endpoints.append(endpoint)
     return endpoints
+
+
+def _model_status_published(node: object) -> bool:
+    if not isinstance(node, dict):
+        return False
+    runtime_status = node.get("runtime_status")
+    models = runtime_status.get("models") if isinstance(runtime_status, dict) else None
+    return isinstance(models, dict) and bool(str(models.get("revision") or "").strip())
+
+
+def _model_status_needs_peer_refresh(node: object) -> bool:
+    if not _model_status_published(node):
+        return True
+    runtime_status = node.get("runtime_status") if isinstance(node, dict) else None
+    models = runtime_status.get("models") if isinstance(runtime_status, dict) else None
+    reported_at = str((models or {}).get("reported_at") or "").strip()
+    if not reported_at:
+        # Older runtime-status publishers did not include timestamps. A valid
+        # revision remains usable and avoids forcing permanent peer polling.
+        return False
+    try:
+        reported = datetime.fromisoformat(reported_at.replace("Z", "+00:00"))
+        if reported.tzinfo is None:
+            reported = reported.replace(tzinfo=UTC)
+    except ValueError:
+        return False
+    age_seconds = (datetime.now(UTC) - reported.astimezone(UTC)).total_seconds()
+    return age_seconds >= RUNTIME_STATUS_PEER_STALE_SECONDS
+
+
+def _authoritative_peer_runtime_status_node(
+    node_endpoint: dict[str, Any],
+) -> dict[str, Any]:
+    node_name = str(node_endpoint.get("node_name") or "").strip()
+    target = str(node_endpoint.get("grpc_target") or "").strip()
+    if not node_name or not target:
+        raise RuntimeError("peer runtime-status endpoint is incomplete")
+    peer = Client(target=target, timeout=RUNTIME_STATUS_PEER_TIMEOUT_SECONDS)
+    payload = json.loads(peer.get_runtime_statuses())
+    nodes = payload.get("nodes") if isinstance(payload, dict) else None
+    for node in nodes or []:
+        if not isinstance(node, dict):
+            continue
+        candidate = str(node.get("name") or node.get("node") or "").strip()
+        if candidate == node_name and _model_status_published(node):
+            return node
+    raise RuntimeError(f"cluster node {node_name} has not published model status")
 
 
 def _local_cluster_node_endpoint() -> dict[str, Any] | None:

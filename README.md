@@ -75,6 +75,10 @@ the MirrorNeuron GAR package index configured, install it with:
 `mn model add --file <definition.json>`. Registrations are stored in
 `$MN_HOME/models/registry.json`; provider secrets remain environment-variable
 references. Use `mn model list --available` to include catalog-only choices.
+The default list is federation-wide: it merges each connected node's published
+Docker Model Runner inventory. A discovered artifact reports `ready` when its
+LiteLLM route is live and `installed` while route reconciliation is pending;
+registry ownership is not presented as a health state.
 Add `--default` to make one newly added DMR or provider model the logical
 default ahead of the built-in Nemotron/Gemma fallback chain. Provider files
 used with `--default` must contain exactly one model.
@@ -100,14 +104,19 @@ Force a live capability evaluation and save the effective LiteLLM-facing
 matrix in the SDK model-catalog overlay:
 
 ```bash
+mn model probe
 mn model probe gemma4:e2b
 mn model probe nemotron-3.5-lightning:latest --json
 mn model probe gemma4:e2b --capabilities image,json-schema,stream,thinking
 ```
 
-The default probe covers embeddings, image input, strict JSON Schema output,
-SSE streaming, and thinking. When the selected DMR artifact is local, the CLI
-runs the identical probe directly against Docker Model Runner and fails if the
+With no model argument, `probe` evaluates every model in the same
+federation-wide runtime inventory returned by `mn model list`. It continues
+after individual failures, reports every result, and exits unsuccessfully when
+one or more probes fail. Supplying a model keeps the single-model behavior. The
+default probe covers embeddings, image input, strict JSON Schema output, SSE
+streaming, and thinking. When the selected DMR artifact is local, the CLI runs
+the identical probe directly against Docker Model Runner and fails if the
 LiteLLM result differs. Remote-owner and provider models are tested through the
 managed LiteLLM route without exposing or bypassing the owner's direct endpoint.
 
@@ -409,6 +418,10 @@ snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
   per-entry `fallback_model` links. The existing cluster model monitor
   rebuilds these routes as nodes join, rejoin, or leave; incomplete peer
   snapshots retain the last safe routes until departure is confirmed.
+  The steady-state inventory check runs once per minute by default. If a
+  federated Core's shared snapshot omits a peer or remains stale, the monitor
+  reads that peer's authoritative Core snapshot directly instead of increasing
+  poll frequency.
   Gateway route names and `fallback_model` are read from the SDK's merged model
   catalog, including `~/.mn/models/catalog.json` (or `$MN_HOME`) and the
   highest-priority `MN_MODEL_CATALOG_PATH` override. When a local runtime's DHCP

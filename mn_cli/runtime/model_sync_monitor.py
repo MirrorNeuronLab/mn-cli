@@ -13,7 +13,10 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 FALSE_VALUES = {"0", "false", "no", "off"}
-DEFAULT_INTERVAL_SECONDS = 15.0
+# Model inventory changes are infrequent and a short propagation delay is
+# acceptable. Keep the steady-state probe deliberately low-frequency; model
+# commands still reconcile immediately on the node where a mutation occurs.
+DEFAULT_INTERVAL_SECONDS = 60.0
 DEFAULT_RETRY_MIN_SECONDS = 1.0
 DEFAULT_RETRY_MAX_SECONDS = 30.0
 DEFAULT_NODE_MISSING_GRACE_SECONDS = 90.0

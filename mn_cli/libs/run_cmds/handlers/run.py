@@ -54,8 +54,14 @@ def _record_prevalidated_command_rules(
     metadata = (
         manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
     )
+    source_manifest = (
+        manifest.get("manifest")
+        if isinstance(manifest.get("manifest"), dict)
+        else {}
+    )
     validation_candidates = (
         (manifest, "input_validation"),
+        (source_manifest, "input_validation"),
         (metadata, "input_validation"),
     )
     for container, key in validation_candidates:

@@ -67,6 +67,9 @@ API to call.
 2. It publishes a model-status snapshot to Core with a content revision.
 3. Each node's native SDK process runs the cluster model monitor. The monitor
    reads live membership and the revisioned inventory for every live node.
+   Shared snapshots are preferred. When a federated Core omits a live peer's
+   snapshot or retains a stale one, one bounded read is made directly to that
+   peer's Core; the normal monitor interval is not shortened.
 4. It creates one deployment identity from the owner node, runtime model, and
    owner proxy endpoint. Only identical physical deployments are deduplicated.
 5. Each node rebuilds its local proxy config. It excludes a remote hop to
@@ -85,7 +88,7 @@ The monitor defaults are:
 
 ```text
 MN_CLUSTER_MODEL_MONITOR_ENABLED=true
-MN_CLUSTER_MODEL_MONITOR_INTERVAL_SECONDS=15
+MN_CLUSTER_MODEL_MONITOR_INTERVAL_SECONDS=60
 MN_CLUSTER_MODEL_MONITOR_RETRY_MIN_SECONDS=1
 MN_CLUSTER_MODEL_MONITOR_RETRY_MAX_SECONDS=30
 MN_CLUSTER_MODEL_MONITOR_NODE_MISSING_GRACE_SECONDS=90

@@ -228,17 +228,25 @@ SDK registry changes. If the requested DMR artifact is already installed on an
 eligible local or cluster node, `add` adopts that artifact and registers it
 without reinstalling it.
 
-`probe` force-tests embeddings, image input, strict JSON Schema output, SSE
-streaming, and thinking against the model's managed LiteLLM route, then stores
-the effective matrix in the SDK model-catalog overlay. `--capabilities` accepts
-a comma-separated subset using the SDK's canonical names or aliases. For a DMR
-artifact selected on the local node, the command first runs the same contract
-directly against Docker Model Runner and fails if LiteLLM changes any result.
-For provider or remote-owner routes, the direct path is reported as not run;
-the command does not bypass a remote owner's loopback-only DMR endpoint.
+`probe` with no model argument force-tests every model in the federation-wide
+inventory returned by `list`; an explicit model argument retains single-model
+operation. A batch continues after individual failures, returns every per-model
+result, and uses a failing exit status if any probe fails. Each probe tests
+embeddings, image input, strict JSON Schema output, SSE streaming, and thinking
+against the model's managed LiteLLM route, then stores the effective matrix in
+the SDK model-catalog overlay. `--capabilities` accepts a comma-separated subset
+using the SDK's canonical names or aliases and applies it to every selected
+model. For a DMR artifact selected on the local node, the command first runs the
+same contract directly against Docker Model Runner and fails if LiteLLM changes
+any result. For provider or remote-owner routes, the direct path is reported as
+not run; the command does not bypass a remote owner's loopback-only DMR
+endpoint.
 
-`list` renders registered models and discovered unmanaged DMR artifacts;
-`--available` also includes catalog-only choices. Machine records expose
+`list` renders registered models and the discovered federation-wide DMR
+inventory; `--available` also includes catalog-only choices. A discovered
+artifact has state `ready` when it is installed and routed, or `installed`
+while routing is pending. Registry ownership is exposed separately and is not
+used as a health state. Machine records expose
 explicit kind, state, registration, installation, routing, node, catalog, and
 verification facts, including one health record per physical installation.
 Mutating commands support `--json`. `update` targets all recorded DMR

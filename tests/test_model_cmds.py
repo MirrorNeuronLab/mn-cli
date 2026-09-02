@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from mn_sdk import (
+    AppError,
     HostHardwareProfile,
     ModelCapabilityReport,
     add_registered_models,
@@ -216,7 +217,7 @@ def test_model_list_marks_cluster_remote_installed_and_local_route_wins(mocker):
     assert [item["local"] for item in local_model["installations"]] == [True, False]
 
 
-def test_model_list_includes_unregistered_cluster_artifact_as_unmanaged(mocker):
+def test_model_list_reports_routed_cluster_artifact_as_ready(mocker):
     upsert_model_remote(
         "spark-nemotron",
         "nemotron-3.5-lightning:latest",
@@ -241,7 +242,7 @@ def test_model_list_includes_unregistered_cluster_artifact_as_unmanaged(mocker):
         for item in cli_data(result)["models"]
         if item["id"] == "nemotron-3.5-lightning:latest"
     )
-    assert model["state"] == "unmanaged"
+    assert model["state"] == "ready"
     assert model["registered"] is False
     assert model["installed"] is True
     assert model["routed"] is True
@@ -257,6 +258,58 @@ def test_model_list_includes_unregistered_cluster_artifact_as_unmanaged(mocker):
             "route_source": "remote_litellm_gateway",
         }
     ]
+
+
+def test_model_list_reads_unregistered_artifact_from_live_peer_inventory(mocker):
+    spark_model = {
+        "id": "nemotron3:q4_K_M",
+        "provider": "docker_model_runner",
+        "model": "nemotron3:q4_K_M",
+        "api_model": "nemotron3:q4_K_M",
+        "installed": True,
+    }
+    mocker.patch("mn_cli.libs.model_cmds._installed_model_names", return_value=set())
+    mocker.patch(
+        "mn_cli.libs.model_cmds._cluster_runtime_status_endpoints",
+        return_value=[
+            {
+                "node": {},
+                "node_name": "mirror_neuron@local",
+                "host": "10.0.0.1",
+                "self": True,
+                "self_authoritative": True,
+            },
+            {
+                "node": {
+                    "runtime_status": {
+                        "models": {
+                            "revision": "spark-v1",
+                            "status": {"models": [spark_model]},
+                        }
+                    }
+                },
+                "node_name": "mirror_neuron@spark",
+                "host": "10.0.0.2",
+                "self": False,
+                "self_authoritative": True,
+            },
+        ],
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds.litellm_gateway_health",
+        return_value={"ok": True, "models": ["nemotron3:q4_K_M"]},
+    )
+
+    result = runner.invoke(app, ["model", "list", "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    model = next(
+        item for item in cli_data(result)["models"] if item["id"] == "nemotron3:q4_K_M"
+    )
+    assert model["state"] == "ready"
+    assert model["installed"] is True
+    assert model["registered"] is False
+    assert model["node"] == "mirror_neuron@spark"
 
 
 def test_model_list_hides_private_owner_route_names(mocker):
@@ -889,6 +942,116 @@ def test_model_probe_checks_local_dmr_and_litellm_then_persists_proxy_matrix(
     assert probe.call_args_list[1].kwargs["persist"] is True
 
 
+def test_model_probe_without_model_probes_every_runtime_inventory_model(mocker):
+    mocker.patch(
+        "mn_cli.libs.model_cmds._runtime_model_list_payload",
+        return_value={
+            "models": [
+                {"id": "gemma4:e2b"},
+                {"id": "nemotron3:q4_K_M"},
+            ],
+            "registry": "/tmp/registry.json",
+        },
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds._local_runtime_node_name",
+        return_value="mirror_neuron@spark",
+    )
+
+    def probe(model, capabilities, **kwargs):
+        return {
+            "status": "verified",
+            "model": model,
+            "required": [capabilities] if capabilities else [],
+            "capabilities": {"streaming": True},
+            "paths": {},
+            "local_node": kwargs["local_node"],
+        }
+
+    run_probe = mocker.patch(
+        "mn_cli.libs.model_cmds.run_model_probe",
+        side_effect=probe,
+    )
+
+    result = runner.invoke(
+        app,
+        ["model", "probe", "--capabilities", "streaming", "--json"],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = cli_data(result)
+    assert payload["status"] == "verified"
+    assert payload["total"] == 2
+    assert payload["verified"] == 2
+    assert payload["failed"] == 0
+    assert [item["model"] for item in payload["results"]] == [
+        "gemma4:e2b",
+        "nemotron3:q4_K_M",
+    ]
+    assert all(item["ok"] is True for item in payload["results"])
+    assert [call.args[:2] for call in run_probe.call_args_list] == [
+        ("gemma4:e2b", "streaming"),
+        ("nemotron3:q4_K_M", "streaming"),
+    ]
+    assert all(
+        call.kwargs["local_node"] == "mirror_neuron@spark"
+        for call in run_probe.call_args_list
+    )
+
+
+def test_model_probe_batch_continues_after_an_individual_failure(mocker):
+    mocker.patch(
+        "mn_cli.libs.model_cmds._runtime_model_list_payload",
+        return_value={
+            "models": [
+                {"id": "first"},
+                {"id": "broken"},
+                {"id": "last"},
+            ],
+            "registry": "/tmp/registry.json",
+        },
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds._local_runtime_node_name",
+        return_value="mirror_neuron@spark",
+    )
+    def successful(model):
+        return {
+            "status": "verified",
+            "model": model,
+            "capabilities": {"streaming": True},
+            "paths": {},
+        }
+
+    run_probe = mocker.patch(
+        "mn_cli.libs.model_cmds.run_model_probe",
+        side_effect=[
+            successful("first"),
+            AppError("MN_MODEL_PROBE_FAILED", "The model probe failed."),
+            successful("last"),
+        ],
+    )
+
+    result = runner.invoke(app, ["model", "probe", "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "MN_MODEL_PROBE_BATCH_FAILED"
+    batch = payload["error"]["details"]
+    assert batch["status"] == "partial"
+    assert batch["total"] == 3
+    assert batch["verified"] == 2
+    assert batch["failed"] == 1
+    assert [item["model"] for item in batch["results"]] == [
+        "first",
+        "broken",
+        "last",
+    ]
+    assert batch["results"][1]["error"]["code"] == "MN_MODEL_PROBE_FAILED"
+    assert run_probe.call_count == 3
+
+
 def test_model_probe_can_probe_remote_route_through_litellm_only(mocker):
     matrix = {"structured_output": True, "streaming": True}
     probe = mocker.patch(
@@ -1175,6 +1338,82 @@ def test_cluster_runtime_status_endpoints_use_live_membership_and_ignore_departe
             "status_event_ids": ["1-0"],
         }
     ]
+
+
+def test_cluster_runtime_status_endpoints_fetch_missing_peer_snapshot_directly(mocker):
+    local = _cluster_node("mirror_neuron@local", "10.0.0.1", self_node=True)
+    spark = _cluster_node("mirror_neuron@spark", "10.0.0.2")
+    local_snapshot = {
+        **local,
+        "runtime_status": {
+            "models": {
+                "revision": "local-v1",
+                "status": {"models": []},
+            }
+        },
+    }
+    spark_snapshot = {
+        **spark,
+        "runtime_status": {
+            "models": {
+                "revision": "spark-v1",
+                "status": {
+                    "models": [
+                        {
+                            "id": "nemotron3:q4_K_M",
+                            "provider": "docker_model_runner",
+                            "model": "nemotron3:q4_K_M",
+                            "installed": True,
+                        }
+                    ]
+                },
+            }
+        },
+    }
+    mocker.patch(
+        "mn_cli.libs.model_cmds.client.get_system_summary",
+        return_value=_cluster_summary(local, spark),
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds.client.get_runtime_statuses",
+        return_value=json.dumps({"nodes": [local_snapshot, spark], "events": []}),
+    )
+    peer = mocker.Mock()
+    peer.get_runtime_statuses.return_value = json.dumps(
+        {"nodes": [local_snapshot, spark_snapshot], "events": []}
+    )
+    peer_client = mocker.patch("mn_cli.libs.model_cmds.Client", return_value=peer)
+
+    endpoints = model_cmds._cluster_runtime_status_endpoints()
+
+    spark_endpoint = next(
+        endpoint
+        for endpoint in endpoints
+        if endpoint["node_name"] == "mirror_neuron@spark"
+    )
+    assert model_cmds._runtime_model_inventory_for_node(spark_endpoint)[0]["id"] == (
+        "nemotron3:q4_K_M"
+    )
+    peer_client.assert_called_once_with(
+        target="10.0.0.2:55051",
+        timeout=model_cmds.RUNTIME_STATUS_PEER_TIMEOUT_SECONDS,
+    )
+
+
+def test_model_status_refreshes_stale_snapshot_without_penalizing_legacy_snapshot():
+    def snapshot(reported_at=None):
+        models = {"revision": "peer-v1", "status": {"models": []}}
+        if reported_at is not None:
+            models["reported_at"] = reported_at
+        return {"runtime_status": {"models": models}}
+
+    assert model_cmds._model_status_needs_peer_refresh(
+        snapshot("2000-01-01T00:00:00Z")
+    )
+    assert not model_cmds._model_status_needs_peer_refresh(
+        snapshot("2999-01-01T00:00:00Z")
+    )
+    assert not model_cmds._model_status_needs_peer_refresh(snapshot())
 
 
 def test_cluster_node_is_not_local_for_remote_host(monkeypatch):
@@ -2106,6 +2345,10 @@ def test_model_install_local_dmr_publishes_status_without_peer_gateway_fanout(mo
         ),
     )
     mocker.patch(
+        "mn_cli.libs.model_cmds.client.get_runtime_statuses",
+        return_value=json.dumps({"nodes": []}),
+    )
+    mocker.patch(
         "mn_cli.libs.model_cmds.client.publish_runtime_status",
         side_effect=lambda payload: json.dumps(
             {
@@ -2151,7 +2394,8 @@ def test_model_install_local_dmr_publishes_status_without_peer_gateway_fanout(mo
         local_syncs[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"]
         == "http://model-runner.docker.internal/engines/v1"
     )
-    peer_client.assert_not_called()
+    peer_client.assert_called_once_with(target="10.0.0.2:55051", timeout=5.0)
+    peer_client.return_value.sync_litellm_gateway.assert_not_called()
 
 
 def test_model_install_node_uses_prepare_runtime_model_not_ssh(mocker):
@@ -3013,7 +3257,7 @@ def test_model_remove_force_overrides_blueprint_owner_guard(mocker):
     assert get_registered_model("gemma4:e2b") is None
 
 
-def test_model_remove_keep_artifact_leaves_unmanaged_dmr(mocker):
+def test_model_remove_keep_artifact_reports_installed_dmr(mocker):
     entry = resolve_model_entry("gemma4:e2b")
     add_registered_models([dmr_registration(entry, selected_node="local")])
     mocker.patch(
@@ -3038,7 +3282,7 @@ def test_model_remove_keep_artifact_leaves_unmanaged_dmr(mocker):
     model = next(
         item for item in cli_data(listed)["models"] if item["id"] == "gemma4:e2b"
     )
-    assert model["state"] == "unmanaged"
+    assert model["state"] == "installed"
     assert model["registered"] is False
 
 

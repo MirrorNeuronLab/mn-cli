@@ -365,9 +365,14 @@ def test_run_defers_injected_cluster_model_selection_preparation_and_gateway(
     assert cluster.gateway_syncs == []
     submitted_manifest = json.loads(submit.call_args.args[0])
     assistant = submitted_manifest["agents"]["nodes"][0]
+    assert (
+        assistant["config"]["environment"]["MN_LLM_PROVIDER"]
+        == "docker_model_runner"
+    )
     assert assistant["config"]["environment"]["MN_LLM_MODEL"] == "default"
-    assert assistant["config"]["environment"]["MN_LLM_API_BASE"] == "http://127.0.0.1:4000/v1"
+    assert assistant["config"]["environment"]["MN_LLM_API_BASE"] == "auto"
     assert assistant["config"]["environment"]["MN_RUNTIME_MODEL_MANAGED"] == "1"
+
 
 def test_run_auto_schedule_creates_resource_wait_schedule(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
@@ -491,6 +496,69 @@ def test_run_prevalidates_command_rules_before_core_submission(mocker, tmp_path,
     ]
     validation = submitted_manifest["metadata"]["mn_validation"]["input_validation"]
     assert validation == {
+        "status": "passed",
+        "validator": "mn-python-sdk",
+        "prevalidated_command_rules": [
+            {"name": "host_validator", "type": "command", "index": 0}
+        ],
+    }
+
+
+def test_record_prevalidated_command_rules_in_source_manifest():
+    manifest = {
+        "apiVersion": "mn.workflow/v1",
+        "kind": "WorkflowSource",
+        "manifest": {
+            "input_validation": {
+                "rules": [
+                    {
+                        "name": "host_validator",
+                        "type": "command",
+                        "command": [sys.executable, "-c", "print('validated')"],
+                    },
+                    {
+                        "name": "job_name",
+                        "type": "pattern",
+                        "source": "manifest",
+                        "path": "job_name",
+                        "pattern": "^prevalidated-",
+                    },
+                ]
+            }
+        },
+    }
+    validation_report = {
+        "ok": True,
+        "results": [
+            {
+                "ok": True,
+                "type": "command",
+                "rule": {
+                    "name": "host_validator",
+                    "type": "command",
+                    "index": 0,
+                },
+            },
+            {
+                "ok": True,
+                "type": "pattern",
+                "rule": {"name": "job_name", "type": "pattern", "index": 1},
+            },
+        ],
+    }
+
+    run_cmds._record_prevalidated_command_rules(manifest, validation_report)
+
+    assert manifest["manifest"]["input_validation"]["rules"] == [
+        {
+            "name": "job_name",
+            "type": "pattern",
+            "source": "manifest",
+            "path": "job_name",
+            "pattern": "^prevalidated-",
+        }
+    ]
+    assert manifest["metadata"]["mn_validation"]["input_validation"] == {
         "status": "passed",
         "validator": "mn-python-sdk",
         "prevalidated_command_rules": [
