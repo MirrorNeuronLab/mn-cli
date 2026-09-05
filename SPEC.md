@@ -446,3 +446,13 @@ values resolve through the SDK. Payload assembly stages one resolved descriptor;
 launch environment is passed explicitly. Confirmed failure permits owned
 resource rollback; uncertain submission acknowledgements require reconciliation.
 See `mn-docs/blueprint-standard.md` for document ownership and extension schemas.
+
+## Explicit skill dependency versions
+
+Skill dependencies must declare a version in the manifest or runtime package
+index, or carry an explicit version constraint in a configured requirement.
+An unversioned skill fails preparation before installation; no global skill
+version or SDK-version fallback is applied. References to skills already
+versioned in the manifest use that declaration. Development staging preserves
+the SDK's own static project version or, for the running SDK source checkout,
+its installed distribution version. Missing SDK version metadata is an error.

@@ -450,3 +450,13 @@ defaults`, and an explicitly blank environment value overrides dotenv. Set
 `MN_MODEL_CATALOG_PATH` in `.env` to select an operator catalog containing both
 semantic defaults and model entries; there are no separate preferred/fallback
 model-name environment variables.
+
+## Explicit skill dependency versions
+
+Skill dependencies must declare a version in the manifest or runtime package
+index, or carry an explicit version constraint in a configured requirement.
+An unversioned skill fails preparation before installation; no global skill
+version or SDK-version fallback is applied. References to skills already
+versioned in the manifest use that declaration. Development staging preserves
+the SDK's own static project version or, for the running SDK source checkout,
+its installed distribution version. Missing SDK version metadata is an error.

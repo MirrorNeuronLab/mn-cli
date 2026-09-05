@@ -1,7 +1,6 @@
 """Compatibility exports for the SDK-owned skill dependency contract."""
 
 from mn_sdk.skill_dependencies import (
-    DEFAULT_SKILL_PACKAGE_VERSION,
     GAR_PIP_INDEX_URL,
     PYPI_PIP_INDEX_URL,
     gar_requirement_lines,
@@ -17,7 +16,6 @@ from mn_sdk.skill_dependencies import (
 )
 
 __all__ = [
-    "DEFAULT_SKILL_PACKAGE_VERSION",
     "GAR_PIP_INDEX_URL",
     "PYPI_PIP_INDEX_URL",
     "gar_requirement_lines",
