@@ -44,8 +44,12 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.setattr(
         run_cmds,
         "sync_litellm_gateway",
-        lambda **_kwargs: {"status": "running", "api_base": "http://mn-litellm-proxy:4000/v1"},
+        lambda **_kwargs: {
+            "status": "running",
+            "api_base": "http://mn-litellm-proxy:4000/v1",
+        },
     )
+
 
 def test_doctor_bundle_prepares_without_submitting_job(mocker, tmp_path):
     bundle_dir = tmp_path / "doctor_bundle"
@@ -55,11 +59,22 @@ def test_doctor_bundle_prepares_without_submitting_job(mocker, tmp_path):
         "mn_cli.libs.run_cmds._doctor_runtime_foundation",
         return_value={"status": "passing", "detail": "runtime ok"},
     )
-    mocker.patch("mn_cli.libs.run_cmds._doctor_validate_hardware", return_value={"ok": True})
-    mocker.patch("mn_cli.libs.run_cmds._doctor_validate_services", return_value={"ok": True})
-    mocker.patch("mn_cli.libs.run_cmds._doctor_validate_inputs", return_value={"ok": True})
-    mocker.patch("mn_cli.libs.run_cmds._doctor_validate_models", return_value={"ok": True})
-    mocker.patch("mn_cli.libs.run_cmds._prepare_runtime_models_for_run_or_exit", return_value={"models": []})
+    mocker.patch(
+        "mn_cli.libs.run_cmds._doctor_validate_hardware", return_value={"ok": True}
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds._doctor_validate_services", return_value={"ok": True}
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds._doctor_validate_inputs", return_value={"ok": True}
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds._doctor_validate_models", return_value={"ok": True}
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds._prepare_runtime_models_for_run_or_exit",
+        return_value={"models": []},
+    )
     mocker.patch(
         "mn_cli.libs.run_cmds.prepare_manifest_for_submission",
         side_effect=lambda _bundle_dir, manifest, **_kwargs: manifest,
@@ -70,7 +85,9 @@ def test_doctor_bundle_prepares_without_submitting_job(mocker, tmp_path):
         return_value={"status": "skipped", "detail": "none"},
     )
     mocker.patch("mn_cli.libs.run_cmds._stage_bundle_payloads", return_value={})
-    mocker.patch("mn_cli.libs.run_cmds.blueprint_requires_context_engine", return_value=False)
+    mocker.patch(
+        "mn_cli.libs.run_cmds.blueprint_requires_context_engine", return_value=False
+    )
     mock_prepare = mocker.patch(
         "mn_cli.libs.run_cmds.prepare_job_submission",
         return_value=SimpleNamespace(
@@ -88,6 +105,7 @@ def test_doctor_bundle_prepares_without_submitting_job(mocker, tmp_path):
     mock_prepare.assert_called_once()
     mock_submit.assert_not_called()
 
+
 def test_doctor_bundle_check_only_skips_openshell_build(mocker, tmp_path):
     bundle_dir = tmp_path / "doctor_openshell_bundle"
     bundle_dir.mkdir()
@@ -98,7 +116,9 @@ def test_doctor_bundle_check_only_skips_openshell_build(mocker, tmp_path):
                     "nodes": [
                         {
                             "node_id": "shell",
-                            "config": {"runner_module": "MirrorNeuron.Sandbox.OpenShell"},
+                            "config": {
+                                "runner_module": "MirrorNeuron.Sandbox.OpenShell"
+                            },
                         }
                     ]
                 }
@@ -109,10 +129,18 @@ def test_doctor_bundle_check_only_skips_openshell_build(mocker, tmp_path):
         "mn_cli.libs.run_cmds._doctor_runtime_foundation",
         return_value={"status": "passing", "detail": "runtime ok"},
     )
-    mocker.patch("mn_cli.libs.run_cmds._doctor_validate_hardware", return_value={"ok": True})
-    mocker.patch("mn_cli.libs.run_cmds._doctor_validate_services", return_value={"ok": True})
-    mocker.patch("mn_cli.libs.run_cmds._doctor_validate_inputs", return_value={"ok": True})
-    mocker.patch("mn_cli.libs.run_cmds._doctor_validate_models", return_value={"ok": True})
+    mocker.patch(
+        "mn_cli.libs.run_cmds._doctor_validate_hardware", return_value={"ok": True}
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds._doctor_validate_services", return_value={"ok": True}
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds._doctor_validate_inputs", return_value={"ok": True}
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds._doctor_validate_models", return_value={"ok": True}
+    )
     mocker.patch(
         "mn_cli.libs.run_cmds.prepare_manifest_for_submission",
         side_effect=lambda _bundle_dir, manifest, **_kwargs: manifest,
@@ -129,6 +157,7 @@ def test_doctor_bundle_check_only_skips_openshell_build(mocker, tmp_path):
     mock_build.assert_not_called()
     mock_prepare_job.assert_not_called()
 
+
 def test_doctor_summary_redacts_and_marks_critical():
     report = {
         "runtime": {"status": "passing"},
@@ -144,9 +173,12 @@ def test_doctor_summary_redacts_and_marks_critical():
     assert redacted["config"]["nested"]["token"] == "[redacted]"
     assert redacted["config"]["nested"]["plain"] == "ok"
 
+
 def test_doctor_environment_probe_reports(mocker, tmp_path):
     env_dir = tmp_path / "venv"
-    mocker.patch("mn_cli.libs.run_cmds._doctor_prepare_python_env", return_value=env_dir)
+    mocker.patch(
+        "mn_cli.libs.run_cmds._doctor_prepare_python_env", return_value=env_dir
+    )
     host_manifest = {
         "agents": {
             "nodes": [
@@ -182,7 +214,13 @@ def test_doctor_environment_probe_reports(mocker, tmp_path):
     docker_report = run_cmds._doctor_docker_worker_report(
         {
             "prepared": True,
-            "services": [{"service": "worker", "container_name": "mn-worker", "image": "worker:latest"}],
+            "services": [
+                {
+                    "service": "worker",
+                    "container_name": "mn-worker",
+                    "image": "worker:latest",
+                }
+            ],
         }
     )
 
@@ -223,14 +261,28 @@ def test_doctor_prepares_hostlocal_python_on_selected_remote_node(mocker, tmp_pa
         },
     }
     runtime_client = object()
-    mocker.patch("mn_cli.libs.run_cmds.handlers.doctor._local_runtime_node_name", return_value="mirror_neuron@mac")
-    mocker.patch("mn_cli.libs.run_cmds.handlers.doctor._cluster_node_endpoint", return_value={"node": {}})
-    mocker.patch("mn_cli.libs.run_cmds.handlers.doctor._runtime_model_prepare_client", return_value=runtime_client)
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor._local_runtime_node_name",
+        return_value="mirror_neuron@mac",
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor._cluster_node_endpoint",
+        return_value={"node": {}},
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor._runtime_model_prepare_client",
+        return_value=runtime_client,
+    )
     prepare = mocker.patch(
         "mn_cli.libs.run_cmds.handlers.doctor._prepare_runtime_model_with_retry",
-        return_value={"runtime_path": "/runtime/shared/blueprint-python-envs/remote", "host_path": "/host/shared/blueprint-python-envs/remote"},
+        return_value={
+            "runtime_path": "/runtime/shared/blueprint-python-envs/remote",
+            "host_path": "/host/shared/blueprint-python-envs/remote",
+        },
     )
-    local_prepare = mocker.patch("mn_cli.libs.run_cmds.handlers.doctor._doctor_prepare_python_env")
+    local_prepare = mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor._doctor_prepare_python_env"
+    )
 
     report = run_cmds._doctor_prepare_hostlocal_python_envs(
         tmp_path,
@@ -240,7 +292,10 @@ def test_doctor_prepares_hostlocal_python_on_selected_remote_node(mocker, tmp_pa
     )
 
     assert report["status"] == "passing"
-    assert manifest["agents"]["nodes"][0]["config"]["python_environment"]["path"] == "/runtime/shared/blueprint-python-envs/remote"
+    assert (
+        manifest["agents"]["nodes"][0]["config"]["python_environment"]["path"]
+        == "/runtime/shared/blueprint-python-envs/remote"
+    )
     assert prepare.call_args.args[0] is runtime_client
     assert prepare.call_args.args[1]["node"] == "mirror_neuron@spark"
     assert prepare.call_args.args[1]["ensure_hostlocal_python_environment"] is True
@@ -367,7 +422,9 @@ def test_doctor_passes_declared_local_source_versions_to_local_hostlocal_prepare
     }
 
 
-def test_doctor_maps_prepared_python_environment_into_runtime_shared_storage(tmp_path, monkeypatch):
+def test_doctor_maps_prepared_python_environment_into_runtime_shared_storage(
+    tmp_path, monkeypatch
+):
     host_root = tmp_path / "host-shared"
     runtime_root = Path("/runtime/shared")
     monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", str(host_root))
@@ -411,7 +468,9 @@ def test_doctor_ignores_unrelated_managed_core_for_explicit_runtime(
     running.assert_not_called()
 
 
-def test_doctor_prepares_hostlocal_python_environment_inside_docker_core(tmp_path, monkeypatch, mocker):
+def test_doctor_prepares_hostlocal_python_environment_inside_docker_core(
+    tmp_path, monkeypatch, mocker
+):
     bundle_dir = tmp_path / "bundle"
     requirements = bundle_dir / "payloads" / "worker" / "requirements.txt"
     requirements.parent.mkdir(parents=True)
@@ -429,7 +488,9 @@ def test_doctor_prepares_hostlocal_python_environment_inside_docker_core(tmp_pat
     def fake_run(args, **kwargs):
         calls.append((args, kwargs))
         if args[-1] == "--version":
-            return subprocess.CompletedProcess(args, 0, stdout="Python 3.11.2\n", stderr="")
+            return subprocess.CompletedProcess(
+                args, 0, stdout="Python 3.11.2\n", stderr=""
+            )
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
     mocker.patch("mn_cli.libs.run_cmds.subprocess.run", side_effect=fake_run)
@@ -446,7 +507,13 @@ def test_doctor_prepares_hostlocal_python_environment_inside_docker_core(tmp_pat
     host_env_root = Path(os.environ["MN_HOME"]) / "cache" / "blueprint-python-envs"
     runtime_env_dir = Path("/root/.mn/cache/blueprint-python-envs") / env_dir.name
     assert env_dir.parent == host_env_root
-    assert calls[0][0] == ["docker", "exec", "mirror-neuron-core", "python3", "--version"]
+    assert calls[0][0] == [
+        "docker",
+        "exec",
+        "mirror-neuron-core",
+        "python3",
+        "--version",
+    ]
     assert calls[1][0] == [
         "docker",
         "exec",
@@ -473,7 +540,9 @@ def test_doctor_prepares_hostlocal_python_environment_inside_docker_core(tmp_pat
         "requests==2.32.0",
     ]
     assert (env_dir / ".ready").is_file()
-    assert (env_dir / ".mn-requirements.txt").read_text(encoding="utf-8") == "fastapi==0.115.0\n"
+    assert (env_dir / ".mn-requirements.txt").read_text(
+        encoding="utf-8"
+    ) == "fastapi==0.115.0\n"
 
 
 def test_doctor_stages_local_hostlocal_packages_outside_read_only_source(
@@ -525,7 +594,9 @@ def test_doctor_stages_local_hostlocal_packages_outside_read_only_source(
         timeout=1,
     )
 
-    staged = mn_home / "cache" / "blueprint-python-sources" / env_dir.name / "0-local-skill"
+    staged = (
+        mn_home / "cache" / "blueprint-python-sources" / env_dir.name / "0-local-skill"
+    )
     runtime_staged = (
         Path("/root/.mn/cache/blueprint-python-sources")
         / env_dir.name
@@ -576,8 +647,12 @@ def test_doctor_preserves_declared_version_in_staged_local_hostlocal_package(
         local_source_versions={str(source): "1.2.31"},
     )
 
-    staged = mn_home / "cache" / "blueprint-python-sources" / env_dir.name / "0-local-skill"
-    assert 'fallback_version = "1.2.31"' in staged.joinpath("pyproject.toml").read_text()
+    staged = (
+        mn_home / "cache" / "blueprint-python-sources" / env_dir.name / "0-local-skill"
+    )
+    assert (
+        'fallback_version = "1.2.31"' in staged.joinpath("pyproject.toml").read_text()
+    )
 
 
 def test_doctor_resolves_hostlocal_sources_from_persisted_skills_root(
@@ -624,14 +699,20 @@ def test_doctor_resolves_bundle_payload_source_and_wheel_from_explicit_roots(
     wheel = bundle_root / "local-skill-1.0.0-py3-none-any.whl"
     wheel.write_bytes(b"wheel fixture")
 
-    assert run_cmds._doctor_workspace_local_source(
-        str(source),
-        extra_roots=[bundle_root],
-    ) == source
-    assert run_cmds._doctor_workspace_local_source(
-        str(wheel),
-        extra_roots=[bundle_root],
-    ) == wheel
+    assert (
+        run_cmds._doctor_workspace_local_source(
+            str(source),
+            extra_roots=[bundle_root],
+        )
+        == source
+    )
+    assert (
+        run_cmds._doctor_workspace_local_source(
+            str(wheel),
+            extra_roots=[bundle_root],
+        )
+        == wheel
+    )
 
 
 def test_doctor_rebases_missing_monorepo_local_source_for_remote_runtime(
@@ -693,9 +774,12 @@ def test_network_worker_publishes_preallocated_blueprint_ui_ports():
 
 
 def test_network_worker_does_not_publish_ui_range_in_dynamic_mode():
-    assert runtime_server._network_blueprint_web_ui_port_args(
-        {"MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE": "dynamic"}
-    ) == []
+    assert (
+        runtime_server._network_blueprint_web_ui_port_args(
+            {"MN_BLUEPRINT_WEB_UI_PORT_ALLOCATION_MODE": "dynamic"}
+        )
+        == []
+    )
 
 
 def test_doctor_removes_partial_core_owned_python_environment_in_core(
@@ -764,7 +848,9 @@ def test_doctor_warns_when_explicit_python_cache_is_synchronized(
     monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", str(shared_root))
     monkeypatch.setenv("MN_BLUEPRINT_PYTHON_ENVS_DIR", str(configured))
     env_dir = configured / "digest"
-    mocker.patch("mn_cli.libs.run_cmds._doctor_prepare_python_env", return_value=env_dir)
+    mocker.patch(
+        "mn_cli.libs.run_cmds._doctor_prepare_python_env", return_value=env_dir
+    )
     mocker.patch("mn_cli.libs.run_cmds._doctor_running_core_container", return_value="")
     manifest = {
         "agents": {
@@ -836,6 +922,7 @@ def test_doctor_skill_report_reads_declared_dependencies(tmp_path):
     assert report["status"] == "passing"
     assert {entry["name"] for entry in report["entries"]} == {"search", "numpy"}
 
+
 def test_doctor_llm_and_embedding_smoke_uses_host_reachable_urls(mocker):
     calls = []
 
@@ -843,7 +930,9 @@ def test_doctor_llm_and_embedding_smoke_uses_host_reachable_urls(mocker):
         calls.append((name, url, payload, timeout))
         return {"name": name, "status": "passing", "url": url}
 
-    mocker.patch("mn_cli.libs.run_cmds._doctor_post_openai_payload", side_effect=fake_post)
+    mocker.patch(
+        "mn_cli.libs.run_cmds._doctor_post_openai_payload", side_effect=fake_post
+    )
 
     chat = run_cmds._doctor_chat_smoke(
         "primary",
@@ -880,9 +969,11 @@ def test_doctor_llm_and_embedding_smoke_uses_host_reachable_urls(mocker):
     assert calls[2][1] == "http://127.0.0.1:12434/engines/v1/embeddings"
 
 
-def test_doctor_llm_smoke_uses_prepared_default_model_from_environment(tmp_path, mocker):
+def test_doctor_llm_smoke_uses_prepared_default_model_from_environment(
+    tmp_path, mocker
+):
     config_dir = tmp_path / "config"
-    config_dir.mkdir()
+    config_dir.mkdir(exist_ok=True)
     (config_dir / "default.json").write_text(
         json.dumps({"llm": {"configs": {"primary": {"max_tokens": 256}}}})
     )
@@ -905,7 +996,7 @@ def test_doctor_llm_smoke_uses_prepared_default_model_from_environment(tmp_path,
 
 def test_doctor_llm_smoke_merges_manifest_model_contract(tmp_path, mocker):
     config_dir = tmp_path / "config"
-    config_dir.mkdir()
+    config_dir.mkdir(exist_ok=True)
     (config_dir / "default.json").write_text(
         json.dumps({"llm": {"configs": {"primary": {"max_tokens": 256}}}})
     )

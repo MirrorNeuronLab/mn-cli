@@ -14,6 +14,7 @@ from mn_cli.libs.job_cleanup import JobResourceCleanupError, cleanup_job_resourc
 from mn_cli.libs.run_cmds.common import _stage_bundle_payloads
 from mn_cli.libs.ui import (
     activity,
+    launch_activity,
     print_collection,
     print_detail,
     print_info,
@@ -26,44 +27,74 @@ from mn_cli.shared import client, console, logger
 
 def create(
     bundle: str = typer.Argument(help="Blueprint/job bundle directory or archive."),
-    job_id: str | None = typer.Option(None, "--job-id", help="Optional durable job ID."),
+    job_id: str | None = typer.Option(
+        None, "--job-id", help="Optional durable job ID."
+    ),
     config: str | None = typer.Option(
         None, "--config", help="Resolved configuration JSON file."
     ),
-    node: str | None = typer.Option(None, "--node", help="Core that will own and execute this job."),
+    node: str | None = typer.Option(
+        None, "--node", help="Core that will own and execute this job."
+    ),
 ):
     """Create a durable job definition without starting a run."""
     try:
         owner_node = node.strip() if isinstance(node, str) else ""
-        manifest_json, payloads = read_bundle(bundle)
+        with launch_activity(
+            console,
+            "Read blueprint",
+            "reading and validating the package and its assets",
+        ):
+            manifest_json, payloads = read_bundle(bundle)
         resolved = _read_json_object(config) if config else {}
         bundle_path = Path(bundle).expanduser().resolve()
-        prepared_manifest = prepare_manifest_for_submission(
-            bundle_path,
-            json.loads(manifest_json),
-            config_overrides=resolved,
-        )
-        prepared_payloads = (
-            _stage_bundle_payloads(bundle_path, prepared_manifest)
-            if bundle_path.is_dir()
-            else payloads
-        )
-        prepared = prepare_job_submission(
-            prepared_manifest,
-            prepared_payloads,
-            bundle_dir=str(bundle_path) if bundle_path.is_dir() else None,
-            job_id=job_id,
-            cluster_client=client,
-        )
-        result = json.loads(
-            client.create_job(
-                prepared.manifest_json,
-                prepared.payloads,
-                job_id=job_id or "",
-                resolved_configuration=resolved,
-                owner_node=owner_node,
+        with launch_activity(
+            console,
+            "Prepare workflow dependencies",
+            "resolving configuration and declared agent and skill packages",
+        ):
+            prepared_manifest = prepare_manifest_for_submission(
+                bundle_path,
+                json.loads(manifest_json),
+                config_overrides=resolved,
             )
-        )
+        with launch_activity(
+            console,
+            "Stage workflow files",
+            "copying and verifying payloads and runtime support files",
+        ):
+            prepared_payloads = (
+                _stage_bundle_payloads(bundle_path, prepared_manifest)
+                if bundle_path.is_dir()
+                else payloads
+            )
+        with launch_activity(
+            console,
+            "Prepare job runtime",
+            "preparing worker images, containers, services, and storage as declared by the blueprint.",
+            expectation="Docker builds and first-time dependency installation can take several minutes.",
+        ):
+            prepared = prepare_job_submission(
+                prepared_manifest,
+                prepared_payloads,
+                bundle_dir=str(bundle_path) if bundle_path.is_dir() else None,
+                job_id=job_id,
+                cluster_client=client,
+            )
+        with launch_activity(
+            console,
+            "Submit job definition",
+            "waiting for the runtime to acknowledge the prepared definition",
+        ):
+            result = json.loads(
+                client.create_job(
+                    prepared.manifest_json,
+                    prepared.payloads,
+                    job_id=job_id or "",
+                    resolved_configuration=resolved,
+                    owner_node=owner_node,
+                )
+            )
         print_success_confirmation(
             console,
             "Job create",

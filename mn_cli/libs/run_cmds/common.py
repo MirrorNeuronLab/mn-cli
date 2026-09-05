@@ -23,8 +23,8 @@ from mn_sdk import (
     LITELLM_GATEWAY_HOST_API_BASE,
     BlueprintModelOps,
     Client,
-    ModelEndpointMap,
     ModelCatalog,
+    ModelEndpointMap,
     ModelPrepareError,
     blueprint_model_dependency_summary,
     build_deferred_runtime_model_plan,
@@ -76,6 +76,8 @@ from mn_sdk import (
 )
 from mn_sdk.blueprint_support.shared_outputs import (
     materialize_shared_storage_outputs as _sdk_materialize_shared_storage_outputs,
+)
+from mn_sdk.blueprint_support.shared_outputs import (
     materialize_shared_storage_outputs_until_stable as _sdk_materialize_shared_storage_outputs_until_stable,
 )
 from mn_sdk.context_engine import blueprint_requires_context_engine
@@ -325,6 +327,10 @@ def _load_bundle_manifest(bundle_path: str) -> tuple[Path, Path, dict[str, Any]]
 
     with open(manifest_file, "r") as f:
         manifest_dict = json.load(f)
+    from mn_sdk.blueprints import MANIFEST_SCHEMA, compile_blueprint, read_blueprint
+
+    if manifest_dict.get("$schema") == MANIFEST_SCHEMA:
+        manifest_dict = compile_blueprint(read_blueprint(bundle_dir)).manifest
     return bundle_dir, manifest_file, manifest_dict
 
 
@@ -360,18 +366,9 @@ def _stage_bundle_payloads(
     manifest_dict: dict[str, Any],
 ) -> dict[str, bytes]:
     payloads = stage_bundle_payload_assets(manifest_dict, bundle_dir)
-    stage_upload_path_payloads_for_manifest(
-        manifest_dict, payloads, bundle_dir=bundle_dir
-    )
-    stage_blueprint_support_payloads_for_manifest(
-        manifest_dict, payloads, bundle_dir=bundle_dir
-    )
-    stage_skill_runtime_support_payloads_for_manifest(
-        manifest_dict, payloads, bundle_dir=bundle_dir
-    )
-    stage_skill_dependency_payloads_for_manifest(
-        manifest_dict, payloads, bundle_dir=bundle_dir
-    )
+    from mn_sdk.blueprints.payloads import stage_submission_payloads
+
+    stage_submission_payloads(manifest_dict, payloads, bundle_dir=bundle_dir)
     return payloads
 
 

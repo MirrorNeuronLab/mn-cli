@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from blueprint_fixtures import write_package_manifest
 from mn_sdk import (
     AgentProgress,
     load_model_ownership,
@@ -42,8 +43,12 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.setattr(
         run_cmds,
         "sync_litellm_gateway",
-        lambda **_kwargs: {"status": "running", "api_base": "http://mn-litellm-proxy:4000/v1"},
+        lambda **_kwargs: {
+            "status": "running",
+            "api_base": "http://mn-litellm-proxy:4000/v1",
+        },
     )
+
 
 def test_job_log_writer_uses_run_logging_env(monkeypatch):
     job_id = f"env-vars-{uuid.uuid4().hex}"
@@ -66,6 +71,7 @@ def test_job_log_writer_uses_run_logging_env(monkeypatch):
     assert handler.maxBytes == 456
     assert handler.backupCount == 3
 
+
 def test_job_log_writer_rotates_event_log_with_env(monkeypatch):
     job_id = f"rotate-{uuid.uuid4().hex}"
     monkeypatch.setenv("MN_RUN_EVENT_LOG_MAX_BYTES", "1")
@@ -86,21 +92,26 @@ def test_job_log_writer_rotates_event_log_with_env(monkeypatch):
     assert (writer.log_dir / "events.log.2").exists()
     assert not (writer.log_dir / "events.log.3").exists()
 
+
 def test_stream_bad_json(mocker, tmp_path):
-    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
-        "invalid json format",
-        json.dumps({"type": "job_failed"})
-    ])
-    
-    mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-123"}))
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.stream_events",
+        return_value=["invalid json format", json.dumps({"type": "job_failed"})],
+    )
+
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.create_job",
+        return_value=json.dumps({"job_id": "job-123"}),
+    )
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
     manifest_file = bundle_dir / "manifest.json"
-    manifest_file.write_text(json.dumps(workflow_manifest({"nodes": []})))
-    
+    write_package_manifest(manifest_file, json.dumps(workflow_manifest({"nodes": []})))
+
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
     assert result.exit_code == 0
     assert "Status: Failed" in result.stdout
+
 
 def test_stream_all_events(mocker, tmp_path):
     events = [
@@ -109,88 +120,116 @@ def test_stream_all_events(mocker, tmp_path):
         json.dumps({"type": "job_running"}),
         json.dumps({"type": "agent_message_received"}),
         json.dumps({"type": "custom_progressive", "payload": {"foo": "progressive"}}),
-        json.dumps({"type": "job_completed", "result": {"foo": "bar"}})
+        json.dumps({"type": "job_completed", "result": {"foo": "bar"}}),
     ]
-    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=events)
-    mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-123"}))
-    
+    mocker.patch("mn_cli.libs.run_cmds.client.stream_events", return_value=events)
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.create_job",
+        return_value=json.dumps({"job_id": "job-123"}),
+    )
+
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
     manifest_file = bundle_dir / "manifest.json"
-    manifest_file.write_text(json.dumps(workflow_manifest({"nodes": []})))
-    
+    write_package_manifest(manifest_file, json.dumps(workflow_manifest({"nodes": []})))
+
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
     assert result.exit_code == 0
     assert "Status: Completed" in result.stdout
     assert "result.txt" in result.stdout
     assert "result_stream.txt" in result.stdout
 
+
 def test_stream_cancelled_event_is_terminal(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
-    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
-        json.dumps({"type": "job_running"}),
-        json.dumps({"type": "job_cancelled"}),
-    ])
-    mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-123"}))
-    mock_get = mocker.patch('mn_cli.libs.run_cmds.client.get_run')
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.stream_events",
+        return_value=[
+            json.dumps({"type": "job_running"}),
+            json.dumps({"type": "job_cancelled"}),
+        ],
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.create_job",
+        return_value=json.dumps({"job_id": "job-123"}),
+    )
+    mock_get = mocker.patch("mn_cli.libs.run_cmds.client.get_run")
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
     manifest_file = bundle_dir / "manifest.json"
-    manifest_file.write_text(json.dumps(workflow_manifest({"nodes": []})))
+    write_package_manifest(manifest_file, json.dumps(workflow_manifest({"nodes": []})))
 
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
 
     assert result.exit_code == 0
     assert "Status: Cancelled" in result.stdout
-    mock_get.assert_not_called()
+    mock_get.assert_called_once()
+
 
 def test_stream_helper_cancelled_event_is_terminal_without_follow(mocker, tmp_path):
     job_id = f"job-cancelled-{uuid.uuid4().hex}"
     log_writer = run_cmds.JobLogWriter(job_id, run_dir=tmp_path / "run")
-    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
-        json.dumps({"type": "job_running"}),
-        json.dumps({"type": "job_cancelled"}),
-    ])
-    mock_get = mocker.patch('mn_cli.libs.run_cmds.client.get_run')
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.stream_events",
+        return_value=[
+            json.dumps({"type": "job_running"}),
+            json.dumps({"type": "job_cancelled"}),
+        ],
+    )
+    mock_get = mocker.patch("mn_cli.libs.run_cmds.client.get_run")
 
-    status = run_cmds._stream_and_format_events(job_id, log_writer=log_writer, follow_seconds=0)
+    status = run_cmds._stream_and_format_events(
+        job_id, log_writer=log_writer, follow_seconds=0
+    )
 
     assert status == "cancelled"
     assert '"type": "job_cancelled"' in log_writer.events_file.read_text()
     mock_get.assert_not_called()
 
+
 def test_stream_keyboard_interrupt(mocker, tmp_path):
-    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', side_effect=KeyboardInterrupt)
-    mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-123"}))
-    
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.stream_events", side_effect=KeyboardInterrupt
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.create_job",
+        return_value=json.dumps({"job_id": "job-123"}),
+    )
+
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
     manifest_file = bundle_dir / "manifest.json"
-    manifest_file.write_text(json.dumps(workflow_manifest({"nodes": []})))
-    
+    write_package_manifest(manifest_file, json.dumps(workflow_manifest({"nodes": []})))
+
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
     assert result.exit_code == 0
     assert "Detached from workflow UI. Job is still running." in result.stdout
 
+
 def test_post_submit_keyboard_interrupt_detaches_without_stopping_job(mocker, tmp_path):
-    mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-started"}))
     mocker.patch(
-        'mn_cli.libs.run_cmds._stream_and_format_events',
+        "mn_cli.libs.run_cmds.client.create_job",
+        return_value=json.dumps({"job_id": "job-started"}),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds._stream_and_format_events",
         side_effect=KeyboardInterrupt,
     )
     mocker.patch(
-        'mn_cli.libs.run_cmds.client.get_run',
-        return_value=json.dumps({
-            "run_id": "job-started-run",
-            "status": "running",
-        }),
+        "mn_cli.libs.run_cmds.client.get_run",
+        return_value=json.dumps(
+            {
+                "run_id": "job-started-run",
+                "status": "running",
+            }
+        ),
     )
 
     bundle_dir = tmp_path / "started_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(
-        json.dumps(workflow_manifest({"nodes": []}))
+    write_package_manifest(
+        bundle_dir / "manifest.json", json.dumps(workflow_manifest({"nodes": []}))
     )
 
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])

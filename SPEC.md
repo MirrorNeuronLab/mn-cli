@@ -94,6 +94,13 @@ those contracts.
 
 ## Output Contract
 
+Blocking blueprint-launch and job-creation stages expose descriptive activity
+messages and elapsed time. Interactive terminals use a transient spinner;
+plain/non-interactive human output uses ten-second stderr heartbeats without
+terminal control sequences. JSON emits no added progress. Activity reporting
+ends on return, error, or interruption and never retries or cancels runtime work.
+Only measured upstream progress may be presented as a percentage.
+
 - Every leaf command accepts `--json`. One-shot commands return exactly one
   `mn.cli/v1` envelope; followed and watch commands emit `mn.cli.stream/v1`
   NDJSON records.
@@ -427,3 +434,15 @@ python -m build
 Changes to CLI/API parity or shared behavior also require the corresponding
 contract suite in `mn-system-tests`, but this repository's own tests remain the
 primary gate for command and presentation behavior.
+
+
+## Canonical blueprint packages
+
+All blueprint folders and ZIPs use the blueprint/v1 manifest schema and role
+documents owned by `mn_sdk.blueprints`. Catalog indexes contain ordered package
+paths only. Catalog reads are data-only; explicit compilation produces Core's
+runtime manifest. Default configuration, local overwrites, and invocation
+values resolve through the SDK. Payload assembly stages one resolved descriptor;
+launch environment is passed explicitly. Confirmed failure permits owned
+resource rollback; uncertain submission acknowledgements require reconciliation.
+See `mn-docs/blueprint-standard.md` for document ownership and extension schemas.

@@ -1,5 +1,13 @@
 # MirrorNeuron CLI
 
+Long blueprint launches and `mn job create` report the current preparation stage,
+including dependencies, payload staging, Docker workers, and runtime submission.
+Interactive terminals show a spinner with elapsed time. Plain and redirected
+human output receive a concise “still waiting” line every ten seconds on stderr.
+First-time image builds may take several minutes; an elapsed timer indicates a
+pending call, not a measured completion percentage. Existing model-download
+progress remains available. `--json` output stays unchanged.
+
 `mn-cli` provides the `mn` command for validating and running blueprints,
 inspecting runtime state, managing jobs, exporting artifacts, and starting local
 services installed by `mn-deploy`.

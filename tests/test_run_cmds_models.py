@@ -240,12 +240,14 @@ def test_hostlocal_preflight_without_models_pins_cpu_workflow_to_local_node():
     manifest = {
         "requirements": {"gpu": {"min_count": 0}},
         "agents": {
-            "nodes": [{
-                "node_id": "worker",
-                "config": {"runner_module": "MirrorNeuron.Runner.HostLocal"},
-                "resources": {"cpu_cores": 0.1, "memory_mb": 64},
-            }]
-        }
+            "nodes": [
+                {
+                    "node_id": "worker",
+                    "config": {"runner_module": "MirrorNeuron.Runner.HostLocal"},
+                    "resources": {"cpu_cores": 0.1, "memory_mb": 64},
+                }
+            ]
+        },
     }
     resources = _mac_and_spark_resources()
     system = _matching_system_summary(resources)
@@ -258,9 +260,9 @@ def test_hostlocal_preflight_without_models_pins_cpu_workflow_to_local_node():
     )
 
     assert placement["selected_node"] == "mirror_neuron@mac"
-    assert manifest["agents"]["nodes"][0]["policies"]["scheduler"]["preferred_node"] == (
-        "mirror_neuron@mac"
-    )
+    assert manifest["agents"]["nodes"][0]["policies"]["scheduler"][
+        "preferred_node"
+    ] == ("mirror_neuron@mac")
 
 
 def test_single_node_placement_scores_gpu_headroom_then_load():
@@ -363,7 +365,9 @@ def test_distributed_placement_leaves_agents_unpinned():
 
 
 def test_placement_without_node_local_requirements_skips_runtime_inspection(mocker):
-    inspect_runtime = mocker.patch("mn_cli.libs.run_cmds.model_cluster.client.get_system_summary")
+    inspect_runtime = mocker.patch(
+        "mn_cli.libs.run_cmds.model_cluster.client.get_system_summary"
+    )
 
     assert run_cmds._resolve_and_apply_workflow_placement({"nodes": []}) is None
 
@@ -611,7 +615,8 @@ def test_prepare_runtime_models_preserves_node_owned_remote_while_rechecking_tar
     assert remotes["spark"]["base_url"] == "http://192.168.4.173:12434/v1"
     endpoints = json.loads(env_overrides["MN_MODEL_ENDPOINTS_JSON"])
     assert (
-        endpoints["nemotron-3.5-lightning:latest"]["api_base"] == "http://mn-litellm-proxy:4000/v1"
+        endpoints["nemotron-3.5-lightning:latest"]["api_base"]
+        == "http://mn-litellm-proxy:4000/v1"
     )
     assert endpoints["nemotron-3.5-lightning:latest"]["node"] == "spark"
     resolver = run_cmds._prepared_model_installed_resolver(summary)
@@ -643,7 +648,10 @@ def test_runtime_model_ready_label_includes_remote_install_node():
         }
     )
 
-    assert label == "nemotron-3.5-lightning:latest installed on mirror_neuron@192.168.4.173"
+    assert (
+        label
+        == "nemotron-3.5-lightning:latest installed on mirror_neuron@192.168.4.173"
+    )
 
 
 def test_runtime_model_ready_label_includes_remote_already_installed_node():
@@ -685,7 +693,7 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
     bundle_dir = tmp_path / "assistant"
     bundle_dir.mkdir()
     config_dir = bundle_dir / "config"
-    config_dir.mkdir()
+    config_dir.mkdir(exist_ok=True)
     (config_dir / "default.json").write_text(
         json.dumps(
             {
@@ -1063,7 +1071,7 @@ def test_prepare_runtime_models_promotes_preferred_large_profile_on_capable_clus
     bundle_dir = tmp_path / "assistant"
     bundle_dir.mkdir()
     config_dir = bundle_dir / "config"
-    config_dir.mkdir()
+    config_dir.mkdir(exist_ok=True)
     (config_dir / "default.json").write_text(
         json.dumps(_preferred_large_model_config()), encoding="utf-8"
     )
@@ -1117,19 +1125,21 @@ def test_prepare_runtime_models_promotes_preferred_large_profile_on_capable_clus
     effective_config = json.loads(env_overrides["MN_BLUEPRINT_CONFIG_JSON"])
     assert effective_config["llm"]["active_model_profile"] == "large_model_profile"
     assert effective_config["llm"]["model"] == "nemotron-3.5-lightning:latest"
+    assert effective_config["llm"]["runtime_model"] == "nemotron-3.5-lightning:latest"
+    assert effective_config["llm"]["strict_json"] is True
     assert (
-        effective_config["llm"]["runtime_model"]
+        effective_config["llm"]["configs"]["primary"]["model"]
         == "nemotron-3.5-lightning:latest"
     )
-    assert effective_config["llm"]["strict_json"] is True
-    assert effective_config["llm"]["configs"]["primary"]["model"] == "nemotron-3.5-lightning:latest"
     assert (
         effective_config["llm"]["configs"]["primary"]["runtime_model"]
         == "nemotron-3.5-lightning:latest"
     )
     resolver = run_cmds._prepared_model_installed_resolver(summary)
     assert (
-        resolver("nemotron-3.5-lightning:latest", {"model": "nemotron-3.5-lightning:latest"})
+        resolver(
+            "nemotron-3.5-lightning:latest", {"model": "nemotron-3.5-lightning:latest"}
+        )
         is True
     )
     validation_manifest, validation_config = (
@@ -1176,7 +1186,7 @@ def test_prepare_runtime_models_keeps_default_model_without_capable_cluster_node
     bundle_dir = tmp_path / "assistant"
     bundle_dir.mkdir()
     config_dir = bundle_dir / "config"
-    config_dir.mkdir()
+    config_dir.mkdir(exist_ok=True)
     (config_dir / "default.json").write_text(
         json.dumps(_preferred_large_model_config()), encoding="utf-8"
     )
@@ -1239,7 +1249,7 @@ def test_prepare_runtime_models_surfaces_large_profile_prepare_failure_without_f
     bundle_dir = tmp_path / "assistant"
     bundle_dir.mkdir()
     config_dir = bundle_dir / "config"
-    config_dir.mkdir()
+    config_dir.mkdir(exist_ok=True)
     (config_dir / "default.json").write_text(
         json.dumps(_preferred_large_model_config()), encoding="utf-8"
     )
@@ -1342,7 +1352,10 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
             "model": "nemotron-3.5-lightning:latest",
             "provider": "docker_model_runner",
         },
-        model={"id": "nemotron-3.5-lightning:latest", "model": "nemotron-3.5-lightning:latest"},
+        model={
+            "id": "nemotron-3.5-lightning:latest",
+            "model": "nemotron-3.5-lightning:latest",
+        },
         cluster={"node": "mirror_neuron@192.168.4.173"},
         backend="llama.cpp",
         context_size=8192,
@@ -1484,7 +1497,10 @@ def test_runtime_model_preflight_ignores_skill_owned_rag_model(mocker, tmp_path)
     config = {
         "llm": {
             "configs": {
-                "primary": {"provider": "docker_model_runner", "model": "nemotron-3.5-lightning:latest"}
+                "primary": {
+                    "provider": "docker_model_runner",
+                    "model": "nemotron-3.5-lightning:latest",
+                }
             }
         },
         "knowledge_rag": {
@@ -1525,9 +1541,9 @@ def _write_adaptive_source_model_config(bundle_dir: Path) -> dict:
         },
     }
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
     config_dir = bundle_dir / "config"
-    config_dir.mkdir()
+    config_dir.mkdir(exist_ok=True)
     (config_dir / "default.json").write_text(
         json.dumps(
             {
@@ -1612,9 +1628,7 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
     assert {item["runtime_model"] for item in cluster.prepare_calls} == {
         expected_chat_model,
     }
-    assert {item["endpoint"]["node"] for item in summary["models"]} == {
-        expected_node
-    }
+    assert {item["endpoint"]["node"] for item in summary["models"]} == {expected_node}
     assert len(cluster.gateway_syncs) == 1
     assert {
         endpoint["node"]
@@ -1627,9 +1641,9 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
         } == {"http://10.0.0.2:4000/v1"}
     worker_endpoints = json.loads(env_overrides["MN_MODEL_ENDPOINTS_JSON"])
     assert worker_endpoints
-    assert {
-        endpoint["api_base"] for endpoint in worker_endpoints.values()
-    } == {"http://mn-litellm-proxy:4000/v1"}
+    assert {endpoint["api_base"] for endpoint in worker_endpoints.values()} == {
+        "http://mn-litellm-proxy:4000/v1"
+    }
     assert env_overrides["MN_LLM_MODEL"] == "default"
     prepared_worker_manifest = run_cmds.prepare_manifest_for_submission(
         bundle_dir,
@@ -1642,9 +1656,7 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
                 "nodes": [
                     {
                         "node_id": "assistant",
-                        "config": {
-                            "runner_module": "MirrorNeuron.Runner.DockerWorker"
-                        },
+                        "config": {"runner_module": "MirrorNeuron.Runner.DockerWorker"},
                     }
                 ]
             },
@@ -1657,9 +1669,7 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
     ]
     assert worker_environment["MN_LLM_PROVIDER"] == "litellm"
     assert worker_environment["MN_LLM_MODEL"] == "default"
-    assert worker_environment["MN_LLM_API_BASE"] == (
-        "http://mn-litellm-proxy:4000/v1"
-    )
+    assert worker_environment["MN_LLM_API_BASE"] == ("http://mn-litellm-proxy:4000/v1")
     debug_output = capsys.readouterr().err
     assert "Runtime model prepare plan" in debug_output
     assert f"on {expected_node}" in debug_output
@@ -1710,9 +1720,7 @@ def test_injected_remote_installed_state_remains_routed_through_local_litellm(
     )
 
     assert placement["selected_node"] == "mirror_neuron@spark"
-    assert {call["status"] for call in cluster.prepare_calls} == {
-        "already_installed"
-    }
+    assert {call["status"] for call in cluster.prepare_calls} == {"already_installed"}
     assert {item["status"] for item in summary["models"]} == {
         "runtime_node_already_installed"
     }
@@ -1721,9 +1729,9 @@ def test_injected_remote_installed_state_remains_routed_through_local_litellm(
         for endpoint in cluster.gateway_syncs[0]["runtime_endpoints"].values()
     } == {"http://10.0.0.2:4000/v1"}
     worker_endpoints = json.loads(env_overrides["MN_MODEL_ENDPOINTS_JSON"])
-    assert {
-        endpoint["api_base"] for endpoint in worker_endpoints.values()
-    } == {"http://mn-litellm-proxy:4000/v1"}
+    assert {endpoint["api_base"] for endpoint in worker_endpoints.values()} == {
+        "http://mn-litellm-proxy:4000/v1"
+    }
 
 
 def test_runtime_model_preflight_rejects_ineligible_node_before_prepare(mocker):
@@ -1751,15 +1759,15 @@ def test_runtime_model_preflight_rejects_ineligible_node_before_prepare(mocker):
     system = {
         "nodes": [
             {
-                    "name": "mirror_neuron@mac",
-                    "status": "healthy",
-                    "scheduling_eligible": True,
-                    "self": True,
-                    "coordination_store": {
-                        "identity": "test-store",
-                        "writable_primary": True,
-                        "healthy": True,
-                    },
+                "name": "mirror_neuron@mac",
+                "status": "healthy",
+                "scheduling_eligible": True,
+                "self": True,
+                "coordination_store": {
+                    "identity": "test-store",
+                    "writable_primary": True,
+                    "healthy": True,
+                },
             }
         ]
     }
@@ -1773,8 +1781,9 @@ def test_runtime_model_preflight_rejects_ineligible_node_before_prepare(mocker):
             system_summary=system,
         )
 
-    assert "model nemotron-3.5-lightning:latest: gpu_memory_free_mb=32768 < required=49152" in str(
-        error.value
+    assert (
+        "model nemotron-3.5-lightning:latest: gpu_memory_free_mb=32768 < required=49152"
+        in str(error.value)
     )
     prepare.assert_not_called()
 
@@ -1812,17 +1821,17 @@ def test_runtime_model_preflight_selects_small_fallback_for_default_on_small_nod
     }
     system = {
         "nodes": [
-                {
-                    "name": "mirror_neuron@mac",
-                    "status": "healthy",
-                    "scheduling_eligible": True,
-                    "self": True,
-                    "coordination_store": {
-                        "identity": "test-store",
-                        "writable_primary": True,
-                        "healthy": True,
-                    },
-                }
+            {
+                "name": "mirror_neuron@mac",
+                "status": "healthy",
+                "scheduling_eligible": True,
+                "self": True,
+                "coordination_store": {
+                    "identity": "test-store",
+                    "writable_primary": True,
+                    "healthy": True,
+                },
+            }
         ]
     }
 
@@ -1876,23 +1885,24 @@ def test_distributed_runtime_model_preflight_rejects_before_prepare(mocker):
     }
     system = {
         "nodes": [
-                {
-                    "name": "mirror_neuron@mac",
-                    "status": "healthy",
-                    "scheduling_eligible": True,
-                    "self": True,
-                    "coordination_store": {
-                        "identity": "test-store",
-                        "writable_primary": True,
-                        "healthy": True,
-                    },
-                }
+            {
+                "name": "mirror_neuron@mac",
+                "status": "healthy",
+                "scheduling_eligible": True,
+                "self": True,
+                "coordination_store": {
+                    "identity": "test-store",
+                    "writable_primary": True,
+                    "healthy": True,
+                },
+            }
         ]
     }
     prepare = mocker.patch("mn_cli.libs.run_cmds._install_runtime_cluster_model")
 
     with pytest.raises(
-        RuntimeError, match="No runtime node can prepare required model nemotron-3.5-lightning:latest"
+        RuntimeError,
+        match="No runtime node can prepare required model nemotron-3.5-lightning:latest",
     ):
         run_cmds._preflight_and_apply_runtime_model_placement(
             manifest,
@@ -1984,7 +1994,10 @@ def test_runtime_cluster_model_install_requires_native_sdk_grpc_metadata(mocker)
                 "model": "nemotron-3.5-lightning:latest",
                 "provider": "docker_model_runner",
             },
-            model={"id": "nemotron-3.5-lightning:latest", "model": "nemotron-3.5-lightning:latest"},
+            model={
+                "id": "nemotron-3.5-lightning:latest",
+                "model": "nemotron-3.5-lightning:latest",
+            },
             cluster={"node": "mirror_neuron@192.168.4.173"},
             backend="llama.cpp",
             context_size=8192,
@@ -2004,7 +2017,7 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
     bundle_dir = tmp_path / "assistant"
     bundle_dir.mkdir()
     config_dir = bundle_dir / "config"
-    config_dir.mkdir()
+    config_dir.mkdir(exist_ok=True)
     (config_dir / "default.json").write_text(
         json.dumps(
             {

@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from blueprint_fixtures import write_package_manifest
 from mn_sdk import (
     AgentProgress,
     load_model_ownership,
@@ -38,7 +39,9 @@ validate_handler = import_module("mn_cli.libs.run_cmds.handlers.validate")
 @pytest.mark.parametrize("width", [80, 120])
 def test_validation_report_uses_a_wrapped_table(mocker, width):
     stream = StringIO()
-    report_console = Console(file=stream, force_terminal=False, no_color=True, width=width)
+    report_console = Console(
+        file=stream, force_terminal=False, no_color=True, width=width
+    )
     mocker.patch.object(validate_handler, "console", report_console)
 
     validate_handler._emit_validation_report(
@@ -77,16 +80,28 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.setattr(
         run_cmds,
         "sync_litellm_gateway",
-        lambda **_kwargs: {"status": "running", "api_base": "http://mn-litellm-proxy:4000/v1"},
+        lambda **_kwargs: {
+            "status": "running",
+            "api_base": "http://mn-litellm-proxy:4000/v1",
+        },
     )
 
-def test_run_ensures_context_engine_when_blueprint_memory_enabled(mocker, tmp_path, monkeypatch):
+
+def test_run_ensures_context_engine_when_blueprint_memory_enabled(
+    mocker, tmp_path, monkeypatch
+):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
-    mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="context-run")
-    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-context"}))
-    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
-        json.dumps({"type": "job_completed"})
-    ])
+    mocker.patch(
+        "mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="context-run"
+    )
+    mock_submit = mocker.patch(
+        "mn_cli.libs.run_cmds.client.create_job",
+        return_value=json.dumps({"job_id": "job-context"}),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.stream_events",
+        return_value=[json.dumps({"type": "job_completed"})],
+    )
     mock_ensure = mocker.patch(
         "mn_cli.libs.run_cmds.ensure_context_engine_runtime",
         return_value={"status": "started", "service": "membrane-context-engine"},
@@ -94,12 +109,12 @@ def test_run_ensures_context_engine_when_blueprint_memory_enabled(mocker, tmp_pa
 
     bundle_dir = tmp_path / "context_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(
-        json.dumps(workflow_manifest({"nodes": []}))
+    write_package_manifest(
+        bundle_dir / "manifest.json", json.dumps(workflow_manifest({"nodes": []}))
     )
     (bundle_dir / "payloads").mkdir()
     config_dir = bundle_dir / "config"
-    config_dir.mkdir()
+    config_dir.mkdir(exist_ok=True)
     (config_dir / "default.json").write_text(
         json.dumps(
             {
@@ -131,9 +146,16 @@ def test_context_engine_prepares_on_selected_workflow_node(mocker, tmp_path):
     bundle_dir = tmp_path / "remote_context_bundle"
     bundle_dir.mkdir()
     config_dir = bundle_dir / "config"
-    config_dir.mkdir()
+    config_dir.mkdir(exist_ok=True)
     (config_dir / "default.json").write_text(
-        json.dumps({"memory_layer": {"enabled": True, "sdk_import_package": "mn_context_engine_sdk"}}),
+        json.dumps(
+            {
+                "memory_layer": {
+                    "enabled": True,
+                    "sdk_import_package": "mn_context_engine_sdk",
+                }
+            }
+        ),
         encoding="utf-8",
     )
     manifest = {"runtime": {"memory": {"enabled": True}}}
@@ -143,8 +165,13 @@ def test_context_engine_prepares_on_selected_workflow_node(mocker, tmp_path):
         "mn_cli.libs.run_cmds.context._local_runtime_node_name",
         return_value="mirror_neuron@local",
     )
-    mocker.patch("mn_cli.libs.run_cmds.context._cluster_node_endpoint", return_value=endpoint)
-    mocker.patch("mn_cli.libs.run_cmds.context._runtime_model_prepare_client", return_value=runtime_client)
+    mocker.patch(
+        "mn_cli.libs.run_cmds.context._cluster_node_endpoint", return_value=endpoint
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.context._runtime_model_prepare_client",
+        return_value=runtime_client,
+    )
     prepare = mocker.patch(
         "mn_cli.libs.run_cmds.context._prepare_runtime_model_with_retry",
         return_value={
@@ -154,7 +181,9 @@ def test_context_engine_prepares_on_selected_workflow_node(mocker, tmp_path):
             "node": "mirror_neuron@spark",
         },
     )
-    local_ensure = mocker.patch("mn_cli.libs.run_cmds.context.ensure_context_engine_runtime")
+    local_ensure = mocker.patch(
+        "mn_cli.libs.run_cmds.context.ensure_context_engine_runtime"
+    )
 
     summary = run_cmds._ensure_context_engine_for_run_if_needed(
         bundle_dir,
@@ -182,7 +211,7 @@ def test_context_engine_uses_compose_ensure_for_selected_local_node(
     bundle_dir = tmp_path / "local_context_bundle"
     bundle_dir.mkdir()
     config_dir = bundle_dir / "config"
-    config_dir.mkdir()
+    config_dir.mkdir(exist_ok=True)
     (config_dir / "default.json").write_text(
         json.dumps({"memory_layer": {"enabled": True}}),
         encoding="utf-8",
@@ -237,6 +266,7 @@ def test_runtime_ensure_context_engine_explains_first_launch(mocker):
     assert "/tmp/Membrane" in result.stdout
     mock_ensure.assert_called_once_with(force=False, prepare_image=True)
 
+
 def test_runtime_ensure_context_engine_reports_release_image(mocker):
     mock_ensure = mocker.patch(
         "mn_cli.libs.sys_cmds.ensure_context_engine_runtime",
@@ -257,24 +287,34 @@ def test_runtime_ensure_context_engine_reports_release_image(mocker):
     assert "v1.2.14" in result.stdout
     mock_ensure.assert_called_once_with(force=False, prepare_image=True)
 
-def test_run_does_not_ensure_context_engine_when_memory_disabled_by_env(mocker, tmp_path, monkeypatch):
+
+def test_run_does_not_ensure_context_engine_when_memory_disabled_by_env(
+    mocker, tmp_path, monkeypatch
+):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     monkeypatch.setenv("MN_CONTEXT_MEMORY_ENABLED", "0")
-    mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="context-disabled-run")
-    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-context-disabled"}))
-    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
-        json.dumps({"type": "job_completed"})
-    ])
+    mocker.patch(
+        "mn_cli.libs.run_cmds._make_blueprint_run_id",
+        return_value="context-disabled-run",
+    )
+    mock_submit = mocker.patch(
+        "mn_cli.libs.run_cmds.client.create_job",
+        return_value=json.dumps({"job_id": "job-context-disabled"}),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.stream_events",
+        return_value=[json.dumps({"type": "job_completed"})],
+    )
     mock_ensure = mocker.patch("mn_cli.libs.run_cmds.ensure_context_engine_runtime")
 
     bundle_dir = tmp_path / "context_disabled_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(
-        json.dumps(workflow_manifest({"nodes": []}))
+    write_package_manifest(
+        bundle_dir / "manifest.json", json.dumps(workflow_manifest({"nodes": []}))
     )
     (bundle_dir / "payloads").mkdir()
     config_dir = bundle_dir / "config"
-    config_dir.mkdir()
+    config_dir.mkdir(exist_ok=True)
     (config_dir / "default.json").write_text(
         json.dumps(
             {

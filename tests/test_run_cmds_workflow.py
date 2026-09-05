@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from blueprint_fixtures import write_package_manifest
 from mn_sdk import (
     AgentProgress,
     load_model_ownership,
@@ -42,8 +43,12 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.setattr(
         run_cmds,
         "sync_litellm_gateway",
-        lambda **_kwargs: {"status": "running", "api_base": "http://mn-litellm-proxy:4000/v1"},
+        lambda **_kwargs: {
+            "status": "running",
+            "api_base": "http://mn-litellm-proxy:4000/v1",
+        },
     )
+
 
 def test_cli_agent_progress_detail_omits_token_usage_and_budgets():
     estimated = AgentProgress(
@@ -68,121 +73,163 @@ def test_cli_agent_progress_detail_omits_token_usage_and_budgets():
     assert "42% est." not in _agent_progress_detail(explicit)
     assert "tok" not in _agent_progress_detail(explicit)
 
+
 def test_run_displays_live_job_type_and_follow_status(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     monkeypatch.setenv("MN_RUN_BACKGROUND_EVENT_RELAY", "0")
-    mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-live"}))
-    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
-        json.dumps({"type": "job_pending"}),
-        json.dumps({"type": "job_scheduled"}),
-    ])
     mocker.patch(
-        'mn_cli.libs.run_cmds.client.get_run',
-        return_value=json.dumps({
-            "run_id": "job-live-run",
-            "status": "running",
-        }),
+        "mn_cli.libs.run_cmds.client.create_job",
+        return_value=json.dumps({"job_id": "job-live"}),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.stream_events",
+        return_value=[
+            json.dumps({"type": "job_pending"}),
+            json.dumps({"type": "job_scheduled"}),
+        ],
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.get_run",
+        return_value=json.dumps(
+            {
+                "run_id": "job-live-run",
+                "status": "running",
+            }
+        ),
     )
 
     bundle_dir = tmp_path / "live_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps(workflow_manifest({
-        "policies": {"job_type": "service", "stream_mode": "live"},
-        "nodes": [],
-    })))
+    write_package_manifest(
+        bundle_dir / "manifest.json",
+        json.dumps(
+            workflow_manifest(
+                {
+                    "policies": {"job_type": "service", "stream_mode": "live"},
+                    "nodes": [],
+                }
+            )
+        ),
+    )
 
-    result = runner.invoke(app, ["blueprint", "run", str(bundle_dir), "--follow-seconds", "0", "--web-ui"])
+    result = runner.invoke(
+        app, ["blueprint", "run", str(bundle_dir), "--follow-seconds", "0", "--web-ui"]
+    )
 
     assert result.exit_code == 0
     assert "Live service" in result.stdout
     assert "Watch" in result.stdout
     assert "75%" not in result.stdout
 
+
 def test_run_displays_workflow_steps_and_agents(mocker, tmp_path):
-    mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-workflow"}))
-    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
-        json.dumps({"type": "job_pending"}),
-        json.dumps({"type": "job_scheduled"}),
-        json.dumps({"type": "workflow_step_started", "payload": {"step": "research"}}),
-        json.dumps({"type": "workflow_worker_started", "payload": {"step": "research", "worker": "research:docs"}}),
-        json.dumps(
-            {
-                "type": "workflow_step_attempt_completed",
-                "payload": {
-                    "step": "research",
-                    "worker": "research:docs",
-                    "tokens": 1200,
-                    "tools": 3,
-                },
-            }
-        ),
-        json.dumps(
-            {
-                "type": "workflow_step_attempt_completed",
-                "payload": {
-                    "step": "research",
-                    "worker": "research:docs",
-                    "llm": {"usage": {"input_tokens": 350, "output_tokens": 250}},
-                    "tools": 1,
-                },
-            }
-        ),
-        json.dumps({"type": "research_done", "payload": {"step": "research"}}),
-        json.dumps({"type": "job_completed"}),
-    ])
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.create_job",
+        return_value=json.dumps({"job_id": "job-workflow"}),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.stream_events",
+        return_value=[
+            json.dumps({"type": "job_pending"}),
+            json.dumps({"type": "job_scheduled"}),
+            json.dumps(
+                {"type": "workflow_step_started", "payload": {"step": "research"}}
+            ),
+            json.dumps(
+                {
+                    "type": "workflow_worker_started",
+                    "payload": {"step": "research", "worker": "research:docs"},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "workflow_step_attempt_completed",
+                    "payload": {
+                        "step": "research",
+                        "worker": "research:docs",
+                        "tokens": 1200,
+                        "tools": 3,
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "workflow_step_attempt_completed",
+                    "payload": {
+                        "step": "research",
+                        "worker": "research:docs",
+                        "llm": {"usage": {"input_tokens": 350, "output_tokens": 250}},
+                        "tools": 1,
+                    },
+                }
+            ),
+            json.dumps({"type": "research_done", "payload": {"step": "research"}}),
+            json.dumps({"type": "job_completed"}),
+        ],
+    )
 
     bundle_dir = tmp_path / "workflow_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps(workflow_manifest({
-        "apiVersion": "mn.workflow/v1",
-        "kind": "Workflow",
-        "id": "workflow-blueprint",
-        "name": "Workflow Blueprint",
-        "description": "Two workers inside one workflow step.",
-        "workflow": {
-            "workflow_id": "workflow-blueprint_v2",
-            "entrypoint": "research",
-            "steps": [
+    write_package_manifest(
+        bundle_dir / "manifest.json",
+        json.dumps(
+            workflow_manifest(
                 {
-                    "id": "research",
-                    "label": "Research",
-                    "goal": "Collect evidence",
-                    "run": "research_team",
-                    "emits": "research_done",
-                    "on": {"research_done": "completed"},
+                    "apiVersion": "mn.workflow/v1",
+                    "kind": "Workflow",
+                    "id": "workflow-blueprint",
+                    "name": "Workflow Blueprint",
+                    "description": "Two workers inside one workflow step.",
+                    "workflow": {
+                        "workflow_id": "workflow-blueprint_v2",
+                        "entrypoint": "research",
+                        "steps": [
+                            {
+                                "id": "research",
+                                "label": "Research",
+                                "goal": "Collect evidence",
+                                "run": "research_team",
+                                "emits": "research_done",
+                                "on": {"research_done": "completed"},
+                            }
+                        ],
+                    },
+                    "agents": {
+                        "schema": "mn.agents.communication_graph/v1",
+                        "entrypoints": ["research:docs"],
+                        "nodes": [
+                            {"node_id": "research:docs"},
+                            {"node_id": "research:risks"},
+                        ],
+                        "edges": [],
+                    },
+                    "runtime": {
+                        "bindings": {
+                            "research_team": {
+                                "type": "team",
+                                "workers": [
+                                    {
+                                        "id": "research:docs",
+                                        "role": "Analyze docs",
+                                        "model": "Opus 4.8",
+                                        "tokens": 1200,
+                                        "tools": 3,
+                                    },
+                                    {
+                                        "id": "research:risks",
+                                        "role": "Summarize risks",
+                                        "model": "Opus 4.8",
+                                        "tokens": 900,
+                                        "tools": 2,
+                                    },
+                                ],
+                            }
+                        }
+                    },
                 }
-            ],
-        },
-        "agents": {
-            "schema": "mn.agents.communication_graph/v1",
-            "entrypoints": ["research:docs"],
-            "nodes": [{"node_id": "research:docs"}, {"node_id": "research:risks"}],
-            "edges": [],
-        },
-        "runtime": {
-            "bindings": {
-                "research_team": {
-                    "type": "team",
-                    "workers": [
-                        {
-                            "id": "research:docs",
-                            "role": "Analyze docs",
-                            "model": "Opus 4.8",
-                            "tokens": 1200,
-                            "tools": 3,
-                        },
-                        {
-                            "id": "research:risks",
-                            "role": "Summarize risks",
-                            "model": "Opus 4.8",
-                            "tokens": 900,
-                            "tools": 2,
-                        },
-                    ],
-                }
-            }
-        },
-    })))
+            )
+        ),
+    )
 
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
 
@@ -253,7 +300,14 @@ def test_workflow_monitor_renders_service_idle_and_ready_counts():
         "workflow_kind": "service",
         "status": "running",
         "elapsed_seconds": 342,
-        "agent_count": {"done": 1, "running": 0, "idle": 1, "ready": 2, "failed": 0, "total": 2},
+        "agent_count": {
+            "done": 1,
+            "running": 0,
+            "idle": 1,
+            "ready": 2,
+            "failed": 0,
+            "total": 2,
+        },
         "current_step_id": "visual_detector",
         "current_step": {
             "id": "visual_detector",
@@ -276,14 +330,33 @@ def test_workflow_monitor_renders_service_idle_and_ready_counts():
             ],
         },
         "steps": [
-            {"id": "ingress", "label": "Ingress", "status": "done", "done_count": 1, "ready_count": 1, "total_count": 1},
-            {"id": "visual_detector", "label": "Visual Detector", "status": "idle", "current": True, "idle_count": 1, "ready_count": 1, "total_count": 1},
+            {
+                "id": "ingress",
+                "label": "Ingress",
+                "status": "done",
+                "done_count": 1,
+                "ready_count": 1,
+                "total_count": 1,
+            },
+            {
+                "id": "visual_detector",
+                "label": "Visual Detector",
+                "status": "idle",
+                "current": True,
+                "idle_count": 1,
+                "ready_count": 1,
+                "total_count": 1,
+            },
         ],
         "messages": ["Observing: latest event video_watch_frame_observed"],
     }
 
     console = Console(record=True, width=140)
-    console.print(generate_live_layout("job-service", {"workflow_progress": progress}, JobMonitorState()))
+    console.print(
+        generate_live_layout(
+            "job-service", {"workflow_progress": progress}, JobMonitorState()
+        )
+    )
     rendered = console.export_text()
 
     assert "2/2 steps" in rendered
@@ -382,12 +455,17 @@ def test_workflow_monitor_labels_running_service_live_and_downstream_pending_wai
     }
 
     console = Console(record=True, width=140)
-    console.print(generate_live_layout("job-service", {"workflow_progress": progress}, JobMonitorState()))
+    console.print(
+        generate_live_layout(
+            "job-service", {"workflow_progress": progress}, JobMonitorState()
+        )
+    )
     rendered = console.export_text()
 
     assert "Warehouse Service" in rendered
     assert "(live)" in rendered
     assert "Finalize (waiting)" in rendered
+
 
 def test_workflow_monitor_renders_graph_layers_and_multiple_active_steps():
     progress = {
@@ -395,11 +473,26 @@ def test_workflow_monitor_renders_graph_layers_and_multiple_active_steps():
         "workflow_kind": "batch",
         "status": "running",
         "elapsed_seconds": 42,
-        "agent_count": {"done": 1, "running": 2, "idle": 0, "ready": 3, "failed": 0, "total": 4},
+        "agent_count": {
+            "done": 1,
+            "running": 2,
+            "idle": 0,
+            "ready": 3,
+            "failed": 0,
+            "total": 4,
+        },
         "current_step_id": "income",
         "current_step_ids": ["income", "property"],
         "steps": [
-            {"id": "intake", "label": "Intake", "status": "done", "done_count": 1, "total_count": 1, "layer": 0, "children": ["income", "property"]},
+            {
+                "id": "intake",
+                "label": "Intake",
+                "status": "done",
+                "done_count": 1,
+                "total_count": 1,
+                "layer": 0,
+                "children": ["income", "property"],
+            },
             {
                 "id": "income",
                 "label": "Income",
@@ -409,7 +502,14 @@ def test_workflow_monitor_renders_graph_layers_and_multiple_active_steps():
                 "total_count": 1,
                 "layer": 1,
                 "parents": ["intake"],
-                "agents": [{"id": "income_agent", "status": "running", "working_on": "Prepare income", "progress": 0.4}],
+                "agents": [
+                    {
+                        "id": "income_agent",
+                        "status": "running",
+                        "working_on": "Prepare income",
+                        "progress": 0.4,
+                    }
+                ],
             },
             {
                 "id": "property",
@@ -420,14 +520,25 @@ def test_workflow_monitor_renders_graph_layers_and_multiple_active_steps():
                 "total_count": 1,
                 "layer": 1,
                 "parents": ["intake"],
-                "agents": [{"id": "property_agent", "status": "running", "working_on": "Prepare property", "progress": 0.3}],
+                "agents": [
+                    {
+                        "id": "property_agent",
+                        "status": "running",
+                        "working_on": "Prepare property",
+                        "progress": 0.3,
+                    }
+                ],
             },
         ],
         "messages": ["Running: graph branches active"],
     }
 
     console = Console(record=True, width=150)
-    console.print(generate_live_layout("job-graph", {"workflow_progress": progress}, JobMonitorState()))
+    console.print(
+        generate_live_layout(
+            "job-graph", {"workflow_progress": progress}, JobMonitorState()
+        )
+    )
     rendered = console.export_text()
 
     assert "Workflow" in rendered
@@ -439,6 +550,7 @@ def test_workflow_monitor_renders_graph_layers_and_multiple_active_steps():
     assert " 3 Property" not in rendered
     assert "income_agent" in rendered
     assert "property_agent" in rendered
+
 
 def test_workflow_renderer_shared_between_live_monitor_and_blueprint_run_paths():
     manifest = {
@@ -478,7 +590,14 @@ def test_workflow_renderer_shared_between_live_monitor_and_blueprint_run_paths()
 
     view = BlueprintWorkflowProgress(manifest, job_id="job-shared")
     view.record_event_token_usage(
-        {"type": "workflow_step_attempt_completed", "payload": {"step": "research", "worker": "research:docs", "llm": {"usage": {"input_tokens": 80, "output_tokens": 20}}}}
+        {
+            "type": "workflow_step_attempt_completed",
+            "payload": {
+                "step": "research",
+                "worker": "research:docs",
+                "llm": {"usage": {"input_tokens": 80, "output_tokens": 20}},
+            },
+        }
     )
     snapshot = view.snapshot()
 
@@ -506,11 +625,14 @@ def test_workflow_renderer_shared_between_live_monitor_and_blueprint_run_paths()
     assert "run used" not in job_monitor_view
     assert "100 tok" not in workflow_view
     assert "100 tok" not in job_monitor_view
-    controls = "keys: ↑/↓ select agent, Enter details, Backspace overview, q or Ctrl+C detach"
+    controls = (
+        "keys: ↑/↓ select agent, Enter details, Backspace overview, q or Ctrl+C detach"
+    )
     assert controls in workflow_view
     assert controls in job_monitor_view
     assert "j/k" not in workflow_view
     assert "j/k" not in job_monitor_view
+
 
 def test_blueprint_workflow_monitor_uses_shared_detach_keys():
     progress = {
@@ -546,6 +668,7 @@ def test_blueprint_workflow_monitor_uses_shared_detach_keys():
     assert state.handle_key("\x03", 0) is False
     assert "q or Ctrl+C detach" in output
     assert "Ctrl+D" not in output
+
 
 def test_workflow_token_tracking_prefers_usage_fields_and_ignores_budget_only_payloads():
     manifest = {
@@ -585,25 +708,49 @@ def test_workflow_token_tracking_prefers_usage_fields_and_ignores_budget_only_pa
 
     view = BlueprintWorkflowProgress(manifest, job_id="job-token")
     console = Console(record=True, width=120)
-    console.print(generate_live_layout("job-token", {"workflow_progress": view.snapshot()}, JobMonitorState()))
+    console.print(
+        generate_live_layout(
+            "job-token", {"workflow_progress": view.snapshot()}, JobMonitorState()
+        )
+    )
     assert "500 tok budget" not in console.export_text()
     assert "run used" not in console.export_text()
 
     view.record_event_token_usage(
-        {"type": "workflow_step_attempt_completed", "payload": {"step": "step", "worker": "agent-1", "token_budget": 500}}
+        {
+            "type": "workflow_step_attempt_completed",
+            "payload": {"step": "step", "worker": "agent-1", "token_budget": 500},
+        }
     )
     console = Console(record=True, width=120)
-    console.print(generate_live_layout("job-token", {"workflow_progress": view.snapshot()}, JobMonitorState()))
+    console.print(
+        generate_live_layout(
+            "job-token", {"workflow_progress": view.snapshot()}, JobMonitorState()
+        )
+    )
     assert "500 tok budget" not in console.export_text()
     assert "run used" not in console.export_text()
 
     view.record_event_token_usage(
-        {"type": "workflow_step_attempt_completed", "payload": {"step": "step", "worker": "agent-1", "tokens": {"count": 12}, "usage": {"total_tokens": 50}}}
+        {
+            "type": "workflow_step_attempt_completed",
+            "payload": {
+                "step": "step",
+                "worker": "agent-1",
+                "tokens": {"count": 12},
+                "usage": {"total_tokens": 50},
+            },
+        }
     )
-    console.print(generate_live_layout("job-token", {"workflow_progress": view.snapshot()}, JobMonitorState()))
+    console.print(
+        generate_live_layout(
+            "job-token", {"workflow_progress": view.snapshot()}, JobMonitorState()
+        )
+    )
     output = console.export_text()
     assert "run used" not in output
     assert "50 tok" not in output
+
 
 def test_workflow_monitor_state_controls_with_shared_renderer():
     state = JobMonitorState()
@@ -631,7 +778,13 @@ def test_workflow_monitor_state_controls_with_shared_renderer():
                             "running_count": 1,
                             "total_count": 1,
                             "agents": [
-                                {"id": "agent-a", "status": "running", "working_on": "Analyze A", "progress": 0.7, "tokens": 50},
+                                {
+                                    "id": "agent-a",
+                                    "status": "running",
+                                    "working_on": "Analyze A",
+                                    "progress": 0.7,
+                                    "tokens": 50,
+                                },
                             ],
                         },
                         {
@@ -641,7 +794,13 @@ def test_workflow_monitor_state_controls_with_shared_renderer():
                             "done_count": 1,
                             "total_count": 1,
                             "agents": [
-                                {"id": "agent-b", "status": "done", "working_on": "Finish B", "progress": 1.0, "tokens": 30},
+                                {
+                                    "id": "agent-b",
+                                    "status": "done",
+                                    "working_on": "Finish B",
+                                    "progress": 1.0,
+                                    "tokens": 30,
+                                },
                             ],
                         },
                     ],

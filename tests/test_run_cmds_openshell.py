@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from blueprint_fixtures import write_package_manifest
 from mn_sdk import (
     AgentProgress,
     load_model_ownership,
@@ -42,18 +43,26 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.setattr(
         run_cmds,
         "sync_litellm_gateway",
-        lambda **_kwargs: {"status": "running", "api_base": "http://mn-litellm-proxy:4000/v1"},
+        lambda **_kwargs: {
+            "status": "running",
+            "api_base": "http://mn-litellm-proxy:4000/v1",
+        },
     )
+
 
 def test_openshell_env_prefers_active_gateway_metadata(tmp_path, monkeypatch):
     config_dir = tmp_path / "openshell-config"
     gateway_dir = config_dir / "gateways" / "openshell"
     gateway_dir.mkdir(parents=True)
     (config_dir / "active_gateway").write_text("openshell\n")
-    (gateway_dir / "metadata.json").write_text(json.dumps({
-        "name": "openshell",
-        "gateway_endpoint": "https://127.0.0.1:8080",
-    }))
+    (gateway_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "name": "openshell",
+                "gateway_endpoint": "https://127.0.0.1:8080",
+            }
+        )
+    )
     monkeypatch.setenv("OPENSHELL_CONFIG_DIR", str(config_dir))
     monkeypatch.delenv("OPENSHELL_GATEWAY", raising=False)
     monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
@@ -63,6 +72,7 @@ def test_openshell_env_prefers_active_gateway_metadata(tmp_path, monkeypatch):
     assert env["OPENSHELL_GATEWAY"] == "openshell"
     assert "OPENSHELL_GATEWAY_ENDPOINT" not in env
     assert run_cmds._openshell_gateway_endpoint() == "https://127.0.0.1:8080"
+
 
 def test_openshell_env_prefers_managed_runtime_over_auto_selected_gateway(
     tmp_path, monkeypatch
@@ -97,6 +107,7 @@ def test_openshell_env_prefers_managed_runtime_over_auto_selected_gateway(
     assert "OPENSHELL_GATEWAY" not in env
     assert run_cmds._openshell_gateway_endpoint() == "http://127.0.0.1:58080"
 
+
 def test_openshell_env_respects_explicit_gateway_over_managed_runtime(
     tmp_path, monkeypatch
 ):
@@ -115,6 +126,7 @@ def test_openshell_env_respects_explicit_gateway_over_managed_runtime(
     assert env["OPENSHELL_GATEWAY"] == "remote-team-gateway"
     assert "OPENSHELL_GATEWAY_ENDPOINT" not in env
 
+
 def test_openshell_executable_prefers_user_local_install(tmp_path, monkeypatch):
     executable = tmp_path / ".local" / "bin" / "openshell"
     executable.parent.mkdir(parents=True)
@@ -124,18 +136,27 @@ def test_openshell_executable_prefers_user_local_install(tmp_path, monkeypatch):
 
     assert run_cmds._openshell_executable() == str(executable)
 
-def test_run_prebuilds_custom_openshell_image_from_payload_directory(mocker, tmp_path, monkeypatch):
+
+def test_run_prebuilds_custom_openshell_image_from_payload_directory(
+    mocker, tmp_path, monkeypatch
+):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     monkeypatch.setenv("OPENSHELL_CONFIG_DIR", str(tmp_path / "openshell-config"))
     monkeypatch.delenv("OPENSHELL_GATEWAY", raising=False)
     monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
-    mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="openshell-from-run")
-    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-123"}))
-    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
-        json.dumps({"type": "job_completed"})
-    ])
+    mocker.patch(
+        "mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="openshell-from-run"
+    )
+    mock_submit = mocker.patch(
+        "mn_cli.libs.run_cmds.client.create_job",
+        return_value=json.dumps({"job_id": "job-123"}),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.stream_events",
+        return_value=[json.dumps({"type": "job_completed"})],
+    )
     mock_build = mocker.patch(
-        'mn_cli.libs.run_cmds.subprocess.run',
+        "mn_cli.libs.run_cmds.subprocess.run",
         return_value=mocker.Mock(
             returncode=0,
             stdout="Image \x1b[36mopenshell/sandbox-from:123\x1b[39m is available in the gateway.\n",
@@ -145,22 +166,29 @@ def test_run_prebuilds_custom_openshell_image_from_payload_directory(mocker, tmp
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps(workflow_manifest({
-        "apiVersion": "mn.workflow/v1",
-        "kind": "Workflow",
-        "id": "openshell-workflow",
-        "flow": {
-            "nodes": [
+    write_package_manifest(
+        bundle_dir / "manifest.json",
+        json.dumps(
+            workflow_manifest(
                 {
-                    "node_id": "detector",
-                    "config": {
-                        "runner_module": "MirrorNeuron.Runner.OpenShell",
-                        "custom_openshell_image": "detector/openshell_sandbox",
+                    "apiVersion": "mn.workflow/v1",
+                    "kind": "Workflow",
+                    "id": "openshell-workflow",
+                    "flow": {
+                        "nodes": [
+                            {
+                                "node_id": "detector",
+                                "config": {
+                                    "runner_module": "MirrorNeuron.Runner.OpenShell",
+                                    "custom_openshell_image": "detector/openshell_sandbox",
+                                },
+                            }
+                        ]
                     },
                 }
-            ]
-        },
-    })))
+            )
+        ),
+    )
     sandbox_dir = bundle_dir / "payloads" / "detector" / "openshell_sandbox"
     sandbox_dir.mkdir(parents=True)
     (sandbox_dir / "Dockerfile").write_text("FROM base\n")
@@ -170,23 +198,38 @@ def test_run_prebuilds_custom_openshell_image_from_payload_directory(mocker, tmp
     assert result.exit_code == 0
     assert "OpenShell sandbox image build successful." in result.stdout
     mock_build.assert_called_once()
-    assert mock_build.call_args.kwargs["env"]["OPENSHELL_GATEWAY_ENDPOINT"] == "http://127.0.0.1:58080"
+    assert (
+        mock_build.call_args.kwargs["env"]["OPENSHELL_GATEWAY_ENDPOINT"]
+        == "http://127.0.0.1:58080"
+    )
     manifest = json.loads(mock_submit.call_args.args[0])
-    assert manifest["flow"]["nodes"][0]["config"]["custom_openshell_image"] == "detector/openshell_sandbox"
-    assert manifest["flow"]["nodes"][0]["config"]["from"] == "openshell/sandbox-from:123"
+    assert (
+        manifest["flow"]["nodes"][0]["config"]["custom_openshell_image"]
+        == "detector/openshell_sandbox"
+    )
+    assert (
+        manifest["flow"]["nodes"][0]["config"]["from"] == "openshell/sandbox-from:123"
+    )
+
 
 def test_run_prebuilds_legacy_openshell_from_directory(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     monkeypatch.setenv("OPENSHELL_CONFIG_DIR", str(tmp_path / "openshell-config"))
     monkeypatch.delenv("OPENSHELL_GATEWAY", raising=False)
     monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
-    mocker.patch('mn_cli.libs.run_cmds._make_blueprint_run_id', return_value="openshell-from-run")
-    mock_submit = mocker.patch('mn_cli.libs.run_cmds.client.create_job', return_value=json.dumps({"job_id": "job-123"}))
-    mocker.patch('mn_cli.libs.run_cmds.client.stream_events', return_value=[
-        json.dumps({"type": "job_completed"})
-    ])
     mocker.patch(
-        'mn_cli.libs.run_cmds.subprocess.run',
+        "mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="openshell-from-run"
+    )
+    mock_submit = mocker.patch(
+        "mn_cli.libs.run_cmds.client.create_job",
+        return_value=json.dumps({"job_id": "job-123"}),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.stream_events",
+        return_value=[json.dumps({"type": "job_completed"})],
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.subprocess.run",
         return_value=mocker.Mock(
             returncode=0,
             stdout="Image openshell/sandbox-from:456 is available in the gateway.\n",
@@ -196,17 +239,24 @@ def test_run_prebuilds_legacy_openshell_from_directory(mocker, tmp_path, monkeyp
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "manifest.json").write_text(json.dumps(workflow_manifest({
-        "nodes": [
-            {
-                "node_id": "detector",
-                "config": {
-                    "runner_module": "MirrorNeuron.Sandbox.OpenShell",
-                    "from": "detector/openshell_sandbox",
-                },
-            }
-        ]
-    })))
+    write_package_manifest(
+        bundle_dir / "manifest.json",
+        json.dumps(
+            workflow_manifest(
+                {
+                    "nodes": [
+                        {
+                            "node_id": "detector",
+                            "config": {
+                                "runner_module": "MirrorNeuron.Sandbox.OpenShell",
+                                "from": "detector/openshell_sandbox",
+                            },
+                        }
+                    ]
+                }
+            )
+        ),
+    )
     sandbox_dir = bundle_dir / "payloads" / "detector" / "openshell_sandbox"
     sandbox_dir.mkdir(parents=True)
     (sandbox_dir / "Dockerfile").write_text("FROM base\n")
@@ -215,7 +265,9 @@ def test_run_prebuilds_legacy_openshell_from_directory(mocker, tmp_path, monkeyp
 
     assert result.exit_code == 0
     manifest = json.loads(mock_submit.call_args.args[0])
-    assert manifest["agents"]["nodes"][0]["config"]["from"] == "openshell/sandbox-from:456"
+    assert (
+        manifest["agents"]["nodes"][0]["config"]["from"] == "openshell/sandbox-from:456"
+    )
 
 
 def test_prepare_openshell_builds_conventional_context_for_local_image(
@@ -239,6 +291,7 @@ def test_prepare_openshell_builds_conventional_context_for_local_image(
 
     build.assert_called_once_with(sandbox_dir.resolve(), "sandbox")
     assert config["from"] == "openshell/sandbox-from:prepared"
+
 
 def test_prepare_openshell_shared_sandbox_injects_prepared_runtime_config(
     mocker, tmp_path, monkeypatch
@@ -293,9 +346,10 @@ def test_prepare_openshell_shared_sandbox_injects_prepared_runtime_config(
     )
     assert create_command[create_command.index("--policy") + 1] == str(policy)
     assert "--no-auto-providers" in create_command
-    assert mock_run.call_args_list[1].kwargs["env"][
-        "OPENSHELL_GATEWAY_ENDPOINT"
-    ] == "http://127.0.0.1:58080"
+    assert (
+        mock_run.call_args_list[1].kwargs["env"]["OPENSHELL_GATEWAY_ENDPOINT"]
+        == "http://127.0.0.1:58080"
+    )
     assert manifest["metadata"]["mn_native_resources"]["resources"] == [
         {
             "kind": "openshell",
@@ -310,6 +364,7 @@ def test_prepare_openshell_shared_sandbox_injects_prepared_runtime_config(
     )
     assert registry["resources"][0]["external_id"] == sandbox_name
     assert registry["resources"][0]["job_id"] == "research-job"
+
 
 def test_openshell_skill_dependency_context_injects_pinned_gar_install(tmp_path):
     sandbox_dir = tmp_path / "openshell_sandbox"
@@ -336,12 +391,21 @@ def test_openshell_skill_dependency_context_injects_pinned_gar_install(tmp_path)
 
     assert context != sandbox_dir
     assert "mirrorneuron-websocket-stream-skill==1.2.7" in requirements
-    assert "https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/" in requirements
+    assert (
+        "https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/"
+        in requirements
+    )
     assert "--index-url\n" not in requirements
-    assert "--index-url https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/" in requirements
+    assert (
+        "--index-url https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/"
+        in requirements
+    )
     assert "--extra-index-url https://pypi.org/simple" in requirements
     assert "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt" in dockerfile
-    assert "pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
+    assert (
+        "pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt"
+        in dockerfile
+    )
 
 
 def test_openshell_skill_dependency_context_injects_local_dev_sources(tmp_path):
@@ -370,7 +434,9 @@ def test_openshell_skill_dependency_context_injects_local_dev_sources(tmp_path):
     context = run_cmds._openshell_skill_dependency_context(sandbox_dir, manifest)
     try:
         dockerfile = (context / "Dockerfile").read_text(encoding="utf-8")
-        local_requirements = (context / "local-requirements.txt").read_text(encoding="utf-8")
+        local_requirements = (context / "local-requirements.txt").read_text(
+            encoding="utf-8"
+        )
         staged_source = (
             context
             / "__mn_skill_dependencies"

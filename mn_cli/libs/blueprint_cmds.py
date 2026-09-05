@@ -188,9 +188,12 @@ def blueprint_callback(
     ctx.obj = dict(ctx.obj or {})
     ctx.obj[BLUEPRINT_REPO_CONTEXT_KEY] = blueprint_repo
 
+
 def _is_python_source_blueprint(manifest: dict[str, Any]) -> bool:
     metadata = manifest.get("metadata") or {}
-    return metadata.get("python_source_mode") is True or bool(metadata.get("python_workflow"))
+    return metadata.get("python_source_mode") is True or bool(
+        metadata.get("python_workflow")
+    )
 
 
 def _load_blueprint_manifest(blueprint_dir: Path, target_name: str) -> dict[str, Any]:
@@ -199,17 +202,18 @@ def _load_blueprint_manifest(blueprint_dir: Path, target_name: str) -> dict[str,
         raise typer.Exit(2)
     manifest_path = blueprint_dir / "manifest.json"
     if not manifest_path.exists():
-        print_error(console, f"Blueprint '{target_name}' is missing manifest.json. Validation failed.")
+        print_error(
+            console,
+            f"Blueprint '{target_name}' is missing manifest.json. Validation failed.",
+        )
         raise typer.Exit(2)
+    from mn_sdk.blueprints import BlueprintError, blueprint_definition, read_blueprint
+
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        logger.exception("Error parsing blueprint manifest")
-        print_error(console, f"Could not parse manifest.json for blueprint '{target_name}': {exc}")
-        raise typer.Exit(2)
-    if isinstance(manifest, dict) and _is_manifest_source(manifest):
-        return _expand_manifest_source(manifest, root_dir=blueprint_dir)
-    return manifest
+        return blueprint_definition(read_blueprint(blueprint_dir))
+    except BlueprintError as exc:
+        print_error(console, f"Invalid blueprint '{target_name}': {exc}")
+        raise typer.Exit(2) from exc
 
 
 def _prepare_blueprint_bundle_for_run(
@@ -270,7 +274,9 @@ def _run_resolved_blueprint(
 ) -> None:
     shared_run_id = run_id or _make_blueprint_run_id(blueprint_id)
     _print_blueprint_run_phase(1, 3, "Prepare blueprint bundle")
-    bundle_path = _prepare_blueprint_bundle_for_run(blueprint_dir, manifest, shared_run_id)
+    bundle_path = _prepare_blueprint_bundle_for_run(
+        blueprint_dir, manifest, shared_run_id
+    )
     _print_blueprint_run_phase(2, 3, "Review launch config")
     review_overrides = _collect_init_config_review_overrides(bundle_path, manifest)
     config_overrides = _deep_merge(
@@ -282,7 +288,9 @@ def _run_resolved_blueprint(
         fake_overrides = _fake_llm_config_overrides(config or {})
         config_overrides = _deep_merge(config_overrides or {}, fake_overrides)
         config = _deep_merge(config or {}, fake_overrides)
-    testing_overrides = _testing_config_overrides(fake_skills=fake_skills, benchmark=benchmark, debug=debug)
+    testing_overrides = _testing_config_overrides(
+        fake_skills=fake_skills, benchmark=benchmark, debug=debug
+    )
     if testing_overrides:
         config_overrides = _deep_merge(config_overrides or {}, testing_overrides)
         config = _deep_merge(config or {}, testing_overrides)
@@ -400,7 +408,9 @@ def _blueprint_debug_env_overrides(enabled: bool) -> dict[str, str]:
     }
 
 
-def _testing_config_overrides(*, fake_skills: bool = False, benchmark: bool = False, debug: bool = False) -> dict[str, Any]:
+def _testing_config_overrides(
+    *, fake_skills: bool = False, benchmark: bool = False, debug: bool = False
+) -> dict[str, Any]:
     execution: dict[str, Any] = {}
     if fake_skills:
         execution["fake_skills"] = True
@@ -421,8 +431,12 @@ def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]
     return merged
 
 
-def _fake_llm_manifest_for_model_dependencies(manifest: dict[str, Any]) -> dict[str, Any]:
-    runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
+def _fake_llm_manifest_for_model_dependencies(
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    runtime = (
+        manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
+    )
     models = runtime.get("models") if isinstance(runtime.get("models"), dict) else {}
     model_names = list(models) or ["primary"]
     fake_model = {
@@ -452,13 +466,19 @@ def _reject_local_blueprint_path(target: str, *, command: str = "run") -> None:
     if not blueprint_dir.exists():
         return
     print_error(console, "local folders must use an explicit path such as ./folder.")
-    console.print(f"Use [bold]mn blueprint {command} ./{blueprint_dir.name}[/bold] for a local blueprint folder.")
+    console.print(
+        f"Use [bold]mn blueprint {command} ./{blueprint_dir.name}[/bold] for a local blueprint folder."
+    )
     raise typer.Exit(2)
 
 
 def _is_explicit_local_target(target: str) -> bool:
     value = str(target or "").strip()
-    return value.startswith(("./", "../", "/", "~/")) or value in {".", "..", "~"}
+    return (
+        value.startswith(("./", "../", "/", "~/"))
+        or value in {".", "..", "~"}
+        or (value.lower().endswith(".zip") and Path(value).is_file())
+    )
 
 
 def _collect_init_config_review_overrides(
@@ -475,7 +495,9 @@ def _collect_init_config_review_overrides(
         return None
     if not sys.stdin.isatty():
         if review.get("required") is True:
-            console.print("[yellow]Blueprint config review requested; keeping current config in this non-interactive run.[/yellow]")
+            console.print(
+                "[yellow]Blueprint config review requested; keeping current config in this non-interactive run.[/yellow]"
+            )
         return None
 
     config = _load_blueprint_config(bundle_path) or {}
@@ -504,7 +526,9 @@ def _collect_init_config_review_overrides(
             if response == "":
                 continue
         else:
-            response = typer.prompt(label, default=str(default_value), show_default=True)
+            response = typer.prompt(
+                label, default=str(default_value), show_default=True
+            )
         parsed = _parse_review_value(response, default_value)
         if parsed != current:
             _config_path_set(overrides, path, parsed)
@@ -596,7 +620,9 @@ def _print_run_table(runs: list[dict[str, Any]]) -> None:
     if not runs:
         console.print("[yellow]No blueprint runs found.[/yellow]")
         return
-    table = Table("Run ID", "Job ID", "Status", "Ended", "Blueprint", "Web UI", show_header=True)
+    table = Table(
+        "Run ID", "Job ID", "Status", "Ended", "Blueprint", "Web UI", show_header=True
+    )
     for run in runs:
         table.add_row(
             _display(run.get("run_id")),
@@ -628,7 +654,10 @@ def _print_log_records(records: list[dict[str, Any]]) -> None:
 
 
 def _observability_cursor(record: dict[str, Any]) -> str:
-    return str(record.get("id") or f"{record.get('channel','')}:{record.get('type','')}:{record.get('ts') or record.get('timestamp','')}:{record.get('message','')}")
+    return str(
+        record.get("id")
+        or f"{record.get('channel', '')}:{record.get('type', '')}:{record.get('ts') or record.get('timestamp', '')}:{record.get('message', '')}"
+    )
 
 
 def _duration_seconds(value: str) -> float:
@@ -653,9 +682,19 @@ def _duration_seconds(value: str) -> float:
 
 
 def _print_resource_summary(summary: dict[str, Any]) -> None:
-    table = Table("Start", "Samples", "CPU avg/max", "Memory avg/max MB", "GPU avg/max", "LLM tokens", "LLM calls")
+    table = Table(
+        "Start",
+        "Samples",
+        "CPU avg/max",
+        "Memory avg/max MB",
+        "GPU avg/max",
+        "LLM tokens",
+        "LLM calls",
+    )
     for bucket in summary.get("buckets") or []:
-        if not bucket.get("sample_count") and not (bucket.get("llm") or {}).get("total_tokens"):
+        if not bucket.get("sample_count") and not (bucket.get("llm") or {}).get(
+            "total_tokens"
+        ):
             continue
         llm = bucket.get("llm") or {}
         table.add_row(
@@ -695,7 +734,7 @@ def blueprint_list(ctx: typer.Context):
                 bp.get("id", "N/A"),
                 bp.get("name", "N/A"),
                 bp.get("job_name", "N/A"),
-                bp.get("description", "")
+                bp.get("description", ""),
             )
         from mn_cli.output import record_result
 
@@ -710,20 +749,30 @@ def blueprint_list(ctx: typer.Context):
 def blueprint_show(
     ctx: typer.Context,
     blueprint_id: str = typer.Argument(help="Catalog blueprint ID."),
-    source: str | None = typer.Option(None, "--source", help="Blueprint repository URL or local path."),
+    source: str | None = typer.Option(
+        None, "--source", help="Blueprint repository URL or local path."
+    ),
 ) -> None:
     """Show one catalog blueprint without preparing or running it."""
     blueprint_repo = _context_blueprint_repo(ctx)
     try:
         if source:
             candidate = Path(source).expanduser()
-            storage_dir = candidate if candidate.exists() else _blueprint_storage_dir_for_source(source)
+            storage_dir = (
+                candidate
+                if candidate.exists()
+                else _blueprint_storage_dir_for_source(source)
+            )
         elif blueprint_repo:
             storage_dir = _blueprint_cache_dir_for_repo(blueprint_repo)
         else:
             storage_dir = _default_blueprint_storage_dir()
         if not (storage_dir / "index.json").is_file():
-            print_error(console, "Blueprint catalog is not stored locally. Run 'mn blueprint add <ID>' first.", code="MN_NOT_FOUND")
+            print_error(
+                console,
+                "Blueprint catalog is not stored locally. Run 'mn blueprint add <ID>' first.",
+                code="MN_NOT_FOUND",
+            )
             raise typer.Exit(2)
         entries = _load_blueprint_index(storage_dir / "index.json", require_paths=True)
     except typer.Exit:
@@ -732,11 +781,17 @@ def blueprint_show(
         print_error(console, exc)
         raise typer.Exit(1) from exc
     entry = next(
-        (item for item in entries if item.get("id") == blueprint_id or item.get("path") == blueprint_id),
+        (
+            item
+            for item in entries
+            if item.get("id") == blueprint_id or item.get("path") == blueprint_id
+        ),
         None,
     )
     if entry is None:
-        print_error(console, f"Blueprint {blueprint_id!r} was not found.", code="MN_NOT_FOUND")
+        print_error(
+            console, f"Blueprint {blueprint_id!r} was not found.", code="MN_NOT_FOUND"
+        )
         raise typer.Exit(2)
     payload = dict(entry)
     payload.setdefault("id", blueprint_id)
@@ -751,24 +806,50 @@ def blueprint_show(
 def blueprint_add(
     ctx: typer.Context,
     blueprint_id: str = typer.Argument(help="Catalog blueprint ID to add."),
-    source: str | None = typer.Option(None, "--source", help="Blueprint repository URL or local path."),
-    revision: str | None = typer.Option(None, "--revision", help="Git revision to add."),
-    force: bool = typer.Option(False, "--force", help="Override compatibility checks; does not replace confirmation."),
+    source: str | None = typer.Option(
+        None, "--source", help="Blueprint repository URL or local path."
+    ),
+    revision: str | None = typer.Option(
+        None, "--revision", help="Git revision to add."
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Override compatibility checks; does not replace confirmation.",
+    ),
 ) -> None:
     """Add one catalog blueprint and its required runtime models."""
-    blueprint_install(ctx, blueprint_id=blueprint_id, source=source, revision=revision, force=force)
+    blueprint_install(
+        ctx, blueprint_id=blueprint_id, source=source, revision=revision, force=force
+    )
 
 
 def blueprint_remove(
     ctx: typer.Context,
-    blueprint_id: str | None = typer.Argument(None, help="Blueprint ID to remove; omit only with --all."),
-    all_: bool = typer.Option(False, "--all", help="Remove the complete cached blueprint catalog."),
-    source: str | None = typer.Option(None, "--source", help="Cached blueprint storage path."),
-    keep_resources: bool = typer.Option(False, "--keep-resources", help="Keep blueprint-owned cached runtime resources."),
-    keep_models: bool = typer.Option(False, "--keep-models", help="Keep orphaned runtime models."),
-    remove_models: bool = typer.Option(False, "--remove-models", help="Remove orphaned models without a second prompt."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview removal without changing state."),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Confirm removal without prompting."),
+    blueprint_id: str | None = typer.Argument(
+        None, help="Blueprint ID to remove; omit only with --all."
+    ),
+    all_: bool = typer.Option(
+        False, "--all", help="Remove the complete cached blueprint catalog."
+    ),
+    source: str | None = typer.Option(
+        None, "--source", help="Cached blueprint storage path."
+    ),
+    keep_resources: bool = typer.Option(
+        False, "--keep-resources", help="Keep blueprint-owned cached runtime resources."
+    ),
+    keep_models: bool = typer.Option(
+        False, "--keep-models", help="Keep orphaned runtime models."
+    ),
+    remove_models: bool = typer.Option(
+        False, "--remove-models", help="Remove orphaned models without a second prompt."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Preview removal without changing state."
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Confirm removal without prompting."
+    ),
 ) -> None:
     """Remove one blueprint or the complete cached catalog."""
     if bool(blueprint_id) == bool(all_):
@@ -791,6 +872,7 @@ def blueprint_remove(
         remove_models=remove_models,
         dry_run=dry_run,
     )
+
 
 def run_catalog_blueprint(
     blueprint_name: str,
@@ -829,7 +911,7 @@ def run_catalog_blueprint(
     except ValueError as exc:
         print_error(console, exc)
         raise typer.Exit(2)
-    
+
     index_path = Path(storage_dir) / "index.json"
     try:
         blueprints = _load_blueprint_index(index_path, require_paths=True)
@@ -837,21 +919,27 @@ def run_catalog_blueprint(
         logger.exception("Error parsing blueprint index")
         print_error(console, e)
         raise typer.Exit(2)
-        
+
     target_bp = None
     for bp in blueprints:
         if bp.get("id") == blueprint_name or bp.get("path") == blueprint_name:
             target_bp = bp
             break
-            
+
     if not target_bp:
-        print_error(console, f"Blueprint '{blueprint_name}' was not found in the index.")
+        print_error(
+            console, f"Blueprint '{blueprint_name}' was not found in the index."
+        )
         raise typer.Exit(2)
-        
+
     bp_path = os.path.join(storage_dir, target_bp.get("path"))
-    
+
     manifest = _load_blueprint_manifest(Path(bp_path), blueprint_name)
-    blueprint_id = str((manifest.get("metadata") or {}).get("blueprint_id") or target_bp.get("id") or blueprint_name)
+    blueprint_id = str(
+        (manifest.get("metadata") or {}).get("blueprint_id")
+        or target_bp.get("id")
+        or blueprint_name
+    )
     resolved_revision = _git_revision(Path(storage_dir)) or revision
     _run_resolved_blueprint(
         blueprint_dir=Path(bp_path),
@@ -899,10 +987,40 @@ def run_local_blueprint_folder(
 ) -> None:
     """Run a local Python source blueprint folder through the shared blueprint runner."""
     blueprint_dir = Path(folder).expanduser()
+    if blueprint_dir.is_file() and blueprint_dir.suffix.lower() == ".zip":
+        from mn_sdk.blueprints import open_blueprint
+
+        with open_blueprint(blueprint_dir) as package:
+            return run_local_blueprint_folder(
+                str(package.root),
+                run_id=run_id,
+                follow_seconds=follow_seconds,
+                force=force,
+                config_overrides=config_overrides,
+                detached=detached,
+                web_ui=web_ui,
+                auto_schedule=auto_schedule,
+                schedule=schedule,
+                fake_llm=fake_llm,
+                fake_skills=fake_skills,
+                benchmark=benchmark,
+                debug=debug,
+                job_id=job_id,
+                owner_node=owner_node,
+                replace_existing_run=replace_existing_run,
+            )
     manifest = _load_blueprint_manifest(blueprint_dir, str(blueprint_dir))
-    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
-    workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
-    workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v1" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
+    metadata = (
+        manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    )
+    workflow = (
+        manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
+    )
+    workflow_manifest = (
+        manifest.get("apiVersion") == "mn.workflow/v1"
+        or manifest.get("kind") == "Workflow"
+        or isinstance(manifest.get("workflow"), dict)
+    )
     blueprint_id = str(
         metadata.get("blueprint_id")
         or manifest.get("id")
@@ -957,6 +1075,28 @@ def _run_local_folder(
     replace_existing_run: bool = False,
 ) -> None:
     bundle_dir = Path(folder).expanduser()
+    if bundle_dir.is_file() and bundle_dir.suffix.lower() == ".zip":
+        from mn_sdk.blueprints import open_blueprint
+
+        with open_blueprint(bundle_dir) as package:
+            return _run_local_folder(
+                str(package.root),
+                run_id=run_id,
+                follow_seconds=follow_seconds,
+                force=force,
+                config_overrides=config_overrides,
+                detached=detached,
+                web_ui=web_ui,
+                auto_schedule=auto_schedule,
+                schedule=schedule,
+                fake_llm=fake_llm,
+                fake_skills=fake_skills,
+                benchmark=benchmark,
+                debug=debug,
+                job_id=job_id,
+                owner_node=owner_node,
+                replace_existing_run=replace_existing_run,
+            )
     manifest = _load_blueprint_manifest(bundle_dir, str(bundle_dir))
     if _is_python_source_blueprint(manifest):
         run_local_blueprint_folder(
@@ -1003,7 +1143,9 @@ def _run_local_folder(
         )
     config_overrides = _deep_merge(
         config_overrides,
-        _testing_config_overrides(fake_skills=fake_skills, benchmark=benchmark, debug=debug),
+        _testing_config_overrides(
+            fake_skills=fake_skills, benchmark=benchmark, debug=debug
+        ),
     )
     _run_bundle(
         str(bundle_dir),
@@ -1067,7 +1209,9 @@ def doctor_catalog_blueprint(
             break
 
     if not target_bp:
-        print_error(console, f"Blueprint '{blueprint_name}' was not found in the index.")
+        print_error(
+            console, f"Blueprint '{blueprint_name}' was not found in the index."
+        )
         raise typer.Exit(2)
 
     bp_path = Path(storage_dir) / str(target_bp.get("path"))
@@ -1141,7 +1285,9 @@ def _doctor_resolved_blueprint(
     debug: bool,
 ) -> dict[str, Any] | None:
     shared_run_id = _make_blueprint_run_id(blueprint_id)
-    bundle_path = _prepare_blueprint_bundle_for_run(blueprint_dir, manifest, shared_run_id)
+    bundle_path = _prepare_blueprint_bundle_for_run(
+        blueprint_dir, manifest, shared_run_id
+    )
     config_overrides = _collect_init_config_review_overrides(bundle_path, manifest)
     return _doctor_bundle(
         str(bundle_path),
@@ -1197,9 +1343,7 @@ def _doctor_local_folder(
 
     blueprint_id = _blueprint_id_from_manifest(manifest, fallback=bundle_dir.name)
     shared_run_id = _make_blueprint_run_id(blueprint_id)
-    config_overrides = (
-        _collect_init_config_review_overrides(bundle_dir, manifest)
-    )
+    config_overrides = _collect_init_config_review_overrides(bundle_dir, manifest)
     return _doctor_bundle(
         str(bundle_dir),
         env_overrides={
@@ -1231,9 +1375,17 @@ def _blueprint_id_from_manifest(
     fallback: str,
     catalog_id: str = "",
 ) -> str:
-    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
-    workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
-    workflow_manifest = manifest.get("apiVersion") == "mn.workflow/v1" or manifest.get("kind") == "Workflow" or isinstance(manifest.get("workflow"), dict)
+    metadata = (
+        manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    )
+    workflow = (
+        manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
+    )
+    workflow_manifest = (
+        manifest.get("apiVersion") == "mn.workflow/v1"
+        or manifest.get("kind") == "Workflow"
+        or isinstance(manifest.get("workflow"), dict)
+    )
     return str(
         metadata.get("blueprint_id")
         or catalog_id
@@ -1277,7 +1429,9 @@ def blueprint_doctor(
     ] = False,
     revision: Annotated[
         str | None,
-        typer.Option("--revision", help="Checkout a specific git revision before diagnosing."),
+        typer.Option(
+            "--revision", help="Checkout a specific git revision before diagnosing."
+        ),
     ] = None,
     json_output: Annotated[
         bool,
@@ -1289,23 +1443,37 @@ def blueprint_doctor(
     ] = 3.0,
     check_only: Annotated[
         bool,
-        typer.Option("--check-only", help="Validate declared dependencies without preparing Docker, OpenShell, or native environments."),
+        typer.Option(
+            "--check-only",
+            help="Validate declared dependencies without preparing Docker, OpenShell, or native environments.",
+        ),
     ] = False,
     no_llm_call: Annotated[
         bool,
-        typer.Option("--no-llm-call", help="Skip tiny LLM and embedding smoke requests."),
+        typer.Option(
+            "--no-llm-call", help="Skip tiny LLM and embedding smoke requests."
+        ),
     ] = False,
     cleanup: Annotated[
         bool,
-        typer.Option("--cleanup", help="Clean up doctor-created DockerWorker resources after probing."),
+        typer.Option(
+            "--cleanup",
+            help="Clean up doctor-created DockerWorker resources after probing.",
+        ),
     ] = False,
     force: Annotated[
         bool,
-        typer.Option("--force", help="Continue preparation even if runtime requirement checks fail."),
+        typer.Option(
+            "--force",
+            help="Continue preparation even if runtime requirement checks fail.",
+        ),
     ] = False,
     debug: Annotated[
         bool,
-        typer.Option("--debug", help="Enable verbose blueprint runtime debug environment variables."),
+        typer.Option(
+            "--debug",
+            help="Enable verbose blueprint runtime debug environment variables.",
+        ),
     ] = False,
 ) -> None:
     """Diagnose a catalog blueprint or local folder without submitting a job."""
@@ -1387,7 +1555,9 @@ def blueprint_run(
     ] = False,
     revision: Annotated[
         str | None,
-        typer.Option("--revision", help="Checkout a specific git revision before running."),
+        typer.Option(
+            "--revision", help="Checkout a specific git revision before running."
+        ),
     ] = None,
     follow_seconds: Annotated[
         float | None,
@@ -1420,7 +1590,9 @@ def blueprint_run(
     ] = False,
     yes: Annotated[
         bool,
-        typer.Option("--yes", "-y", help="Confirm service-run replacement without prompting."),
+        typer.Option(
+            "--yes", "-y", help="Confirm service-run replacement without prompting."
+        ),
     ] = False,
     detached: Annotated[
         bool,
@@ -1586,10 +1758,22 @@ def blueprint_run(
 
 def blueprint_install(
     ctx: typer.Context,
-    blueprint_id: str | None = typer.Argument(None, help="Blueprint ID to install. Omit to install the blueprint library."),
-    source: str | None = typer.Option(None, "--source", help="Blueprint repository URL or local path."),
-    revision: str | None = typer.Option(None, "--revision", help="Git revision to use when installing a blueprint by ID."),
-    force: bool = typer.Option(False, "--force", help="Replace cached library storage, or force model install compatibility for a blueprint."),
+    blueprint_id: str | None = typer.Argument(
+        None, help="Blueprint ID to install. Omit to install the blueprint library."
+    ),
+    source: str | None = typer.Option(
+        None, "--source", help="Blueprint repository URL or local path."
+    ),
+    revision: str | None = typer.Option(
+        None,
+        "--revision",
+        help="Git revision to use when installing a blueprint by ID.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Replace cached library storage, or force model install compatibility for a blueprint.",
+    ),
 ):
     """Install the blueprint library or one blueprint plus its required runtime models."""
     if blueprint_id:
@@ -1604,7 +1788,9 @@ def blueprint_install(
 
     blueprint_repo = _context_blueprint_repo(ctx)
     try:
-        repo_source, uses_default_repo = _resolved_blueprint_source(source=source, blueprint_repo=blueprint_repo)
+        repo_source, uses_default_repo = _resolved_blueprint_source(
+            source=source, blueprint_repo=blueprint_repo
+        )
     except ValueError as exc:
         print_error(console, exc)
         raise typer.Exit(1)
@@ -1616,7 +1802,9 @@ def blueprint_install(
         else _blueprint_storage_dir_for_source(repo_source)
     )
     if storage_dir.exists() and not force:
-        console.print(f"[yellow]Blueprint storage already exists at {storage_dir}. Use --force to replace it.[/yellow]")
+        console.print(
+            f"[yellow]Blueprint storage already exists at {storage_dir}. Use --force to replace it.[/yellow]"
+        )
         return
     if storage_dir.exists() and force:
         import shutil
@@ -1663,7 +1851,9 @@ def _install_catalog_blueprint_with_models(
     manifest = _read_json_object(bundle_root / "manifest.json")
     config = _load_blueprint_config(bundle_root)
     try:
-        install_source, _uses_default_repo = _resolved_blueprint_source(source=source, blueprint_repo=blueprint_repo)
+        install_source, _uses_default_repo = _resolved_blueprint_source(
+            source=source, blueprint_repo=blueprint_repo
+        )
     except ValueError as exc:
         print_error(console, exc)
         raise typer.Exit(1)
@@ -1689,7 +1879,11 @@ def _install_catalog_blueprint_with_models(
     print_success_confirmation(
         console,
         "Blueprint add",
-        details=[("Blueprint", blueprint_id), ("Storage", storage_dir), ("Bundle", bundle_root)],
+        details=[
+            ("Blueprint", blueprint_id),
+            ("Storage", storage_dir),
+            ("Bundle", bundle_root),
+        ],
         next_steps=f"mn blueprint run {blueprint_id}",
     )
     _print_model_install_summary(model_summary)
@@ -1744,7 +1938,9 @@ def _print_model_install_start(model: dict[str, Any]) -> None:
     label = str(model.get("id") or model.get("model") or "runtime model")
     docker_model = str(model.get("model") or "")
     backend = str(model.get("backend") or "auto")
-    detail = f"{label} ({docker_model})" if docker_model and docker_model != label else label
+    detail = (
+        f"{label} ({docker_model})" if docker_model and docker_model != label else label
+    )
     console.print(
         f"[yellow]Runtime model {detail} is not installed. "
         f"Installing with backend {backend}; this may take a few minutes the first time.[/yellow]"
@@ -1759,10 +1955,20 @@ def _install_model_with_progress(
     context_size: Any,
     force: bool,
 ) -> dict[str, Any]:
-    label = str(model.get("id") or model.get("model") or entry.get("id") or entry.get("model") or "runtime model")
+    label = str(
+        model.get("id")
+        or model.get("model")
+        or entry.get("id")
+        or entry.get("model")
+        or "runtime model"
+    )
     docker_model = str(model.get("model") or entry.get("model") or "")
-    detail = f"{label} ({docker_model})" if docker_model and docker_model != label else label
-    console.print(f"[cyan]Installing runtime model {detail} with Docker Model Runner...[/cyan]")
+    detail = (
+        f"{label} ({docker_model})" if docker_model and docker_model != label else label
+    )
+    console.print(
+        f"[cyan]Installing runtime model {detail} with Docker Model Runner...[/cyan]"
+    )
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -1791,7 +1997,9 @@ def _print_model_install_summary(summary: dict[str, Any]) -> None:
             status="none declared",
         )
         return
-    table = Table(title="Blueprint model dependencies", show_header=True, header_style="bold")
+    table = Table(
+        title="Blueprint model dependencies", show_header=True, header_style="bold"
+    )
     table.add_column("Model")
     table.add_column("Provider")
     table.add_column("Status")
@@ -1863,10 +2071,14 @@ def _uninstall_catalog_blueprint(
         if orphaned:
             console.print(f"[yellow]Kept {len(orphaned)} orphaned model(s).[/yellow]")
         return
-    _remove_or_prompt_for_orphaned_models(orphaned, remove_models=remove_models, dry_run=dry_run)
+    _remove_or_prompt_for_orphaned_models(
+        orphaned, remove_models=remove_models, dry_run=dry_run
+    )
 
 
-def _blueprint_entry_from_storage(storage_dir: Path, blueprint_id: str) -> dict[str, Any]:
+def _blueprint_entry_from_storage(
+    storage_dir: Path, blueprint_id: str
+) -> dict[str, Any]:
     try:
         entries = _load_blueprint_index(storage_dir / "index.json", require_paths=True)
     except BlueprintIndexError as exc:
@@ -1875,7 +2087,11 @@ def _blueprint_entry_from_storage(storage_dir: Path, blueprint_id: str) -> dict[
     for entry in entries:
         if entry.get("id") == blueprint_id:
             return entry
-    print_error(console, f"Blueprint {blueprint_id!r} was not found in {storage_dir}.", code="MN_NOT_FOUND")
+    print_error(
+        console,
+        f"Blueprint {blueprint_id!r} was not found in {storage_dir}.",
+        code="MN_NOT_FOUND",
+    )
     raise typer.Exit(2)
 
 
@@ -1883,7 +2099,11 @@ def _blueprint_bundle_root_from_entry(storage_dir: Path, entry: dict[str, Any]) 
     path = Path(str(entry.get("path") or entry.get("id") or ""))
     bundle_root = path if path.is_absolute() else storage_dir / path
     if not bundle_root.is_dir():
-        print_error(console, f"Blueprint bundle not found at {bundle_root}.", code="MN_NOT_FOUND")
+        print_error(
+            console,
+            f"Blueprint bundle not found at {bundle_root}.",
+            code="MN_NOT_FOUND",
+        )
         raise typer.Exit(2)
     return bundle_root
 
@@ -1904,7 +2124,11 @@ def _read_json_object(path: Path) -> dict[str, Any]:
 
 def _blueprint_installs_dir() -> Path:
     configured = os.getenv("MN_BLUEPRINT_INSTALLS_DIR")
-    return Path(configured).expanduser() if configured else resolve_mn_home() / "blueprint_installs"
+    return (
+        Path(configured).expanduser()
+        if configured
+        else resolve_mn_home() / "blueprint_installs"
+    )
 
 
 def _record_blueprint_install(
@@ -1934,7 +2158,9 @@ def _record_blueprint_install(
         "models": model_summary.get("models") or [],
     }
     target = install_dir / f"{blueprint_id}.json"
-    target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    target.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return target
 
 
@@ -1966,12 +2192,16 @@ def _archive_blueprint_install(
     if dry_run:
         return archive_path
     archive_dir.mkdir(parents=True, exist_ok=True)
-    archive_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    archive_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     record_path.unlink(missing_ok=True)
     return archive_path
 
 
-def _orphaned_models_after_owner_removal(blueprint_id: str, *, dry_run: bool) -> list[dict[str, Any]]:
+def _orphaned_models_after_owner_removal(
+    blueprint_id: str, *, dry_run: bool
+) -> list[dict[str, Any]]:
     if not dry_run:
         return _remove_model_owner(blueprint_id)
     ledger = _load_model_ownership()
@@ -1981,7 +2211,12 @@ def _orphaned_models_after_owner_removal(blueprint_id: str, *, dry_run: bool) ->
             continue
         owners = dict(record.get("owners") or {})
         owners.pop(blueprint_id, None)
-        if not owners and not record.get("manual") and str(record.get("provider") or "docker_model_runner") == "docker_model_runner":
+        if (
+            not owners
+            and not record.get("manual")
+            and str(record.get("provider") or "docker_model_runner")
+            == "docker_model_runner"
+        ):
             projected = dict(record)
             projected["owners"] = {}
             orphaned.append(projected)
@@ -2038,9 +2273,15 @@ def _remove_or_prompt_for_orphaned_models(
 
 def blueprint_update(
     ctx: typer.Context,
-    blueprint_id: str | None = typer.Argument(None, help="Blueprint ID to refresh; omit only with --all."),
-    all_: bool = typer.Option(False, "--all", help="Refresh the complete blueprint catalog."),
-    source: str | None = typer.Option(None, "--source", help="Cached blueprint repo/path to update."),
+    blueprint_id: str | None = typer.Argument(
+        None, help="Blueprint ID to refresh; omit only with --all."
+    ),
+    all_: bool = typer.Option(
+        False, "--all", help="Refresh the complete blueprint catalog."
+    ),
+    source: str | None = typer.Option(
+        None, "--source", help="Cached blueprint repo/path to update."
+    ),
 ):
     """Refresh one blueprint or the complete catalog and its dependencies."""
     if bool(blueprint_id) == bool(all_):
@@ -2052,19 +2293,26 @@ def blueprint_update(
         storage_dir = _blueprint_storage_dir_for_source(blueprint_repo)
     else:
         try:
-            repo_source, uses_default_repo = _resolved_blueprint_source(source=None, blueprint_repo=None)
+            repo_source, uses_default_repo = _resolved_blueprint_source(
+                source=None, blueprint_repo=None
+            )
         except ValueError as exc:
             print_error(console, exc)
             raise typer.Exit(1)
-        storage_dir = _default_blueprint_storage_dir() if uses_default_repo else _blueprint_storage_dir_for_source(repo_source)
+        storage_dir = (
+            _default_blueprint_storage_dir()
+            if uses_default_repo
+            else _blueprint_storage_dir_for_source(repo_source)
+        )
     if not storage_dir.exists():
-        print_error(console, f"Blueprint storage not found at {storage_dir}. Run 'mn blueprint add {blueprint_id or 'ID'}' first.")
+        print_error(
+            console,
+            f"Blueprint storage not found at {storage_dir}. Run 'mn blueprint add {blueprint_id or 'ID'}' first.",
+        )
         raise typer.Exit(2)
     before_ids = _blueprint_ids_from_storage(storage_dir)
     installed_ids = {
-        path.stem
-        for path in _blueprint_installs_dir().glob("*.json")
-        if path.is_file()
+        path.stem for path in _blueprint_installs_dir().glob("*.json") if path.is_file()
     }
     _git_pull(storage_dir)
     try:
@@ -2074,7 +2322,9 @@ def blueprint_update(
         raise typer.Exit(1)
     after_ids = _blueprint_ids_from_storage(storage_dir)
     if blueprint_id and blueprint_id not in after_ids:
-        print_error(console, f"Blueprint {blueprint_id!r} was not found.", code="MN_NOT_FOUND")
+        print_error(
+            console, f"Blueprint {blueprint_id!r} was not found.", code="MN_NOT_FOUND"
+        )
         raise typer.Exit(2)
     removed_ids = before_ids - after_ids
     cleanup_summary = _cleanup_catalog_resources(
@@ -2110,17 +2360,53 @@ def blueprint_update(
 
 def blueprint_cleanup(
     ctx: typer.Context,
-    blueprint_id: str | None = typer.Option(None, "--blueprint-id", help="Clean resources for one blueprint ID."),
-    source: str | None = typer.Option(None, "--source", help="Blueprint storage path used to decide which resources are dead."),
-    python_envs_dir: str | None = typer.Option(None, "--python-envs-dir", help="Override the blueprint Python environment cache root."),
-    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the shared blueprint run store root."),
-    generated_bundles_dir: str | None = typer.Option(None, "--generated-bundles-dir", help="Override the generated Python workflow bundle cache root."),
-    bundle_cache_dir: str | None = typer.Option(None, "--bundle-cache-dir", help="Override the MirrorNeuron local bundle cache root."),
-    include_files: bool = typer.Option(True, "--files/--no-files", help="Also remove blueprint-owned run records, generated bundles, and local bundle cache entries."),
-    include_docker: bool = typer.Option(True, "--docker/--no-docker", help="Also remove Docker resources labelled for removed blueprints."),
-    include_dead: bool = typer.Option(True, "--dead/--no-dead", help="Remove stale incomplete resources and resources for blueprints no longer in storage."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be removed without deleting anything."),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Confirm cleanup without prompting."),
+    blueprint_id: str | None = typer.Option(
+        None, "--blueprint-id", help="Clean resources for one blueprint ID."
+    ),
+    source: str | None = typer.Option(
+        None,
+        "--source",
+        help="Blueprint storage path used to decide which resources are dead.",
+    ),
+    python_envs_dir: str | None = typer.Option(
+        None,
+        "--python-envs-dir",
+        help="Override the blueprint Python environment cache root.",
+    ),
+    runs_root: str | None = typer.Option(
+        None, "--runs-root", help="Override the shared blueprint run store root."
+    ),
+    generated_bundles_dir: str | None = typer.Option(
+        None,
+        "--generated-bundles-dir",
+        help="Override the generated Python workflow bundle cache root.",
+    ),
+    bundle_cache_dir: str | None = typer.Option(
+        None,
+        "--bundle-cache-dir",
+        help="Override the MirrorNeuron local bundle cache root.",
+    ),
+    include_files: bool = typer.Option(
+        True,
+        "--files/--no-files",
+        help="Also remove blueprint-owned run records, generated bundles, and local bundle cache entries.",
+    ),
+    include_docker: bool = typer.Option(
+        True,
+        "--docker/--no-docker",
+        help="Also remove Docker resources labelled for removed blueprints.",
+    ),
+    include_dead: bool = typer.Option(
+        True,
+        "--dead/--no-dead",
+        help="Remove stale incomplete resources and resources for blueprints no longer in storage.",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would be removed without deleting anything."
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Confirm cleanup without prompting."
+    ),
 ):
     """Clean blueprint-owned Python envs, ~/.mn files, Docker resources, and stale leftovers."""
     if not dry_run:
@@ -2136,15 +2422,23 @@ def blueprint_cleanup(
         storage_dir = _resolve_blueprint_storage_for_cleanup(ctx, source)
         active_ids = _blueprint_ids_from_storage(storage_dir)
         if not active_ids:
-            console.print(f"[yellow]No readable blueprint index found at {storage_dir}; only stale incomplete resources will be cleaned.[/yellow]")
+            console.print(
+                f"[yellow]No readable blueprint index found at {storage_dir}; only stale incomplete resources will be cleaned.[/yellow]"
+            )
 
     summary = _cleanup_blueprint_resources(
         blueprint_ids=explicit_ids,
         active_blueprint_ids=active_ids,
-        python_envs_dir=Path(python_envs_dir).expanduser() if python_envs_dir else _default_python_envs_dir(),
+        python_envs_dir=Path(python_envs_dir).expanduser()
+        if python_envs_dir
+        else _default_python_envs_dir(),
         runs_root=Path(runs_root).expanduser() if runs_root else _default_runs_root(),
-        generated_bundles_dir=Path(generated_bundles_dir).expanduser() if generated_bundles_dir else _default_generated_bundles_dir(),
-        bundle_cache_dir=Path(bundle_cache_dir).expanduser() if bundle_cache_dir else _default_bundle_cache_dir(),
+        generated_bundles_dir=Path(generated_bundles_dir).expanduser()
+        if generated_bundles_dir
+        else _default_generated_bundles_dir(),
+        bundle_cache_dir=Path(bundle_cache_dir).expanduser()
+        if bundle_cache_dir
+        else _default_bundle_cache_dir(),
         include_dead=include_dead,
         include_docker=include_docker,
         include_files=include_files,
@@ -2155,12 +2449,28 @@ def blueprint_cleanup(
 
 def blueprint_uninstall(
     ctx: typer.Context,
-    blueprint_id: str | None = typer.Argument(None, help="Blueprint ID to uninstall. Omit to remove cached blueprint storage."),
-    source: str | None = typer.Option(None, "--source", help="Cached blueprint storage path to remove."),
-    keep_resources: bool = typer.Option(False, "--keep-resources", help="Remove blueprint files but keep cached runtime resources."),
-    keep_models: bool = typer.Option(False, "--keep-models", help="Keep orphaned models after removing this blueprint."),
-    remove_models: bool = typer.Option(False, "--remove-models", help="Remove orphaned models without prompting."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be removed without deleting anything."),
+    blueprint_id: str | None = typer.Argument(
+        None, help="Blueprint ID to uninstall. Omit to remove cached blueprint storage."
+    ),
+    source: str | None = typer.Option(
+        None, "--source", help="Cached blueprint storage path to remove."
+    ),
+    keep_resources: bool = typer.Option(
+        False,
+        "--keep-resources",
+        help="Remove blueprint files but keep cached runtime resources.",
+    ),
+    keep_models: bool = typer.Option(
+        False,
+        "--keep-models",
+        help="Keep orphaned models after removing this blueprint.",
+    ),
+    remove_models: bool = typer.Option(
+        False, "--remove-models", help="Remove orphaned models without prompting."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would be removed without deleting anything."
+    ),
 ):
     """Remove cached blueprint storage and its owned runtime resources."""
     if keep_models and remove_models:
@@ -2211,14 +2521,22 @@ def blueprint_uninstall(
     _print_cleanup_summary(summary)
 
 
-def _resolve_blueprint_storage_for_cleanup(ctx: typer.Context, source: str | None) -> Path:
+def _resolve_blueprint_storage_for_cleanup(
+    ctx: typer.Context, source: str | None
+) -> Path:
     if source:
         return Path(source).expanduser()
     blueprint_repo = _context_blueprint_repo(ctx)
     if blueprint_repo:
         return _blueprint_storage_dir_for_source(blueprint_repo)
-    repo_source, uses_default_repo = _resolved_blueprint_source(source=None, blueprint_repo=None)
-    return _default_blueprint_storage_dir() if uses_default_repo else _blueprint_storage_dir_for_source(repo_source)
+    repo_source, uses_default_repo = _resolved_blueprint_source(
+        source=None, blueprint_repo=None
+    )
+    return (
+        _default_blueprint_storage_dir()
+        if uses_default_repo
+        else _blueprint_storage_dir_for_source(repo_source)
+    )
 
 
 def _blueprint_ids_from_storage(storage_dir: Path) -> set[str]:
@@ -2243,9 +2561,16 @@ def _blueprint_ids_from_storage(storage_dir: Path) -> set[str]:
                     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
                 except Exception:
                     continue
-                metadata = manifest.get("metadata") if isinstance(manifest, dict) else {}
-                manifest_blueprint_id = metadata.get("blueprint_id") if isinstance(metadata, dict) else None
-                if isinstance(manifest_blueprint_id, str) and manifest_blueprint_id.strip():
+                metadata = (
+                    manifest.get("metadata") if isinstance(manifest, dict) else {}
+                )
+                manifest_blueprint_id = (
+                    metadata.get("blueprint_id") if isinstance(metadata, dict) else None
+                )
+                if (
+                    isinstance(manifest_blueprint_id, str)
+                    and manifest_blueprint_id.strip()
+                ):
                     ids.add(manifest_blueprint_id.strip())
     return ids
 
@@ -2283,7 +2608,14 @@ def _print_cleanup_summary(summary: dict[str, Any] | None) -> None:
     process_removed = summary.get("process_removed") or []
     errors = summary.get("errors") or []
     dry_run = bool(summary.get("dry_run"))
-    if python_removed or run_removed or generated_removed or bundle_removed or docker_removed or process_removed:
+    if (
+        python_removed
+        or run_removed
+        or generated_removed
+        or bundle_removed
+        or docker_removed
+        or process_removed
+    ):
         action = "Blueprint cleanup dry run" if dry_run else "Blueprint cleanup"
         printer = print_confirmed if dry_run else print_success_confirmation
         printer(
@@ -2310,18 +2642,32 @@ def _print_cleanup_summary(summary: dict[str, Any] | None) -> None:
 
 
 def blueprint_monitor(
-    follow: bool = typer.Option(False, "--follow", "-f", help="Refresh the run table until interrupted."),
-    blueprint_id: str | None = typer.Option(None, "--blueprint-id", help="Only show runs for one blueprint ID."),
-    max_runs: int = typer.Option(20, "--max-runs", help="Maximum number of runs to display."),
-    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
-    interval: float = typer.Option(2.0, "--interval", help="Refresh interval in seconds when --follow is enabled."),
+    follow: bool = typer.Option(
+        False, "--follow", "-f", help="Refresh the run table until interrupted."
+    ),
+    blueprint_id: str | None = typer.Option(
+        None, "--blueprint-id", help="Only show runs for one blueprint ID."
+    ),
+    max_runs: int = typer.Option(
+        20, "--max-runs", help="Maximum number of runs to display."
+    ),
+    runs_root: str | None = typer.Option(
+        None, "--runs-root", help="Override the default $MN_HOME/runs directory."
+    ),
+    interval: float = typer.Option(
+        2.0, "--interval", help="Refresh interval in seconds when --follow is enabled."
+    ),
 ):
     """Show recent blueprint runs from the shared run store."""
     list_runs, _, _ = _load_observability_api()
     try:
         while True:
-            runs = list_runs(runs_root=runs_root, blueprint_id=blueprint_id, limit=max_runs)
-            console.print(f"[bold]Blueprint runs[/bold] {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            runs = list_runs(
+                runs_root=runs_root, blueprint_id=blueprint_id, limit=max_runs
+            )
+            console.print(
+                f"[bold]Blueprint runs[/bold] {time.strftime('%Y-%m-%d %H:%M:%S')}"
+            )
             _print_run_table(runs)
             if not follow:
                 return
@@ -2333,9 +2679,15 @@ def blueprint_monitor(
 def blueprint_tail(
     run_id: str,
     lines: int = typer.Option(20, "--lines", "-n", help="Number of events to show."),
-    follow: bool = typer.Option(False, "--follow", "-f", help="Continue printing new events until interrupted."),
-    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
-    interval: float = typer.Option(1.0, "--interval", help="Polling interval in seconds when --follow is enabled."),
+    follow: bool = typer.Option(
+        False, "--follow", "-f", help="Continue printing new events until interrupted."
+    ),
+    runs_root: str | None = typer.Option(
+        None, "--runs-root", help="Override the default $MN_HOME/runs directory."
+    ),
+    interval: float = typer.Option(
+        1.0, "--interval", help="Polling interval in seconds when --follow is enabled."
+    ),
 ):
     """Print the event stream for one blueprint run."""
     _load_run_or_exit(run_id, runs_root)
@@ -2361,7 +2713,9 @@ def blueprint_tail(
                         continue
                     selected.append(event)
                     seen_ids.add(cursor)
-                    last_ts = str(event.get("ts") or event.get("timestamp") or last_ts or "")
+                    last_ts = str(
+                        event.get("ts") or event.get("timestamp") or last_ts or ""
+                    )
                 _print_events(selected)
             if not follow:
                 return
@@ -2375,11 +2729,21 @@ def blueprint_tail(
 
 def blueprint_logs(
     run_id: str,
-    lines: int = typer.Option(50, "--lines", "-n", help="Number of log records to show."),
-    level: str | None = typer.Option(None, "--level", help="Minimum log level to show."),
-    follow: bool = typer.Option(False, "--follow", "-f", help="Continue printing new logs until interrupted."),
-    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
-    interval: float = typer.Option(1.0, "--interval", help="Polling interval in seconds when --follow is enabled."),
+    lines: int = typer.Option(
+        50, "--lines", "-n", help="Number of log records to show."
+    ),
+    level: str | None = typer.Option(
+        None, "--level", help="Minimum log level to show."
+    ),
+    follow: bool = typer.Option(
+        False, "--follow", "-f", help="Continue printing new logs until interrupted."
+    ),
+    runs_root: str | None = typer.Option(
+        None, "--runs-root", help="Override the default $MN_HOME/runs directory."
+    ),
+    interval: float = typer.Option(
+        1.0, "--interval", help="Polling interval in seconds when --follow is enabled."
+    ),
 ):
     """Print structured logs for one blueprint run."""
     _load_run_or_exit(run_id, runs_root)
@@ -2404,7 +2768,9 @@ def blueprint_logs(
                     continue
                 selected.append(record)
                 seen_ids.add(cursor)
-                last_ts = str(record.get("ts") or record.get("timestamp") or last_ts or "")
+                last_ts = str(
+                    record.get("ts") or record.get("timestamp") or last_ts or ""
+                )
             _print_log_records(selected)
             if not follow:
                 return
@@ -2415,12 +2781,29 @@ def blueprint_logs(
 
 def blueprint_stream(
     run_id: str,
-    channels: str = typer.Option("events,logs,human,resources", "--channels", help="Comma-separated channels to print."),
-    lines: int = typer.Option(100, "--lines", "-n", help="Number of stream records to show."),
-    level: str | None = typer.Option(None, "--level", help="Minimum log level when logs are included."),
-    follow: bool = typer.Option(False, "--follow", "-f", help="Continue printing new stream records until interrupted."),
-    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
-    interval: float = typer.Option(1.0, "--interval", help="Polling interval in seconds when --follow is enabled."),
+    channels: str = typer.Option(
+        "events,logs,human,resources",
+        "--channels",
+        help="Comma-separated channels to print.",
+    ),
+    lines: int = typer.Option(
+        100, "--lines", "-n", help="Number of stream records to show."
+    ),
+    level: str | None = typer.Option(
+        None, "--level", help="Minimum log level when logs are included."
+    ),
+    follow: bool = typer.Option(
+        False,
+        "--follow",
+        "-f",
+        help="Continue printing new stream records until interrupted.",
+    ),
+    runs_root: str | None = typer.Option(
+        None, "--runs-root", help="Override the default $MN_HOME/runs directory."
+    ),
+    interval: float = typer.Option(
+        1.0, "--interval", help="Polling interval in seconds when --follow is enabled."
+    ),
 ):
     """Print merged blueprint events, logs, human events, and resource samples."""
     _load_run_or_exit(run_id, runs_root)
@@ -2459,11 +2842,21 @@ def blueprint_stream(
 
 def blueprint_resources(
     run_id: str,
-    window: str = typer.Option("24h", "--window", help="History window, for example 24h."),
-    bucket: str = typer.Option("1h", "--bucket", help="Aggregation bucket, for example 1h."),
-    live: bool = typer.Option(False, "--live", help="Refresh resource usage until interrupted."),
-    interval: float = typer.Option(5.0, "--interval", help="Live refresh interval in seconds."),
-    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
+    window: str = typer.Option(
+        "24h", "--window", help="History window, for example 24h."
+    ),
+    bucket: str = typer.Option(
+        "1h", "--bucket", help="Aggregation bucket, for example 1h."
+    ),
+    live: bool = typer.Option(
+        False, "--live", help="Refresh resource usage until interrupted."
+    ),
+    interval: float = typer.Option(
+        5.0, "--interval", help="Live refresh interval in seconds."
+    ),
+    runs_root: str | None = typer.Option(
+        None, "--runs-root", help="Override the default $MN_HOME/runs directory."
+    ),
 ):
     """Show CPU, GPU, memory, and LLM token usage for one blueprint run."""
     _load_run_or_exit(run_id, runs_root)
@@ -2474,7 +2867,12 @@ def blueprint_resources(
     live_interval = max(float(interval), 1.0)
     try:
         while True:
-            summary = read_run_resources(run_id, runs_root=runs_root, window_hours=window_hours, bucket_seconds=bucket_seconds)
+            summary = read_run_resources(
+                run_id,
+                runs_root=runs_root,
+                window_hours=window_hours,
+                bucket_seconds=bucket_seconds,
+            )
             if live and json_enabled():
                 emit_stream_record("snapshot", data=summary)
             else:
@@ -2491,12 +2889,20 @@ def blueprint_resources(
 
 
 def blueprint_human_command(
-    args: list[str] = typer.Argument(None, help="Run ID, or respond/ack subcommand arguments."),
-    pending: bool = typer.Option(False, "--pending", help="Show only pending human input requests."),
-    decision: str | None = typer.Option(None, "--decision", help="Decision for respond."),
+    args: list[str] = typer.Argument(
+        None, help="Run ID, or respond/ack subcommand arguments."
+    ),
+    pending: bool = typer.Option(
+        False, "--pending", help="Show only pending human input requests."
+    ),
+    decision: str | None = typer.Option(
+        None, "--decision", help="Decision for respond."
+    ),
     notes: str = typer.Option("", "--notes", help="Optional reviewer notes."),
     reviewer: str = typer.Option("cli", "--reviewer", help="Reviewer identity label."),
-    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
+    runs_root: str | None = typer.Option(
+        None, "--runs-root", help="Override the default $MN_HOME/runs directory."
+    ),
 ):
     """Inspect and respond to human collaboration events."""
     args = args or []
@@ -2507,13 +2913,22 @@ def blueprint_human_command(
         if not decision:
             console.print("[red]--decision is required for respond.[/red]")
             raise typer.Exit(1)
-        return blueprint_human_respond(args[1], args[2], decision=decision, notes=notes, reviewer=reviewer, runs_root=runs_root)
+        return blueprint_human_respond(
+            args[1],
+            args[2],
+            decision=decision,
+            notes=notes,
+            reviewer=reviewer,
+            runs_root=runs_root,
+        )
 
     if args and args[0] == "ack":
         if len(args) < 3:
             console.print("[red]ack expects run_id and notice_id.[/red]")
             raise typer.Exit(1)
-        return blueprint_human_ack(args[1], args[2], reviewer=reviewer, runs_root=runs_root)
+        return blueprint_human_ack(
+            args[1], args[2], reviewer=reviewer, runs_root=runs_root
+        )
 
     run_id = args[0] if args else None
     if not run_id:
@@ -2533,8 +2948,12 @@ def blueprint_human_command(
 def blueprint_human(
     ctx: typer.Context,
     run_id: str | None = typer.Argument(None, help="Blueprint run ID."),
-    pending: bool = typer.Option(False, "--pending", help="Show only pending human input requests."),
-    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
+    pending: bool = typer.Option(
+        False, "--pending", help="Show only pending human input requests."
+    ),
+    runs_root: str | None = typer.Option(
+        None, "--runs-root", help="Override the default $MN_HOME/runs directory."
+    ),
 ):
     """Show human collaboration events for one blueprint run."""
     if ctx.invoked_subcommand is not None:
@@ -2558,10 +2977,14 @@ def blueprint_human(
 def blueprint_human_respond(
     run_id: str,
     request_id: str,
-    decision: str = typer.Option(..., "--decision", help="Decision value, such as approve, revise, or reject."),
+    decision: str = typer.Option(
+        ..., "--decision", help="Decision value, such as approve, revise, or reject."
+    ),
     notes: str = typer.Option("", "--notes", help="Optional reviewer notes."),
     reviewer: str = typer.Option("cli", "--reviewer", help="Reviewer identity label."),
-    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
+    runs_root: str | None = typer.Option(
+        None, "--runs-root", help="Override the default $MN_HOME/runs directory."
+    ),
 ):
     """Record a response to a human input request."""
     _load_run_or_exit(run_id, runs_root)
@@ -2580,7 +3003,10 @@ def blueprint_human_respond(
             ("Run ID", run_id),
             ("Request ID", request_id),
             ("Decision", decision),
-            ("Approved", payload.get("approved") if isinstance(payload, dict) else None),
+            (
+                "Approved",
+                payload.get("approved") if isinstance(payload, dict) else None,
+            ),
         ],
     )
 
@@ -2589,12 +3015,16 @@ def blueprint_human_ack(
     run_id: str,
     notice_id: str,
     reviewer: str = typer.Option("cli", "--reviewer", help="Reviewer identity label."),
-    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
+    runs_root: str | None = typer.Option(
+        None, "--runs-root", help="Override the default $MN_HOME/runs directory."
+    ),
 ):
     """Acknowledge a human notice."""
     _load_run_or_exit(run_id, runs_root)
     tools = _load_observability_tools()
-    tools["acknowledge_human_notice"](run_id, notice_id, {"reviewer": reviewer}, runs_root=runs_root)
+    tools["acknowledge_human_notice"](
+        run_id, notice_id, {"reviewer": reviewer}, runs_root=runs_root
+    )
     print_success_confirmation(
         console,
         "Human notice acknowledgement",
@@ -2605,7 +3035,9 @@ def blueprint_human_ack(
 def blueprint_compare(
     run_a: str,
     run_b: str,
-    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
+    runs_root: str | None = typer.Option(
+        None, "--runs-root", help="Override the default $MN_HOME/runs directory."
+    ),
 ):
     """Compare two blueprint runs from the shared run store."""
     record_a = _load_run_or_exit(run_a, runs_root, include_observability=True)
@@ -2635,9 +3067,17 @@ def blueprint_compare(
 
     table = Table("Field", run_a, run_b)
     for field in ("Blueprint", "Status", "Started", "Ended"):
-        table.add_row(field, _display(summary_a.get(field)), _display(summary_b.get(field)))
-    table.add_row("Event count", str(len(record_a.get("events") or [])), str(len(record_b.get("events") or [])))
-    table.add_row("Final artifact", _artifact_headline(artifact_a), _artifact_headline(artifact_b))
+        table.add_row(
+            field, _display(summary_a.get(field)), _display(summary_b.get(field))
+        )
+    table.add_row(
+        "Event count",
+        str(len(record_a.get("events") or [])),
+        str(len(record_b.get("events") or [])),
+    )
+    table.add_row(
+        "Final artifact", _artifact_headline(artifact_a), _artifact_headline(artifact_b)
+    )
 
     scalar_keys = sorted(set(artifact_a.keys()) | set(artifact_b.keys()))
     for key in scalar_keys:
@@ -2651,9 +3091,15 @@ def blueprint_compare(
 
 def blueprint_export(
     run_id: str,
-    output_format: str = typer.Option("json", "--format", "-f", help="Export format: json, markdown, or html."),
-    output: str | None = typer.Option(None, "--output", "-o", help="Write the export to this path instead of stdout."),
-    runs_root: str | None = typer.Option(None, "--runs-root", help="Override the default $MN_HOME/runs directory."),
+    output_format: str = typer.Option(
+        "json", "--format", "-f", help="Export format: json, markdown, or html."
+    ),
+    output: str | None = typer.Option(
+        None, "--output", "-o", help="Write the export to this path instead of stdout."
+    ),
+    runs_root: str | None = typer.Option(
+        None, "--runs-root", help="Override the default $MN_HOME/runs directory."
+    ),
 ):
     """Export one blueprint run as JSON, Markdown, or static HTML."""
     from mn_cli.output import json_enabled, record_result
@@ -2666,8 +3112,14 @@ def blueprint_export(
             destination = Path(output).expanduser()
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(rendered + "\n", encoding="utf-8")
-            print_success_confirmation(console, "Blueprint export", details={"Run ID": run_id, "Format": "json", "Output": output})
-            record_result({"run_id": run_id, "format": "json", "output": str(destination)})
+            print_success_confirmation(
+                console,
+                "Blueprint export",
+                details={"Run ID": run_id, "Format": "json", "Output": output},
+            )
+            record_result(
+                {"run_id": run_id, "format": "json", "output": str(destination)}
+            )
         elif json_enabled():
             record_result({"run_id": run_id, "format": "json", "report": record})
         else:
@@ -2678,8 +3130,14 @@ def blueprint_export(
             destination = Path(output).expanduser()
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(rendered + "\n", encoding="utf-8")
-            print_success_confirmation(console, "Blueprint export", details={"Run ID": run_id, "Format": "markdown", "Output": output})
-            record_result({"run_id": run_id, "format": "markdown", "output": str(destination)})
+            print_success_confirmation(
+                console,
+                "Blueprint export",
+                details={"Run ID": run_id, "Format": "markdown", "Output": output},
+            )
+            record_result(
+                {"run_id": run_id, "format": "markdown", "output": str(destination)}
+            )
         elif json_enabled():
             record_result({"run_id": run_id, "format": "markdown", "report": rendered})
         else:
@@ -2687,7 +3145,9 @@ def blueprint_export(
     elif normalized_format in {"html", "static_html", "web"}:
         run_dir = (record.get("run") or {}).get("run_dir")
         if not run_dir:
-            print_error(console, "Cannot write HTML export because this run has no run_dir.")
+            print_error(
+                console, "Cannot write HTML export because this run has no run_dir."
+            )
             raise typer.Exit(2)
         try:
             write_static_run_report = _load_web_ui_api()
@@ -2703,8 +3163,19 @@ def blueprint_export(
         print_success_confirmation(
             console,
             "Blueprint export",
-            details={"Run ID": run_id, "Format": "html", "Output": handle.get("path") or handle.get("url")},
+            details={
+                "Run ID": run_id,
+                "Format": "html",
+                "Output": handle.get("path") or handle.get("url"),
+            },
         )
-        record_result({"run_id": run_id, "format": "html", "output": handle.get("path"), "url": handle.get("url")})
+        record_result(
+            {
+                "run_id": run_id,
+                "format": "html",
+                "output": handle.get("path"),
+                "url": handle.get("url"),
+            }
+        )
     else:
         raise typer.BadParameter("--format must be json, markdown, or html")

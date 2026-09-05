@@ -4303,7 +4303,10 @@ def _merge_model_services_json(existing: object, services: list[dict[str, Any]])
 
 
 def ensure_context_engine_runtime(
-    *, force: bool = False, prepare_image: bool = False
+    *,
+    force: bool = False,
+    prepare_image: bool = False,
+    environment: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Start the already-prepared context-engine package without building it.
 
@@ -4317,6 +4320,8 @@ def ensure_context_engine_runtime(
         )
 
     env = _runtime_base_env(True)
+    if environment is not None:
+        env.update(environment)
     profiles = _compose_profiles_with(env.get("COMPOSE_PROFILES"), "context")
     model = str(
         env.get("MN_CONTEXT_MODEL_RUNNER_MODEL") or DEFAULT_CONTEXT_MODEL_RUNNER_MODEL

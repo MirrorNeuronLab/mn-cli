@@ -151,6 +151,17 @@ def print_info(console, message: Any) -> None:
 
 
 @contextmanager
+def launch_activity(
+    console, label: str, detail: str = "", *, expectation: str = ""
+) -> Iterator[None]:
+    """Show a launch stage and elapsed time without altering the wrapped call."""
+    from mn_cli.libs.launch_progress import launch_activity as render_activity
+
+    with render_activity(console, label, detail, expectation=expectation):
+        yield
+
+
+@contextmanager
 def activity(console, message: str) -> Iterator[None]:
     """Render a transient spinner for an interactive, human-facing operation.
 

@@ -1,3 +1,4 @@
+from mn_cli.libs.ui import launch_activity
 from mn_cli.output import record_result
 
 from ..common import *
@@ -55,9 +56,7 @@ def _record_prevalidated_command_rules(
         manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
     )
     source_manifest = (
-        manifest.get("manifest")
-        if isinstance(manifest.get("manifest"), dict)
-        else {}
+        manifest.get("manifest") if isinstance(manifest.get("manifest"), dict) else {}
     )
     validation_candidates = (
         (manifest, "input_validation"),
@@ -180,7 +179,9 @@ def _strip_docker_worker_debug_details(manifest: dict[str, Any]) -> None:
         if isinstance(metadata.get("mn_docker_workers"), dict)
         else {}
     )
-    services = summary.get("services") if isinstance(summary.get("services"), list) else []
+    services = (
+        summary.get("services") if isinstance(summary.get("services"), list) else []
+    )
     for service in services:
         if isinstance(service, dict):
             service.pop("build", None)
@@ -216,6 +217,7 @@ def run_bundle(
     submitted_config_overrides: dict[str, Any] | None = None
     prepared_submission: Any | None = None
     definition_committed = False
+    submission_attempted = False
     try:
         env_overrides = dict(env_overrides or {})
         config_overrides = dict(config_overrides or {})
@@ -238,14 +240,10 @@ def run_bundle(
         )
         if replace_existing_run and not job_id:
             raise ValueError("replace_existing_run requires an existing job_id")
-        definition_submission_id = generate_job_definition_submission_id(
-            stable_job_id
-        )
+        definition_submission_id = generate_job_definition_submission_id(stable_job_id)
         airgap = hydrate_extracted_airgap(bundle_dir, manifest_dict)
         if airgap.get("air_gapped"):
-            env_overrides.update(
-                offline_environment(airgap.get("wheelhouse") or None)
-            )
+            env_overrides.update(offline_environment(airgap.get("wheelhouse") or None))
         else:
             hydrate_payload_models(bundle_dir, manifest_dict)
 
@@ -305,8 +303,8 @@ def run_bundle(
                 # Keep that decision through preparation so the native runtime
                 # installs it on the same pinned node while workers continue to
                 # call LiteLLM's logical ``default`` alias.
-                env_overrides["MN_SELECTED_RUNTIME_MODEL_FALLBACKS_JSON"] = (
-                    json.dumps(model_fallbacks, sort_keys=True)
+                env_overrides["MN_SELECTED_RUNTIME_MODEL_FALLBACKS_JSON"] = json.dumps(
+                    model_fallbacks, sort_keys=True
                 )
             submission_metadata["selected_node"] = selected_node
             submission_metadata["workflow_placement"] = {
@@ -401,13 +399,18 @@ def run_bundle(
             "Package workflow",
             "staging workflow files, local inputs, runtime helpers, and output wiring.",
         )
-        manifest_dict = prepare_manifest_for_submission(
-            bundle_dir,
-            manifest_dict,
-            env_overrides=env_overrides,
-            submission_metadata=submission_metadata,
-            config_overrides=config_overrides,
-        )
+        with launch_activity(
+            console,
+            "Prepare workflow dependencies",
+            "resolving configuration and declared agent and skill packages",
+        ):
+            manifest_dict = prepare_manifest_for_submission(
+                bundle_dir,
+                manifest_dict,
+                env_overrides=env_overrides,
+                submission_metadata=submission_metadata,
+                config_overrides=config_overrides,
+            )
         # Source manifests can acquire DockerWorker or HostLocal nodes only
         # while templates are rendered above. Resolve placement again before
         # either node-local runtime is prepared so generated control nodes are
@@ -433,68 +436,95 @@ def run_bundle(
                     "Resolve workflow placement",
                     f"selected {selected_node}; all final topology nodes and node-local runtime services are pinned there.",
                 )
-        host_python_report = _doctor_prepare_hostlocal_python_envs(
-            bundle_dir,
-            manifest_dict,
-            timeout=float(os.getenv("MN_BLUEPRINT_PYTHON_ENV_TIMEOUT_SECONDS", "30")),
-            check_only=False,
-            selected_runtime_node=str(
-                env_overrides.get("MN_SELECTED_RUNTIME_NODE") or ""
-            ),
-        )
-        if host_python_report.get("status") == "critical":
-            failures = host_python_report.get("failures") or []
-            detail = "; ".join(
-                f"{item.get('node_id', 'host_local')}: {item.get('detail', 'environment preparation failed')}"
-                for item in failures
-                if isinstance(item, dict)
+        with launch_activity(
+            console,
+            "Prepare Python environments",
+            "checking or installing declared Python dependencies",
+        ):
+            host_python_report = _doctor_prepare_hostlocal_python_envs(
+                bundle_dir,
+                manifest_dict,
+                timeout=float(
+                    os.getenv("MN_BLUEPRINT_PYTHON_ENV_TIMEOUT_SECONDS", "30")
+                ),
+                check_only=False,
+                selected_runtime_node=str(
+                    env_overrides.get("MN_SELECTED_RUNTIME_NODE") or ""
+                ),
             )
-            raise RuntimeError(
-                "HostLocal Python environment preparation failed"
-                + (f": {detail}" if detail else ".")
-            )
+            if host_python_report.get("status") == "critical":
+                failures = host_python_report.get("failures") or []
+                detail = "; ".join(
+                    f"{item.get('node_id', 'host_local')}: {item.get('detail', 'environment preparation failed')}"
+                    for item in failures
+                    if isinstance(item, dict)
+                )
+                raise RuntimeError(
+                    "HostLocal Python environment preparation failed"
+                    + (f": {detail}" if detail else ".")
+                )
         if force:
             _mark_manifest_force(manifest_dict)
-        _prepare_openshell_custom_images(
-            bundle_dir,
-            manifest_dict,
-            shared_sandbox_job_id=str(job_id or blueprint_run_id or "") or None,
-        )
+        with launch_activity(
+            console,
+            "Prepare sandbox images",
+            "checking or building declared OpenShell images and shared sandboxes",
+        ):
+            _prepare_openshell_custom_images(
+                bundle_dir,
+                manifest_dict,
+                shared_sandbox_job_id=str(job_id or blueprint_run_id or "") or None,
+            )
 
-        payloads = _stage_bundle_payloads(bundle_dir, manifest_dict)
+        with launch_activity(
+            console,
+            "Stage workflow files",
+            "copying and verifying payloads, inputs, and runtime support files",
+        ):
+            payloads = _stage_bundle_payloads(bundle_dir, manifest_dict)
 
         schedule_attrs = _run_schedule_attrs(
             auto_schedule=auto_schedule, schedule=schedule
         )
 
-        _ensure_context_engine_for_run_if_needed(
-            bundle_dir,
-            manifest_dict,
-            env_overrides=env_overrides,
-            config_overrides=config_overrides,
-            force=force,
-        )
+        with launch_activity(
+            console,
+            "Prepare context memory",
+            "checking the declared context service and waiting for readiness",
+        ):
+            _ensure_context_engine_for_run_if_needed(
+                bundle_dir,
+                manifest_dict,
+                env_overrides=env_overrides,
+                config_overrides=config_overrides,
+                force=force,
+            )
 
         docker_worker_nodes = _docker_worker_node_ids(manifest_dict)
-        if docker_worker_nodes:
-            selected_node = str(
-                env_overrides.get("MN_SELECTED_RUNTIME_NODE") or ""
-            ).strip()
-            target = selected_node or "the selected runtime node"
-            _print_launch_progress(
-                f"Prepare DockerWorker on {target}",
-                "building and starting the shared worker container through that node's native SDK.",
+        selected_node = str(env_overrides.get("MN_SELECTED_RUNTIME_NODE") or "").strip()
+        target = selected_node or "the selected runtime node"
+        with launch_activity(
+            console,
+            f"Prepare DockerWorker on {target}"
+            if docker_worker_nodes
+            else "Prepare runtime resources",
+            (
+                f"building or reusing images and starting shared containers for {len(docker_worker_nodes)} worker(s)."
+                if docker_worker_nodes
+                else "preparing storage, services, and worker environments."
+            ),
+            expectation="A first launch can take several minutes. Waiting for the runtime to report readiness.",
+        ):
+            prepared_submission = prepare_job_submission(
+                manifest_dict,
+                payloads,
+                bundle_dir=bundle_dir,
+                run_id=blueprint_run_id,
+                job_id=stable_job_id,
+                submission_id=definition_submission_id,
+                cluster_client=client,
+                env={**os.environ, **env_overrides},
             )
-        prepared_submission = prepare_job_submission(
-            manifest_dict,
-            payloads,
-            bundle_dir=bundle_dir,
-            run_id=blueprint_run_id,
-            job_id=stable_job_id,
-            submission_id=definition_submission_id,
-            cluster_client=client,
-            env={**os.environ, **env_overrides},
-        )
         manifest = prepared_submission.manifest_json
         payloads = prepared_submission.payloads
         submitted_manifest = json.loads(manifest)
@@ -512,33 +542,26 @@ def run_bundle(
             else None
         )
         submitted_run_dir = blueprint_run_dir
-        _print_launch_progress(
+        from mn_sdk.blueprints.submission import submit
+        from mn_sdk.submission import PreparedSubmission
+
+        submission_attempted = True
+        with launch_activity(
+            console,
             "Submit runtime job",
-            "handing the prepared bundle to MirrorNeuron core.",
-        )
-        if not job_id:
-            created = json.loads(
-                client.create_job(
-                    manifest,
-                    payloads,
-                    job_id=stable_job_id,
-                    resolved_configuration=config_overrides,
-                    owner_node=str(env_overrides.get("MN_SELECTED_RUNTIME_NODE") or ""),
-                )
-            )
-            stable_job_id = str(created["job_id"])
-            definition_committed = True
-        else:
-            client.update_job(
-                stable_job_id,
-                {"resolved_configuration": config_overrides}
-                if config_overrides
-                else {},
-                manifest_json=manifest,
-                payloads=payloads,
+            "waiting for the runtime to acknowledge the prepared definition",
+        ):
+            created = submit(
+                PreparedSubmission(manifest, payloads, prepared_submission.metadata),
+                client=client,
+                job_id=stable_job_id,
+                resolved_configuration=config_overrides,
+                owner_node=str(env_overrides.get("MN_SELECTED_RUNTIME_NODE") or ""),
+                update_existing=bool(job_id),
                 replace_existing_run=replace_existing_run,
             )
-            definition_committed = True
+        stable_job_id = str(created.get("job_id") or stable_job_id)
+        definition_committed = True
         try:
             _register_manifest_web_ui_handle(
                 manifest_dict,
@@ -680,11 +703,12 @@ def run_bundle(
                     reason=f"job_{final_status}",
                 )
     except typer.Exit:
-        _cleanup_pre_launch_artifacts(
-            pre_launch_process,
-            pre_launch_run_dir,
-            reason="launch_failed",
-        )
+        if not submission_attempted:
+            _cleanup_pre_launch_artifacts(
+                pre_launch_process,
+                pre_launch_run_dir,
+                reason="launch_failed",
+            )
         raise
     except (KeyboardInterrupt, EOFError):
         if submitted_run_id:
@@ -724,36 +748,26 @@ def run_bundle(
                 )
             )
             return
-        _cleanup_pre_launch_artifacts(
-            pre_launch_process,
-            pre_launch_run_dir,
-            reason="launch_interrupted",
-        )
+        if not submission_attempted:
+            _cleanup_pre_launch_artifacts(
+                pre_launch_process,
+                pre_launch_run_dir,
+                reason="launch_interrupted",
+            )
+        else:
+            console.print(
+                "[yellow]Submission interrupted. Resources are preserved; reconcile the job before retrying.[/yellow]"
+            )
         raise typer.Exit(130)
     except Exception as e:
-        if (
-            prepared_submission is not None
-            and submitted_run_id is None
-            and not definition_committed
-        ):
-            submission_id = str(
-                prepared_submission.metadata.get("submission_id") or ""
-            ).strip()
-            if submission_id:
-                try:
-                    cleanup_job_definition_resources(
-                        prepared_submission.manifest_json
-                    )
-                except Exception:
-                    logger.exception(
-                        "Failed to clean DockerWorker services after submission failure",
-                        extra={"submission_id": submission_id},
-                    )
-        _cleanup_pre_launch_artifacts(
-            pre_launch_process,
-            pre_launch_run_dir,
-            reason="launch_failed",
-        )
+        from mn_sdk.blueprints.submission import SubmissionUncertainError
+
+        if not definition_committed and not isinstance(e, SubmissionUncertainError):
+            _cleanup_pre_launch_artifacts(
+                pre_launch_process,
+                pre_launch_run_dir,
+                reason="launch_failed",
+            )
         # ``blueprint run --debug`` is a command-local option, so it cannot
         # update the root callback's debug state. Pass it explicitly here;
         # otherwise preparation failures only show the generic error even

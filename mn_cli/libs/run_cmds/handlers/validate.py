@@ -1,3 +1,5 @@
+from mn_sdk.blueprints import BlueprintError, open_blueprint
+
 from mn_cli.libs.run_cmds.common import (
     _blueprint_runtime_environment,
     _is_safe_payload_relative_path,
@@ -31,11 +33,18 @@ def validate(
       mn blueprint validate ./bundle
       mn blueprint validate ./bundle --json
     """
+    candidate = Path(bundle_path).expanduser()
+    if candidate.is_file() and candidate.suffix.lower() == ".zip":
+        with open_blueprint(candidate) as package:
+            return validate(str(package.root))
     try:
         output_format = "json" if json_enabled() else "table"
         bundle_dir = Path(bundle_path)
         if not bundle_dir.is_dir():
-            print_error(console, f"'{bundle_path}' is not a directory. Expected a bundle folder.")
+            print_error(
+                console,
+                f"'{bundle_path}' is not a directory. Expected a bundle folder.",
+            )
             raise typer.Exit(2)
 
         manifest_file = bundle_dir / "manifest.json"
@@ -57,7 +66,9 @@ def validate(
         if schema_issues:
             report = make_validation_report(schema_issues)
             _emit_validation_report(
-                report, output_format, title="Workflow manifest schema validation failed"
+                report,
+                output_format,
+                title="Workflow manifest schema validation failed",
             )
             raise typer.Exit(2)
 
@@ -124,10 +135,16 @@ def validate(
             ("Job Name", manifest.get("job_name")),
             ("Workflow ID", _manifest_workflow_id(manifest)),
         ]
-        workflow = manifest.get("workflow", {}) if isinstance(manifest.get("workflow"), dict) else {}
+        workflow = (
+            manifest.get("workflow", {})
+            if isinstance(manifest.get("workflow"), dict)
+            else {}
+        )
         steps = workflow.get("steps") if isinstance(workflow.get("steps"), list) else []
         details.append(("Workflow steps", len(steps)))
-        details.append(("Input validation rules", len(validation_result.get("results") or [])))
+        details.append(
+            ("Input validation rules", len(validation_result.get("results") or []))
+        )
         print_confirmed(
             console,
             "Job bundle validation",
@@ -135,11 +152,19 @@ def validate(
             details=details,
         )
 
+    except BlueprintError as exc:
+        _emit_validation_report(
+            make_validation_report([issue.to_dict() for issue in exc.issues]),
+            output_format,
+            title="Blueprint validation failed",
+        )
+        raise typer.Exit(2) from exc
     except typer.Exit:
         raise
     except Exception as e:
         handle_cli_error(e, console, "validate")
         raise typer.Exit(1)
+
 
 def validate_python_environments(
     bundle_dir: Path, manifest: dict[str, Any]
@@ -196,12 +221,14 @@ def validate_python_environments(
 
     return errors
 
+
 def _manifest_agent_nodes(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     agents = manifest.get("agents") if isinstance(manifest.get("agents"), dict) else {}
     agent_nodes = agents.get("nodes") if isinstance(agents, dict) else None
     if isinstance(agent_nodes, list):
         return [node for node in agent_nodes if isinstance(node, dict)]
     return []
+
 
 def _validate_manifest_inputs_or_exit(
     bundle_dir: Path,
@@ -232,6 +259,7 @@ def _validate_manifest_inputs_or_exit(
     _emit_validation_report(result, output_format, title="Input validation failed")
     raise typer.Exit(exit_code)
 
+
 def _validate_manifest_hardware_or_exit(
     manifest: dict[str, Any],
     *,
@@ -254,8 +282,11 @@ def _validate_manifest_hardware_or_exit(
     if result.get("ok"):
         return result
 
-    _emit_validation_report(result, output_format, title="Runtime requirements need attention")
+    _emit_validation_report(
+        result, output_format, title="Runtime requirements need attention"
+    )
     raise typer.Exit(1)
+
 
 def _validate_manifest_services_or_exit(
     bundle_dir: Path,
@@ -302,6 +333,7 @@ def _validate_manifest_services_or_exit(
     _emit_validation_report(result, output_format, title="Service validation failed")
     raise typer.Exit(1)
 
+
 def _validate_manifest_models_or_exit(
     bundle_dir: Path,
     manifest: dict[str, Any],
@@ -324,7 +356,10 @@ def _validate_manifest_models_or_exit(
             if value is not None
         }
     )
-    if env_overrides and str(env_overrides.get("MN_BLUEPRINT_CONFIG_JSON") or "").strip():
+    if (
+        env_overrides
+        and str(env_overrides.get("MN_BLUEPRINT_CONFIG_JSON") or "").strip()
+    ):
         try:
             decoded_config = json.loads(str(env_overrides["MN_BLUEPRINT_CONFIG_JSON"]))
         except json.JSONDecodeError:
@@ -334,10 +369,12 @@ def _validate_manifest_models_or_exit(
     validation_manifest = _manifest_for_model_validation(manifest, config)
     validation_config = config
     if model_install_summary:
-        validation_manifest, validation_config = _model_validation_inputs_with_prepared_models(
-            validation_manifest,
-            config,
-            model_install_summary,
+        validation_manifest, validation_config = (
+            _model_validation_inputs_with_prepared_models(
+                validation_manifest,
+                config,
+                model_install_summary,
+            )
         )
     result = run_model_validation(
         bundle_dir,
@@ -352,6 +389,7 @@ def _validate_manifest_models_or_exit(
     _emit_validation_report(result, output_format, title="Model validation failed")
     raise typer.Exit(1)
 
+
 def _normalize_validation_output(output: str) -> str:
     normalized = str(output or "table").strip().lower()
     if normalized in {"table", "rich", "pretty"}:
@@ -360,6 +398,7 @@ def _normalize_validation_output(output: str) -> str:
         return "json"
     console.print("[red]Unsupported output format. Use 'table' or 'json'.[/red]")
     raise typer.Exit(1)
+
 
 def _emit_validation_report(
     report: dict[str, Any], output_format: str, *, title: str
@@ -376,6 +415,7 @@ def _emit_validation_report(
 
     print_validation_issues(console, title, issues)
 
+
 def _model_capacity_summary(report: dict[str, Any]) -> str:
     summaries: list[str] = []
     for result in report.get("results") or []:
@@ -384,7 +424,14 @@ def _model_capacity_summary(report: dict[str, Any]) -> str:
         requirements = result.get("requirements")
         if not isinstance(requirements, dict) or not requirements:
             continue
-        parts = [str(result.get("model_id") or result.get("model") or result.get("name") or "model")]
+        parts = [
+            str(
+                result.get("model_id")
+                or result.get("model")
+                or result.get("name")
+                or "model"
+            )
+        ]
         provider = result.get("provider")
         if provider:
             parts.append(f"provider {provider}")
@@ -393,9 +440,12 @@ def _model_capacity_summary(report: dict[str, Any]) -> str:
             parts.append(f"GPU >= {min_vram}GB")
         capabilities = requirements.get("required_capabilities")
         if capabilities:
-            parts.append("capability any of " + ",".join(str(item) for item in capabilities))
+            parts.append(
+                "capability any of " + ",".join(str(item) for item in capabilities)
+            )
         summaries.append(" ".join(parts))
     return "; ".join(summaries[:3])
+
 
 def _validation_issue(error: str, *, source: str) -> dict[str, Any]:
     path = ""
