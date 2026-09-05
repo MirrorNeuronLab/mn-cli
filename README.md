@@ -14,6 +14,8 @@ services installed by `mn-deploy`.
 
 ## Quick Start
 
+Requires `mirrorneuron-python-sdk>1.3,<2.0`.
+
 Install locally and run tests:
 
 ```bash
