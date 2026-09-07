@@ -741,9 +741,10 @@ def _event_summary_text(event: Mapping[str, Any]) -> Text:
 def _event_detail_text(event: Mapping[str, Any]) -> str:
     payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
     for mapping in (event, payload):
-        direct = mapping.get("detail")
+        direct = mapping.get("detail") or mapping.get("message")
         if direct not in (None, ""):
             return _monitor_safe_text(direct)
+    for mapping in (event, payload):
         for key in (
             "worker",
             "worker_id",

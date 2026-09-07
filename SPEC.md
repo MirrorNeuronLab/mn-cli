@@ -462,3 +462,7 @@ with full distribution names, `type: pip`, `source: gar`, and exact versions.
 The SDK owns resolution: local development uses source projects and ignores
 package/skill release pins; binary mode retains GAR requirements. This applies
 to HostLocal and DockerWorker submissions, including blueprint-owned skills.
+
+The workflow monitor event feed prefers explicit activity messages over worker
+identifiers, including bounded tool-query previews and outcomes. Long entries
+are ellipsized; recorded events retain the bounded message.

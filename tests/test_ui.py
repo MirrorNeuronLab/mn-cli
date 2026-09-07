@@ -342,3 +342,13 @@ def test_monitor_agent_tables_omit_mail_column():
         )
     )
     assert "mail" not in live_console.export_text().lower()
+
+
+def test_event_feed_prefers_query_message_over_agent_id():
+    from mn_cli.libs.ui import _event_detail_text
+    query = "MATCH (n) RETURN n.logical_id LIMIT 2"
+    assert _event_detail_text({
+        "agent_id": "long_agent_identifier",
+        "payload": {"message": query},
+    }) == query
+    assert _event_detail_text({"detail": query, "agent_id": "worker"}) == query
