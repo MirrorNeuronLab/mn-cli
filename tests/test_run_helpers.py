@@ -265,6 +265,7 @@ def test_prepare_manifest_auto_patches_skill_binary_deps_to_dockerworker(tmp_pat
 
 
 def test_prepare_manifest_injects_gar_skill_dependencies_for_hostlocal(tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_USE_LOCAL_SKILLS", "0")
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     (bundle_dir / "config").mkdir()
@@ -479,7 +480,7 @@ def test_prepare_manifest_stages_declared_rag_components_for_dockerworker_source
     monkeypatch.setattr("mn_sdk.components.installation.sdk_installation", lambda: SDKInstallation("local", source_root=sdk))
     monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path))
     manifest = {
-        "components": ["rag"],
+        "packages": [{"type": "pip", "source": "gar", "name": "mn-python-sdk-rag", "version": "0.1.99"}],
         "nodes": [{"node_id":"worker", "config": {
             "runner_module":"MirrorNeuron.Runner.DockerWorker",
             "docker_worker_image":"worker/docker_worker", "environment":{},
@@ -491,7 +492,8 @@ def test_prepare_manifest_stages_declared_rag_components_for_dockerworker_source
     requirements = payloads["worker/docker_worker/requirements.txt"].decode()
     local_requirements = payloads["worker/docker_worker/local-requirements.txt"].decode()
     dockerfile = payloads["worker/docker_worker/Dockerfile"].decode()
-    assert "mn-python-sdk-rag==0.1.0" in requirements
+    assert "mn-python-sdk-rag==0.1.0" not in requirements
+    assert "mn-python-sdk-rag==0.1.99" not in requirements
     assert "-r /tmp/mn-skill-runtime/local-requirements.txt" in requirements
     assert "/tmp/mn-skill-runtime/local/rag" in local_requirements
     assert "mcp" not in local_requirements
@@ -557,7 +559,7 @@ def test_prepare_manifest_stages_local_skill_dependencies_only_in_docker_workdir
     assert targets == ["document_workflow/.mn-local-skills/evidence_engine_skill"]
 
 
-def test_prepare_manifest_keeps_gar_skill_dependencies_for_hostlocal_dev(tmp_path, monkeypatch):
+def test_prepare_manifest_localizes_skill_dependencies_for_hostlocal_dev(tmp_path, monkeypatch):
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"
     bundle_dir.mkdir()
@@ -598,10 +600,11 @@ def test_prepare_manifest_keeps_gar_skill_dependencies_for_hostlocal_dev(tmp_pat
 
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
 
-    assert prepared["skill_dependencies"] == manifest["skill_dependencies"]
-    assert "mn_local_skill_dependencies" not in prepared.get("metadata", {})
+    assert prepared["skill_dependencies"] == []
+    assert "mn_local_skill_dependencies" in prepared["metadata"]
     packages = prepared["agents"]["nodes"][0]["config"]["python_environment"]["packages"]
-    assert "mirrorneuron-evidence-engine-skill==1.2.7" in packages
+    assert str(skills_root / "evidence_engine_skill") in packages
+    assert "mirrorneuron-evidence-engine-skill==1.2.7" not in packages
 
 
 def test_prepare_manifest_gar_skill_runtime_uses_pinned_requirements_not_local_sources(tmp_path, monkeypatch):

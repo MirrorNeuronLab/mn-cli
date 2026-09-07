@@ -460,3 +460,9 @@ version or SDK-version fallback is applied. References to skills already
 versioned in the manifest use that declaration. Development staging preserves
 the SDK's own static project version or, for the running SDK source checkout,
 its installed distribution version. Missing SDK version metadata is an error.
+
+Blueprint SDK capabilities use the canonical `dependencies.json.packages` list,
+with full distribution names, `type: pip`, `source: gar`, and exact versions.
+The SDK owns resolution: local development uses source projects and ignores
+package/skill release pins; binary mode retains GAR requirements. This applies
+to HostLocal and DockerWorker submissions, including blueprint-owned skills.
