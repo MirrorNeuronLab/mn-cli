@@ -13,7 +13,7 @@ dependencies = [
     "click>=8.1.0",
     "jsonschema>=4.25",
     "typer>=0.9.0",
-    "mirrorneuron-web-ui-skill",
+    "mn-python-sdk-web-ui>=0.1,<0.2",
     "rich>=13.0.0"
 ]
 

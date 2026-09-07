@@ -102,7 +102,7 @@ from mn_sdk.submission_preparation import (
     load_blueprint_config,
     manifest_nodes,
     prepare_manifest_for_submission,
-    stage_blueprint_support_payloads_for_manifest,
+    stage_sdk_payloads_for_manifest,
     stage_local_input_payloads_for_manifest,
     stage_skill_dependency_payloads_for_manifest,
     stage_skill_runtime_support_payloads_for_manifest,

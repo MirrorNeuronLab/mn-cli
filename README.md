@@ -70,7 +70,7 @@ mn node remove mirror_neuron@spark --yes
 This detaches the peer from the current Core only; it does not delete the
 peer's owner-local jobs or data.
 
-The CLI uses `mirrorneuron-web-ui-skill` for static HTML exports and for the
+The CLI uses `mn-python-sdk-web-ui` for static HTML exports and for the
 job-scoped iframe handle that forwards a blueprint-owned web service.
 
 ## Model operations

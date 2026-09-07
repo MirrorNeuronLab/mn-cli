@@ -9,12 +9,12 @@ def _load_web_ui_claimer() -> Callable[..., Any]:
     """Load the shared UI-handle contract used by all blueprints."""
 
     try:
-        from mn_web_ui_skill import claim_web_ui
+        from mn_sdk_web_ui import claim_web_ui
     except ModuleNotFoundError as exc:
-        if exc.name != "mn_web_ui_skill":
+        if exc.name != "mn_sdk_web_ui":
             raise
         raise RuntimeError(
-            "Blueprint Web UI registration requires mirrorneuron-web-ui-skill. "
+            "Blueprint Web UI registration requires mn-python-sdk-web-ui. "
             "Install a current mirrorneuron-cli package."
         ) from exc
     return claim_web_ui

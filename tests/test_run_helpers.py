@@ -9,9 +9,9 @@ from mn_cli.libs.artifacts import promote_large_payloads_to_blob_refs
 from mn_cli.libs.run_logs import JobLogWriter, materialize_sent_email_copy
 from mn_cli.libs.run_manifest import (
     apply_manifest_config_bindings,
-    ensure_blueprint_support_sdk_build_context_uploads,
+    ensure_sdk_build_context_uploads,
     load_blueprint_config,
-    stage_blueprint_support_payloads_for_manifest,
+    stage_sdk_payloads_for_manifest,
     stage_local_input_payloads_for_manifest,
     stage_skill_dependency_payloads_for_manifest,
     stage_skill_runtime_support_payloads_for_manifest,
@@ -159,6 +159,7 @@ def test_prepare_manifest_for_submission_merges_runtime_env_and_metadata(tmp_pat
 
 
 def test_prepare_manifest_auto_patches_skill_binary_deps_to_dockerworker(tmp_path, monkeypatch):
+    monkeypatch.setenv("MN_USE_LOCAL_SKILLS", "0")
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"
     sdk_root = tmp_path / "mn-python-sdk"
@@ -170,7 +171,7 @@ def test_prepare_manifest_auto_patches_skill_binary_deps_to_dockerworker(tmp_pat
     worker_dir.mkdir(parents=True)
     (worker_dir / "requirements.txt").write_text(
         "--index-url https://packages.example/simple/\n"
-        "mirrorneuron-w3m-browser-skill\n"
+        "mirrorneuron-w3m-browser-skill==0.1.0\n"
         "example-external>=1\n",
         encoding="utf-8",
     )
@@ -179,11 +180,6 @@ def test_prepare_manifest_auto_patches_skill_binary_deps_to_dockerworker(tmp_pat
         "w3m_browser_skill",
         "mirrorneuron-w3m-browser-skill",
         runtime=True,
-    )
-    _write_skill_pyproject(
-        skills_root,
-        "blueprint_support_skill",
-        "mirrorneuron-blueprint-support-skill",
     )
     monkeypatch.setenv("MN_SKILLS_ROOT", str(skills_root))
     monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path))
@@ -195,15 +191,15 @@ def test_prepare_manifest_auto_patches_skill_binary_deps_to_dockerworker(tmp_pat
                 "python_dependencies": {
                     "requirements": "worker/requirements.txt",
                     "packages": [
-                        "mirrorneuron-blueprint-support-skill",
-                        "mirrorneuron-w3m-browser-skill",
+                        "mirrorneuron-python-sdk==1.3.13",
+                        "mirrorneuron-w3m-browser-skill==0.1.0",
                         "example-external>=1",
                     ],
                 },
                 "input_skills": {
                     "w3m_browser": {
                         "skill": "w3m_browser_skill",
-                        "package": "mirrorneuron-w3m-browser-skill",
+                        "package": "mirrorneuron-w3m-browser-skill==0.1.0",
                         "install_policy": "python_environment_pip",
                     }
                 },
@@ -263,8 +259,8 @@ def test_prepare_manifest_auto_patches_skill_binary_deps_to_dockerworker(tmp_pat
     assert "COPY build_context/w3m_browser_skill" not in dockerfile
     assert "/tmp/mn-local-packages" not in dockerfile
     assert "command -v w3m" in dockerfile
-    assert "mirrorneuron-w3m-browser-skill==1.2.24" in requirements
-    assert "mirrorneuron-blueprint-support-skill==1.2.24" in requirements
+    assert "mirrorneuron-w3m-browser-skill==0.1.0" in requirements
+    assert "mirrorneuron-python-sdk==1.3.13" in requirements
     assert "example-external>=1" in requirements
 
 
@@ -350,7 +346,7 @@ def test_prepare_manifest_stages_local_skill_dependencies_in_dev(tmp_path, monke
             {
                 "type": "pip",
                 "source": "gar",
-                "name": "mirrorneuron-rag-skill",
+                "name": "mn-python-sdk-rag",
                 "version": "1.2.14",
             },
         ],
@@ -369,7 +365,7 @@ def test_prepare_manifest_stages_local_skill_dependencies_in_dev(tmp_path, monke
 
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
     remaining = [item["name"] for item in prepared["skill_dependencies"]]
-    assert remaining == ["mirrorneuron-rag-skill"]
+    assert remaining == ["mn-python-sdk-rag"]
     assert prepared["metadata"]["mn_local_skill_dependencies"]["packages"] == [
         "mirrorneuron-evidence-engine-skill"
     ]
@@ -392,7 +388,7 @@ def test_prepare_manifest_stages_local_skill_dependencies_in_dev(tmp_path, monke
     requirements = payloads["worker/docker_worker/requirements.txt"].decode()
     local_requirements = payloads["worker/docker_worker/local-requirements.txt"].decode()
     dockerfile = payloads["worker/docker_worker/Dockerfile"].decode()
-    assert "mirrorneuron-rag-skill==1.2.14" in requirements
+    assert "mn-python-sdk-rag==1.2.14" in requirements
     assert "mirrorneuron-evidence-engine-skill" not in requirements
     assert "/tmp/mn-skill-runtime/local/evidence_engine_skill" not in requirements
     assert "/tmp/mn-skill-runtime/local/evidence_engine_skill" in local_requirements
@@ -400,7 +396,8 @@ def test_prepare_manifest_stages_local_skill_dependencies_in_dev(tmp_path, monke
     assert "COPY local-requirements.txt /tmp/mn-skill-runtime/local-requirements.txt" in dockerfile
     assert "COPY __mn_skill_dependencies/local/evidence_engine_skill" in dockerfile
     assert "pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
-    assert "pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/local-requirements.txt" in dockerfile
+    assert "-r /tmp/mn-skill-runtime/local-requirements.txt" in requirements
+    assert dockerfile.count("pip install") == 1
 
 
 def test_prepare_manifest_stages_local_skill_dependencies_from_runtime_env(tmp_path, monkeypatch):
@@ -465,74 +462,41 @@ def test_prepare_manifest_stages_local_skill_dependencies_from_runtime_env(tmp_p
     assert "/tmp/mn-skill-runtime/local/evidence_engine_skill" in local_requirements
 
 
-def test_prepare_manifest_stages_local_rag_skill_source_for_dockerworker_dev(
+def test_prepare_manifest_stages_declared_rag_components_for_dockerworker_source(
     tmp_path, monkeypatch
 ):
+    from mn_sdk.components.installation import SDKInstallation
     bundle_dir = tmp_path / "bundle"
-    skills_root = tmp_path / "mn-skills"
     bundle_dir.mkdir()
-    (bundle_dir / "config").mkdir()
-    (bundle_dir / "config" / "default.json").write_text(
-        json.dumps({"identity": {"blueprint_id": "local_rag_dev"}}),
-        encoding="utf-8",
-    )
-    _write_skill_pyproject(
-        skills_root,
-        "rag_skill",
-        "mirrorneuron-rag-skill",
-        dependencies=["pymilvus[milvus-lite]>=2.4"],
-    )
-    skill_module = skills_root / "rag_skill" / "src" / "mn_rag_skill"
-    skill_module.mkdir(parents=True)
-    (skill_module / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
-    monkeypatch.setenv("MN_ENV", "dev")
+    sdk = tmp_path / "mn-python-sdk"
+    for name in ["common", "models", "rag"]:
+        project = sdk / "packages" / name
+        project.mkdir(parents=True)
+        (project / "pyproject.toml").write_text(
+            f'[project]\nname="mn-python-sdk-{name}"\nversion="0.1.0"\n'
+        )
+    (sdk / "pyproject.toml").write_text('[project]\nname="mirrorneuron-python-sdk"\nversion="1.3.13"\n')
+    monkeypatch.setattr("mn_sdk.components.installation.sdk_installation", lambda: SDKInstallation("local", source_root=sdk))
     monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path))
-    monkeypatch.setenv("MN_SKILLS_ROOT", str(skills_root))
-
     manifest = {
-        "skill_dependencies": [
-            {
-                "type": "pip",
-                "source": "gar",
-                "name": "mirrorneuron-rag-skill",
-                "version": "1.2.14",
-            }
-        ],
-        "nodes": [
-            {
-                "node_id": "worker",
-                "config": {
-                    "runner_module": "MirrorNeuron.Runner.DockerWorker",
-                    "docker_worker_image": "worker/docker_worker",
-                    "environment": {},
-                },
-            }
-        ],
+        "components": ["rag"],
+        "nodes": [{"node_id":"worker", "config": {
+            "runner_module":"MirrorNeuron.Runner.DockerWorker",
+            "docker_worker_image":"worker/docker_worker", "environment":{},
+        }}],
     }
     payloads = {"worker/docker_worker/Dockerfile": b"FROM python:3.11-slim\n"}
-
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
-    assert prepared["skill_dependencies"] == []
-
-    stage_skill_dependency_payloads_for_manifest(
-        prepared,
-        payloads,
-        bundle_dir=bundle_dir,
-    )
-
+    stage_skill_dependency_payloads_for_manifest(prepared, payloads, bundle_dir=bundle_dir)
     requirements = payloads["worker/docker_worker/requirements.txt"].decode()
     local_requirements = payloads["worker/docker_worker/local-requirements.txt"].decode()
     dockerfile = payloads["worker/docker_worker/Dockerfile"].decode()
-    pyproject = payloads[
-        "worker/docker_worker/__mn_skill_dependencies/local/rag_skill/pyproject.toml"
-    ].decode()
-    assert "mirrorneuron-rag-skill" not in requirements
-    assert "/tmp/mn-skill-runtime/local/rag_skill" not in requirements
-    assert "/tmp/mn-skill-runtime/local/rag_skill" in local_requirements
-    assert "pymilvus[milvus-lite]>=2.4" in pyproject
-    assert "COPY local-requirements.txt /tmp/mn-skill-runtime/local-requirements.txt" in dockerfile
-    assert "COPY __mn_skill_dependencies/local/rag_skill" in dockerfile
-    assert "-r /tmp/mn-skill-runtime/local-requirements.txt" in dockerfile
+    assert "mn-python-sdk-rag==0.1.0" in requirements
+    assert "-r /tmp/mn-skill-runtime/local-requirements.txt" in requirements
+    assert "/tmp/mn-skill-runtime/local/rag" in local_requirements
+    assert "mcp" not in local_requirements
+    assert dockerfile.count("pip install") == 1
+    assert "COPY __mn_skill_dependencies/local/rag" in dockerfile
     assert "--no-deps" not in dockerfile
 
 
@@ -659,14 +623,14 @@ def test_prepare_manifest_gar_skill_runtime_uses_pinned_requirements_not_local_s
                 "identity": {"blueprint_id": "gar_runtime_bp"},
                 "python_dependencies": {
                     "packages": [
-                        "mirrorneuron-w3m-browser-skill",
+                        "mirrorneuron-w3m-browser-skill==0.1.0",
                         "example-external>=1",
                     ],
                 },
                 "input_skills": {
                     "w3m_browser": {
                         "skill": "w3m_browser_skill",
-                        "package": "mirrorneuron-w3m-browser-skill",
+                        "package": "mirrorneuron-w3m-browser-skill==0.1.0",
                         "install_policy": "python_environment_pip",
                     }
                 },
@@ -744,7 +708,7 @@ def test_generated_skill_runtime_installs_local_dev_skills_before_verification(
                 "input_skills": {
                     "w3m_browser": {
                         "skill": "w3m_browser_skill",
-                        "package": "mirrorneuron-w3m-browser-skill",
+                        "package": "mirrorneuron-w3m-browser-skill==0.1.0",
                         "enabled": True,
                     }
                 },
@@ -793,7 +757,8 @@ def test_generated_skill_runtime_installs_local_dev_skills_before_verification(
         "__mn_skill_runtime/docker_worker/requirements.txt"
     ].decode()
     local_copy = "COPY __mn_skill_dependencies/local/w3m_browser_skill"
-    local_install = "-r /tmp/mn-skill-runtime/local-requirements.txt"
+    local_install = "-r /tmp/mn-skill-runtime/requirements.txt"
+    assert "-r /tmp/mn-skill-runtime/local-requirements.txt" in requirements
     verification = "RUN python3 -c 'import mn_w3m_browser_skill'"
     assert "--index-url\n" not in requirements
     assert dockerfile.index(local_copy) < dockerfile.index(local_install)
@@ -808,7 +773,7 @@ def test_stage_skill_dependency_payloads_injects_pinned_gar_requirements_for_doc
             {
                 "type": "pip",
                 "source": "gar",
-                "name": "mirrorneuron-rag-skill",
+                "name": "mn-python-sdk-rag",
                 "version": "1.2.7",
             }
         ],
@@ -835,7 +800,7 @@ def test_stage_skill_dependency_payloads_injects_pinned_gar_requirements_for_doc
     assert staged["staged"] is True
     requirements = payloads["worker/docker_worker/requirements.txt"].decode()
     dockerfile = payloads["worker/docker_worker/Dockerfile"].decode()
-    assert "mirrorneuron-rag-skill==1.2.7" in requirements
+    assert "mn-python-sdk-rag==1.2.7" in requirements
     assert "https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/" in requirements
     assert "--index-url\n" not in requirements
     assert "--index-url https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/" in requirements
@@ -852,7 +817,7 @@ def test_stage_skill_dependency_payloads_ignores_comment_only_dependency_text(tm
             {
                 "type": "pip",
                 "source": "gar",
-                "name": "mirrorneuron-rag-skill",
+                "name": "mn-python-sdk-rag",
                 "version": "1.2.7",
             }
         ],
@@ -883,60 +848,27 @@ def test_stage_skill_dependency_payloads_ignores_comment_only_dependency_text(tm
 
     requirements = payloads["worker/docker_worker/requirements.txt"].decode()
     dockerfile = payloads["worker/docker_worker/Dockerfile"].decode()
-    assert "mirrorneuron-rag-skill==1.2.7" in requirements
+    assert "mn-python-sdk-rag==1.2.7" in requirements
     assert "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt" in dockerfile
     assert "pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
 
 
-def test_prepare_manifest_adds_sdk_upload_for_manual_blueprint_support_worker(tmp_path, monkeypatch):
-    bundle_dir = tmp_path / "bundle"
-    skills_root = tmp_path / "mn-skills"
-    sdk_root = tmp_path / "mn-python-sdk"
-    bundle_dir.mkdir()
-    (bundle_dir / "config").mkdir()
-    sdk_root.mkdir()
-    (sdk_root / "pyproject.toml").write_text("[project]\nname='mirrorneuron-python-sdk'\n", encoding="utf-8")
-    _write_skill_pyproject(
-        skills_root,
-        "blueprint_support_skill",
-        "mirrorneuron-blueprint-support-skill",
-    )
-    monkeypatch.setenv("MN_SKILLS_ROOT", str(skills_root))
+def test_prepare_manifest_adds_component_upload_for_manual_sdk_worker(tmp_path, monkeypatch):
+    component = tmp_path / "mn-python-sdk/packages/common"
+    component.mkdir(parents=True)
+    (component / "pyproject.toml").write_text("[project]\nname='mn-python-sdk-common'\nversion='0.1.0'\n")
     monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path))
-    (bundle_dir / "config" / "default.json").write_text(
-        json.dumps({"identity": {"blueprint_id": "manual_support"}}),
-        encoding="utf-8",
-    )
-    manifest = {
-        "nodes": [
-            {
-                "node_id": "worker",
-                "config": {
-                    "runner_module": "MirrorNeuron.Runner.DockerWorker",
-                    "build_context_upload_paths": [
-                        {
-                            "base": "skills_root",
-                            "source": "blueprint_support_skill",
-                            "target": "document_workflow/docker_worker/build_context/blueprint_support_skill",
-                        }
-                    ],
-                },
-            }
-        ]
-    }
-
-    prepared = prepare_manifest_for_submission(bundle_dir, manifest)
-    uploads = prepared["agents"]["nodes"][0]["config"]["build_context_upload_paths"]
-
-    assert {
-        "base": "workspace_root",
-        "source": "mn-python-sdk",
-        "target": "document_workflow/docker_worker/build_context/mn-python-sdk",
-    } in uploads
-    assert ensure_blueprint_support_sdk_build_context_uploads(prepared)["added"] == 0
+    manifest = {"agents": {"nodes": [{"node_id": "worker", "config": {
+        "runner_module": "MirrorNeuron.Runner.DockerWorker",
+        "build_context_upload_paths": [{"base": "workspace_root", "source": "mn-python-sdk", "target": "worker/build_context/mn-python-sdk"}],
+    }}]}}
+    assert ensure_sdk_build_context_uploads(manifest)["added"] == 1
+    uploads = manifest["agents"]["nodes"][0]["config"]["build_context_upload_paths"]
+    assert {"base": "workspace_root", "source": "mn-python-sdk/packages/common", "target": "worker/build_context/mn-python-sdk/packages/common"} in uploads
+    assert ensure_sdk_build_context_uploads(manifest)["added"] == 0
 
 
-def test_prepare_manifest_localizes_sdk_with_dev_blueprint_support_worker(tmp_path, monkeypatch):
+def test_prepare_manifest_localizes_sdk_with_dev_skill_worker(tmp_path, monkeypatch):
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"
     sdk_root = tmp_path / "mn-python-sdk"
@@ -958,18 +890,18 @@ def test_prepare_manifest_localizes_sdk_with_dev_blueprint_support_worker(tmp_pa
         encoding="utf-8",
     )
     (worker_dir / "requirements.txt").write_text(
-        "mirrorneuron-python-sdk==1.2.22\n",
+        "mirrorneuron-text-analysis-skill==1.2.22\n",
         encoding="utf-8",
     )
     _write_skill_pyproject(
         skills_root,
-        "blueprint_support_skill",
-        "mirrorneuron-blueprint-support-skill",
+        "text_analysis_skill",
+        "mirrorneuron-text-analysis-skill",
         dependencies=["mirrorneuron-python-sdk"],
     )
     sdk_root.mkdir()
     (sdk_root / "pyproject.toml").write_text(
-        "[project]\nname='mirrorneuron-python-sdk'\nversion='0.0.0'\n",
+        "[project]\nname='mirrorneuron-python-sdk'\nversion='1.3.13'\n",
         encoding="utf-8",
     )
     sdk_runtime = sdk_root / "mn_sdk" / "blueprint_support" / "runtime.py"
@@ -984,7 +916,7 @@ def test_prepare_manifest_localizes_sdk_with_dev_blueprint_support_worker(tmp_pa
             {
                 "type": "pip",
                 "source": "gar",
-                "name": "mirrorneuron-blueprint-support-skill",
+                "name": "mirrorneuron-text-analysis-skill",
                 "version": "1.2.8",
             }
         ],
@@ -1007,7 +939,7 @@ def test_prepare_manifest_localizes_sdk_with_dev_blueprint_support_worker(tmp_pa
 
     assert prepared["skill_dependencies"] == []
     assert local["packages"] == [
-        "mirrorneuron-blueprint-support-skill",
+        "mirrorneuron-text-analysis-skill",
         "mirrorneuron-python-sdk",
     ]
 
@@ -1019,10 +951,10 @@ def test_prepare_manifest_localizes_sdk_with_dev_blueprint_support_worker(tmp_pa
         "document_workflow/docker_worker/local-requirements.txt"
     ].decode()
     dockerfile = payloads["document_workflow/docker_worker/Dockerfile"].decode()
-    assert "mirrorneuron-python-sdk==1.2.22" not in requirements
-    assert "/tmp/mn-skill-runtime/local/blueprint_support_skill" in local_requirements
+    assert "mirrorneuron-text-analysis-skill==1.2.22" not in requirements
+    assert "/tmp/mn-skill-runtime/local/text_analysis_skill" in local_requirements
     assert "/tmp/mn-skill-runtime/local/mn-python-sdk" in local_requirements
-    assert "COPY __mn_skill_dependencies/local/blueprint_support_skill" in dockerfile
+    assert "COPY __mn_skill_dependencies/local/text_analysis_skill" in dockerfile
     assert "COPY __mn_skill_dependencies/local/mn-python-sdk" in dockerfile
     assert any(key.endswith("mn-python-sdk/mn_sdk/blueprint_support/runtime.py") for key in payloads)
 
@@ -1051,7 +983,7 @@ def test_prepare_manifest_skill_runtime_node_scope_patches_only_selected_nodes(t
                 "input_skills": {
                     "w3m_browser": {
                         "skill": "w3m_browser_skill",
-                        "package": "mirrorneuron-w3m-browser-skill",
+                        "package": "mirrorneuron-w3m-browser-skill==0.1.0",
                         "install_policy": "python_environment_pip",
                     }
                 },
@@ -1147,7 +1079,7 @@ def test_prepare_manifest_leaves_manual_docker_worker_skill_policy_alone(tmp_pat
                 "input_skills": {
                     "w3m_browser": {
                         "skill": "w3m_browser_skill",
-                        "package": "mirrorneuron-w3m-browser-skill",
+                        "package": "mirrorneuron-w3m-browser-skill==0.1.0",
                         "install_policy": "docker_worker_image",
                     }
                 },
@@ -1240,18 +1172,14 @@ def test_prepare_manifest_for_submission_lowers_workflow_manifest_for_core_runti
     assert "edges" not in prepared
 
 
-def test_stage_blueprint_support_payloads_for_support_dependent_hostlocal_worker(tmp_path, monkeypatch):
-    skills_root = workspace_root() / "mn-skills"
-    if not (skills_root / "blueprint_support_skill" / "src").is_dir():
-        pytest.skip("blueprint support skill source is not checked out")
-
+def test_stage_sdk_payloads_for_component_dependent_hostlocal_worker(tmp_path, monkeypatch):
     bundle_dir = tmp_path / "bundle"
     script_dir = bundle_dir / "payloads" / "simulation_loop" / "scripts"
     config_dir = bundle_dir / "config"
     script_dir.mkdir(parents=True)
     config_dir.mkdir()
     (script_dir / "run_blueprint.py").write_text(
-        "from mn_blueprint_support import run_blueprint_cli\n",
+        "from mn_sdk import Client\n",
         encoding="utf-8",
     )
     (config_dir / "default.json").write_text('{"identity": {"blueprint_id": "bp"}}\n')
@@ -1269,22 +1197,22 @@ def test_stage_blueprint_support_payloads_for_support_dependent_hostlocal_worker
         }
     }
     payloads = {
-        "simulation_loop/scripts/run_blueprint.py": b"from mn_blueprint_support import run_blueprint_cli\n"
+        "simulation_loop/scripts/run_blueprint.py": b"from mn_sdk import Client\n"
     }
-    monkeypatch.setenv("MN_SKILLS_ROOT", str(skills_root))
     monkeypatch.chdir(tmp_path)
 
-    summary = stage_blueprint_support_payloads_for_manifest(
+    summary = stage_sdk_payloads_for_manifest(
         manifest,
         payloads,
         bundle_dir=Path("bundle"),
     )
 
     assert summary == {"staged": True, "sources": ["simulation_loop"]}
-    assert "simulation_loop/mn_blueprint_support/__init__.py" in payloads
-    assert "simulation_loop/scripts/mn_blueprint_support/__init__.py" in payloads
+    assert "simulation_loop/mn_sdk/__init__.py" in payloads
+    assert "simulation_loop/scripts/mn_sdk/__init__.py" in payloads
     assert not any("litellm_communicate_skill" in path for path in payloads)
-    assert payloads["simulation_loop/config/default.json"] == b'{"identity": {"blueprint_id": "bp"}}\n'
+    assert "simulation_loop/mn_sdk_common/__init__.py" in payloads
+    assert not any("mn_sdk_rag/" in path for path in payloads)
 
 
 def test_promote_large_payloads_to_blob_refs(tmp_path, monkeypatch):
@@ -1997,7 +1925,7 @@ def test_prepare_manifest_stages_local_skill_dependencies_from_workspace_fallbac
             {
                 "type": "pip",
                 "source": "gar",
-                "name": "mirrorneuron-rag-skill",
+                "name": "mn-python-sdk-rag",
                 "version": "v1.2.14",
             },
         ],
@@ -2019,7 +1947,7 @@ def test_prepare_manifest_stages_local_skill_dependencies_from_workspace_fallbac
 
     remaining_dependencies = prepared["skill_dependencies"]
     local_metadata = prepared["metadata"]["mn_local_skill_dependencies"]
-    assert [item["name"] for item in remaining_dependencies] == ["mirrorneuron-rag-skill"]
+    assert [item["name"] for item in remaining_dependencies] == ["mn-python-sdk-rag"]
     assert local_metadata["context_root"] == ".mn-local-skills"
     assert local_metadata["packages"] == ["mirrorneuron-evidence-engine-skill"]
     assert local_metadata["sources"][0]["target"] == "worker/.mn-local-skills/evidence_engine_skill"

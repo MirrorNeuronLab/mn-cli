@@ -266,7 +266,7 @@ def test_python_package_updates_use_pinned_gar_requirements(mocker):
         command.index("--extra-index-url") : command.index("--extra-index-url") + 2
     ]
     assert command[-1] == "mirrorneuron-cli==1.1.0"
-    assert "mirrorneuron-blueprint-support-skill[webui]" not in command
+    assert "mirrorneuron-python-sdk[webui]" not in command
 
 
 def test_web_ui_update_uses_configured_package_name(mocker, tmp_path):

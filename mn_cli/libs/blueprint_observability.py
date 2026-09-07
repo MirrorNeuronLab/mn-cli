@@ -41,9 +41,9 @@ def load_observability_tools() -> dict[str, Callable[..., Any]]:
 
 def load_web_ui_api() -> Callable[..., Any]:
     try:
-        from mn_web_ui_skill import write_static_run_report
+        from mn_sdk_web_ui import write_static_run_report
     except ModuleNotFoundError as exc:
-        if exc.name != "mn_web_ui_skill":
+        if exc.name != "mn_sdk_web_ui":
             raise
         raise RuntimeError(
             "HTML blueprint export requires the optional web-ui dependency. "
