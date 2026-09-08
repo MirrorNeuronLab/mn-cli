@@ -34,6 +34,10 @@ mn node list
 mn blueprint run message_routing_trace
 ```
 
+After a completed blueprint run copies both its internal run store and a
+configured user output folder, the human-readable summary prints only the
+user-facing output destination.
+
 `mn runtime start` starts a normal, federation-capable Core. There is no
 separate worker mode: every Core owns its Redis state, can own jobs, and runs
 all agents for those jobs locally. The successful start output includes the

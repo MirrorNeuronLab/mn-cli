@@ -513,7 +513,7 @@ def test_materialize_shared_storage_outputs_retains_submission_after_copy(tmp_pa
 
 
 def test_materialize_shared_storage_outputs_waits_for_delayed_user_output(
-    monkeypatch, tmp_path
+    capsys, monkeypatch, tmp_path
 ):
     host_root = tmp_path / "shared"
     submission = host_root / "submissions" / "sub-delayed"
@@ -561,6 +561,11 @@ def test_materialize_shared_storage_outputs_waits_for_delayed_user_output(
     assert sleep_calls >= 2
     assert (run_target / "events.jsonl").exists()
     assert (user_target / "architecture_report.md").read_text() == "# Report\n"
+    output = capsys.readouterr().out
+    unwrapped_output = output.replace("\n", "")
+    assert output.count("Materialized shared outputs:") == 1
+    assert str(user_target) in unwrapped_output
+    assert str(run_target) not in unwrapped_output
 
 
 def test_detached_batch_run_starts_output_event_relay_for_shared_storage(

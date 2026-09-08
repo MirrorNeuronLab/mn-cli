@@ -415,8 +415,9 @@ def _materialize_shared_storage_outputs(storage: dict[str, Any]) -> bool:
         logger.warning("Shared output materialization warning: %s", warning)
     for error in result.get("errors") or []:
         logger.error("Shared output materialization error: %s", error)
-    for target in result.get("target_paths") or []:
-        console.print(f"[green]Materialized shared outputs:[/green] {target}")
+    targets = result.get("target_paths") or []
+    if targets:
+        console.print(f"[green]Materialized shared outputs:[/green] {targets[-1]}")
     return bool(result.get("copied"))
 
 

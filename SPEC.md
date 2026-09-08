@@ -152,6 +152,9 @@ Only measured upstream progress may be presented as a percentage.
   consumers.
 - Human-readable run submission, detach, terminal-summary, and watch output
   labels the durable Job ID and execution Run ID separately.
+- When terminal materialization copies both the internal run store and a
+  configured user output folder, human-readable output reports only the final
+  user-facing destination. Both copies remain available.
 - Durable group operations render item completion in arrival order. Ctrl+C
   detaches while leaving Core work active and prints the operation ID. A
   `cancellation_pending` item is accepted success with queued remote cleanup;
