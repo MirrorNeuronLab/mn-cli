@@ -4,7 +4,14 @@ import json
 from pathlib import Path
 
 import typer
-from mn_sdk import prepare_job_submission
+from mn_sdk import (
+    ValidationError,
+    blueprint_runtime_environment,
+    load_blueprint_config,
+    prepare_job_submission,
+    record_prevalidated_command_rules,
+    run_input_validation,
+)
 from mn_sdk.blueprint_support import make_run_id
 from mn_sdk.submission_preparation import prepare_manifest_for_submission
 
@@ -46,8 +53,35 @@ def create(
             "reading and validating the package and its assets",
         ):
             manifest_json, payloads = read_bundle(bundle)
-        resolved = _read_json_object(config) if config else {}
         bundle_path = Path(bundle).expanduser().resolve()
+        config_overrides = _read_json_object(config) if config else {}
+        resolved = (
+            load_blueprint_config(
+                bundle_path,
+                config_overrides=config_overrides,
+            )
+            or config_overrides
+        )
+        source_manifest = json.loads(manifest_json)
+        with launch_activity(
+            console,
+            "Validate job inputs",
+            "running required host-side input checks before storing the definition",
+        ):
+            input_report = run_input_validation(
+                bundle_path,
+                source_manifest,
+                config=resolved,
+                env=blueprint_runtime_environment(
+                    bundle_path,
+                    config=resolved,
+                    config_overrides=config_overrides,
+                ),
+            )
+            if input_report.get("ok") is not True:
+                errors = input_report.get("errors") or ["Input validation failed"]
+                raise ValidationError("; ".join(str(error) for error in errors))
+            record_prevalidated_command_rules(source_manifest, input_report)
         with launch_activity(
             console,
             "Prepare workflow dependencies",
@@ -55,7 +89,7 @@ def create(
         ):
             prepared_manifest = prepare_manifest_for_submission(
                 bundle_path,
-                json.loads(manifest_json),
+                source_manifest,
                 config_overrides=resolved,
             )
         with launch_activity(

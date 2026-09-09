@@ -140,7 +140,41 @@ def test_create_prepares_source_bundle_before_stable_submission(monkeypatch, tmp
     monkeypatch.setattr(
         job_definition_cmds,
         "read_bundle",
-        lambda _bundle: ('{"apiVersion":"mn.workflow.source/unsupported"}', {"source.py": b"raw"}),
+        lambda _bundle: (
+            json.dumps(
+                {
+                    "apiVersion": "mn.workflow.source/unsupported",
+                    "input_validation": {
+                        "rules": [
+                            {
+                                "name": "video_source_validate",
+                                "type": "command",
+                                "command": ["validate-video"],
+                            }
+                        ]
+                    },
+                }
+            ),
+            {"source.py": b"raw"},
+        ),
+    )
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "run_input_validation",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "results": [
+                {
+                    "ok": True,
+                    "type": "command",
+                    "rule": {
+                        "name": "video_source_validate",
+                        "type": "command",
+                        "index": 0,
+                    },
+                }
+            ],
+        },
     )
     monkeypatch.setattr(
         job_definition_cmds,
@@ -183,6 +217,15 @@ def test_create_prepares_source_bundle_before_stable_submission(monkeypatch, tmp
     assert calls["prepare"][2]["bundle_dir"] == str(bundle.resolve())
     assert calls["prepare"][2]["job_id"] == "stable-job"
     assert calls["prepare"][0]["graph_id"] == "prepared"
+    source_manifest = calls["prepare"][0]["source_manifest"]
+    assert source_manifest["input_validation"]["rules"] == []
+    assert source_manifest["metadata"]["mn_validation"]["input_validation"] == {
+        "status": "passed",
+        "validator": "mn-python-sdk",
+        "prevalidated_command_rules": [
+            {"name": "video_source_validate", "type": "command", "index": 0}
+        ],
+    }
     assert calls["prepare"][1] == {"runtime.py": b"staged"}
     assert printed[0]["manifest_json"] == prepared.manifest_json
     assert printed[0]["payloads"] == ["runtime.py"]

@@ -73,6 +73,19 @@ def test_cli_debug_output_is_sanitized(mocker):
     assert "/Users/homer" not in output
 
 
+def test_execution_failure_hint_places_global_debug_option_before_command():
+    error = contextualize_cli_error(
+        AppError(
+            "MN_EXECUTION_FAILED",
+            "Execution failed. Run again with --debug for more details.",
+        ),
+        "job start",
+        command_context={"job_id": "job-1"},
+    )
+
+    assert error.hint == "Run again with the global option before the command: mn --debug …"
+
+
 def test_job_delete_names_a_missing_job_and_points_to_job_list(mocker):
     console, stream = _console_stream()
     mocker.patch("mn_cli.error_handler.logger.exception")

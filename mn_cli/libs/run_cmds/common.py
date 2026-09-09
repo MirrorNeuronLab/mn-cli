@@ -52,6 +52,7 @@ from mn_sdk import (
     model_service_tags,
     prepare_job_submission,
     reconcile_cluster_model_remotes,
+    record_prevalidated_command_rules,
     record_model_owner,
     remote_runtime_model_endpoint,
     required_blueprint_models,

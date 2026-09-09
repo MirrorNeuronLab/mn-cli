@@ -198,7 +198,11 @@ definitions. `mn run list/show/watch/logs/result/resources/compare/pause/resume/
 addresses executions and always
 accepts `run_id`. A durable `job_id` owns configuration, schedules, and job data;
 every intentional batch start gets a distinct run identity, while attempts
-retain their run. Only `type: service` jobs have one attached run. Ordinary
+retain their run.
+`mn job create` runs host-side command input validators and records their result
+before storing the definition, so later source-independent starts never pass an
+unvalidated command rule to Core.
+Only `type: service` jobs have one attached run. Ordinary
 second starts fail with `service_run_exists`; `mn job start --force` explicitly
 replaces it with a fresh run ID and always confirms interactively or requires
 `--yes`. CLI output must label and persist both fields without treating them as

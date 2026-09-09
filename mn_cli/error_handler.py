@@ -303,7 +303,7 @@ def contextualize_cli_error(
         )
     elif app_error.code == "MN_EXECUTION_FAILED":
         message = f"MirrorNeuron could not {verb} {target}."
-        hint = "Run the command again with --debug to see the underlying failure."
+        hint = "Run again with the global option before the command: mn --debug …"
     else:
         return app_error
 
