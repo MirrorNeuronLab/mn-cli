@@ -114,6 +114,14 @@ def create(
                 bundle_dir=str(bundle_path) if bundle_path.is_dir() else None,
                 job_id=job_id,
                 cluster_client=client,
+                env={
+                    **blueprint_runtime_environment(
+                        bundle_path,
+                        config=resolved,
+                        config_overrides=config_overrides,
+                    ),
+                    **({"MN_SELECTED_RUNTIME_NODE": owner_node} if owner_node else {}),
+                },
             )
         with launch_activity(
             console,

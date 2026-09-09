@@ -1,4 +1,5 @@
 import json
+import pytest
 from contextlib import contextmanager
 from types import SimpleNamespace
 
@@ -128,7 +129,8 @@ def test_run_delete_confirms_and_delegates_active_run_cleanup_to_core(monkeypatc
     assert printed == [{"run_id": "run-active", "status": "deleted"}]
 
 
-def test_create_prepares_source_bundle_before_stable_submission(monkeypatch, tmp_path):
+@pytest.mark.parametrize("owner_node", [None, "remote"])
+def test_create_prepares_source_bundle_before_stable_submission(monkeypatch, tmp_path, owner_node):
     bundle = tmp_path / "blueprint"
     bundle.mkdir()
     prepared = SimpleNamespace(
@@ -212,7 +214,9 @@ def test_create_prepares_source_bundle_before_stable_submission(monkeypatch, tmp
     printed = []
     monkeypatch.setattr(job_definition_cmds, "record_result", printed.append)
 
-    job_definition_cmds.create(str(bundle), job_id="stable-job", config=None)
+    job_definition_cmds.create(str(bundle), job_id="stable-job", config=None, node=owner_node)
+    if owner_node:
+        assert calls["prepare"][2]["env"]["MN_SELECTED_RUNTIME_NODE"] == owner_node
 
     assert calls["prepare"][2]["bundle_dir"] == str(bundle.resolve())
     assert calls["prepare"][2]["job_id"] == "stable-job"

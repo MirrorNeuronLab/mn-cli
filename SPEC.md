@@ -1,5 +1,9 @@
 # MirrorNeuron CLI Specification
 
+Job creation delegates hardware placement and selected-owner routing to the
+shared SDK before preparing and submitting native resources. Explicit `--node`
+constrains preparation as well as ownership. Starts reuse the stored definition.
+
 ## Purpose
 
 `mn-cli` provides the `mn` command used to install, validate, run, inspect, and

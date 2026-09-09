@@ -238,6 +238,11 @@ IP.
 
 ## Stable jobs and execution runs
 
+`mn job create` selects an eligible runtime from hardware and workflow
+requirements before preparing workers. That selected node owns the submitted
+definition. `--node` explicitly constrains this selection. The blueprint source
+is unchanged; `mn job start` reuses the stored placement and resources.
+
 Create a reusable job once, then start independent runs that share its declared
 job data:
 
