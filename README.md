@@ -483,3 +483,6 @@ to HostLocal and DockerWorker submissions, including blueprint-owned skills.
 The workflow monitor event feed prefers explicit activity messages over worker
 identifiers, including bounded tool-query previews and outcomes. Long entries
 are ellipsized; recorded events retain the bounded message.
+
+The installed API, native SDK, and Web UI executables are resolved under
+`$MN_HOME/venv/bin` (default `~/.mn/venv/bin`), alongside runtime state.
