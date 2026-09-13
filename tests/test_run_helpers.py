@@ -49,6 +49,19 @@ def prepare_manifest_for_submission(bundle_dir, manifest, **kwargs):
         manifest.pop("nodes", None)
     return _prepare_manifest_for_submission(bundle_dir, manifest, **kwargs)
 
+
+@pytest.fixture
+def local_sdk_components(tmp_path):
+    """The local SDK now requires its common component in worker builds."""
+    project = tmp_path / "mn-python-sdk" / "packages" / "common"
+    project.mkdir(parents=True)
+    (tmp_path / "mn-python-sdk" / "pyproject.toml").write_text(
+        '[project]\nname="mirrorneuron-python-sdk"\nversion="1.3.48"\n'
+    )
+    (project / "pyproject.toml").write_text(
+        '[project]\nname="mn-python-sdk-common"\nversion="1.3.47"\n'
+    )
+
 def _write_skill_pyproject(
     skills_root: Path,
     folder: str,
@@ -314,7 +327,7 @@ def test_prepare_manifest_injects_gar_skill_dependencies_for_hostlocal(tmp_path,
     assert str(tmp_path / "mn-skills") not in env.get("PYTHONPATH", "")
 
 
-def test_prepare_manifest_stages_local_skill_dependencies_in_dev(tmp_path, monkeypatch):
+def test_prepare_manifest_stages_local_skill_dependencies_in_dev(tmp_path, monkeypatch, local_sdk_components):
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"
     bundle_dir.mkdir()
@@ -368,7 +381,7 @@ def test_prepare_manifest_stages_local_skill_dependencies_in_dev(tmp_path, monke
     remaining = [item["name"] for item in prepared["skill_dependencies"]]
     assert remaining == ["mn-python-sdk-rag"]
     assert prepared["metadata"]["mn_local_skill_dependencies"]["packages"] == [
-        "mirrorneuron-evidence-engine-skill"
+        "mirrorneuron-evidence-engine-skill", "mirrorneuron-python-sdk", "mn-python-sdk-common"
     ]
 
     staged = stage_skill_dependency_payloads_for_manifest(
@@ -401,7 +414,7 @@ def test_prepare_manifest_stages_local_skill_dependencies_in_dev(tmp_path, monke
     assert dockerfile.count("pip install") == 1
 
 
-def test_prepare_manifest_stages_local_skill_dependencies_from_runtime_env(tmp_path, monkeypatch):
+def test_prepare_manifest_stages_local_skill_dependencies_from_runtime_env(tmp_path, monkeypatch, local_sdk_components):
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"
     runtime_home = tmp_path / ".mn"
@@ -503,7 +516,7 @@ def test_prepare_manifest_stages_declared_rag_components_for_dockerworker_source
 
 
 def test_prepare_manifest_stages_local_skill_dependencies_only_in_docker_workdir_upload(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, local_sdk_components
 ):
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"
@@ -556,10 +569,15 @@ def test_prepare_manifest_stages_local_skill_dependencies_only_in_docker_workdir
     sources = prepared["metadata"]["mn_local_skill_dependencies"]["sources"]
     targets = [source["target"] for source in sources]
 
-    assert targets == ["document_workflow/.mn-local-skills/evidence_engine_skill"]
+    assert targets == [
+        "document_workflow/.mn-local-skills/evidence_engine_skill",
+        "document_workflow/.mn-local-skills/mn-python-sdk",
+        "__mn_components/mn-python-sdk-common",
+        "__mn_components/mirrorneuron-python-sdk",
+    ]
 
 
-def test_prepare_manifest_localizes_skill_dependencies_for_hostlocal_dev(tmp_path, monkeypatch):
+def test_prepare_manifest_localizes_skill_dependencies_for_hostlocal_dev(tmp_path, monkeypatch, local_sdk_components):
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"
     bundle_dir.mkdir()
@@ -688,7 +706,7 @@ def test_prepare_manifest_gar_skill_runtime_uses_pinned_requirements_not_local_s
 
 
 def test_generated_skill_runtime_installs_local_dev_skills_before_verification(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, local_sdk_components
 ):
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"
@@ -871,7 +889,7 @@ def test_prepare_manifest_adds_component_upload_for_manual_sdk_worker(tmp_path, 
     assert ensure_sdk_build_context_uploads(manifest)["added"] == 0
 
 
-def test_prepare_manifest_localizes_sdk_with_dev_skill_worker(tmp_path, monkeypatch):
+def test_prepare_manifest_localizes_sdk_with_dev_skill_worker(tmp_path, monkeypatch, local_sdk_components):
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"
     sdk_root = tmp_path / "mn-python-sdk"
@@ -902,7 +920,7 @@ def test_prepare_manifest_localizes_sdk_with_dev_skill_worker(tmp_path, monkeypa
         "mirrorneuron-text-analysis-skill",
         dependencies=["mirrorneuron-python-sdk"],
     )
-    sdk_root.mkdir()
+    sdk_root.mkdir(exist_ok=True)
     (sdk_root / "pyproject.toml").write_text(
         "[project]\nname='mirrorneuron-python-sdk'\nversion='1.3.13'\n",
         encoding="utf-8",
@@ -942,8 +960,9 @@ def test_prepare_manifest_localizes_sdk_with_dev_skill_worker(tmp_path, monkeypa
 
     assert prepared["skill_dependencies"] == []
     assert local["packages"] == [
-        "mirrorneuron-text-analysis-skill",
         "mirrorneuron-python-sdk",
+        "mirrorneuron-text-analysis-skill",
+        "mn-python-sdk-common",
     ]
 
     payloads: dict[str, bytes] = {}
@@ -1894,7 +1913,7 @@ def PathLikeName(path: str) -> str:
     return path.rsplit("/", 1)[-1]
 
 
-def test_prepare_manifest_stages_local_skill_dependencies_from_workspace_fallback_when_env_roots_are_stale(tmp_path, monkeypatch):
+def test_prepare_manifest_stages_local_skill_dependencies_from_workspace_fallback_when_env_roots_are_stale(tmp_path, monkeypatch, local_sdk_components):
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     (bundle_dir / "config").mkdir()
@@ -1952,7 +1971,7 @@ def test_prepare_manifest_stages_local_skill_dependencies_from_workspace_fallbac
     local_metadata = prepared["metadata"]["mn_local_skill_dependencies"]
     assert [item["name"] for item in remaining_dependencies] == ["mn-python-sdk-rag"]
     assert local_metadata["context_root"] == ".mn-local-skills"
-    assert local_metadata["packages"] == ["mirrorneuron-evidence-engine-skill"]
+    assert local_metadata["packages"] == ["mirrorneuron-evidence-engine-skill", "mirrorneuron-python-sdk", "mn-python-sdk-common"]
     assert local_metadata["sources"][0]["target"] == "worker/.mn-local-skills/evidence_engine_skill"
 
     payloads: dict[str, bytes] = {}

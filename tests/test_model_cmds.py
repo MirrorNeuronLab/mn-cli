@@ -2254,15 +2254,19 @@ def test_model_install_pulls_and_runs_compatible_model(mocker):
     assert [
         "docker",
         "model",
-        "run",
-        "--detach",
+        "configure",
         "--context-size",
         "8192",
         "docker.io/ai/gemma4:E2B",
     ] in calls
 
+    configured = ["docker", "model", "configure", "--context-size", "8192", "docker.io/ai/gemma4:E2B"]
+    started = ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"]
+    assert calls.index(configured) < calls.index(started)
 
-def test_model_install_syncs_local_dmr_gateway_route(mocker):
+
+def test_model_install_syncs_local_dmr_gateway_route(mocker, monkeypatch):
+    monkeypatch.setenv("MN_NODE_HARDWARE_JSON", json.dumps({"platform": {"os": "darwin"}}))
     synced = []
 
     def fake_run(command, **kwargs):
@@ -2320,7 +2324,8 @@ def test_model_install_syncs_local_dmr_gateway_route(mocker):
     assert "docker.io/ai/gemma4:E2B" in load_model_ownership()["models"]
 
 
-def test_model_install_local_dmr_publishes_status_without_peer_gateway_fanout(mocker):
+def test_model_install_local_dmr_publishes_status_without_peer_gateway_fanout(mocker, monkeypatch):
+    monkeypatch.setenv("MN_NODE_HARDWARE_JSON", json.dumps({"platform": {"os": "darwin"}}))
     local_syncs = []
 
     def fake_run(command, **kwargs):
@@ -2479,7 +2484,8 @@ def test_model_install_node_uses_prepare_runtime_model_not_ssh(mocker):
     assert remote["node"] == "spark"
 
 
-def test_model_update_refreshes_local_dmr_gateway_route(mocker):
+def test_model_update_refreshes_local_dmr_gateway_route(mocker, monkeypatch):
+    monkeypatch.setenv("MN_NODE_HARDWARE_JSON", json.dumps({"platform": {"os": "darwin"}}))
     calls = []
     synced = []
 

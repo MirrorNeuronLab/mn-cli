@@ -1707,4 +1707,4 @@ def test_run_no_manifest(tmp_path):
     bundle_dir.mkdir()
     result = runner.invoke(app, ["blueprint", "run", str(bundle_dir)])
     assert result.exit_code == 2
-    assert "missing manifest.json" in result.stderr
+    assert "missing manifest.json" in " ".join(result.stderr.split())

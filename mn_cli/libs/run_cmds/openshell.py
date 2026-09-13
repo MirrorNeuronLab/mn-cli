@@ -382,6 +382,14 @@ def _openshell_skill_dependency_context(source_path: Path, manifest: dict[str, A
             _local_skill_requirements_text(local_context_sources),
             encoding="utf-8",
         )
+    if local_context_sources:
+        requirements.write_text(
+            _requirements_text([
+                *requirements.read_text(encoding="utf-8").splitlines(),
+                "-r /tmp/mn-skill-runtime/local-requirements.txt",
+            ]),
+            encoding="utf-8",
+        )
     dockerfile.write_text(
         _ensure_docker_worker_requirements_install(
             dockerfile.read_text(encoding="utf-8"),

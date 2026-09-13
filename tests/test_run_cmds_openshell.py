@@ -434,6 +434,7 @@ def test_openshell_skill_dependency_context_injects_local_dev_sources(tmp_path):
     context = run_cmds._openshell_skill_dependency_context(sandbox_dir, manifest)
     try:
         dockerfile = (context / "Dockerfile").read_text(encoding="utf-8")
+        requirements = (context / "requirements.txt").read_text(encoding="utf-8")
         local_requirements = (context / "local-requirements.txt").read_text(
             encoding="utf-8"
         )
@@ -451,7 +452,8 @@ def test_openshell_skill_dependency_context_injects_local_dev_sources(tmp_path):
 
     assert "/tmp/mn-skill-runtime/local/example_skill" in local_requirements
     assert "COPY __mn_skill_dependencies/local/example_skill" in dockerfile
-    assert "-r /tmp/mn-skill-runtime/local-requirements.txt" in dockerfile
+    assert "-r /tmp/mn-skill-runtime/local-requirements.txt" in requirements
+    assert "-r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
 
 
 def test_local_docker_openshell_build_uses_plain_progress(mocker, tmp_path):
