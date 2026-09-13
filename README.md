@@ -2,6 +2,10 @@
 
 Long blueprint launches and `mn job create` report the current preparation stage,
 including dependencies, payload staging, Docker workers, and runtime submission.
+`mn blueprint run` applies the same shared input validator as
+`mn blueprint validate` before checking runtime resources, installing models, or
+submitting a job, so missing required inputs fail immediately with the relevant
+`--set` hint.
 Interactive terminals show a spinner with elapsed time. Plain and redirected
 human output receive a concise “still waiting” line every ten seconds on stderr.
 First-time image builds may take several minutes; an elapsed timer indicates a

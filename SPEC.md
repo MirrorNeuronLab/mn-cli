@@ -3,6 +3,10 @@
 Job creation delegates hardware placement and selected-owner routing to the
 shared SDK before preparing and submitting native resources. Explicit `--node`
 constrains preparation as well as ownership. Starts reuse the stored definition.
+`mn blueprint run` executes the SDK-owned input validation used by
+`mn blueprint validate` before runtime resource checks, model preparation, local
+hooks, or submission. Missing required inputs therefore fail without creating a
+runtime job and include the configured `--set` remediation path.
 
 ## Purpose
 

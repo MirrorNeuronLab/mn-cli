@@ -251,7 +251,7 @@ def test_run_stream_error_falls_back_to_status_polling(mocker, tmp_path, monkeyp
     mock_get.assert_called_with("run-stream-fallback")
 
 
-def test_run_prepares_runtime_models_before_model_validation(
+def test_run_validates_inputs_before_runtime_dependencies(
     mocker, tmp_path, monkeypatch
 ):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
@@ -299,7 +299,7 @@ def test_run_prepares_runtime_models_before_model_validation(
 
     run_cmds.run_bundle(str(bundle_dir), follow_seconds=0)
 
-    assert order == ["services", "prepare_models", "validate_models", "inputs"]
+    assert order == ["inputs", "services", "prepare_models", "validate_models"]
 
 
 def test_run_does_not_submit_when_a_required_input_is_missing(
@@ -307,6 +307,15 @@ def test_run_does_not_submit_when_a_required_input_is_missing(
 ):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     submit = mocker.patch("mn_cli.libs.run_cmds.client.create_job")
+    check_resources = mocker.patch(
+        "mn_cli.libs.run_cmds._build_runtime_model_prepare_plan"
+    )
+    prepare_models = mocker.patch(
+        "mn_cli.libs.run_cmds._prepare_runtime_models_for_run_or_exit"
+    )
+    validate_services = mocker.patch(
+        "mn_cli.libs.run_cmds._validate_manifest_services_or_exit"
+    )
     bundle_dir = tmp_path / "required_input_bundle"
     bundle_dir.mkdir()
     (bundle_dir / "config").mkdir(exist_ok=True)
@@ -324,6 +333,9 @@ def test_run_does_not_submit_when_a_required_input_is_missing(
         run_cmds.run_bundle(str(bundle_dir), follow_seconds=0)
 
     assert error.value.exit_code == 1
+    check_resources.assert_not_called()
+    prepare_models.assert_not_called()
+    validate_services.assert_not_called()
     submit.assert_not_called()
 
 

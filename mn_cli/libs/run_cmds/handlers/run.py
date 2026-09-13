@@ -158,8 +158,6 @@ def run_bundle(
         airgap = hydrate_extracted_airgap(bundle_dir, manifest_dict)
         if airgap.get("air_gapped"):
             env_overrides.update(offline_environment(airgap.get("wheelhouse") or None))
-        else:
-            hydrate_payload_models(bundle_dir, manifest_dict)
 
         _ensure_local_run_store_identity(
             bundle_dir,
@@ -168,6 +166,22 @@ def run_bundle(
             submission_metadata,
             config_overrides=config_overrides,
         )
+        if not force:
+            _print_launch_progress(
+                "Validate inputs",
+                "checking required inputs and blueprint validation rules before preparing runtime resources.",
+            )
+            input_validation_report = _validate_manifest_inputs_or_exit(
+                bundle_dir,
+                manifest_dict,
+                env_overrides=env_overrides,
+                config_overrides=config_overrides,
+            )
+            _record_prevalidated_command_rules(manifest_dict, input_validation_report)
+
+        if not airgap.get("air_gapped"):
+            hydrate_payload_models(bundle_dir, manifest_dict)
+
         _print_launch_progress(
             "Check runtime resources",
             "confirming the runtime can satisfy this blueprint before submission.",
@@ -248,8 +262,8 @@ def run_bundle(
             )
         if not force:
             _print_launch_progress(
-                "Validate inputs and dependencies",
-                "checking services, models, local inputs, and non-hard requirements.",
+                "Validate dependencies",
+                "checking services, models, and non-hard requirements.",
             )
             _validate_manifest_services_or_exit(
                 bundle_dir,
@@ -281,13 +295,6 @@ def run_bundle(
                 config_overrides=config_overrides,
                 model_install_summary=model_install_summary,
             )
-            input_validation_report = _validate_manifest_inputs_or_exit(
-                bundle_dir,
-                manifest_dict,
-                env_overrides=env_overrides,
-                config_overrides=config_overrides,
-            )
-            _record_prevalidated_command_rules(manifest_dict, input_validation_report)
         else:
             console.print(
                 "[yellow]Validation skipped because --force was provided; required runtime models will still be prepared before the job is scheduled.[/yellow]"
