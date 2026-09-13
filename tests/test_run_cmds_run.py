@@ -1048,7 +1048,7 @@ def test_run_starts_pre_launch_hook_before_submit(mocker, tmp_path, monkeypatch)
     assert process_info["script"] == str(script_path.resolve())
 
 
-def test_run_cleans_pre_launch_hook_on_validation_failure(
+def test_run_does_not_start_pre_launch_hook_on_validation_failure(
     mocker, tmp_path, monkeypatch
 ):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
@@ -1099,13 +1099,16 @@ def test_run_cleans_pre_launch_hook_on_validation_failure(
         Path(kwargs["env"]["MN_PRE_LAUNCH_READY_FILE"]).write_text("ready\n")
         return process
 
-    mocker.patch("mn_cli.libs.run_cmds.subprocess.Popen", side_effect=fake_popen)
+    mock_popen = mocker.patch(
+        "mn_cli.libs.run_cmds.subprocess.Popen", side_effect=fake_popen
+    )
 
     with pytest.raises(Exception):
         run_cmds.run_bundle(str(bundle_dir), follow_seconds=0)
 
     mock_submit.assert_not_called()
-    mock_killpg.assert_any_call(4343, 15)
+    mock_popen.assert_not_called()
+    mock_killpg.assert_not_called()
 
 
 def test_run_executes_post_launch_hook_after_terminal_status(
