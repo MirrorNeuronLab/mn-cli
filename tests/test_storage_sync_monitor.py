@@ -47,11 +47,13 @@ def test_monitor_recovers_peer_that_appears_after_startup(monkeypatch):
     class Core:
         def get_system_summary(self):
             return {
-                "nodes": [
+                "nodes": []
+                if cycle == 0
+                else [
                     {
                         "name": "remote",
                         "connection_mode": "federated",
-                        "peer_available": cycle > 0,
+                        "peer_available": False,  # cached Core health must not block storage
                     }
                 ]
             }
@@ -151,6 +153,22 @@ def test_missing_live_identity_does_not_change_pairing(monkeypatch, status):
         "syncthing": {"enabled": True, "host": "peer"}
     }
     monkeypatch.setattr(server, "_syncthing_status", lambda *args: status)
+    connect = Mock()
+    monkeypatch.setattr(server, "_connect_syncthing_peers", connect)
+    assert server._reconcile_syncthing_federated_peers(
+        {"MN_SYNCTHING_ENABLED": "auto"}, advertised_host="local", core_client=core
+    ) == {"discovered": 1, "connected": 0}
+    connect.assert_not_called()
+
+
+def test_removed_peer_in_stale_summary_is_not_recreated(monkeypatch):
+    core = Mock()
+    core.get_system_summary.return_value = {
+        "nodes": [
+            {"name": "removed", "connection_mode": "federated", "peer_available": False}
+        ]
+    }
+    core.get_federated_peer.side_effect = LookupError("peer removed")
     connect = Mock()
     monkeypatch.setattr(server, "_connect_syncthing_peers", connect)
     assert server._reconcile_syncthing_federated_peers(

@@ -1958,8 +1958,8 @@ def _reconcile_syncthing_federated_peers(
     for node in nodes if isinstance(nodes, list) else []:
         if not isinstance(node, dict) or node.get("connection_mode") != "federated":
             continue
-        if node.get("peer_available") is False:
-            continue
+        # Core availability is a cached control-plane observation. Storage has
+        # its own authenticated API and must recover even when that view is stale.
         node_name = str(node.get("name") or node.get("node") or "").strip()
         if not node_name:
             continue
