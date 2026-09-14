@@ -687,6 +687,10 @@ def test_connect_syncthing_peers_configures_both_nodes(mocker):
 
 
 def test_reconcile_syncthing_federated_peers_rehydrates_registered_peer(mocker):
+    mocker.patch(
+        "mn_cli.server_cmds._syncthing_status",
+        side_effect=[{"myID": "NEWMINI"}, {"myID": "NEWSPARK"}],
+    )
     class CoreClient:
         def get_system_summary(self):
             return {
@@ -732,8 +736,8 @@ def test_reconcile_syncthing_federated_peers_rehydrates_registered_peer(mocker):
 
     assert result == {"discovered": 1, "connected": 1}
     local_info, remote_info = connect.call_args.args
-    assert local_info["device_id"] == "MINIDEVICE"
-    assert remote_info["device_id"] == "SPARKDEVICE"
+    assert local_info["device_id"] == "NEWMINI"
+    assert remote_info["device_id"] == "NEWSPARK"
 
 
 def test_connect_syncthing_peers_rejects_different_shared_folders():

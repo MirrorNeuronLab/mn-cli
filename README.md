@@ -486,3 +486,20 @@ are ellipsized; recorded events retain the bounded message.
 
 The installed API, native SDK, and Web UI executables are resolved under
 `$MN_HOME/venv/bin` (default `~/.mn/venv/bin`), alongside runtime state.
+
+## Automatic federation storage recovery
+
+The supervised native runtime checks shared-storage pairing every 30 seconds,
+independently of model reconciliation. Incomplete pairing is retried every five
+seconds, including when an already-registered peer starts after the local runtime.
+Each pass reloads persisted sidecar settings and reads current authenticated
+Syncthing device identities before restoring reciprocal device and folder
+registration. Unchanged configurations are not rewritten. Disabled storage and
+unavailable peers never trigger resets, data deletion, or workflow restarts.
+The monitor uses existing federation authorization and never joins unknown nodes.
+Credential changes that invalidate existing federation access require node rejoin.
+
+Install the updated CLI and SDK and restart the native runtime service to enable
+the monitor. No runtime reset or blueprint modification is required. Registration
+is distinct from completed file transfer; DockerWorker preparation still verifies
+the staged context and its readiness marker before building.

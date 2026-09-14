@@ -1937,7 +1937,7 @@ def _reconcile_syncthing_federated_peers(
     """
 
     local_info = _syncthing_node_info(env, advertised_host)
-    if not local_info.get("enabled") or not local_info.get("device_id"):
+    if not local_info.get("enabled"):
         return {"discovered": 0, "connected": 0}
 
     try:
@@ -1967,15 +1967,28 @@ def _reconcile_syncthing_federated_peers(
         try:
             peer = core_client.get_federated_peer(node_name)
             remote_info = peer.get("syncthing") if isinstance(peer, dict) else None
-            if isinstance(remote_info, dict) and _connect_syncthing_peers(
-                local_info, remote_info
+            if not isinstance(remote_info, dict) or not remote_info.get("enabled"):
+                continue
+            # Registration can predate a sidecar reset. Read current identities
+            # from authenticated APIs before restoring the authorized pairing.
+            current_local = dict(local_info)
+            current_remote = dict(remote_info)
+            for info, api_host in (
+                (current_local, "127.0.0.1"),
+                (current_remote, str(remote_info.get("host") or "")),
             ):
+                status = _syncthing_status(api_host, int(info["gui_port"]), info["api_key"])
+                device_id = str(status.get("myID") or "").strip()
+                if not device_id:
+                    raise RuntimeError("Syncthing did not return its device identity")
+                info["device_id"] = device_id
+            if _connect_syncthing_peers(current_local, current_remote):
                 connected += 1
-        except Exception as exc:
-            logger.warning("Could not reconcile Syncthing peer %s: %s", node_name, exc)
+        except Exception:  # noqa: BLE001 - isolate each peer without logging credentials
+            logger.debug("Could not reconcile shared storage for peer %s", node_name)
 
     if discovered:
-        logger.info(
+        logger.debug(
             "Syncthing federation reconciliation discovered=%s connected=%s",
             discovered,
             connected,
