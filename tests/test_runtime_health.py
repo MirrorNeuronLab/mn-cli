@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import pytest
 from io import StringIO
 from pathlib import Path
 
@@ -14,6 +15,22 @@ from mn_cli.libs import runtime_health
 runner = CliRunner()
 
 
+@pytest.mark.parametrize("actual", ["nonode@nohost", "different@host", ""])
+def test_runtime_status_rejects_invalid_identity_in_machine_output(mocker, tmp_path, actual):
+    _patch_targets(mocker, tmp_path, web_ui_installed=True)
+    mocker.patch.object(runtime_health.client, "get_system_summary", return_value=json.dumps({
+        "nodes": [{"name": actual, "self?": True}]
+    }))
+    mocker.patch("mn_cli.libs.runtime_health.urllib.request.urlopen", side_effect=[
+        _HttpResponse({"status": "ok", "api_contract": "mirrorneuron.rest.v1"}),
+        _HttpResponse({"status": "ok", "component": "web-ui"}),
+    ])
+    result = runner.invoke(app, ["runtime", "status", "--json"])
+    assert result.exit_code == 1
+    assert "MN_NODE_IDENTITY_INVALID" in result.stdout
+    assert cli_data(result)["identity"] == {"expected": "test@host", "actual": actual, "valid": False}
+
+
 def cli_data(result):
     payload = json.loads(result.stdout)
     assert payload["schema"] == "mn.cli/v1"
@@ -22,7 +39,7 @@ def cli_data(result):
 
 def test_runtime_health_all_passing(mocker, tmp_path):
     _patch_targets(mocker, tmp_path, web_ui_installed=True)
-    mocker.patch.object(runtime_health.client, "get_system_summary", return_value='{"nodes":[]}')
+    mocker.patch.object(runtime_health.client, "get_system_summary", return_value='{"nodes":[{"name":"test@host","self":true}]}')
     mocker.patch(
         "mn_cli.libs.runtime_health.urllib.request.urlopen",
         side_effect=[
@@ -39,7 +56,7 @@ def test_runtime_health_all_passing(mocker, tmp_path):
 
 def test_runtime_health_api_down_is_critical(mocker, tmp_path):
     _patch_targets(mocker, tmp_path, web_ui_installed=True)
-    mocker.patch.object(runtime_health.client, "get_system_summary", return_value='{"nodes":[]}')
+    mocker.patch.object(runtime_health.client, "get_system_summary", return_value='{"nodes":[{"name":"test@host","self":true}]}')
     mocker.patch(
         "mn_cli.libs.runtime_health.urllib.request.urlopen",
         side_effect=[
@@ -102,7 +119,7 @@ def test_runtime_health_web_ui_down_when_advertised_is_critical(mocker, tmp_path
         json.dumps({"web_ui": {"url": "http://localhost:55173"}, "api": {"base_url": "http://localhost:54001/api/v1"}}),
         encoding="utf-8",
     )
-    mocker.patch.object(runtime_health.client, "get_system_summary", return_value='{"nodes":[]}')
+    mocker.patch.object(runtime_health.client, "get_system_summary", return_value='{"nodes":[{"name":"test@host","self":true}]}')
     mocker.patch(
         "mn_cli.libs.runtime_health.urllib.request.urlopen",
         side_effect=[
@@ -120,7 +137,7 @@ def test_runtime_health_web_ui_down_when_advertised_is_critical(mocker, tmp_path
 
 def test_runtime_health_web_ui_not_installed_is_warning(mocker, tmp_path):
     _patch_targets(mocker, tmp_path, web_ui_installed=False)
-    mocker.patch.object(runtime_health.client, "get_system_summary", return_value='{"nodes":[]}')
+    mocker.patch.object(runtime_health.client, "get_system_summary", return_value='{"nodes":[{"name":"test@host","self":true}]}')
     mocker.patch(
         "mn_cli.libs.runtime_health.urllib.request.urlopen",
         return_value=_HttpResponse({"status": "ok", "api_contract": "mirrorneuron.rest.v1"}),
@@ -390,7 +407,7 @@ def _patch_targets(mocker, tmp_path: Path, *, web_ui_installed: bool) -> Path:
     mocker.patch("mn_cli.libs.runtime_health.RUNTIME_ENDPOINTS_FILE", endpoints)
     mocker.patch("mn_cli.libs.runtime_health.runtime_compose_available", return_value=False)
     mocker.patch("mn_cli.libs.runtime_health.compose_web_ui_enabled", return_value=False)
-    mocker.patch("mn_cli.libs.runtime_health._runtime_base_env", return_value={})
+    mocker.patch("mn_cli.libs.runtime_health._runtime_base_env", return_value={"MN_NODE_NAME": "test@host", "MN_HOME": str(tmp_path)})
     mocker.patch(
         "mn_cli.libs.runtime_health._runtime_endpoint_snapshot",
         return_value={
@@ -409,7 +426,7 @@ class _CoreClient:
 
     def get_system_summary(self):
         self.calls += 1
-        return '{"nodes":[]}'
+        return '{"nodes":[{"name":"test@host","self":true}]}'
 
 
 class _HttpResponse:

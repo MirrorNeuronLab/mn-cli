@@ -503,3 +503,24 @@ Install the updated CLI and SDK and restart the native runtime service to enable
 the monitor. No runtime reset or blueprint modification is required. Registration
 is distinct from completed file transfer; DockerWorker preparation still verifies
 the staged context and its readiness marker before building.
+# Persistent desktop node identity
+
+`mn runtime start` persists a private, versioned `MN_HOME/node-identity.json`
+before starting an independently federated Core. Existing names are preserved;
+new names use `mirror_neuron_<uuid>@127.0.0.1` and do not depend on Wi-Fi or DNS.
+The name is an identity, not the remote connection address. Conflicting saved,
+configured, or container identities stop startup without changing job ownership.
+
+`mn runtime status --json` reports `identity.expected`, `identity.actual`, and
+`identity.valid`. An unnamed or mismatched Core is critical and exits nonzero.
+Use `mn runtime start` to restore missing startup configuration. Restore the
+original identity from backup when configuration conflicts; do not delete the
+identity file or reset job data to bypass the check. Existing records owned by
+`nonode@nohost` require explicit repair and are never reassigned automatically.
+
+After a network change, `mn runtime reconnect` refreshes desktop endpoint
+advertisements without restarting a healthy Core. Explicit DNS endpoints remain
+configured; automatically detected IPs are refreshed. Peers must resolve DNS
+from their containers. If all known endpoints are unreachable, use `mn node add`
+with the peer's current address and federation token. Direct Erlang clusters
+retain their existing naming and discovery contract.

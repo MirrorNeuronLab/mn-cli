@@ -43,6 +43,8 @@ ORIGINAL_WEB_UI_DIRS = server_cmds.WEB_UI_DIRS
 
 @pytest.fixture(autouse=True)
 def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
+    mocker.patch('mn_cli.server_cmds.probe_core_identity', return_value=True)
+    mocker.patch('mn_cli.server_cmds.observe_core_identity', return_value=None)
     monkeypatch.delenv("MN_COOKIE", raising=False)
     monkeypatch.delenv("MN_GRPC_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN", raising=False)
@@ -2458,7 +2460,9 @@ def test_start_server_existing_api_recreates_compose_core_with_stale_grpc_tokens
         "restart_reason": "Core runtime was recreated",
     }
 
-def test_start_server_existing_api_keeps_compose_core_when_grpc_tokens_current(mocker, tmp_path):
+@pytest.mark.parametrize("identity_valid", [True, False])
+def test_start_server_existing_api_recreates_only_for_invalid_identity(mocker, tmp_path, identity_valid):
+    mocker.patch('mn_cli.server_cmds.probe_core_identity', side_effect=[identity_valid, True])
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
     (tmp_path / "api.pid").write_text("1234")
     mocker.patch('mn_cli.server_cmds.os.kill') # check_status returns 0
@@ -2493,11 +2497,11 @@ def test_start_server_existing_api_keeps_compose_core_when_grpc_tokens_current(m
 
     _start_server()
 
-    assert any(item[0] == runtime_compose_cmd("up", "-d") for item in calls)
-    assert not any(
+    assert any(item[0] == runtime_compose_cmd("up", "-d") for item in calls) == identity_valid
+    assert any(
         item[0] == runtime_compose_cmd("up", "-d", "--force-recreate", "redis", "mirror-neuron-core")
         for item in calls
-    )
+    ) == (not identity_valid)
 
 def test_join_still_errors_when_local_api_already_running(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")

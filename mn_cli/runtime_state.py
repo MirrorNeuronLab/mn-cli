@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -38,8 +39,7 @@ def write_env_file_values(path: Path, updates: dict[str, str]) -> None:
 
     lines = _updated_env_lines(original_lines, updates)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    chmod_private(path)
+    write_private_text(path, "\n".join(lines) + "\n")
 
 
 def remove_env_file_keys(path: Path, keys: set[str]) -> bool:
@@ -56,8 +56,7 @@ def remove_env_file_keys(path: Path, keys: set[str]) -> bool:
         return False
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-    chmod_private(path)
+    write_private_text(path, "\n".join(lines) + ("\n" if lines else ""))
     return True
 
 
@@ -116,10 +115,15 @@ def read_text_stripped(path: Path) -> str:
 
 def write_private_text(path: Path, value: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as handle:
-        handle.write(value)
-    chmod_private(path)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(value)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def chmod_private(path: Path) -> None:

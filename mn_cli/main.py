@@ -27,6 +27,7 @@ from mn_cli.libs import (
 )
 from mn_cli.output import RemediatingTyperGroup, instrument_typer
 from mn_cli.runtime_mode import local_runtime_mode
+from mn_cli.runtime.reconnect import reconnect as reconnect_runtime
 
 PACKAGE_NAME = "mirrorneuron-cli"
 FALLBACK_VERSION = "0.0.0"
@@ -213,6 +214,7 @@ operation_app.command(name="watch")(operation_cmds.watch)
 runtime_app.command(name="start")(sys_cmds.start)
 runtime_app.command(name="stop")(sys_cmds.stop)
 runtime_app.command(name="status")(sys_cmds.status)
+runtime_app.command(name="reconnect")(reconnect_runtime)
 runtime_app.command(name="doctor")(sys_cmds.doctor)
 runtime_app.command(name="cleanup")(sys_cmds.cleanup)
 runtime_app.command(name="restart-sidecars")(sys_cmds.restart_sidecars)

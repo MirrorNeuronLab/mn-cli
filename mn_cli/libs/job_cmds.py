@@ -49,6 +49,7 @@ def nodes():
         summary_json = client.get_system_summary()
         summary = json.loads(summary_json)
         summary = _strip_node_list_restart_history(summary)
+        _reject_unnamed_node_health(summary)
         from mn_cli.libs.ui import print_collection
         from mn_cli.output import record_result
 
@@ -68,6 +69,7 @@ def show_node(node_name: str = typer.Argument(help="Runtime node name.")):
     """Show one runtime node from the current system summary."""
     try:
         summary = json.loads(client.get_system_summary())
+        _reject_unnamed_node_health(summary)
         items = summary.get("nodes") if isinstance(summary, dict) else []
         items = items if isinstance(items, list) else []
         node = next(
@@ -96,6 +98,22 @@ def show_node(node_name: str = typer.Argument(help="Runtime node name.")):
             "node show",
             command_context={"node_name": node_name},
         )
+
+
+def _reject_unnamed_node_health(summary):
+    """Do not trust an older Core's healthy status for an unnamed VM."""
+    if not isinstance(summary, dict) or not isinstance(summary.get("nodes"), list):
+        return
+    for node in summary["nodes"]:
+        if not isinstance(node, dict):
+            continue
+        identity = node.get("identity")
+        if _node_text(node, "name", "node", "id") == "nonode@nohost" or (
+            isinstance(identity, dict) and identity.get("expected") and identity.get("valid") is False
+        ):
+            node.update(status="identity_invalid", scheduling_eligible=False,
+                        job_owner_eligible=False,
+                        repair="Restore the original node identity and run mn runtime start. Existing job ownership requires explicit repair.")
 
 
 def _strip_node_list_restart_history(value):

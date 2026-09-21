@@ -501,3 +501,13 @@ Install the updated CLI and SDK and restart the native runtime service to enable
 the monitor. No runtime reset or blueprint modification is required. Registration
 is distinct from completed file transfer; DockerWorker preparation still verifies
 the staged context and its readiness marker before building.
+# Desktop identity and reconnect contract
+
+Independent desktop federation stores a version-1 node identity under MN_HOME,
+using atomic private writes and an OS file lock. Startup adopts only consistent
+saved/configured/container identity evidence; it does not derive identity from
+the current advertised address. Runtime status validates the actual Core node
+against the saved identity and fails readiness for unnamed or mismatched nodes.
+`mn runtime reconnect` writes an atomic version-1 runtime-network.json containing
+node_name, host, and grpc_port for Core to consume without restarting. It never
+changes ownership, direct Erlang membership, or federation credentials.

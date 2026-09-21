@@ -292,6 +292,29 @@ def test_node_list_strips_restart_history_and_reasons(monkeypatch):
     assert "operator maintenance" not in rendered
 
 
+def test_node_list_rejects_healthy_unnamed_runtime_in_table_and_json(monkeypatch):
+    from mn_cli import output as cli_output
+
+    output = _capture_console(monkeypatch)
+    results = []
+    monkeypatch.setattr(cli_output, "record_result", results.append)
+    monkeypatch.setattr(job_cmds, "client", SimpleNamespace(
+        get_system_summary=lambda: json.dumps({"nodes": [{
+            "name": "nonode@nohost", "hostname": "mini.local",
+            "status": "healthy", "self?": True, "job_owner_eligible": True,
+        }]})))
+
+    job_cmds.nodes()
+
+    assert "healthy" not in output.getvalue()
+    assert "identity_invalid" in output.getvalue()
+    assert "jobs unavailable" in output.getvalue()
+    node = results[-1]["nodes"][0]
+    assert node["status"] == "identity_invalid"
+    assert node["job_owner_eligible"] is False
+    assert "mn runtime start" in node["repair"]
+
+
 def test_node_list_uses_complete_node_specific_columns(monkeypatch):
     output = _capture_console(monkeypatch)
     summary = {

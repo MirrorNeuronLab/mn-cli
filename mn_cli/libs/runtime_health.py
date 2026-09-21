@@ -25,6 +25,7 @@ from mn_sdk.litellm_gateway import (
 from mn_sdk.model_runtime import DOCKER_MODEL_RUNNER_HOST_API_BASE, dmr_api_list_models
 
 from mn_cli.runtime_state import read_json_file
+from mn_cli.runtime.identity import identity_health, read_identity
 from mn_cli.libs.ui import print_doctor_checks, print_info
 from mn_cli.output import record_result
 from mn_cli.shared import client, console
@@ -124,13 +125,34 @@ def collect_runtime_status(
 ) -> dict[str, Any]:
     installed_web_ui = compose_web_ui_enabled() or find_web_ui_dir() is not None
     config = _runtime_config(web_ui_installed=installed_web_ui)
-    return sdk_collect_runtime_status(
+    report = sdk_collect_runtime_status(
         config=config,
         client=core_client if core_client is not None else client,
         timeout=timeout,
         http_opener=urllib.request.urlopen,
         web_ui_installed=installed_web_ui,
     )
+    env = config.runtime_env
+    expected = str(env.get("MN_NODE_NAME") or "")
+    try:
+        saved = read_identity(Path(config.mn_home))
+    except RuntimeError:
+        saved = "invalid"
+    nodes = report.get("nodes", {}).get("items", [])
+    local = [node for node in nodes if isinstance(node, dict) and (node.get("self") is True or node.get("self?") is True)]
+    actual = str(local[0].get("name") or local[0].get("node") or "") if len(local) == 1 else ""
+    identity = identity_health(saved or expected, actual)
+    if saved and expected and expected != saved:
+        identity["valid"] = False
+    report["identity"] = identity
+    if not identity["valid"]:
+        report["overall"] = "critical"
+        for component in report["components"]:
+            if component["name"] == "core_grpc":
+                component.update(status="critical", code="MN_NODE_IDENTITY_INVALID",
+                                 identity=identity,
+                                 error="Core identity is missing or mismatched. Run mn runtime start; restore the original identity if configuration conflicts. Records owned by nonode@nohost require explicit repair.")
+    return report
 
 
 def collect_runtime_doctor(

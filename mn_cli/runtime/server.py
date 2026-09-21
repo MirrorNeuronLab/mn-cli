@@ -36,6 +36,7 @@ from mn_sdk.runtime_config import (
     DEFAULT_WEB_UI_PORT as SDK_DEFAULT_WEB_UI_PORT,
 )
 from mn_cli.config import CliConfig
+from mn_cli.runtime.identity import resolve_identity, probe_core_identity, observe_core_identity
 from mn_cli.libs.ui import (
     print_confirmed,
     print_error,
@@ -83,6 +84,10 @@ def _erl_aflags_needs_update(value: Optional[str], dist_port: str | int) -> bool
 
 def _distributed_core_command() -> list[str]:
     command = (
+        'case "${MN_NODE_NAME:-}" in ""|nonode@nohost|*[!a-zA-Z0-9_.@-]*|@*|*@|*@*@*|[!a-zA-Z0-9_]* ) '
+        'echo "error: invalid MN_NODE_NAME; run mn runtime start to repair configuration" >&2; exit 1;; esac; '
+        'case "$MN_NODE_NAME" in *@*) ;; *) echo "error: MN_NODE_NAME requires name@host" >&2; exit 1;; esac; '
+        'case "${MN_NODE_NAME#*@}" in [!a-zA-Z0-9]*) echo "error: invalid node hostname" >&2; exit 1;; esac; '
         'if [ -x "bin/mirror_neuron" ]; then '
         'if [ -n "${MN_NODE_NAME:-}" ]; then '
         'if [ -z "${MN_COOKIE:-}" ] || [ "${MN_COOKIE:-}" = "mirrorneuron" ]; then '
@@ -94,8 +99,6 @@ def _distributed_core_command() -> list[str]:
         "export RELEASE_DISTRIBUTION=name; "
         'export RELEASE_NODE="$MN_NODE_NAME"; '
         'export RELEASE_COOKIE="$MN_COOKIE"; '
-        "else "
-        "export RELEASE_DISTRIBUTION=none; "
         "fi; "
         "exec bin/mirror_neuron start; "
         "fi; "
@@ -108,8 +111,6 @@ def _distributed_core_command() -> list[str]:
         "epmd -daemon; "
         'exec elixir --name "$MN_NODE_NAME" --cookie "$MN_COOKIE" --erl '
         '"-kernel inet_dist_listen_min ${dist_port} inet_dist_listen_max ${dist_port}" -S mix run --no-halt; '
-        "else "
-        "exec mix run --no-halt; "
         "fi"
     )
     return ["sh", "-c", command]
@@ -2099,6 +2100,29 @@ def _network_node_name(host: str) -> str:
     return f"mirror_neuron@{host}"
 
 
+def _ensure_desktop_identity(env: dict[str, str]) -> dict[str, str]:
+    # Explicit direct-Erlang cluster installations keep their existing policy.
+    if _persisted_join_profile(env) or _docker_network_uses_internal_identity(
+        str(env.get("MN_DOCKER_NETWORK_MODE") or "disabled")
+    ):
+        return env
+    configured = _read_env_file(RUNTIME_COMPOSE_ENV).get("MN_NODE_NAME", "")
+    observed = _docker_container_env_value(LOCAL_CORE_CONTAINER, "MN_NODE_NAME")
+    runtime_name = observe_core_identity(env)
+    if "nonode@nohost" in (configured, observed, runtime_name):
+        print_warning(console, "Records owned by nonode@nohost require explicit repair; startup will not reassign their ownership.")
+    name = resolve_identity(
+        DIR, configured=configured or env.get("MN_NODE_NAME", ""),
+        explicit=os.getenv("MN_NODE_NAME", ""), observed=observed, runtime_name=runtime_name,
+    )
+    env = dict(env)
+    env.update(MN_NODE_NAME=name, MN_MODEL_SERVICE_NODE_NAME=name)
+    _write_env_file_values(RUNTIME_COMPOSE_ENV, {
+        "MN_NODE_NAME": name, "MN_MODEL_SERVICE_NODE_NAME": name,
+    })
+    return env
+
+
 def _node_alias_file() -> Path:
     return DIR / "node.alias"
 
@@ -3469,6 +3493,13 @@ def _print_runtime_join_ready(
 ) -> None:
     """Print the credential that another Core must use to federate this node."""
 
+    for attempt in range(5):
+        if probe_core_identity(env) is True:
+            break
+        if attempt == 4:
+            raise RuntimeError("MN_NODE_IDENTITY_INVALID: Core did not become ready with its configured identity. Inspect Core startup logs and restore the original configuration.")
+        time.sleep(0.5)
+
     container_names = (LOCAL_CORE_CONTAINER,)
     join_token = token or _running_network_token(container_names)
     if not join_token:
@@ -3838,6 +3869,10 @@ def _join_network(
     # that could interrupt jobs and erase the standalone-store boundary
     # federation is intended to preserve.
     running_node_name = _running_core_node_name(local_client)
+    env = _ensure_desktop_identity(env)
+    local_node_name = env.get("MN_NODE_NAME") or local_node_name
+    if running_node_name and running_node_name != local_node_name:
+        raise RuntimeError("MN_NODE_IDENTITY_INVALID: Run mn runtime start to restore the configured identity before joining a peer.")
     if not running_node_name:
         _ensure_local_cluster_runtime_for_join(
             local_host=local_host,
@@ -3868,7 +3903,9 @@ def _join_network(
             raise
         _raise_join_handshake_error(exc, target)
 
-    remote_node = str(joined.get("node_name") or _network_node_name(seed_host))
+    remote_node = str(joined.get("node_name") or "")
+    if not remote_node or remote_node == "nonode@nohost":
+        raise RuntimeError("The peer did not return a valid node identity. Repair the peer runtime before retrying mn node add.")
     details: list[tuple[str, str]] = [("Node", remote_node)]
     details.append(("Mode", "federated"))
     model_reconcile = _reconcile_cluster_models_after_membership_change()
@@ -7163,6 +7200,10 @@ def _start_server(
     docker_network_mode: Optional[str] = None,
     docker_network_name: Optional[str] = None,
 ):
+    # Both the warm-API and cold-start paths must establish identity first.
+    initial_env = _runtime_base_env(runtime_compose_available())
+    if not ip and not _docker_network_uses_internal_identity(docker_network_mode or "disabled"):
+        initial_env = _ensure_desktop_identity(initial_env)
     if check_status(API_PID_FILE) == 0:
         if ip:
             print_error(console, "MirrorNeuron API is already running.")
@@ -7174,7 +7215,9 @@ def _start_server(
         compose_runtime = runtime_compose_available()
         if compose_runtime:
             _reconcile_compose_core_container()
-        env = _runtime_base_env(compose_runtime)
+        env = dict(initial_env)
+        env["MN_COOKIE"] = os.getenv("MN_COOKIE") or _derive_network_secret(_resolve_network_token(), "cookie")
+        _write_env_file_values(RUNTIME_COMPOSE_ENV, {"MN_COOKIE": env["MN_COOKIE"]})
         for key, value in _runtime_grpc_tokens_from_running_container().items():
             if value:
                 env[key] = value
@@ -7197,6 +7240,8 @@ def _start_server(
                     docker_network_name=docker_network_name,
                 )
             core_running = _docker_container_running("mirror-neuron-core")
+            if core_running and probe_core_identity(env) is False:
+                force_runtime_recreate = True
             if not core_running:
                 print_info(
                     console,
@@ -7316,7 +7361,7 @@ def _start_server(
     network_token = token or _resolve_network_token()
     if token:
         _write_network_token(network_token)
-    env = _runtime_base_env(compose_runtime)
+    env = dict(initial_env)
     env.update(_shared_storage_env_from_runtime_env(env))
     mode_override = (
         docker_network_mode or os.getenv("MN_DOCKER_NETWORK_MODE", "").strip()
@@ -7339,7 +7384,8 @@ def _start_server(
     local_node_name = (
         _docker_node_name(node_alias)
         if use_internal_identity
-        else _network_node_name(advertised_host)
+        else (_network_node_name(advertised_host) if ip or _persisted_join_profile(env)
+              else env.get("MN_NODE_NAME") or _network_node_name(advertised_host))
     )
     env = _ensure_syncthing_for_runtime(env, advertised_host=advertised_host)
     join_handshake = (
@@ -7747,6 +7793,7 @@ def _prepare_running_compose_exposure(
     docker_network_mode: Optional[str],
     docker_network_name: Optional[str],
 ) -> tuple[dict[str, str], bool]:
+    env = _ensure_desktop_identity(env)
     network_token = token or _resolve_network_token()
     advertised_host = _advertised_network_host(host)
     requested_mode = _docker_network_mode(
@@ -7766,7 +7813,7 @@ def _prepare_running_compose_exposure(
     local_node_name = (
         _docker_node_name(node_alias)
         if use_internal_identity
-        else _network_node_name(advertised_host)
+        else env.get("MN_NODE_NAME") or _network_node_name(advertised_host)
     )
     env.update(_shared_storage_env_from_runtime_env(env))
     env = _ensure_syncthing_for_runtime(env, advertised_host=advertised_host)
