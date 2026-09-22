@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import time
 import json
+import time
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -84,7 +84,7 @@ def stream_api_workflow_progress(
     if not base:
         return
     quoted_run_id = urllib.parse.quote(str(run_id), safe="")
-    url = f"{base}/runs/{quoted_run_id}/workflow-progress/stream"
+    url = f"{base}/runs/{quoted_run_id}/events/stream"
     headers = {"Accept": "text/event-stream"}
     if api_token:
         headers["Authorization"] = f"Bearer {api_token}"
@@ -95,10 +95,13 @@ def stream_api_workflow_progress(
         for raw_line in response:
             line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
             if line == "":
-                if event_name == "snapshot" and data_lines:
+                if event_name in {"snapshot", "run.snapshot", "message"} and data_lines:
                     payload = json.loads("\n".join(data_lines))
                     if isinstance(payload, dict):
-                        yield payload
+                        if payload.get("type") == "run.snapshot" and isinstance(payload.get("data"), dict):
+                            yield payload["data"]
+                        elif "type" not in payload:
+                            yield payload
                 event_name = "message"
                 data_lines = []
                 continue

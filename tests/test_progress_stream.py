@@ -17,8 +17,8 @@ class _Response:
     def __iter__(self):
         return iter(
             [
-                b"event: snapshot\n",
-                b'data: {"version":2,"run_id":"researcher-346dab41d3","steps":[]}\n',
+                b"event: run.snapshot\n",
+                b'data: {"type":"run.snapshot","data":{"version":2,"run_id":"researcher-346dab41d3","steps":[]}}\n',
                 b"\n",
             ]
         )
@@ -46,7 +46,7 @@ def test_api_progress_stream_uses_v2_execution_run_route(mocker):
     )
 
     assert captured == {
-        "url": "http://localhost:54001/api/v1/runs/researcher-346dab41d3/workflow-progress/stream",
+        "url": "http://localhost:54001/api/v1/runs/researcher-346dab41d3/events/stream",
         "timeout": 12,
     }
     assert snapshots[0]["version"] == 2

@@ -359,7 +359,7 @@ def test_workflow_monitor_renders_service_idle_and_ready_counts():
     )
     rendered = console.export_text()
 
-    assert "2/2 steps" in rendered
+    assert "1 live · 2 steps" in rendered
     assert "idle" in rendered
     assert "Review visual detection" in rendered
     assert "Visual Detector" in rendered
@@ -465,6 +465,59 @@ def test_workflow_monitor_labels_running_service_live_and_downstream_pending_wai
     assert "Warehouse Service" in rendered
     assert "(live)" in rendered
     assert "Finalize (waiting)" in rendered
+    assert "∞ live" in rendered
+
+
+def test_service_monitor_joins_saved_shape_with_empty_runtime_progress():
+    from mn_cli.libs.run_cmds.handlers.monitor import _with_monitor_shape
+
+    shape = {
+        "kind": "service",
+        "workflow_id": "microduck_controller_v1",
+        "steps": [
+            {"id": "run", "label": "Run Service", "agents": [{"id": "service-agent", "role": "controller"}]},
+            {"id": "finish", "label": "Finalize", "agents": [{"id": "finalizer"}]},
+        ],
+    }
+    progress = _with_monitor_shape({"status": "running", "steps": []}, shape)
+
+    assert [step["status"] for step in progress["steps"]] == ["running", "pending"]
+    assert progress["current_step"]["agents"][0]["id"] == "service-agent"
+    console = Console(record=True, width=140)
+    console.print(generate_live_layout("run-1", {"workflow_progress": progress}, JobMonitorState()))
+    rendered = console.export_text()
+    assert "Run Service (live)" in rendered
+    assert "Finalize (waiting)" in rendered
+    assert "service-agent" in rendered
+    assert "∞ live" in rendered
+
+
+def test_service_monitor_fetches_definition_when_latest_run_has_no_steps(monkeypatch):
+    import io
+    from importlib import import_module
+
+    monitor_module = import_module("mn_cli.libs.run_cmds.handlers.monitor")
+
+    monkeypatch.setattr(monitor_module, "config", SimpleNamespace(api_base_url="http://local/api/v1", api_token=""))
+    responses = {
+        "/jobs/job-1": {"type": "service"},
+        "/jobs/job-1/workflow/latest-run/steps": {"run_id": "run-1", "steps": []},
+        "/jobs/job-1/workflow/definition/steps": {
+            "workflow_id": "service-flow", "steps": [{"id": "run", "agents": [{"id": "agent"}]}]
+        },
+    }
+
+    def open_request(request, timeout):
+        assert timeout == 5
+        path = request.full_url.removeprefix("http://local/api/v1")
+        return io.BytesIO(json.dumps(responses[path]).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", open_request)
+    shape = monitor_module._monitor_workflow_shape("job-1", "run-1")
+    assert shape == {
+        "kind": "service", "workflow_id": "service-flow",
+        "steps": [{"id": "run", "agents": [{"id": "agent"}]}],
+    }
 
 
 def test_workflow_monitor_renders_graph_layers_and_multiple_active_steps():

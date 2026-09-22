@@ -513,6 +513,8 @@ def generate_workflow_progress_layout(
         current_step = next((step for step in steps if step.get("current")), steps[0] if steps else {})
     if current_step_ids:
         active_steps = [step for step in steps if str(step.get("id")) in set(current_step_ids)]
+        if not active_steps and current_step:
+            active_steps = [current_step]
     else:
         active_steps = [current_step] if current_step else []
     agents = [
@@ -526,15 +528,22 @@ def generate_workflow_progress_layout(
     status = str(progress.get("status") or "unknown")
     color = _status_color(status)
     workflow_kind = str(progress.get("workflow_kind") or "batch").lower()
+    if workflow_kind == "service":
+        agents = [{**agent, "workflow_kind": "service"} for agent in agents]
     shown_steps, total_steps = _workflow_summary_step_counts(steps, workflow_kind=workflow_kind)
     elapsed_label = _format_elapsed(progress.get("elapsed_seconds"))
 
     header = Table.grid(expand=True)
     header.add_column(ratio=2)
     header.add_column(justify="right")
+    step_summary = (
+        f"{sum(1 for step in steps if step.get('status') in {'running', 'idle'})} live · {total_steps} steps"
+        if workflow_kind == "service" and status == "running"
+        else f"{shown_steps}/{total_steps} steps"
+    )
     header.add_row(
         Text(str(progress.get("workflow_id") or progress.get("name") or job_id), style="bold bright_blue"),
-        Text(f"{shown_steps}/{total_steps} steps  |  {elapsed_label}  |  {status}", style=f"bold {color}"),
+        Text(f"{step_summary}  |  {elapsed_label}  |  {status}", style=f"bold {color}"),
     )
 
     run_id = str(progress.get("run_id") or "").strip()
@@ -815,7 +824,9 @@ def _workflow_phase_table(steps: list[dict[str, Any]], *, workflow_kind: str = "
         ready_count = int(step.get("ready_count") or step.get("done_count") or 0)
         done_count = int(step.get("done_count") or 0)
         count_value = ready_count if workflow_kind == "service" else done_count
-        count = f"{count_value}/{int(step.get('total_count') or 0)}"
+        count = (
+            "∞ live" if status in {"running", "idle"} else "waiting" if status == "pending" else status
+        ) if workflow_kind == "service" else f"{count_value}/{int(step.get('total_count') or 0)}"
         table.add_row(label, count, style="bright_blue" if current else _status_color(icon_status))
     if not steps:
         table.add_row(". Runtime", "0/0", style="cyan")
@@ -844,11 +855,16 @@ def _workflow_agent_table(
         # Keep selection visible through the marker and weight, without
         # painting the whole row white in terminals with a dark background.
         row_style = f"bold {_status_color(status)}" if index == selected_index else _status_color(status)
+        display_progress = (
+            Text("∞ live", style="cyan") if status in {"running", "idle"}
+            else Text("waiting", style="dim") if status == "pending"
+            else Text(status, style=_status_color(status))
+        ) if str(agent.get("workflow_kind") or "") == "service" else _progress_renderable(agent)
         table.add_row(
             f"{marker}{index + 1}",
             _agent_id(agent),
             _workflow_agent_summary(agent),
-            _progress_renderable(agent),
+            display_progress,
             style=row_style,
         )
     return table
