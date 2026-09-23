@@ -423,9 +423,9 @@ def _materialize_shared_storage_outputs(storage: dict[str, Any]) -> bool:
 
 def _shared_output_copy_timeout_seconds() -> float:
     try:
-        return max(float(os.getenv("MN_OUTPUT_COPY_TIMEOUT_SECONDS", "30")), 0.1)
+        return max(float(os.getenv("MN_OUTPUT_COPY_TIMEOUT_SECONDS", "120")), 0.1)
     except (TypeError, ValueError):
-        return 30.0
+        return 120.0
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

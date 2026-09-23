@@ -1,5 +1,10 @@
 # MirrorNeuron CLI Specification
 
+The CLI waits for shared-storage output materialization after terminal blueprint
+runs. The default deadline is 120 seconds and is configurable with
+`MN_OUTPUT_COPY_TIMEOUT_SECONDS`. Incomplete copies are reported as errors by
+the SDK materializer rather than acknowledged as complete.
+
 Job creation delegates hardware placement and selected-owner routing to the
 shared SDK before preparing and submitting native resources. Explicit `--node`
 constrains preparation as well as ownership. Starts reuse the stored definition.

@@ -1,5 +1,9 @@
 # MirrorNeuron CLI
 
+Completed cross-node blueprint runs wait up to 120 seconds by default for the
+replicated final result and declared output files before completing the local
+output copy. Set `MN_OUTPUT_COPY_TIMEOUT_SECONDS` to adjust this deadline.
+
 Long blueprint launches and `mn job create` report the current preparation stage,
 including dependencies, payload staging, Docker workers, and runtime submission.
 `mn blueprint run` applies the same shared input validator as
