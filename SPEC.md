@@ -214,6 +214,8 @@ every intentional batch start gets a distinct run identity, while attempts
 retain their run.
 Run list/show may display a mapped replicated run record when Core no longer
 has the run. Nonterminal stored records are `unknown`, never asserted live.
+Run listing checks Core for owners named by local run records, including
+archived definitions and runs beyond the first page, before using `unknown`.
 `mn job create` runs host-side command input validators and records their result
 before storing the definition, so later source-independent starts never pass an
 unvalidated command rule to Core.

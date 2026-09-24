@@ -3,7 +3,7 @@ import json
 from typer.testing import CliRunner
 
 from mn_cli.main import app
-from mn_cli.libs.run_public import _merge_run_items
+from mn_cli.libs.run_public import _merge_run_items, _runtime_run_items
 
 runner = CliRunner()
 
@@ -16,6 +16,30 @@ def test_run_list_marks_unconfirmed_local_running_record_unknown():
 
     assert result["old"]["status"] == "unknown"
     assert result["live"]["status"] == "completed"
+
+
+def test_run_list_reads_archived_and_locally_mapped_job_runs(mocker):
+    list_jobs = mocker.patch(
+        "mn_cli.libs.run_public.client.list_jobs",
+        return_value=json.dumps({"items": []}),
+    )
+    list_runs = mocker.patch(
+        "mn_cli.libs.run_public.client.list_runs",
+        side_effect=[
+            json.dumps({"items": [{"run_id": "old", "status": "completed"}], "next_page_token": "more"}),
+            json.dumps({"items": [{"run_id": "recent", "status": "failed"}]}),
+        ],
+    )
+
+    result = _runtime_run_items(
+        blueprint_id=None,
+        limit=20,
+        local_items=[{"run_id": "old", "job_id": "archived-job"}],
+    )
+
+    assert [run["status"] for run in result] == ["completed", "failed"]
+    list_jobs.assert_called_once_with(include_archived=True, page_size=50)
+    assert list_runs.call_count == 2
 
 
 def _documents(output: str) -> list[dict]:

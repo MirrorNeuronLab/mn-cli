@@ -42,9 +42,10 @@ def list_runs(
         list_from_store, _, _ = blueprint_cmds._load_observability_api()
         try:
             while True:
+                local_items = list_from_store(runs_root=runs_root, blueprint_id=blueprint, limit=limit)
                 items = _merge_run_items(
-                    list_from_store(runs_root=runs_root, blueprint_id=blueprint, limit=limit),
-                    _runtime_run_items(blueprint_id=blueprint, limit=limit),
+                    local_items,
+                    _runtime_run_items(blueprint_id=blueprint, limit=limit, local_items=local_items),
                     limit=limit,
                 )
                 emit_stream_record("snapshot", data={"items": items, "count": len(items)})
@@ -69,7 +70,7 @@ def list_runs(
     )
     items = _merge_run_items(
         local_items,
-        _runtime_run_items(blueprint_id=blueprint, limit=limit),
+        _runtime_run_items(blueprint_id=blueprint, limit=limit, local_items=local_items),
         limit=limit,
     )
     print_collection(
@@ -80,7 +81,7 @@ def list_runs(
     )
 
 
-def _runtime_run_items(*, blueprint_id: str | None, limit: int) -> list[dict]:
+def _runtime_run_items(*, blueprint_id: str | None, limit: int, local_items: list[dict] | None = None) -> list[dict]:
     """Read all visible durable-job runs when Core is reachable.
 
     The local run store receives the submission mapping before terminal
@@ -89,7 +90,7 @@ def _runtime_run_items(*, blueprint_id: str | None, limit: int) -> list[dict]:
     """
 
     try:
-        jobs_payload = json.loads(client.list_jobs(page_size=max(limit, 50)))
+        jobs_payload = json.loads(client.list_jobs(include_archived=True, page_size=max(limit, 50)))
     except Exception:
         logger.debug("Unable to list runtime jobs for run listing", exc_info=True)
         return []
@@ -105,6 +106,14 @@ def _runtime_run_items(*, blueprint_id: str | None, limit: int) -> list[dict]:
     if not isinstance(jobs, list):
         return []
 
+    # The first jobs page can omit the owners of locally recorded runs.
+    # Query those owners directly so their terminal Core state is not lost.
+    local_job_ids = {
+        str(item.get("job_id") or "").strip()
+        for item in (local_items or [])
+        if isinstance(item, dict)
+    }
+    seen_job_ids: set[str] = set()
     items: list[dict] = []
     for job in jobs:
         if not isinstance(job, dict):
@@ -113,13 +122,24 @@ def _runtime_run_items(*, blueprint_id: str | None, limit: int) -> list[dict]:
         job_blueprint_id = str(job.get("blueprint_id") or "").strip()
         if not job_id or (blueprint_id and job_blueprint_id != blueprint_id):
             continue
+        seen_job_ids.add(job_id)
+        items.extend(_runs_for_job(job_id, job_blueprint_id, limit))
+    for job_id in sorted(local_job_ids - seen_job_ids - {""}):
+        items.extend(_runs_for_job(job_id, blueprint_id or "", limit))
+    return items
+
+
+def _runs_for_job(job_id: str, job_blueprint_id: str, limit: int) -> list[dict]:
+    items: list[dict] = []
+    page_token = ""
+    while True:
         try:
             runs_payload = json.loads(
-                client.list_runs(job_id, page_size=max(limit, 50))
+                client.list_runs(job_id, page_size=max(limit, 50), page_token=page_token)
             )
         except Exception:
             logger.debug("Unable to list runs for durable job %s", job_id, exc_info=True)
-            continue
+            break
         runs = (
             runs_payload.get("data")
             or runs_payload.get("runs")
@@ -129,7 +149,7 @@ def _runtime_run_items(*, blueprint_id: str | None, limit: int) -> list[dict]:
             else []
         )
         if not isinstance(runs, list):
-            continue
+            break
         for run in runs:
             if not isinstance(run, dict):
                 continue
@@ -138,6 +158,10 @@ def _runtime_run_items(*, blueprint_id: str | None, limit: int) -> list[dict]:
             if job_blueprint_id:
                 item.setdefault("blueprint_id", job_blueprint_id)
             items.append(item)
+        next_token = str(runs_payload.get("next_page_token") or "") if isinstance(runs_payload, dict) else ""
+        if not next_token or next_token == page_token:
+            break
+        page_token = next_token
     return items
 
 
