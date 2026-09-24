@@ -596,7 +596,8 @@ def run_bundle(
         )
         if final_status in FINAL_STATUSES:
             materialized_shared = _materialize_shared_storage_outputs(
-                prepared_submission.metadata
+                prepared_submission.metadata,
+                execution_id=execution_id,
             )
             if not materialized_shared:
                 _materialize_completed_blueprint_outputs(

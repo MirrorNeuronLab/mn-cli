@@ -512,6 +512,33 @@ def test_materialize_shared_storage_outputs_retains_submission_after_copy(tmp_pa
     assert submission.exists()
 
 
+def test_materialize_publishes_result_for_actual_execution_id(tmp_path):
+    host_root = tmp_path / "shared"
+    submission = host_root / "submissions" / "sub-1"
+    source = submission / "outputs" / "user"
+    actual_run = submission / "outputs" / "runs" / "actual-run"
+    source.mkdir(parents=True)
+    actual_run.mkdir(parents=True)
+    (source / "report.md").write_text("# Report\n")
+    target = tmp_path / "Downloads" / "purchasing_manager"
+    copied = run_cmds._materialize_shared_storage_outputs({
+        "host_root": str(host_root),
+        "host_submission_path": str(submission),
+        "runtime_root": "/runtime/shared",
+        "run_id": "planned-run",
+        "output_copy": [{
+            "source_path": "/runtime/shared/submissions/sub-1/outputs/user",
+            "target_path": str(target),
+            "kind": "directory",
+            "result": {"kind": "output_folder", "label": "Output folder"},
+        }],
+    }, execution_id="actual-run")
+    assert copied is True
+    event = json.loads((actual_run / "events.jsonl").read_text().splitlines()[0])
+    assert event["payload"]["run_id"] == "actual-run"
+    assert not (submission / "outputs" / "runs" / "planned-run").exists()
+
+
 def test_materialize_shared_storage_outputs_waits_for_delayed_user_output(
     capsys, monkeypatch, tmp_path
 ):

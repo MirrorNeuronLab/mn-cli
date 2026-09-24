@@ -399,7 +399,7 @@ def _materialize_completed_blueprint_outputs(
         logger.exception("Failed to materialize blueprint outputs to %s", output_folder)
 
 
-def _materialize_shared_storage_outputs(storage: dict[str, Any]) -> bool:
+def _materialize_shared_storage_outputs(storage: dict[str, Any], *, execution_id: str | None = None) -> bool:
     if not isinstance(storage, dict):
         return False
     output_copy = storage.get("output_copy")
@@ -408,9 +408,10 @@ def _materialize_shared_storage_outputs(storage: dict[str, Any]) -> bool:
             storage,
             poll_seconds=0.25,
             timeout_seconds=_shared_output_copy_timeout_seconds(),
+            result_run_id=execution_id,
         ) or {}
     else:
-        result = _sdk_materialize_shared_storage_outputs(storage) or {}
+        result = _sdk_materialize_shared_storage_outputs(storage, result_run_id=execution_id) or {}
     for warning in result.get("warnings") or []:
         logger.warning("Shared output materialization warning: %s", warning)
     for error in result.get("errors") or []:
