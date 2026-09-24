@@ -266,6 +266,10 @@ mn run resume <run-id>
 mn run cancel <run-id>
 ```
 
+When an older run is no longer visible to Core, `run list` and `run show`
+recover verified terminal status from its replicated submission. A stored
+`running` marker without a live Core record is shown as `unknown`.
+
 In an interactive terminal, run pause, resume, and cancel display a spinner
 while Core processes the request. JSON and `MN_CLI_OUTPUT=plain` output remain
 free of transient progress so they are safe for automation.

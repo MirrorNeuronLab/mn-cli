@@ -3,8 +3,19 @@ import json
 from typer.testing import CliRunner
 
 from mn_cli.main import app
+from mn_cli.libs.run_public import _merge_run_items
 
 runner = CliRunner()
+
+
+def test_run_list_marks_unconfirmed_local_running_record_unknown():
+    local = [{"run_id": "old", "status": "running"}, {"run_id": "live", "status": "running"}]
+    core = [{"run_id": "live", "status": "completed"}]
+
+    result = {item["run_id"]: item for item in _merge_run_items(local, core, limit=10)}
+
+    assert result["old"]["status"] == "unknown"
+    assert result["live"]["status"] == "completed"
 
 
 def _documents(output: str) -> list[dict]:

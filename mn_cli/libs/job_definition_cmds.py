@@ -13,6 +13,7 @@ from mn_sdk import (
     run_input_validation,
 )
 from mn_sdk.blueprint_support import make_run_id
+from mn_sdk.shared_run_store import mapped_run_record
 from mn_sdk.submission_preparation import prepare_manifest_for_submission
 
 from mn_cli.error_handler import handle_cli_error
@@ -331,7 +332,16 @@ def runs(job_id: str = typer.Argument(help="Durable job ID.")):
 
 def run_status(run_id: str):
     """Inspect one execution run."""
-    _print_run(client.get_run, run_id, "run show")
+    try:
+        record = json.loads(client.get_run(run_id))
+    except Exception as exc:
+        record = mapped_run_record(run_id)
+        if record is None:
+            handle_cli_error(exc, console, "run show", command_context={"run_id": run_id})
+            return
+        if record.get("status") not in {"completed", "failed", "cancelled"}:
+            record = {**record, "status": "unknown"}
+    print_detail(console, "Run", record)
 
 
 def run_pause(run_id: str):

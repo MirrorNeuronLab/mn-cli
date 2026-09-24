@@ -212,6 +212,8 @@ addresses executions and always
 accepts `run_id`. A durable `job_id` owns configuration, schedules, and job data;
 every intentional batch start gets a distinct run identity, while attempts
 retain their run.
+Run list/show may display a mapped replicated run record when Core no longer
+has the run. Nonterminal stored records are `unknown`, never asserted live.
 `mn job create` runs host-side command input validators and records their result
 before storing the definition, so later source-independent starts never pass an
 unvalidated command rule to Core.

@@ -7,6 +7,21 @@ from mn_cli.libs import job_definition_cmds
 from mn_cli.libs.job_cleanup import JobResourceCleanupError
 
 
+def test_run_show_uses_verified_shared_record_when_core_lost_run(monkeypatch):
+    rendered = []
+    monkeypatch.setattr(job_definition_cmds, "client", SimpleNamespace(
+        get_run=lambda _run_id: (_ for _ in ()).throw(LookupError("missing")),
+    ))
+    monkeypatch.setattr(job_definition_cmds, "mapped_run_record", lambda _run_id: {
+        "run_id": "run-old", "status": "failed",
+    })
+    monkeypatch.setattr(job_definition_cmds, "print_detail", lambda _console, title, value: rendered.append((title, value)))
+
+    job_definition_cmds.run_status("run-old")
+
+    assert rendered == [("Run", {"run_id": "run-old", "status": "failed"})]
+
+
 def test_job_start_force_confirms_and_replaces_with_fresh_run_id(monkeypatch):
     calls = {}
     confirmations = []

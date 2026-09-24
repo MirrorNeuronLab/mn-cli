@@ -42,7 +42,11 @@ def list_runs(
         list_from_store, _, _ = blueprint_cmds._load_observability_api()
         try:
             while True:
-                items = list_from_store(runs_root=runs_root, blueprint_id=blueprint, limit=limit)
+                items = _merge_run_items(
+                    list_from_store(runs_root=runs_root, blueprint_id=blueprint, limit=limit),
+                    _runtime_run_items(blueprint_id=blueprint, limit=limit),
+                    limit=limit,
+                )
                 emit_stream_record("snapshot", data={"items": items, "count": len(items)})
                 import time
 
@@ -149,13 +153,21 @@ def _merge_run_items(
         run_id = str(item.get("run_id") or "").strip()
         if run_id:
             merged[run_id] = dict(item)
+    live_ids: set[str] = set()
     for item in runtime_items:
         run_id = str(item.get("run_id") or "").strip()
         if not run_id:
             continue
+        live_ids.add(run_id)
         combined = dict(merged.get(run_id) or {})
         combined.update(item)
         merged[run_id] = combined
+
+    for run_id, item in merged.items():
+        if run_id not in live_ids and str(item.get("status") or "").lower() not in {
+            "completed", "failed", "cancelled", "canceled", "unknown",
+        }:
+            item["status"] = "unknown"
 
     return sorted(
         merged.values(),
