@@ -178,6 +178,9 @@ the newest workflow events without growing the monitor.
 Reattachment uses the manifest projection saved for that exact run; it never
 guesses an unrelated catalog blueprint when older run metadata lacks a
 `blueprint_id`.
+While the API progress stream is available, `mn run watch` displays its public
+step snapshot directly. The phase counters, current step, worker activity, and
+percentages therefore match the API for the same run.
 When a remote owner is verifying SDK-staged local inputs, the same monitor
 shows `Waiting for staged inputs on <node>` until Core dispatches the workflow.
 The interactive monitor intentionally omits LLM token totals and budgets because

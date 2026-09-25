@@ -861,6 +861,42 @@ def test_monitor_stream_timeout_covers_transient_deadlines(monkeypatch):
     assert _monitor_api_stream_timeout_seconds() >= 30
 
 
+def test_monitor_keeps_api_step_state_when_local_event_replay_lags(mocker):
+    snapshot = {
+        "schema_version": 1,
+        "status": "running",
+        "completed_steps": 4,
+        "current_step_id": "develop",
+        "current_step_ids": ["develop"],
+        "steps": [
+            {"id": "frame", "status": "done"},
+            {"id": "build", "status": "done"},
+            {"id": "assess", "status": "done"},
+            {"id": "plan", "status": "done"},
+            {"id": "develop", "status": "running", "agents": [
+                {"id": "researcher", "progress": 0.55, "working_on": "DockerWorker command started"}
+            ]},
+            {"id": "publish", "status": "pending"},
+        ],
+    }
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor._local_run_store_manifest",
+        side_effect=AssertionError("API snapshot needs no local manifest lookup"),
+    )
+    replay = mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor._local_progress_from_run_store",
+        side_effect=AssertionError("API progress must remain authoritative"),
+    )
+    get_run = mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.monitor._get_run_for_monitor",
+        side_effect=AssertionError("API progress must remain authoritative"),
+    )
+
+    assert _public_progress_from_api_snapshot("run-1", snapshot) is snapshot
+    replay.assert_not_called()
+    get_run.assert_not_called()
+
+
 def test_monitor_falls_back_when_api_stream_fails_after_local_snapshot(
     mocker, monkeypatch
 ):

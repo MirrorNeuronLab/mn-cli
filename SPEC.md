@@ -154,6 +154,9 @@ Only measured upstream progress may be presented as a percentage.
 - Reattachment prefers the exact saved run manifest/projection even when it is
   intentionally too sanitized for resubmission. A missing blueprint ID must
   never cause the monitor to select an unrelated first catalog entry.
+- A public API progress snapshot is authoritative for live `run watch` step
+  state. Local event replay is only used to reconstruct older runtime-node
+  snapshots or when the API stream is unavailable.
 - Interactive workflow monitors show a fixed-height, timestamped event tail at
   the bottom. The tail automatically advances to the newest workflow events
   without displacing progress or agent details.
