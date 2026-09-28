@@ -125,6 +125,20 @@ def _validate_workflow_manifest_issues(manifest: dict[str, Any]) -> list[dict[st
         workflow, step_ids
     )
     issues.extend(dynamic_issues)
+    # SDK compilation admits child templates separately from the fixed DAG.
+    # Their runtime bindings are valid without making them fixed workflow steps.
+    children = workflow.get("child_workflows", {})
+    if isinstance(children, dict):
+        for parent, child in children.items():
+            if parent not in step_ids or not isinstance(child, dict):
+                issues.append(_workflow_validation_issue(
+                    f"workflow.child_workflows.{parent}",
+                    "child workflow must belong to a fixed workflow step",
+                ))
+                continue
+            templates = child.get("templates", {})
+            if isinstance(templates, dict):
+                template_ids.update(templates)
 
     if isinstance(agents, dict):
         issues.extend(_validate_agent_graph_issues(agents))

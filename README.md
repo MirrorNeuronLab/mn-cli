@@ -10,6 +10,8 @@ including dependencies, payload staging, Docker workers, and runtime submission.
 `mn blueprint validate` before checking runtime resources, installing models, or
 submitting a job, so missing required inputs fail immediately with the relevant
 `--set` hint.
+Validation also accepts runtime bindings for SDK-admitted child-workflow
+templates while rejecting unknown step bindings.
 Interactive terminals show a spinner with elapsed time. Plain and redirected
 human output receive a concise “still waiting” line every ten seconds on stderr.
 First-time image builds may take several minutes; an elapsed timer indicates a

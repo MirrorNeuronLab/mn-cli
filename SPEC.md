@@ -12,6 +12,8 @@ constrains preparation as well as ownership. Starts reuse the stored definition.
 `mn blueprint validate` before runtime resource checks, model preparation, local
 hooks, or submission. Missing required inputs therefore fail without creating a
 runtime job and include the configured `--set` remediation path.
+Compiled child-workflow template IDs are valid runtime binding targets even
+though they are not fixed parent DAG steps. Unknown bindings remain invalid.
 
 ## Purpose
 

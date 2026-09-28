@@ -89,6 +89,21 @@ def test_workflow_manifest_reports_nested_step_and_runtime_binding_issues():
     }.issubset(_issue_paths(issues))
 
 
+def test_compiled_child_template_bindings_are_admitted_but_unknown_bindings_fail():
+    manifest = _workflow_manifest()
+    manifest["workflow"]["child_workflows"] = {
+        "start": {"templates": {"review_packet": {"run": "review_packet"}}}
+    }
+    manifest["runtime"]["bindings"] = {"review_packet": {}, "unknown": {}}
+    paths = _issue_paths(workflow_validation._validate_workflow_manifest_issues(manifest))
+    assert "runtime.bindings.review_packet" not in paths
+    assert "runtime.bindings.unknown" in paths
+    manifest["workflow"]["child_workflows"]["missing"] = manifest["workflow"]["child_workflows"].pop("start")
+    paths = _issue_paths(workflow_validation._validate_workflow_manifest_issues(manifest))
+    assert "workflow.child_workflows.missing" in paths
+    assert "runtime.bindings.review_packet" in paths
+
+
 def test_dynamic_workflow_accepts_admitted_template_binding_and_replace_path_region():
     manifest = _workflow_manifest()
     manifest["workflow"]["mode"] = "dynamic_dag"
