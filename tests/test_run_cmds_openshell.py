@@ -512,6 +512,45 @@ def test_local_docker_openshell_build_uses_plain_progress(mocker, tmp_path):
     assert command[:3] == ["docker", "build", "--progress=plain"]
 
 
+def test_openshell_context_preserves_scm_versions_extras_and_clean_sources(tmp_path):
+    import tomllib
+    from packaging.requirements import Requirement
+
+    image = tmp_path / "image"
+    image.mkdir()
+    (image / "Dockerfile").write_text("FROM base\nUSER sandbox\n")
+    records = []
+    for folder, package, dependencies, extras in [
+        ("common", "mn-python-sdk-common", [], ""),
+        ("sdk", "mirrorneuron-python-sdk", ["mn-python-sdk-common>=1.2,<2.0"], "[models]"),
+    ]:
+        source = tmp_path / folder
+        source.mkdir()
+        (source / "pyproject.toml").write_text(
+            f'[project]\nname = "{package}"\ndynamic = ["version"]\n'
+            f'dependencies = {json.dumps(dependencies)}\n'
+            '[tool.setuptools_scm]\nfallback_version = "0.0.0"\n'
+        )
+        (source / "stale.egg-info").mkdir()
+        (source / "stale.egg-info" / "PKG-INFO").write_text("Version: 0.0.0\n")
+        records.append({"package": package, "source": str(source), "version": "1.3.58", "extras": extras})
+    manifest = {"metadata": {"mn_local_skill_dependencies": {"sources": records}}}
+    context = run_cmds._openshell_skill_dependency_context(image, manifest)
+    try:
+        staged = context / "__mn_skill_dependencies/local"
+        common = tomllib.loads((staged / "common/pyproject.toml").read_text())
+        sdk = tomllib.loads((staged / "sdk/pyproject.toml").read_text())
+        common_version = common["tool"]["setuptools_scm"]["fallback_version"]
+        assert common_version == "1.3.58"
+        assert Requirement(sdk["project"]["dependencies"][0]).specifier.contains(common_version)
+        assert sdk["tool"]["setuptools_scm"]["fallback_version"] == "1.3.58"
+        assert "/tmp/mn-skill-runtime/local/sdk[models]" in (context / "local-requirements.txt").read_text()
+        assert not list(staged.rglob("*.egg-info"))
+        assert 'fallback_version = "0.0.0"' in (tmp_path / "common/pyproject.toml").read_text()
+    finally:
+        run_cmds.shutil.rmtree(context)
+
+
 def test_managed_gateway_builds_with_docker_without_named_metadata(tmp_path, monkeypatch, mocker):
     monkeypatch.delenv("OPENSHELL_GATEWAY", raising=False)
     monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)

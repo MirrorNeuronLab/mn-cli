@@ -5,7 +5,7 @@ from mn_sdk.submission_preparation import (
     _local_skill_dependency_source_records,
     _local_skill_requirements_text,
     _requirements_text,
-    _safe_dependency_source_name,
+    _stage_local_skill_dependency_context_sources,
 )
 
 from mn_cli.runtime_state import mn_home, read_env_file
@@ -378,23 +378,17 @@ def _openshell_skill_dependency_context(source_path: Path, manifest: dict[str, A
         _requirements_text([*existing_requirements.splitlines(), *requirements_text.splitlines()]),
         encoding="utf-8",
     )
-    local_context_sources: list[str] = []
-    for record in local_sources:
-        local_source = Path(record["source"]).expanduser()
-        if not local_source.exists():
-            continue
-        name = _safe_dependency_source_name(local_source)
-        relative_target = Path("__mn_skill_dependencies") / "local" / name
-        target = temp_context / relative_target
-        if local_source.is_dir():
-            shutil.copytree(local_source, target, dirs_exist_ok=True)
-        else:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(local_source, target)
-        local_context_sources.append(relative_target.as_posix())
+    staged_payloads: dict[str, bytes] = {}
+    local_context_sources = _stage_local_skill_dependency_context_sources(
+        "", local_sources, staged_payloads
+    )
+    for relative_path, content in staged_payloads.items():
+        target = temp_context / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
     if local_context_sources:
         (temp_context / "local-requirements.txt").write_text(
-            _local_skill_requirements_text(local_context_sources),
+            _local_skill_requirements_text(local_context_sources, local_sources),
             encoding="utf-8",
         )
     if local_context_sources:

@@ -98,6 +98,8 @@ Local gateway detection follows the same explicit-endpoint, explicit-gateway,
 managed-runtime, and named-gateway precedence as sandbox preparation. Managed
 loopback endpoints do not require named gateway metadata. Their image builds
 use the Docker CLI and its configured context.
+OpenShell dependency contexts use the SDK's local-source staging contract,
+including preserved setuptools-scm version metadata and dependency extras.
 
 The CLI owns:
 

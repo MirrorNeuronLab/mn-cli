@@ -452,6 +452,8 @@ snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
   registration, rather than as a missing blueprint.
   Local managed gateways build sandbox images through the Docker CLI, which
   honors the active Docker context (including Docker Desktop on macOS).
+  OpenShell build contexts use SDK source staging to preserve local package
+  versions and requested extras when Git metadata is absent from the image.
 - `default` is a LiteLLM model group, not a concrete model. Its preferred and
   fallback entries come from the SDK catalog's `defaults.llm.model` and
   per-entry `fallback_model` links. The existing cluster model monitor
