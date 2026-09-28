@@ -472,15 +472,20 @@ def _build_openshell_from_image(source_path: Path, node_id: Any) -> str:
     return image_ref
 
 def _openshell_gateway_uses_local_docker() -> bool:
-    gateway_name = _openshell_gateway_name()
-    if not gateway_name:
-        return False
-
-    metadata = _openshell_gateway_metadata(gateway_name)
-    if metadata.get("is_remote") is True:
-        return False
-
-    endpoint = metadata.get("gateway_endpoint")
+    # Match the endpoint precedence used by _openshell_env. Managed Compose
+    # gateways need not have a named gateway in the user's OpenShell config.
+    endpoint = os.getenv("OPENSHELL_GATEWAY_ENDPOINT", "").strip()
+    explicit_gateway = os.getenv("OPENSHELL_GATEWAY", "").strip()
+    if not endpoint and not explicit_gateway:
+        endpoint = _openshell_runtime_gateway_endpoint()
+    if not endpoint:
+        gateway_name = explicit_gateway or _openshell_gateway_name()
+        if not gateway_name:
+            return False
+        metadata = _openshell_gateway_metadata(gateway_name)
+        if metadata.get("is_remote") is True:
+            return False
+        endpoint = metadata.get("gateway_endpoint")
     if not isinstance(endpoint, str):
         return False
     parsed = urllib.parse.urlparse(endpoint)

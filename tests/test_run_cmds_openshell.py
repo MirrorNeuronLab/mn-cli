@@ -505,3 +505,62 @@ def test_local_docker_openshell_build_uses_plain_progress(mocker, tmp_path):
     assert image.startswith("openshell/sandbox-from:")
     command = mock_build.call_args.args[0]
     assert command[:3] == ["docker", "build", "--progress=plain"]
+
+
+def test_managed_gateway_builds_with_docker_without_named_metadata(tmp_path, monkeypatch, mocker):
+    monkeypatch.delenv("OPENSHELL_GATEWAY", raising=False)
+    monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
+    monkeypatch.setenv("OPENSHELL_CONFIG_DIR", str(tmp_path / "empty-config"))
+    home = tmp_path / "mn-home"
+    home.mkdir()
+    (home / "docker-compose.env").write_text(
+        "OPENSHELL_GATEWAY_ENDPOINT=http://127.0.0.1:58080\n"
+    )
+    context = tmp_path / "image"
+    context.mkdir()
+    (context / "Dockerfile").write_text("FROM scratch\n")
+    build = mocker.patch(
+        "mn_cli.libs.run_cmds._run_streaming_local_docker_build",
+        return_value=subprocess.CompletedProcess(["docker"], 0, "ok", ""),
+    )
+    openshell = mocker.patch("mn_cli.libs.run_cmds.subprocess.run")
+
+    image = run_cmds._build_openshell_from_image(context, "generate")
+
+    assert image.startswith("openshell/sandbox-from:")
+    build.assert_called_once()
+    command = build.call_args.args[0]
+    assert command[:3] == ["docker", "build", "--progress=plain"]
+    assert "--host" not in command and "--context" not in command
+    openshell.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "endpoint,gateway,managed,remote,expected",
+    [
+        ("http://127.0.0.1:58080", "remote", "", True, True),
+        ("http://remote:58080", "local", "http://127.0.0.1:58080", False, False),
+        ("", "remote", "http://127.0.0.1:58080", True, False),
+        ("", "", "http://127.0.0.1:58080", True, True),
+        ("", "", "http://remote:58080", False, False),
+        ("", "", "", False, True),
+        ("", "", "", True, False),
+    ],
+)
+def test_local_docker_selection_matches_gateway_precedence(
+    tmp_path, monkeypatch, endpoint, gateway, managed, remote, expected,
+):
+    monkeypatch.setenv("OPENSHELL_GATEWAY_ENDPOINT", endpoint)
+    monkeypatch.setenv("OPENSHELL_GATEWAY", gateway)
+    home = tmp_path / "mn-home"
+    home.mkdir()
+    (home / "docker-compose.env").write_text(f"OPENSHELL_GATEWAY_ENDPOINT={managed}\n")
+    config = tmp_path / "openshell-config"
+    named = config / "gateways" / (gateway or "active")
+    named.mkdir(parents=True)
+    (config / "active_gateway").write_text("active\n")
+    (named / "metadata.json").write_text(json.dumps({
+        "gateway_endpoint": "http://127.0.0.1:58080", "is_remote": remote,
+    }))
+    monkeypatch.setenv("OPENSHELL_CONFIG_DIR", str(config))
+    assert run_cmds._openshell_gateway_uses_local_docker() is expected

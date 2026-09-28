@@ -94,6 +94,10 @@ OpenShell preparation resolves the submitting host's CLI from `~/.local/bin`
 or `PATH` before building images or registering sandboxes. A missing executable
 raises `MN_FAILED_PRECONDITION` with installation guidance; it is not a missing
 blueprint. The host CLI must match the deployed gateway version.
+Local gateway detection follows the same explicit-endpoint, explicit-gateway,
+managed-runtime, and named-gateway precedence as sandbox preparation. Managed
+loopback endpoints do not require named gateway metadata. Their image builds
+use the Docker CLI and its configured context.
 
 The CLI owns:
 
