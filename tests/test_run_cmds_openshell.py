@@ -359,6 +359,7 @@ def test_prepare_openshell_shared_sandbox_injects_prepared_runtime_config(
     )
 
     sandbox_name = config["sandbox_name"]
+    assert config["runner_module"] == "MirrorNeuron.Runner.OpenShell"
     assert sandbox_name.startswith("mirror-neuron-job-research-job-")
     assert len(sandbox_name) <= 63
     assert config["ssh_host"] == f"openshell-{sandbox_name}"
@@ -446,7 +447,9 @@ def test_openshell_skill_dependency_context_injects_pinned_gar_install(tmp_path)
 def test_openshell_skill_dependency_context_injects_local_dev_sources(tmp_path):
     sandbox_dir = tmp_path / "openshell_sandbox"
     sandbox_dir.mkdir()
-    (sandbox_dir / "Dockerfile").write_text("FROM python:3.11-slim\n", encoding="utf-8")
+    (sandbox_dir / "Dockerfile").write_text(
+        "FROM python:3.11-slim\nUSER sandbox\n", encoding="utf-8"
+    )
     local_skill = tmp_path / "example_skill"
     local_skill.mkdir()
     (local_skill / "pyproject.toml").write_text(
@@ -486,6 +489,8 @@ def test_openshell_skill_dependency_context_injects_local_dev_sources(tmp_path):
             run_cmds.shutil.rmtree(context, ignore_errors=True)
 
     assert "/tmp/mn-skill-runtime/local/example_skill" in local_requirements
+    assert dockerfile[:dockerfile.index("RUN if [ -s")].rstrip().endswith("USER root")
+    assert dockerfile.rstrip().endswith("USER sandbox")
     assert "COPY __mn_skill_dependencies/local/example_skill" in dockerfile
     assert "-r /tmp/mn-skill-runtime/local-requirements.txt" in requirements
     assert "-r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
