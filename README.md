@@ -446,6 +446,10 @@ snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
 - OpenShell workers that reuse a job-scoped sandbox are prepared before
   submission; the submitted node receives the concrete sandbox name and SSH
   host instead of asking Core to create host resources.
+  The submitting host must have an OpenShell CLI matching the gateway version
+  in `~/.local/bin` or `PATH`, even when Core runs in Docker. A missing CLI is
+  reported as a preparation prerequisite before image builds or sandbox
+  registration, rather than as a missing blueprint.
 - `default` is a LiteLLM model group, not a concrete model. Its preferred and
   fallback entries come from the SDK catalog's `defaults.llm.model` and
   per-entry `fallback_model` links. The existing cluster model monitor

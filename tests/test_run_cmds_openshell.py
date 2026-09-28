@@ -35,6 +35,12 @@ runner = CliRunner()
 
 @pytest.fixture(autouse=True)
 def isolated_mn_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    original_which = run_cmds.shutil.which
+    monkeypatch.setattr(
+        run_cmds.shutil, "which",
+        lambda command: "openshell" if command == "openshell" else original_which(command),
+    )
     monkeypatch.setenv("MN_HOME", str(tmp_path / "mn-home"))
     monkeypatch.delenv("MN_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
@@ -135,6 +141,35 @@ def test_openshell_executable_prefers_user_local_install(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
 
     assert run_cmds._openshell_executable() == str(executable)
+
+
+def test_openshell_executable_resolves_path(monkeypatch):
+    monkeypatch.setattr(run_cmds.shutil, "which", lambda _: "/tools/openshell")
+    assert run_cmds._openshell_executable() == "/tools/openshell"
+
+
+def test_missing_openshell_fails_before_preparation(tmp_path, monkeypatch, mocker):
+    from mn_sdk.errors import AppError
+    from mn_cli.error_handler import contextualize_cli_error
+
+    monkeypatch.setattr(run_cmds.shutil, "which", lambda _: None)
+    register = mocker.patch("mn_cli.libs.run_cmds.register_native_resource")
+    build = mocker.patch("mn_cli.libs.run_cmds._build_openshell_from_image")
+    manifest = {"flow": {"nodes": [{"node_id": "review", "config": {
+        "runner_module": "MirrorNeuron.Runner.OpenShell",
+        "reuse_shared_sandbox": True,
+    }}]}}
+    with pytest.raises(AppError) as raised:
+        run_cmds._prepare_openshell_custom_images(
+            tmp_path, manifest, shared_sandbox_job_id="review-job",
+        )
+    error = contextualize_cli_error(raised.value, "run bundle")
+    assert error.code == "MN_FAILED_PRECONDITION"
+    assert "OpenShell CLI" in error.user_message
+    assert "submitting host" in error.user_message
+    assert "~/.local/bin or PATH" in error.hint
+    register.assert_not_called()
+    build.assert_not_called()
 
 
 def test_run_prebuilds_custom_openshell_image_from_payload_directory(

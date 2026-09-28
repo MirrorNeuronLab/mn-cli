@@ -1,4 +1,5 @@
 from mn_sdk.native_resource_registry import register_native_resource
+from mn_sdk.errors import AppError
 from mn_sdk.submission_preparation import (
     _ensure_docker_worker_requirements_install,
     _local_skill_dependency_source_records,
@@ -20,7 +21,18 @@ def _openshell_executable() -> str:
     user_executable = Path.home() / ".local" / "bin" / "openshell"
     if user_executable.is_file() and os.access(user_executable, os.X_OK):
         return str(user_executable)
-    return "openshell"
+    executable = shutil.which("openshell")
+    if executable:
+        return executable
+    raise AppError(
+        code="MN_FAILED_PRECONDITION",
+        user_message="The OpenShell CLI is not installed on the submitting host.",
+        hint=(
+            "Install an OpenShell CLI matching the runtime gateway version in "
+            "~/.local/bin or PATH, then retry. The CLI inside the Core container "
+            "does not satisfy host-side sandbox preparation."
+        ),
+    )
 
 def _prepare_openshell_custom_images(
     bundle_dir: Path,
@@ -41,6 +53,9 @@ def _prepare_openshell_custom_images(
             continue
         if config.get("runner_module") not in OPENSHELL_RUNNER_MODULES:
             continue
+
+        # Resolve before image builds or native-resource registration.
+        _openshell_executable()
 
         custom_image = config.get("custom_openshell_image")
         if custom_image is not None:

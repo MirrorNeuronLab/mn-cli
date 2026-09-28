@@ -90,6 +90,11 @@ selected remote node without exposing its LAN URL to the browser.
 
 ## Behavior Boundary
 
+OpenShell preparation resolves the submitting host's CLI from `~/.local/bin`
+or `PATH` before building images or registering sandboxes. A missing executable
+raises `MN_FAILED_PRECONDITION` with installation guidance; it is not a missing
+blueprint. The host CLI must match the deployed gateway version.
+
 The CLI owns:
 
 - parsing terminal arguments and environment-backed configuration;
