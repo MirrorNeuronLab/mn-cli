@@ -11,6 +11,7 @@ from mn_cli.terminal import ui_width
 bootstrap_environment()
 
 from mn_cli import update_cmds
+from mn_cli.libs.job_analysis_cmd import analysis as job_analysis
 from mn_cli.banner import format_banner
 from mn_cli.error_handler import handle_cli_error, set_debug
 from mn_cli.libs import (
@@ -173,6 +174,7 @@ blueprint_app.command(name="export")(blueprint_cmds.blueprint_export)
 job_app.command(name="list")(job_definition_cmds.definitions)
 job_app.command(name="create")(job_definition_cmds.create)
 job_app.command(name="show")(job_definition_cmds.inspect)
+job_app.command(name="analysis")(job_analysis)
 job_app.command(name="start")(job_definition_cmds.start)
 job_app.command(name="archive")(job_definition_cmds.archive)
 job_app.command(name="reset-data")(job_definition_cmds.reset_data)

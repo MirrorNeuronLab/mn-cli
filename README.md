@@ -566,3 +566,11 @@ CLI JSON and API Problem Details include numeric `problem_code` (for example,
 1001 for memory requirements or 3001 for scheduling), `category`, `retryable`, and bounded
 structured placement `details.blockers`. See [SPEC.md](SPEC.md#shared-admission-error-contract)
 for codes and retry semantics.
+
+## Job performance
+
+Run `mn job analysis <job_id>` for all recorded execution statistics, or add
+`--json` for the shared SDK/API result in the standard CLI JSON `data` field. Counts distinguish successful, failed,
+cancelled, running, paused, and other unfinished runs. Duration excludes pauses;
+missing/partial measurements and estimated tokens are explicit. Plain mode and
+`NO_COLOR` remain supported. This read-only command does not start the job.
