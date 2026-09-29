@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 import re
-import socket
 import subprocess
 import urllib.parse
 import uuid
@@ -14,6 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any
 
+from mn_cli.runtime import host_discovery as _host_discovery
 import typer
 from mn_sdk import (
     DEFAULT_MODEL_ID,
@@ -2769,69 +2769,20 @@ def _cluster_node_is_local(node_endpoint: dict[str, Any]) -> bool:
 
 @lru_cache(maxsize=1)
 def _local_host_addresses() -> set[str]:
-    hostnames = {"localhost", "127.0.0.1", "::1", "::", "0.0.0.0"}
-    candidates: set[str] = {address.lower() for address in hostnames}
-    try:
-        candidates.update(_resolved_local_hostnames())
-    except Exception:
-        pass
-    try:
-        parsed = urllib.parse.urlparse(f"//{cli_config.grpc_target}")
-        if parsed.hostname:
-            candidates.add(parsed.hostname.lower())
-    except Exception:
-        pass
-    for env_key in ("MN_API_HOST", "MN_GRPC_TARGET", "MN_API_BASE_URL"):
-        env_value = os.getenv(env_key, "")
-        if env_value:
-            candidates.update(_extract_host_candidates_from_text(env_value))
-    return candidates
+    return _host_discovery.local_host_candidates(
+        lambda: cli_config.grpc_target,
+        os.environ,
+        resolve_hostnames=_resolved_local_hostnames,
+        extract_hosts=_extract_host_candidates_from_text,
+    )
 
 
 def _extract_host_candidates_from_text(value: str) -> set[str]:
-    candidates: set[str] = set()
-    text = str(value or "").strip()
-    if not text:
-        return candidates
-    for part in (text, f"//{text}"):
-        parsed = urllib.parse.urlparse(part)
-        if parsed.hostname:
-            candidates.add(parsed.hostname.lower())
-    return candidates
+    return _host_discovery.extract_host_candidates_from_text(value)
 
 
 def _resolved_local_hostnames() -> set[str]:
-    addresses: set[str] = set()
-    try:
-        addresses.add(socket.gethostbyname(socket.gethostname()).lower())
-    except Exception:
-        pass
-    try:
-        addresses.update(
-            addr.lower() for addr in socket.gethostbyname_ex(socket.gethostname())[2]
-        )
-    except Exception:
-        pass
-    try:
-        for info in socket.getaddrinfo(
-            socket.gethostname(), None, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM
-        ):
-            if len(info) >= 5:
-                entry = info[4][0]
-                if isinstance(entry, str):
-                    addresses.add(entry.lower().split("%", 1)[0])
-    except Exception:
-        pass
-    try:
-        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            probe.connect(("10.255.255.255", 1))
-            addresses.add(probe.getsockname()[0].lower())
-        finally:
-            probe.close()
-    except Exception:
-        pass
-    return addresses
+    return _host_discovery.resolved_local_hostnames()
 
 
 def _native_runtime_client_for_node(node_endpoint: dict[str, Any]) -> Client:
@@ -2851,17 +2802,7 @@ def _native_runtime_client_for_node(node_endpoint: dict[str, Any]) -> Client:
 
 
 def _node_native_sdk_grpc_info(node: dict[str, Any]) -> dict[str, Any] | None:
-    candidates: list[Any] = [node.get("native_sdk_grpc")]
-    hardware = node.get("hardware")
-    if isinstance(hardware, dict):
-        candidates.append(hardware.get("native_sdk_grpc"))
-    node_info = node.get("node_info")
-    if isinstance(node_info, dict):
-        candidates.append(node_info.get("native_sdk_grpc"))
-    for candidate in candidates:
-        if isinstance(candidate, dict) and candidate:
-            return candidate
-    return None
+    return _host_discovery.node_native_sdk_grpc_info(node)
 
 
 def _cluster_node_native_sdk_endpoint(

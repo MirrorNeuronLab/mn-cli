@@ -35,6 +35,7 @@ from mn_sdk.runtime_config import (
     DEFAULT_GRPC_PORT as SDK_DEFAULT_GRPC_PORT,
     DEFAULT_WEB_UI_PORT as SDK_DEFAULT_WEB_UI_PORT,
 )
+from mn_cli.runtime.watchdog import launch_watchdog, watchdog_restart_settings
 from mn_cli.config import CliConfig
 from mn_cli.runtime.identity import resolve_identity, probe_core_identity, observe_core_identity
 from mn_cli.libs.ui import (
@@ -6252,32 +6253,23 @@ def _start_native_sdk_grpc_watchdog(env: dict[str, str]) -> subprocess.Popen:
         "pid_file": str(NATIVE_SDK_GRPC_PID_FILE),
         "log_file": str(NATIVE_SDK_GRPC_LOG),
         "service_name": "Native SDK gRPC",
-        "restart_delay": env.get(
-            "MN_NATIVE_SDK_GRPC_RESTART_DELAY_SECONDS",
-            DEFAULT_WEB_UI_RESTART_DELAY_SECONDS,
-        ),
-        "max_restart_delay": env.get(
-            "MN_NATIVE_SDK_GRPC_MAX_RESTART_DELAY_SECONDS",
-            DEFAULT_WATCHDOG_MAX_RESTART_DELAY_SECONDS,
-        ),
-        "max_consecutive_failures": env.get(
-            "MN_NATIVE_SDK_GRPC_MAX_CONSECUTIVE_FAILURES",
-            DEFAULT_WATCHDOG_MAX_CONSECUTIVE_FAILURES,
-        ),
-        "min_uptime_seconds": env.get(
-            "MN_NATIVE_SDK_GRPC_MIN_UPTIME_SECONDS",
-            DEFAULT_WATCHDOG_MIN_UPTIME_SECONDS,
+        **watchdog_restart_settings(
+            env,
+            "MN_NATIVE_SDK_GRPC",
+            defaults=(
+                DEFAULT_WEB_UI_RESTART_DELAY_SECONDS,
+                DEFAULT_WATCHDOG_MAX_RESTART_DELAY_SECONDS,
+                DEFAULT_WATCHDOG_MAX_CONSECUTIVE_FAILURES,
+                DEFAULT_WATCHDOG_MIN_UPTIME_SECONDS,
+            ),
         ),
     }
-    with open(NATIVE_SDK_GRPC_WATCHDOG_LOG, "w") as out:
-        return subprocess.Popen(
-            [sys.executable, "-c", _web_ui_watchdog_script(), json.dumps(config)],
-            stdout=out,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            env=env,
-            start_new_session=True,
-        )
+    return launch_watchdog(
+        config,
+        env=env,
+        watchdog_log=NATIVE_SDK_GRPC_WATCHDOG_LOG,
+        script=_web_ui_watchdog_script(),
+    )
 
 
 def _wait_for_tcp(host: str, port: str, *, timeout_seconds: float = 5.0) -> bool:
@@ -6454,31 +6446,23 @@ def _start_api_watchdog(env: dict[str, str]) -> subprocess.Popen:
         "pid_file": str(API_PID_FILE),
         "log_file": str(API_LOG),
         "service_name": "REST API",
-        "restart_delay": env.get(
-            "MN_API_RESTART_DELAY_SECONDS", DEFAULT_WEB_UI_RESTART_DELAY_SECONDS
-        ),
-        "max_restart_delay": env.get(
-            "MN_API_MAX_RESTART_DELAY_SECONDS",
-            DEFAULT_WATCHDOG_MAX_RESTART_DELAY_SECONDS,
-        ),
-        "max_consecutive_failures": env.get(
-            "MN_API_MAX_CONSECUTIVE_FAILURES",
-            DEFAULT_WATCHDOG_MAX_CONSECUTIVE_FAILURES,
-        ),
-        "min_uptime_seconds": env.get(
-            "MN_API_MIN_UPTIME_SECONDS",
-            DEFAULT_WATCHDOG_MIN_UPTIME_SECONDS,
+        **watchdog_restart_settings(
+            env,
+            "MN_API",
+            defaults=(
+                DEFAULT_WEB_UI_RESTART_DELAY_SECONDS,
+                DEFAULT_WATCHDOG_MAX_RESTART_DELAY_SECONDS,
+                DEFAULT_WATCHDOG_MAX_CONSECUTIVE_FAILURES,
+                DEFAULT_WATCHDOG_MIN_UPTIME_SECONDS,
+            ),
         ),
     }
-    with open(API_WATCHDOG_LOG, "w") as out:
-        return subprocess.Popen(
-            [sys.executable, "-c", _web_ui_watchdog_script(), json.dumps(config)],
-            stdout=out,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            env=env,
-            start_new_session=True,
-        )
+    return launch_watchdog(
+        config,
+        env=env,
+        watchdog_log=API_WATCHDOG_LOG,
+        script=_web_ui_watchdog_script(),
+    )
 
 
 def _start_api_if_installed(
@@ -6589,31 +6573,23 @@ def _start_web_ui_watchdog(
         "pid_file": str(WEB_UI_PID_FILE),
         "log_file": str(WEB_UI_LOG),
         "service_name": "Web UI",
-        "restart_delay": env.get(
-            "MN_WEB_UI_RESTART_DELAY_SECONDS", DEFAULT_WEB_UI_RESTART_DELAY_SECONDS
-        ),
-        "max_restart_delay": env.get(
-            "MN_WEB_UI_MAX_RESTART_DELAY_SECONDS",
-            DEFAULT_WATCHDOG_MAX_RESTART_DELAY_SECONDS,
-        ),
-        "max_consecutive_failures": env.get(
-            "MN_WEB_UI_MAX_CONSECUTIVE_FAILURES",
-            DEFAULT_WATCHDOG_MAX_CONSECUTIVE_FAILURES,
-        ),
-        "min_uptime_seconds": env.get(
-            "MN_WEB_UI_MIN_UPTIME_SECONDS",
-            DEFAULT_WATCHDOG_MIN_UPTIME_SECONDS,
+        **watchdog_restart_settings(
+            env,
+            "MN_WEB_UI",
+            defaults=(
+                DEFAULT_WEB_UI_RESTART_DELAY_SECONDS,
+                DEFAULT_WATCHDOG_MAX_RESTART_DELAY_SECONDS,
+                DEFAULT_WATCHDOG_MAX_CONSECUTIVE_FAILURES,
+                DEFAULT_WATCHDOG_MIN_UPTIME_SECONDS,
+            ),
         ),
     }
-    with open(WEB_UI_WATCHDOG_LOG, "w") as out:
-        return subprocess.Popen(
-            [sys.executable, "-c", _web_ui_watchdog_script(), json.dumps(config)],
-            stdout=out,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            env=env,
-            start_new_session=True,
-        )
+    return launch_watchdog(
+        config,
+        env=env,
+        watchdog_log=WEB_UI_WATCHDOG_LOG,
+        script=_web_ui_watchdog_script(),
+    )
 
 
 def _web_ui_http_url(web_ui_host: str, web_ui_port: str, path: str = "/") -> str:
