@@ -397,3 +397,19 @@ def test_child_panel_failure_and_new_round_are_visible_without_markup():
     assert '[red]provider denied[/red]' in output
     assert '\x1b' not in output and '\x07' not in output
     assert state.child_count == 2
+
+
+def test_child_tree_shows_descriptive_labels_and_unique_ids():
+    for width in (60, 160):
+        console, stream = _capture_console(width=width)
+        steps = [
+            {'id': 'review', 'label': 'Review', 'status': 'failed'},
+            {'id': 'review:r1:scan-3', 'parent_step_id': 'review',
+             'label': 'Scan source: api.py', 'status': 'failed', 'child_round': 1},
+        ]
+        console.print(generate_workflow_progress_layout('run', {'steps': steps, 'status': 'failed'}))
+        text = stream.getvalue()
+        assert 'api.py' in text
+        assert 'r1:scan-3' in text
+        assert '└─' in text
+        assert 'inspection remains' in text

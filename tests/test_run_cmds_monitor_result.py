@@ -1046,3 +1046,46 @@ def test_result_error(mocker):
 
     assert result.exit_code == 1
     assert "MN_EXECUTION_FAILED" in result.stderr
+
+
+@pytest.mark.parametrize("transport", ["stream", "poll"])
+@pytest.mark.parametrize("status", ["failed", "completed", "cancelled"])
+def test_terminal_monitor_remains_interactive_until_detach(mocker, monkeypatch, transport, status):
+    import importlib
+    module = importlib.import_module("mn_cli.libs.run_cmds.handlers.monitor")
+    class StaticLive:
+        def __init__(self, *args, **kwargs):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+    snapshot = {"schema_version": "1", "status": status, "steps": [{"id": "review"}]}
+    mocker.patch.object(module, "config", SimpleNamespace(api_base_url="http://unused", api_token=""))
+    mocker.patch.object(module, "_local_progress_from_run_store", return_value=None)
+    mocker.patch.object(module, "_monitor_workflow_shape", return_value=None)
+    mocker.patch.object(module, "_interactive_live_output", return_value=True)
+    mocker.patch("sys.stdin.fileno", return_value=0)
+    mocker.patch("termios.tcgetattr", return_value=[1])
+    mocker.patch("termios.tcsetattr")
+    mocker.patch("tty.setcbreak")
+    mocker.patch.object(module, "Live", StaticLive)
+    mocker.patch("rich.live.Live", StaticLive)
+    mocker.patch.object(module, "fetch_and_save_results")
+    seen = []
+    def keys(state, data, **kwargs):
+        if data and data.get("workflow_progress", {}).get("status") == status:
+            seen.append(data)
+        return len(seen) < 3
+    mocker.patch.object(module, "_handle_live_workflow_key", side_effect=keys)
+    monkeypatch.delenv("MN_JOB_MONITOR_DISABLE_API_STREAM", raising=False)
+    if transport == "stream":
+        mocker.patch.object(module, "stream_api_workflow_progress", return_value=iter([snapshot]))
+        assert module._live_monitor_api_stream("run") is True
+    else:
+        mocker.patch.object(module, "_live_monitor_api_stream", return_value=False)
+        fetch = mocker.patch.object(module, "_get_run_for_monitor", return_value=json.dumps({"status": status}))
+        mocker.patch.object(module, "_workflow_progress_for_monitor", return_value=snapshot)
+        module._live_monitor("run")
+        assert fetch.call_count == 1
+    assert len(seen) == 3

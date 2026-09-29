@@ -48,7 +48,14 @@ def child_steps_table(steps: list[dict[str, Any]], state: JobMonitorState) -> Ta
     table.add_column("Task", ratio=3, overflow="fold")
     table.add_column("Status", width=7)
     table.add_column("Time", justify="right", width=5)
+    parent_labels = {str(step.get("id")): str(step.get("label") or step.get("id"))
+                     for step in steps if not step.get("parent_step_id")}
+    previous_parent = None
     for step in page:
+        parent = str(step["parent_step_id"])
+        if parent != previous_parent:
+            table.add_row("", Text(parent_labels.get(parent, parent) + " · sub-workflow", style="bold"), "", "")
+            previous_parent = parent
         status = str(step.get("status") or "pending")
         color = {
             "running": "cyan", "failed": "red", "blocked": "red",
@@ -57,7 +64,10 @@ def child_steps_table(steps: list[dict[str, Any]], state: JobMonitorState) -> Ta
         task_id = str(step.get("id") or "?")
         if len(parents) == 1:
             task_id = task_id.removeprefix(str(step["parent_step_id"]) + ":")
-        task = Text(_monitor_safe_text(task_id), style=color)
+        label = str(step.get("label") or task_id)
+        task = Text("  └─ " + _monitor_safe_text(label, limit=180), style=color)
+        if label != task_id:
+            task.append("\n     " + _monitor_safe_text(task_id), style="dim")
         task.append(" · " + _monitor_safe_text(step.get("child_phase") or "task"))
         failure = step.get("failure")
         reason = step.get("status_reason") or (

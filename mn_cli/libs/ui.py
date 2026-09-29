@@ -489,6 +489,8 @@ def generate_live_layout(job_id: str, data: Dict[str, Any], state: Optional[JobM
     )
 
     footer = Text(_monitor_footer_text(state), style="dim")
+    if status in {"failed", "completed", "cancelled"}:
+        footer.append("\nRun finished · inspection remains open until q or Ctrl+C", style=color)
     last_event = summary.get("last_event")
     if last_event:
         footer.append(f"\nlatest event: {last_event}", style="dim")
@@ -601,6 +603,8 @@ def generate_workflow_progress_layout(
     staged_input_wait = _staged_input_wait_status(progress)
 
     footer = Text(_monitor_footer_text(state), style="dim")
+    if status in {"failed", "completed", "cancelled"}:
+        footer.append("\nRun finished · inspection remains open until q or Ctrl+C", style=color)
     messages = [str(message) for message in progress.get("messages", []) if message]
     if messages:
         footer.append(f"\nlatest event: {messages[-1]}", style="dim")

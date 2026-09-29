@@ -1,5 +1,7 @@
 # MirrorNeuron CLI Specification
 
+Interactive `mn run watch` keeps completed, failed, and cancelled runs open for inspection until `q` or Ctrl+C. Terminal snapshots stop polling; redirected output still finishes automatically. Child tasks appear beneath their parent sub-workflow with descriptive labels, stable instance IDs, round, status and elapsed time; `[` / `]` page tasks and `f` follows the active or failed task.
+
 The CLI waits for shared-storage output materialization after terminal blueprint
 runs. The default deadline is 120 seconds and is configurable with
 `MN_OUTPUT_COPY_TIMEOUT_SECONDS`. Incomplete copies are reported as errors by

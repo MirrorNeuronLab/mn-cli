@@ -831,6 +831,7 @@ def _live_monitor_api_stream(
         old_settings = termios.tcgetattr(fd)
         tty.setcbreak(fd)
 
+    terminal_received = False
     try:
         with Live(
             view,
@@ -853,6 +854,8 @@ def _live_monitor_api_stream(
                 try:
                     kind, payload = event_queue.get(timeout=0.05 if is_tty else 0.5)
                 except queue.Empty:
+                    continue
+                if terminal_received and kind in {"error", "done"}:
                     continue
                 if kind == "error":
                     # A local run-store snapshot is useful while connecting,
@@ -881,7 +884,9 @@ def _live_monitor_api_stream(
                         "job": {"job_id": job_id, "status": progress.get("status")},
                     }
                     if str(progress.get("status") or "").lower() in FINAL_STATUSES:
-                        return True
+                        terminal_received = True
+                        if not is_tty:
+                            return True
     except KeyboardInterrupt:
         return True
     finally:
@@ -961,6 +966,13 @@ def _live_monitor(
             transient=bool(is_tty and getattr(console, "is_terminal", False)),
         ):
             while True:
+                if final_status in FINAL_STATUSES:
+                    if not _handle_live_workflow_key(
+                        monitor_state, data, is_tty=is_tty,
+                        select_module=select, block_seconds=0.1,
+                    ):
+                        break
+                    continue
                 try:
                     with _temporary_monitor_rpc_timeout():
                         run_json = _get_run_for_monitor(job_id)
@@ -995,7 +1007,8 @@ def _live_monitor(
                     status = summary.get("status") or job.get("status") or "unknown"
                     if status in ["completed", "failed", "cancelled"]:
                         final_status = status
-                        break
+                        if not is_tty:
+                            break
 
                 if not _handle_live_workflow_key(
                     monitor_state,
