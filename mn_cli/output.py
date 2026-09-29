@@ -474,6 +474,9 @@ def _error_payload(error: AppError) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "code": error.code,
         "message": error.user_message,
+        "problem_code": error.problem_code,
+        "category": error.category,
+        "retryable": error.retryable,
     }
     if error.hint:
         payload["hint"] = error.hint

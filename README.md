@@ -553,3 +553,14 @@ counts include newly discovered tasks. Four child rows and a three-event tail ke
 the child view compact. On macOS, attached runs and detached output
 relays hold an idle-sleep assertion for their lifetime. Display sleep remains allowed;
 explicit sleep is not prevented. An explicit relay time limit also ends its assertion.
+
+## Actionable launch errors
+
+Hardware and scheduling failures use shared SDK codes and explain the cause
+without requiring debug mode. For example, a 48 GiB memory requirement on a
+24 GiB node reports `MN_MEMORY_REQUIREMENT_UNMET`, the required and available
+amounts, and a hint to select a larger node or reduce the requirement.
+CLI JSON and API Problem Details include numeric `problem_code` (for example,
+1001 for memory requirements or 3001 for scheduling), `category`, `retryable`, and bounded
+structured placement `details.blockers`. See [SPEC.md](SPEC.md#shared-admission-error-contract)
+for codes and retry semantics.

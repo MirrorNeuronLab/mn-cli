@@ -318,6 +318,7 @@ def print_cli_error(
 
         console = error_console
     print_error(console, escape(app_error.user_message), code=app_error.code)
+    console.print(f"[dim]Problem code: {app_error.problem_code} ({app_error.category})[/dim]")
     if app_error.hint:
         console.print(f"[bold yellow]! Hint:[/bold yellow] {escape(app_error.hint)}")
     if debug and app_error.internal_message:

@@ -184,3 +184,31 @@ def test_cli_wrapper_catches_unhandled_command_errors(monkeypatch, capsys, mocke
     assert "raw failure" not in output
     assert "secret-token" not in output
     assert "/Users/homer" not in output
+
+
+@pytest.mark.parametrize("width", [50, 140])
+@pytest.mark.parametrize("plain", [False, True])
+def test_memory_failure_explains_requirements_without_debug(mocker, monkeypatch, width, plain):
+    from mn_sdk.admission_errors import placement_error
+    from mn_cli.output import _error_payload
+    from mn_sdk.errors import normalize_exception
+
+    if plain:
+        monkeypatch.setenv("MN_CLI_OUTPUT", "plain")
+    console, stream = _console_stream()
+    console.width = width
+    mocker.patch("mn_cli.error_handler.logger.exception")
+    error = placement_error({"node": ["host_memory_total_mb=24576 < required=49152"]}, "private")
+    with pytest.raises(typer.Exit):
+        handle_cli_error(error, console, "blueprint run", debug=False)
+    output = " ".join(stream.getvalue().split())
+    assert "MN_MEMORY_REQUIREMENT_UNMET" in output
+    assert "requires 48 GiB; available 24 GiB" in output
+    assert "reduce the workflow's memory requirement" in output
+    assert "private" not in output
+    payload = _error_payload(normalize_exception(error))
+    assert payload["problem_code"] == 1001
+    assert "Problem code: 1001 (hardware)" in output
+    assert payload["category"] == "hardware"
+    assert payload["retryable"] is False
+    assert payload["details"]["blockers"][0]["required"] == 48
