@@ -536,3 +536,11 @@ against the saved identity and fails readiness for unnamed or mismatched nodes.
 `mn runtime reconnect` writes an atomic version-1 runtime-network.json containing
 node_name, host, and grpc_port for Core to consume without restarting. It never
 changes ownership, direct Erlang membership, or federation credentials.
+
+The workflow monitor separates fixed phases from runtime-created sub-workflow steps.
+The child panel shows task IDs, parent, round, phase, status, elapsed time and failure
+reason. It follows active work, with `[` / `]` paging and `f` to resume following;
+counts include newly discovered tasks. Four child rows and a three-event tail keep
+the child view compact. On macOS, attached runs and detached output
+relays hold an idle-sleep assertion for their lifetime. Display sleep remains allowed;
+explicit sleep is not prevented. An explicit relay time limit also ends its assertion.

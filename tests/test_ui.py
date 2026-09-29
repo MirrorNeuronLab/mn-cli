@@ -352,3 +352,48 @@ def test_event_feed_prefers_query_message_over_agent_id():
         "payload": {"message": query},
     }) == query
     assert _event_detail_text({"detail": query, "agent_id": "worker"}) == query
+
+
+def test_dynamic_child_panel_follows_pages_and_keeps_parent_counts():
+    steps = [{'id': 'review', 'label': 'Review', 'status': 'running', 'agents': []}]
+    steps += [{'id': f'review:r1:scan{i}', 'parent_step_id': 'review',
+               'child_round': 1, 'child_phase': 'executing',
+               'status': 'completed' if i < 8 else 'running' if i == 8 else 'pending',
+               'elapsed_seconds': 123, 'agents': []} for i in range(18)]
+    for width in (60, 160):
+        state = JobMonitorState()
+        console, stream = _capture_console(width=width)
+        progress = {'steps': steps, 'status': 'running'}
+        console.print(generate_workflow_progress_layout('run', progress, state=state))
+        text = stream.getvalue()
+        assert '0/1 steps' in text
+        assert 'scan8' in text
+        assert 'scan0' not in text
+        assert '2:03' in text
+        assert state.child_page_start == 8
+        state.handle_key('[', 0)
+        console.print(generate_workflow_progress_layout('run', progress, state=state))
+        assert state.child_page_start == 4
+        assert 'scan4' in stream.getvalue()
+        state.handle_key('f', 0)
+        console.print(generate_workflow_progress_layout('run', progress, state=state))
+        assert state.child_page_start == 8
+
+
+def test_child_panel_failure_and_new_round_are_visible_without_markup():
+    state = JobMonitorState()
+    steps = [{'id': 'review', 'status': 'running', 'agents': []},
+             {'id': 'review:p0', 'parent_step_id': 'review', 'child_round': 0,
+              'child_phase': 'planning', 'status': 'done'}]
+    # A round discovered after the initial snapshot must immediately appear.
+    console, stream = _capture_console(width=100)
+    console.print(generate_workflow_progress_layout('run', {'steps': steps}, state=state))
+    steps.append({'id': 'review:r1:scan', 'parent_step_id': 'review', 'child_round': 1,
+                  'child_phase': 'executing', 'status': 'failed',
+                  'status_reason': '[red]provider denied[/red]\x1b\x07'})
+    console.print(generate_workflow_progress_layout('run', {'steps': steps}, state=state))
+    output = stream.getvalue()
+    assert 'r1:scan' in output
+    assert '[red]provider denied[/red]' in output
+    assert '\x1b' not in output and '\x07' not in output
+    assert state.child_count == 2

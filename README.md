@@ -545,3 +545,11 @@ configured; automatically detected IPs are refreshed. Peers must resolve DNS
 from their containers. If all known endpoints are unreachable, use `mn node add`
 with the peer's current address and federation token. Direct Erlang clusters
 retain their existing naming and discovery contract.
+
+The workflow monitor separates fixed phases from runtime-created sub-workflow steps.
+The child panel shows task IDs, parent, round, phase, status, elapsed time and failure
+reason. It follows active work, with `[` / `]` paging and `f` to resume following;
+counts include newly discovered tasks. Four child rows and a three-event tail keep
+the child view compact. On macOS, attached runs and detached output
+relays hold an idle-sleep assertion for their lifetime. Display sleep remains allowed;
+explicit sleep is not prevented. An explicit relay time limit also ends its assertion.

@@ -598,6 +598,7 @@ def test_materialize_shared_storage_outputs_waits_for_delayed_user_output(
 def test_detached_batch_run_starts_output_event_relay_for_shared_storage(
     mocker, tmp_path, monkeypatch
 ):
+    monkeypatch.setattr("mn_cli.runtime.idle_sleep.sys.platform", "linux")
     monkeypatch.setenv("MN_RUN_BACKGROUND_EVENT_RELAY", "1")
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", str(tmp_path / "shared"))

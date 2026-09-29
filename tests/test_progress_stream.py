@@ -66,3 +66,14 @@ def test_runtime_model_prepare_progress_flushes_immediately():
             },
         }
     )
+
+
+def test_monitor_manifest_keeps_child_metadata_and_live_steps():
+    view = BlueprintWorkflowProgress({'workflow': {'steps': [
+        {'id': 'review'}, {'id': 'review:p0', 'parent_step_id': 'review',
+                           'child_round': 0, 'child_phase': 'planning'}]}})
+    assert view.steps_by_id['review:p0'].parent_step_id == 'review'
+    view.update({'type': 'workflow_child_plan_committed', 'topology_delta': {
+        'steps_added': [{'id': 'review:r1:scan', 'parent_step_id': 'review',
+                         'child_round': 1, 'child_phase': 'executing'}]}})
+    assert view.steps_by_id['review:r1:scan'].child_round == 1

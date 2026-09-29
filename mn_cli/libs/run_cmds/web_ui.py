@@ -335,6 +335,9 @@ def _start_background_event_relay_if_needed(
     if max_seconds is not None:
         command.extend(["--max-seconds", f"{max_seconds:g}"])
 
+    from mn_cli.runtime.idle_sleep import awake_command
+
+    command = awake_command(command)
     with log_path.open("a", encoding="utf-8") as relay_log:
         process = subprocess.Popen(
             command,

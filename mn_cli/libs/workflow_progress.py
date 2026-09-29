@@ -82,6 +82,12 @@ class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
                     layer=int(graph_step.get("layer") or 0),
                     requires=_text_list(raw.get("requires")),
                     provides=_text_list(raw.get("provides")),
+                    template_id=raw.get("template_id"),
+                    region_id=raw.get("region_id"),
+                    parent_step_id=raw.get("parent_step_id"),
+                    child_workflow_id=raw.get("child_workflow_id"),
+                    child_round=raw.get("child_round"),
+                    child_phase=raw.get("child_phase"),
                     agents=agents,
                     live=live or any(agent.live for agent in agents),
                 )

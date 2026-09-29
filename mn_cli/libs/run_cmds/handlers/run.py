@@ -1,5 +1,6 @@
 from mn_cli.libs.ui import launch_activity
 from mn_cli.output import record_result
+from mn_cli.runtime.idle_sleep import prevent_idle_sleep
 
 from ..common import *
 from ..context import *
@@ -586,14 +587,15 @@ def run_bundle(
             )
             return
 
-        final_status = _stream_and_format_events(
-            execution_id,
-            log_writer,
-            resolved_follow_seconds,
-            web_ui_url=web_ui_url,
-            manifest=manifest_dict,
-            stable_job_id=stable_job_id,
-        )
+        with prevent_idle_sleep():
+            final_status = _stream_and_format_events(
+                execution_id,
+                log_writer,
+                resolved_follow_seconds,
+                web_ui_url=web_ui_url,
+                manifest=manifest_dict,
+                stable_job_id=stable_job_id,
+            )
         if final_status in FINAL_STATUSES:
             materialized_shared = _materialize_shared_storage_outputs(
                 prepared_submission.metadata,

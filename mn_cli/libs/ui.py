@@ -35,6 +35,9 @@ class JobMonitorState:
     def __init__(self) -> None:
         self.selected_index = 0
         self.detail_mode = False
+        self.child_offset = None
+        self.child_page_start = 0
+        self.child_count = 0
 
     def handle_key(self, key: str, agent_count: int) -> bool:
         """Apply one of the monitor's supported keys.
@@ -45,6 +48,16 @@ class JobMonitorState:
         """
         if key in {"q", "\x03"}:
             return False
+        if key in {"[", "]", "f"}:
+            from mn_cli.libs.workflow_children import PAGE_SIZE
+
+            if key == "f":
+                self.child_offset = None
+            else:
+                delta = PAGE_SIZE if key == "]" else -PAGE_SIZE
+                last_page = max((self.child_count - 1) // PAGE_SIZE, 0) * PAGE_SIZE
+                self.child_offset = min(max(self.child_page_start + delta, 0), last_page)
+            return True
         if key == "\x1b[B":
             self.selected_index = min(self.selected_index + 1, max(agent_count - 1, 0))
             return True
@@ -530,7 +543,13 @@ def generate_workflow_progress_layout(
     workflow_kind = str(progress.get("workflow_kind") or "batch").lower()
     if workflow_kind == "service":
         agents = [{**agent, "workflow_kind": "service"} for agent in agents]
-    shown_steps, total_steps = _workflow_summary_step_counts(steps, workflow_kind=workflow_kind)
+    parent_steps = [dict(step) for step in steps if not step.get("parent_step_id")]
+    for parent in parent_steps:
+        child_steps = [step for step in steps if step.get("parent_step_id") == parent.get("id")]
+        if child_steps:
+            parent["child_step_total"] = len(child_steps)
+            parent["child_step_done"] = sum(step.get("status") in {"done", "completed", "skipped"} for step in child_steps)
+    shown_steps, total_steps = _workflow_summary_step_counts(parent_steps, workflow_kind=workflow_kind)
     elapsed_label = _format_elapsed(progress.get("elapsed_seconds"))
 
     header = Table.grid(expand=True)
@@ -558,15 +577,19 @@ def generate_workflow_progress_layout(
     body = Table.grid(expand=True)
     body.add_column(ratio=1)
     body.add_column(ratio=3)
+    from mn_cli.libs.workflow_children import child_steps_table
+
+    children = child_steps_table(steps, state)
     agent_title = "Agents"
     if active_steps:
         first_step = active_steps[0]
         if isinstance(first_step, dict):
             agent_title = str(first_step.get("label") or first_step.get("id") or "Agents")
     body.add_row(
-        _workflow_phase_table(steps, workflow_kind=workflow_kind),
+        _workflow_phase_table(parent_steps, workflow_kind=workflow_kind),
         _agent_detail_panel(agents[state.selected_index] if agents and state.detail_mode else None)
         if state.detail_mode
+        else children if children is not None
         else _workflow_agent_table(agents, state.selected_index, title_prefix=agent_title),
     )
 
@@ -593,6 +616,7 @@ def generate_workflow_progress_layout(
         _event_feed_panel(
             progress.get("recent_events") or progress.get("events"),
             fallback_message=messages[-1] if messages else None,
+            rows=3 if children is not None else _EVENT_FEED_ROWS,
         )
     )
     renderables.append(footer)
@@ -658,7 +682,7 @@ def _runtime_model_display_name(value: str) -> str:
     return value.replace("-", " ").replace(":latest", "").title()
 
 
-def _event_feed_panel(events: Any, *, fallback_message: Any = None) -> Panel:
+def _event_feed_panel(events: Any, *, fallback_message: Any = None, rows: int = _EVENT_FEED_ROWS) -> Panel:
     """Render the newest event records in a fixed-height monitor panel.
 
     The source event stream is append-only. Selecting its tail on every live
@@ -669,7 +693,7 @@ def _event_feed_panel(events: Any, *, fallback_message: Any = None) -> Panel:
     records = [event for event in events or [] if isinstance(event, Mapping)]
     if not records and fallback_message:
         records = [{"type": "event", "detail": fallback_message}]
-    records = records[-_EVENT_FEED_ROWS:]
+    records = records[-rows:]
 
     table = Table.grid(expand=True, padding=(0, 1))
     table.add_column("Time", width=8, no_wrap=True, style="dim")
@@ -685,18 +709,18 @@ def _event_feed_panel(events: Any, *, fallback_message: Any = None) -> Panel:
                 overflow="ellipsis",
             ),
         )
-        remaining_rows = _EVENT_FEED_ROWS - 1
+        remaining_rows = rows - 1
     else:
         for event in records:
             table.add_row(_event_time_text(event), _event_summary_text(event))
-        remaining_rows = _EVENT_FEED_ROWS - len(records)
+        remaining_rows = rows - len(records)
     for _ in range(remaining_rows):
         table.add_row("", "")
 
     return Panel(
         table,
         title="Events · latest",
-        height=_EVENT_FEED_HEIGHT,
+        height=rows + 2,
         border_style="dim",
         box=box.SIMPLE,
     )
@@ -827,6 +851,8 @@ def _workflow_phase_table(steps: list[dict[str, Any]], *, workflow_kind: str = "
         count = (
             "∞ live" if status in {"running", "idle"} else "waiting" if status == "pending" else status
         ) if workflow_kind == "service" else f"{count_value}/{int(step.get('total_count') or 0)}"
+        if step.get("child_step_total"):
+            count = f"{step['child_step_done']}/{step['child_step_total']}"
         table.add_row(label, count, style="bright_blue" if current else _status_color(icon_status))
     if not steps:
         table.add_row(". Runtime", "0/0", style="cyan")
