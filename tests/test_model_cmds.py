@@ -57,6 +57,7 @@ def _capability_report(
 
 @pytest.fixture(autouse=True)
 def isolate_model_ownership(monkeypatch, tmp_path):
+    _configured_windows.clear()
     monkeypatch.setenv("MN_HOME", str(tmp_path / ".mn"))
     monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
     monkeypatch.setenv("MN_MODEL_REMOTES_PATH", str(tmp_path / "model-remotes.json"))
@@ -75,7 +76,21 @@ def isolate_model_ownership(monkeypatch, tmp_path):
     )
 
 
+_configured_windows = {}
+
+
 def _completed(command, returncode=0, stdout="", stderr=""):
+    # Model installation now verifies DMR configuration, rather than trusting
+    # the configure exit status. Keep the fake transport stateful at that boundary.
+    if returncode == 0 and not stdout and command[:2] == ["docker", "model"]:
+        if command[2] == "inspect":
+            stdout = "{}"
+        elif command[2:4] == ["configure", "show"]:
+            stdout = json.dumps([{"Model": command[-1], "Backend": "llama.cpp",
+                                  "Mode": "completion", "Config": {
+                                      "context-size": _configured_windows.get(command[-1])}}])
+        elif command[2] == "configure" and "--context-size" in command:
+            _configured_windows[command[-1]] = int(command[command.index("--context-size") + 1])
     return subprocess.CompletedProcess(command, returncode, stdout, stderr)
 
 
@@ -2257,10 +2272,12 @@ def test_model_install_pulls_and_runs_compatible_model(mocker):
         "configure",
         "--context-size",
         "8192",
+        "--mode",
+        "completion",
         "docker.io/ai/gemma4:E2B",
     ] in calls
 
-    configured = ["docker", "model", "configure", "--context-size", "8192", "docker.io/ai/gemma4:E2B"]
+    configured = ["docker", "model", "configure", "--context-size", "8192", "--mode", "completion", "docker.io/ai/gemma4:E2B"]
     started = ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"]
     assert calls.index(configured) < calls.index(started)
 
@@ -2734,7 +2751,7 @@ def test_model_install_retries_transient_pull_failure(mocker):
                 return _completed(
                     command, returncode=1, stderr="writing blob: blob digest mismatch"
                 )
-        if command == ["docker", "model", "inspect", "docker.io/ai/gemma4:E2B"]:
+        if command == ["docker", "model", "inspect", "docker.io/ai/gemma4:E2B"] and pull_attempts < 2:
             return _completed(command, returncode=1)
         return _completed(command)
 
@@ -2839,7 +2856,7 @@ def test_model_install_state_can_be_listed_after_install(mocker):
     assert model["cataloged"] is True
 
 
-def test_model_install_skips_context_size_when_docker_cli_does_not_support_it(mocker):
+def test_model_install_verifies_context_with_configure_when_run_help_omits_it(mocker):
     calls = []
 
     def fake_run(command, **kwargs):
@@ -2874,6 +2891,8 @@ def test_model_install_skips_context_size_when_docker_cli_does_not_support_it(mo
 
     assert result.exit_code == 0
     assert ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"] in calls
+    assert ["docker", "model", "configure", "--context-size", "8192", "--mode", "completion", "docker.io/ai/gemma4:E2B"] in calls
+    assert calls.count(["docker", "model", "configure", "show", "docker.io/ai/gemma4:E2B"]) >= 2
     assert [
         "docker",
         "model",
@@ -3576,3 +3595,23 @@ def test_model_update_defaults_to_all_recorded_replicas(mocker):
 
     assert result.exit_code == 0, result.stdout
     assert [call.kwargs["node"] for call in install.call_args_list] == ["mini", "spark"]
+
+
+@pytest.mark.parametrize("local_installed", [False, True])
+def test_model_list_keeps_all_unregistered_remote_owners(mocker, local_installed):
+    model = "docker.io/ai/gemma4:E2B"
+    mocker.patch("mn_cli.libs.model_cmds._installed_model_names", return_value={model} if local_installed else set())
+    mocker.patch("mn_cli.libs.model_cmds._local_runtime_node_name", return_value="local-owner")
+    mocker.patch("mn_cli.libs.model_cmds.load_model_registry", return_value={})
+    mocker.patch("mn_cli.libs.model_cmds.load_model_catalog", return_value={})
+    remotes = [{"name": "gemma4:e2b", "model": model, "api_model": "gemma4:e2b",
+                "node": owner, "base_url": f"http://{owner}:8080/v1"}
+               for owner in ("peer-a", "peer-b")]
+    mocker.patch("mn_cli.libs.model_cmds._cluster_model_records_for_list", return_value=remotes)
+    rows = model_cmds._runtime_model_list_payload()["models"]
+    assert len(rows) == 1
+    installations = rows[0]["installations"]
+    expected = {"peer-a", "peer-b"} | ({"local-owner"} if local_installed else set())
+    assert {item["node"] for item in installations} == expected
+    assert len(installations) == len(expected)
+    assert all(item["local"] is False for item in installations if item["node"] != "local-owner")

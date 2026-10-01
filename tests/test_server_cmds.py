@@ -1958,6 +1958,7 @@ def test_stop_local_runtime_for_worker_stops_compose_and_sidecars(mocker):
     assert not server_cmds.WEB_UI_PID_FILE.exists()
 
 def test_join_network_uses_sdk_federation(mocker, monkeypatch):
+    mocker.patch("mn_cli.server_cmds._running_core_node_name", return_value=None)
     import mn_sdk
     import mn_cli.shared
 
@@ -2017,6 +2018,7 @@ def test_join_network_uses_sdk_federation(mocker, monkeypatch):
 def test_join_network_does_not_register_federation_when_syncthing_is_unavailable(
     mocker, monkeypatch
 ):
+    mocker.patch("mn_cli.server_cmds._running_core_node_name", return_value=None)
     import mn_sdk
     from mn_sdk.errors import AppError
 
@@ -2058,6 +2060,7 @@ def test_join_network_does_not_register_federation_when_syncthing_is_unavailable
 
 
 def test_join_network_propagates_sdk_readiness_failure(mocker):
+    mocker.patch("mn_cli.server_cmds._running_core_node_name", return_value=None)
     import mn_sdk
     from mn_sdk.errors import AppError
 

@@ -1020,9 +1020,9 @@ def test_run_starts_pre_launch_hook_before_submit(mocker, tmp_path, monkeypatch)
         )
         return process
 
-    popen = mocker.patch(
-        "mn_cli.libs.run_cmds.subprocess.Popen", side_effect=fake_popen
-    )
+    popen = mocker.Mock(side_effect=fake_popen)
+    mocker.patch("mn_cli.libs.run_cmds.subprocess",
+                 SimpleNamespace(**{**vars(subprocess), "Popen": popen}))
 
     run_cmds.run_bundle(str(bundle_dir), follow_seconds=0)
 
@@ -1172,7 +1172,8 @@ def test_run_executes_post_launch_hook_after_terminal_status(
         )
         return process
 
-    mocker.patch("mn_cli.libs.run_cmds.subprocess.Popen", side_effect=fake_popen)
+    mocker.patch("mn_cli.libs.run_cmds.subprocess",
+                 SimpleNamespace(**{**vars(subprocess), "Popen": mocker.Mock(side_effect=fake_popen)}))
 
     run_cmds.run_bundle(
         str(bundle_dir),

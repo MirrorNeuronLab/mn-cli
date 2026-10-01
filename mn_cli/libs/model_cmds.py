@@ -224,6 +224,22 @@ def _runtime_model_list_payload(*, available: bool = False) -> dict[str, Any]:
         discovered = _discovered_remote_dmr_payload(remote, routed_names=routed_names)
         models.append(discovered)
         known_model_keys.update(_model_payload_match_keys(discovered))
+    # Discovery creates one row per model, but every owner must remain visible
+    # even when the same unregistered artifact is installed locally or on
+    # multiple peers.
+    for model in models:
+        if model.get("kind") != "dmr":
+            continue
+        installations = model.setdefault("installations", [])
+        seen = {
+            (item.get("node"), item.get("model"), item.get("api_base", ""))
+            for item in installations
+        }
+        for installation in _remote_installations_for_model(model, remote_records):
+            identity = (installation.get("node"), installation.get("model"), installation.get("api_base", ""))
+            if identity not in seen:
+                installations.append(installation)
+                seen.add(identity)
     if available:
         existing_ids = {str(model.get("id") or "") for model in models}
         for entry in list_model_entries(load_model_catalog()):

@@ -339,6 +339,9 @@ def test_json_error_excludes_internal_diagnostics_and_redacts_details():
     payload = json.loads(result.stdout)
     assert payload["error"] == {
         "code": "MN_PERMISSION_DENIED",
+        "category": "authorization",
+        "problem_code": 6001,
+        "retryable": False,
         "message": "Permission denied.",
         "hint": "Authenticate and retry.",
         "details": {"token": "[redacted]", "path": "/tmp/model.json"},

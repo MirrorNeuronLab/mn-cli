@@ -1,5 +1,8 @@
 # MirrorNeuron CLI
 
+`mn model list` shows every discovered installation of a DMR model, including
+local and multiple remote owners of the same unregistered artifact.
+
 Interactive `mn run watch` keeps completed, failed, and cancelled runs open for inspection until `q` or Ctrl+C. Terminal snapshots stop polling; redirected output still finishes automatically. Child tasks appear beneath their parent sub-workflow with descriptive labels, stable instance IDs, round, status and elapsed time; `[` / `]` page tasks and `f` follows the active or failed task.
 
 Completed cross-node blueprint runs wait up to 120 seconds by default for the

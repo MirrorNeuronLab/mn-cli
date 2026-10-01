@@ -15,6 +15,13 @@ from mn_cli.libs import runtime_health
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def isolated_identity_home(monkeypatch, tmp_path):
+    # RuntimeConfig resolves HOME separately from the injected endpoint mapping.
+    monkeypatch.setenv("MN_HOME", str(tmp_path))
+
+
+
 @pytest.mark.parametrize("actual", ["nonode@nohost", "different@host", ""])
 def test_runtime_status_rejects_invalid_identity_in_machine_output(mocker, tmp_path, actual):
     _patch_targets(mocker, tmp_path, web_ui_installed=True)

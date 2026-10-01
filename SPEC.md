@@ -1,5 +1,9 @@
 # MirrorNeuron CLI Specification
 
+Model listings retain all discovered DMR installations in one model row,
+including unregistered artifacts shared by the local node and multiple remote
+owners. Deduplicating model rows must not discard their owner endpoints.
+
 Interactive `mn run watch` keeps completed, failed, and cancelled runs open for inspection until `q` or Ctrl+C. Terminal snapshots stop polling; redirected output still finishes automatically. Child tasks appear beneath their parent sub-workflow with descriptive labels, stable instance IDs, round, status and elapsed time; `[` / `]` page tasks and `f` follows the active or failed task.
 
 The CLI waits for shared-storage output materialization after terminal blueprint
