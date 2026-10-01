@@ -356,6 +356,7 @@ def test_prepare_openshell_shared_sandbox_injects_prepared_runtime_config(
         tmp_path / "run_bundle",
         manifest,
         shared_sandbox_job_id="research-job",
+        shared_sandbox_submission_id="research-job-def-one",
     )
 
     sandbox_name = config["sandbox_name"]
@@ -393,6 +394,7 @@ def test_prepare_openshell_shared_sandbox_injects_prepared_runtime_config(
             "external_id": sandbox_name,
             "owner_node": "",
             "job_id": "research-job",
+            "submission_id": "research-job-def-one",
         }
     ]
     registry = json.loads(
@@ -608,3 +610,87 @@ def test_local_docker_selection_matches_gateway_precedence(
     }))
     monkeypatch.setenv("OPENSHELL_CONFIG_DIR", str(config))
     assert run_cmds._openshell_gateway_uses_local_docker() is expected
+
+
+@pytest.mark.parametrize("existing_job", [None, "job-existing"])
+def test_launch_commits_openshell_ownership_and_survives_gc(
+    tmp_path, monkeypatch, mocker, existing_job
+):
+    from mn_sdk import client as client_module
+    from mn_sdk.native_resource_registry import list_native_resources, reconcile_native_resources
+    from mn_sdk.native_runtime_service import _native_resource_reference_checker
+
+    durable_job = existing_job or "job-generated"
+    monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
+    monkeypatch.delenv("MN_NODE_NAME", raising=False)
+    mocker.patch("mn_cli.libs.run_cmds.generate_stable_job_id", return_value=durable_job)
+    mocker.patch("mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="blueprint-run-label")
+    mocker.patch("mn_cli.libs.run_cmds.client.create_job", return_value=json.dumps({"job_id": durable_job}))
+    mocker.patch("mn_cli.libs.run_cmds.client.update_job", return_value=json.dumps({"job_id": durable_job}))
+    mocker.patch("mn_cli.libs.run_cmds.client.stream_events", return_value=[json.dumps({"type": "job_completed"})])
+    mocker.patch("mn_cli.libs.run_cmds.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", ""))
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    write_package_manifest(bundle / "manifest.json", json.dumps(workflow_manifest({
+        "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "sandbox-ownership",
+        "flow": {"nodes": [{"node_id": "review", "config": {
+            "runner_module": "MirrorNeuron.Runner.OpenShell",
+            "from": "sandbox:prepared", "reuse_shared_sandbox": True,
+        }}]},
+    })))
+    run_cmds.run_bundle(
+        str(bundle), job_id=existing_job, detached=True,
+        submission_metadata={"blueprint_run_id": "blueprint-run-label"},
+    )
+    records = [r for r in list_native_resources() if r["kind"] == "openshell"]
+    assert len(records) == 1
+    record = records[0]
+    assert record["job_id"] == durable_job
+    assert record["submission_id"].startswith(durable_job + "-def-")
+    assert record["state"] == "committed"
+    assert record["run_id"] == ""
+
+    class Core:
+        def get_system_summary(self):
+            return json.dumps({"status": "healthy"})
+
+        def get_job(self, job_id):
+            assert job_id == durable_job
+            return json.dumps({"job_id": job_id, "status": "active", "native_resource_ownership": {
+                "submission_id": record["submission_id"], "resources": [{"external_id": record["external_id"]}],
+            }})
+
+    monkeypatch.setattr(client_module, "Client", Core)
+    checker = _native_resource_reference_checker()
+    commands = []
+    def command_runner(command, timeout):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    for elapsed in (4000, 6000, 9000):
+        result = reconcile_native_resources(
+            reference_checker=checker, now=record["created_at"] + elapsed,
+            command_runner=command_runner,
+        )
+        assert not result["errors"]
+        assert result["preserved"]
+    assert commands == []
+    assert list_native_resources()[0]["missing_observations"] == 0
+
+
+def test_openshell_definition_revisions_have_separate_sandboxes(tmp_path, mocker):
+    from mn_sdk.native_resource_registry import list_native_resources
+
+    mocker.patch("mn_cli.libs.run_cmds.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", ""))
+    for revision in ("one", "two"):
+        manifest = {"flow": {"nodes": [{"node_id": "review", "config": {
+            "runner_module": "MirrorNeuron.Runner.OpenShell", "reuse_shared_sandbox": True,
+        }}]}}
+        run_cmds._prepare_openshell_custom_images(
+            tmp_path, manifest, shared_sandbox_job_id="job-one",
+            shared_sandbox_submission_id=f"job-one-def-{revision}",
+        )
+    records = list_native_resources()
+    assert len(records) == 2
+    assert len({r["external_id"] for r in records}) == 2
+    assert {r["job_id"] for r in records} == {"job-one"}

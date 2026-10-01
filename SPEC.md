@@ -100,6 +100,11 @@ Local gateway detection follows the same explicit-endpoint, explicit-gateway,
 managed-runtime, and named-gateway precedence as sandbox preparation. Managed
 loopback endpoints do not require named gateway metadata. Their image builds
 use the Docker CLI and its configured context.
+Shared OpenShell sandboxes are registered against the durable job ID and
+definition submission ID, never the blueprint run label. Sandbox identities are
+unique per definition revision. Successful submission commits that preparation
+record; reconciliation preserves resources referenced by the durable definition.
+
 OpenShell dependency contexts use the SDK's local-source staging contract,
 including preserved setuptools-scm version metadata and dependency extras.
 
@@ -635,3 +640,17 @@ Run `mn job analysis <job_id>` for all recorded execution statistics, or add
 cancelled, running, paused, and other unfinished runs. Duration excludes pauses;
 missing/partial measurements and estimated tokens are explicit. Plain mode and
 `NO_COLOR` remain supported. This read-only command does not start the job.
+
+## Failed-run recovery operation
+
+`mn run retry <run-id>` plans and submits a manual checkpoint retry.
+`--dry-run`, repeatable `--set path=value` and standard JSON output are supported.
+Planning returns preserved/retried steps, adjustable fields and attempt/checkpoint
+selection. Submission uses a request idempotency key. Explicit original
+`--expected-attempt` and `--checkpoint-revision` with `--idempotency-key` support
+resubmission after a lost response. Core remains the recovery authority.
+
+Resume is reserved for paused work and points failed runs to retry. List/show
+identify `record_source: runtime|history`; stored-only recovery is unverified or
+blocked with a practical reason. A missing stored control record and an unavailable
+runtime are distinct from an entirely unknown run ID.

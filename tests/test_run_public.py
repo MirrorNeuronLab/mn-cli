@@ -177,6 +177,7 @@ def test_run_list_for_job_accepts_v2_items_response(mocker):
                 "job_id": "stable-job",
                 "status": "running",
                 "updated_at": "2026-08-17T17:00:00Z",
+                "record_source": "runtime",
             }
         ],
         "count": 1,
@@ -238,6 +239,7 @@ def test_run_list_enriches_local_mapping_with_runtime_status(mocker):
                 "submitted_at": "2026-08-17T16:00:00Z",
                 "status": "running",
                 "updated_at": "2026-08-17T17:00:00Z",
+                "record_source": "runtime",
             }
         ],
         "count": 1,

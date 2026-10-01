@@ -395,7 +395,8 @@ def run_bundle(
             _prepare_openshell_custom_images(
                 bundle_dir,
                 manifest_dict,
-                shared_sandbox_job_id=str(job_id or blueprint_run_id or "") or None,
+                shared_sandbox_job_id=stable_job_id,
+                shared_sandbox_submission_id=definition_submission_id,
             )
 
         with launch_activity(

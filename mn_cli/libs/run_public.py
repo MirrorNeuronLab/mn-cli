@@ -3,12 +3,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Annotated
+from uuid import uuid4
 
+import grpc
 import typer
+from mn_sdk.errors import ValidationError
+from mn_sdk.run_retry import parse_retry_settings
+from mn_sdk.shared_run_store import mapped_run_record
+from mn_cli.error_handler import handle_cli_error
 from mn_sdk.runtime_config import resolve_mn_home
 
 from mn_cli.libs import blueprint_cmds, job_definition_cmds, run_cmds
-from mn_cli.libs.ui import print_collection
+from mn_cli.libs.ui import print_collection, print_detail
 from mn_cli.output import emit_stream_record, json_enabled, record_result
 from mn_cli.shared import client, console, logger
 
@@ -31,6 +37,7 @@ def list_runs(
         )
         if not isinstance(items, list):
             items = []
+        items = [{**item, "record_source": "runtime"} for item in items if isinstance(item, dict)]
         print_collection(
             console,
             "Runs",
@@ -77,7 +84,7 @@ def list_runs(
         console,
         "Runs",
         items,
-        columns=(("ID", "run_id"), ("Kind", "blueprint_id"), ("State", "status"), ("Node / Owner", "job_id"), ("Updated", "updated_at")),
+        columns=(("ID", "run_id"), ("Kind", "blueprint_id"), ("State", "status"), ("Record", "record_source"), ("Node / Owner", "job_id"), ("Updated", "updated_at")),
     )
 
 
@@ -188,6 +195,9 @@ def _merge_run_items(
         merged[run_id] = combined
 
     for run_id, item in merged.items():
+        item["record_source"] = "runtime" if run_id in live_ids else "history"
+        if run_id not in live_ids:
+            item["retry"] = {"available": False, "reason": "Recovery is unverified. Check Core availability and plan a retry."}
         if run_id not in live_ids and str(item.get("status") or "").lower() not in {
             "completed", "failed", "cancelled", "canceled", "unknown",
         }:
@@ -207,6 +217,52 @@ def _merge_run_items(
 def show_run(run_id: str = typer.Argument(help="Execution run ID.")) -> None:
     """Show one execution run."""
     job_definition_cmds.run_status(run_id)
+
+
+def retry_run(
+    run_id: str = typer.Argument(help="Failed execution run ID."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Verify recovery without starting work."),
+    settings: list[str] = typer.Option([], "--set", help="Explicit declared retry setting: path=value. Repeatable."),
+    idempotency_key: str | None = typer.Option(None, "--idempotency-key", help="Reuse this key after a lost response."),
+    expected_attempt: int | None = typer.Option(None, "--expected-attempt", min=1, help="Original attempt selection when resubmitting a lost response."),
+    checkpoint_revision: str | None = typer.Option(None, "--checkpoint-revision", help="Original checkpoint selection when resubmitting a lost response."),
+) -> None:
+    """Retry unfinished work from the failed run's last verified checkpoint."""
+    context = {"run_id": run_id}
+    try:
+        overrides = parse_retry_settings(settings)
+        if (expected_attempt is None) != (checkpoint_revision is None):
+            raise ValidationError("Use --expected-attempt and --checkpoint-revision together.")
+        if expected_attempt is not None and (not idempotency_key or dry_run):
+            raise ValidationError("Resubmission requires --idempotency-key and cannot use --dry-run.")
+        if checkpoint_revision is not None:
+            import re
+            if not re.fullmatch(r"[a-f0-9]{64}", checkpoint_revision):
+                raise ValidationError("Checkpoint revision must be a SHA-256 revision from the original retry plan.")
+        try:
+            plan = ({"eligible": True, "expected_attempt": expected_attempt, "checkpoint_revision": checkpoint_revision}
+                    if expected_attempt is not None else json.loads(client.plan_run_retry(run_id, configuration_overrides=overrides)))
+        except grpc.RpcError as exc:
+            if exc.code() != grpc.StatusCode.NOT_FOUND or mapped_run_record(run_id) is None:
+                raise
+            plan = {"run_id": run_id, "record_source": "history", "eligible": False,
+                    "reason": "Stored history remains, but its Core control record is missing. Start a new run."}
+        if dry_run:
+            print_detail(console, "Retry plan", plan)
+            return
+        if plan.get("eligible") is not True:
+            raise ValidationError(str(plan.get("reason") or "Retry is unavailable."))
+        key = idempotency_key or str(uuid4())
+        context.update(idempotency_key=key, expected_attempt=plan["expected_attempt"], checkpoint_revision=plan["checkpoint_revision"])
+        if not json_enabled():
+            console.print(f"Retry request: {key}\nAttempt: {plan['expected_attempt']}\nCheckpoint: {plan['checkpoint_revision']}")
+        result = json.loads(client.retry_run(
+            run_id, expected_attempt=plan["expected_attempt"], checkpoint_revision=plan["checkpoint_revision"],
+            configuration_overrides=overrides, idempotency_key=key))
+        result["idempotency_key"] = key
+        print_detail(console, "Retry accepted", result)
+    except Exception as exc:
+        handle_cli_error(exc, console, "run retry", command_context=context)
 
 
 def watch_run(run_id: str = typer.Argument(help="Execution run ID.")) -> None:

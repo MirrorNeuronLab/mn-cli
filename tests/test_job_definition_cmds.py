@@ -19,7 +19,10 @@ def test_run_show_uses_verified_shared_record_when_core_lost_run(monkeypatch):
 
     job_definition_cmds.run_status("run-old")
 
-    assert rendered == [("Run", {"run_id": "run-old", "status": "failed"})]
+    assert rendered[0][0] == "Run"
+    assert rendered[0][1]["record_source"] == "history"
+    assert rendered[0][1]["retry"]["available"] is False
+    assert rendered[0][1]["status"] == "failed"
 
 
 def test_job_start_force_confirms_and_replaces_with_fresh_run_id(monkeypatch):
@@ -89,7 +92,7 @@ def test_run_resume_shows_activity_while_waiting_for_runtime(monkeypatch):
         return json.dumps({"run_id": run_id, "status": "resumed"})
 
     monkeypatch.setattr(job_definition_cmds, "activity", fake_activity)
-    monkeypatch.setattr(job_definition_cmds, "client", SimpleNamespace(resume_run=resume))
+    monkeypatch.setattr(job_definition_cmds, "client", SimpleNamespace(resume_run=resume, get_run=lambda _: json.dumps({"status": "paused"})))
     monkeypatch.setattr(
         job_definition_cmds,
         "print_success_confirmation",

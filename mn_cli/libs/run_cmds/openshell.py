@@ -39,6 +39,7 @@ def _prepare_openshell_custom_images(
     manifest_dict: dict[str, Any],
     *,
     shared_sandbox_job_id: str | None = None,
+    shared_sandbox_submission_id: str | None = None,
 ) -> None:
     nodes = manifest_nodes(manifest_dict)
     flow = manifest_dict.get("flow") if isinstance(manifest_dict.get("flow"), dict) else {}
@@ -84,16 +85,20 @@ def _prepare_openshell_custom_images(
                     shutil.rmtree(build_source, ignore_errors=True)
 
         if shared_sandbox_job_id and config.get("reuse_shared_sandbox") is True:
+            if not shared_sandbox_submission_id:
+                raise ValueError("Shared OpenShell preparation requires a definition submission ID")
             _prepare_openshell_shared_sandbox(
                 bundle_dir,
                 config,
                 job_id=shared_sandbox_job_id,
+                submission_id=shared_sandbox_submission_id,
                 node_id=node.get("node_id") or "openshell",
             )
             _record_openshell_native_resource(
                 manifest_dict,
                 sandbox_name=str(config.get("sandbox_name") or ""),
                 job_id=shared_sandbox_job_id,
+                submission_id=shared_sandbox_submission_id,
             )
 
 def _openshell_gateway_endpoint() -> str:
@@ -226,9 +231,10 @@ def _prepare_openshell_shared_sandbox(
     config: dict[str, Any],
     *,
     job_id: str,
+    submission_id: str,
     node_id: Any,
 ) -> None:
-    sandbox_name = _openshell_shared_sandbox_name(job_id)
+    sandbox_name = _openshell_shared_sandbox_name(submission_id)
     env = _openshell_env()
     openshell_executable = _openshell_executable()
     register_native_resource(
@@ -236,6 +242,7 @@ def _prepare_openshell_shared_sandbox(
         scope="definition",
         external_id=sandbox_name,
         job_id=job_id,
+        submission_id=submission_id,
         owner_node=str(env.get("MN_NODE_NAME") or ""),
         cleanup={"command": openshell_executable},
         state="preparing",
@@ -313,7 +320,7 @@ def _openshell_shared_sandbox_name(job_id: str) -> str:
 
 
 def _record_openshell_native_resource(
-    manifest: dict[str, Any], *, sandbox_name: str, job_id: str
+    manifest: dict[str, Any], *, sandbox_name: str, job_id: str, submission_id: str
 ) -> None:
     if not sandbox_name:
         return
@@ -327,6 +334,7 @@ def _record_openshell_native_resource(
     if not isinstance(native, dict):
         native = {"version": 1, "submission_id": "", "resources": []}
         metadata["mn_native_resources"] = native
+    native["submission_id"] = submission_id
     resources = native.setdefault("resources", [])
     if not isinstance(resources, list):
         resources = []
@@ -337,6 +345,7 @@ def _record_openshell_native_resource(
         "external_id": sandbox_name,
         "owner_node": str(os.getenv("MN_NODE_NAME") or ""),
         "job_id": job_id,
+        "submission_id": submission_id,
     }
     if not any(
         isinstance(item, dict)

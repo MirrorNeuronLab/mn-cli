@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import typer
+import grpc
 from mn_sdk import (
     ValidationError,
     blueprint_runtime_environment,
@@ -341,6 +342,9 @@ def run_status(run_id: str):
             return
         if record.get("status") not in {"completed", "failed", "cancelled"}:
             record = {**record, "status": "unknown"}
+        missing = isinstance(exc, grpc.RpcError) and exc.code() == grpc.StatusCode.NOT_FOUND
+        record = {**record, "record_source": "history", "retry": {"available": False,
+            "reason": "Core control record is missing. Start a new run." if missing else "Core is unavailable. Retry eligibility cannot be checked yet."}}
     print_detail(console, "Run", record)
 
 
@@ -356,6 +360,15 @@ def run_pause(run_id: str):
 
 def run_resume(run_id: str):
     """Resume one execution run."""
+    try:
+        run = json.loads(client.get_run(run_id))
+        if run.get("status") == "failed":
+            raise ValidationError(f"This run failed. Use 'mn run retry {run_id} --dry-run' to check checkpoint recovery.")
+    except Exception as exc:
+        if isinstance(exc, grpc.RpcError) and exc.code() == grpc.StatusCode.NOT_FOUND and mapped_run_record(run_id) is not None:
+            exc = ValidationError("Stored history remains, but the Core control record is missing. Start a new run.")
+        handle_cli_error(exc, console, "run resume", command_context={"run_id": run_id})
+        return
     _print_run(
         client.resume_run,
         run_id,

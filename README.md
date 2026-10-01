@@ -445,6 +445,9 @@ snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
 - Node-local workflows are hard-pinned as a whole after topology lowering.
   Runtime health rejects nodes whose coordination-store identity differs from
   the submitting Core or whose Redis endpoint is read-only.
+- OpenShell sandbox ownership uses the durable job ID and definition submission
+  ID. Each definition revision gets a separate sandbox, and submission commits
+  its preparation record so resource cleanup preserves active work.
 - OpenShell workers that reuse a job-scoped sandbox are prepared before
   submission; the submitted node receives the concrete sandbox name and SSH
   host instead of asking Core to create host resources.
@@ -574,3 +577,36 @@ Run `mn job analysis <job_id>` for all recorded execution statistics, or add
 cancelled, running, paused, and other unfinished runs. Duration excludes pauses;
 missing/partial measurements and estimated tokens are explicit. Plain mode and
 `NO_COLOR` remain supported. This read-only command does not start the job.
+
+## Retry failed work
+
+```bash
+mn run retry <run-id> --dry-run --json
+mn run retry <run-id> --set catalog_review.walltime_seconds=3600
+```
+
+Retry starts a new attempt of the same failed run from a verified durable
+checkpoint. Completed steps remain completed. `--set path=value` is repeatable
+and accepts only declared adjustable settings; omitted settings keep their prior
+values. Increasing a 20-minute total allowance to 60 minutes leaves 40 minutes
+when 20 minutes have already been consumed. Restoring an API or folder may allow
+retry without any settings change.
+
+`mn run resume` continues a paused run. Start a new run for changed inputs,
+workflow topology or result-defining configuration. List/show identify runtime
+records versus stored history; historical visibility alone does not guarantee
+recovery. `--dry-run` returns eligibility and blocked reasons without dispatch.
+
+The command prints the request key and selected attempt/checkpoint before
+submission. After a lost response, reuse those original values and identical
+settings:
+
+```bash
+mn run retry <run-id> --idempotency-key <key> \
+  --expected-attempt <attempt> --checkpoint-revision <revision> \
+  --set catalog_review.walltime_seconds=3600
+```
+
+Standard `--json` output includes structured planning/submission results and
+error context. Truly unknown IDs remain not found; an unavailable Core is reported
+separately from stored history without its control record.
