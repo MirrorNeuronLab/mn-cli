@@ -35,7 +35,7 @@ def _ensure_context_engine_for_run_if_needed(
         disable=not use_progress(),
     ) as progress:
         task = progress.add_task(
-            "[cyan]Preparing context memory: checking Membrane and Docker Model Runner...",
+            "[cyan]Preparing Markdown context memory: checking the Membrane CPU service...",
             total=None,
         )
         selected_node = str(effective_env.get("MN_SELECTED_RUNTIME_NODE") or "").strip()
@@ -58,7 +58,7 @@ def _ensure_context_engine_for_run_if_needed(
         progress.update(task, description="[green]Context memory is ready.")
     console.print(
         f"[green]Context memory ready:[/green] {summary.get('service', 'membrane-context-engine')} "
-        f"using {summary.get('model', 'configured model')}"
+        "using Markdown/DuckDB on CPU"
         + (f" on {selected_node}" if selected_node else "")
     )
     logger.info("Context engine runtime ensured for %s: %s", bundle_dir, summary)

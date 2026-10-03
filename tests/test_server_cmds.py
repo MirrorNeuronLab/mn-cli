@@ -908,8 +908,10 @@ def test_deploy_compose_passes_host_shared_storage_to_core():
     assert "MN_HOST_SHARED_STORAGE_ROOT:" in compose_text
     assert "${MN_HOST_SHARED_STORAGE_ROOT:-${MN_SHARED_STORAGE_ROOT:-" in compose_text
     assert "membrane-context-engine:" in compose_text
-    assert "MN_CONTEXT_MODEL_ENDPOINT" in compose_text
-    assert "MN_CONTEXT_MODEL_NAME" in compose_text
+    assert "MN_CONTEXT_AUTH_TOKEN" in compose_text
+    assert "MN_CONTEXT_DUCKDB_THREADS" in compose_text
+    assert "MN_CONTEXT_MODEL_ENDPOINT" not in compose_text
+    assert "MN_CONTEXT_MODEL_NAME" not in compose_text
     assert 'MN_SYNCTHING_LAN_ONLY: "1"' in compose_text
     for setting in (
         "<relaysEnabled>false</relaysEnabled>",
@@ -1261,26 +1263,19 @@ def test_ensure_context_engine_runtime_persists_profile_and_starts_compose(mocke
     assert env["COMPOSE_PROFILES"] == "openshell,context"
     assert env["ENGINE_IMAGE"] == server_cmds.LOCAL_MEMBRANE_ENGINE_IMAGE
     assert env["MN_MEMBRANE_ENGINE_IMAGE"] == server_cmds.LOCAL_MEMBRANE_ENGINE_IMAGE
-    assert env["MN_CONTEXT_MODEL_RUNNER_MODEL"] == server_cmds.DEFAULT_CONTEXT_MODEL_RUNNER_MODEL
+    assert "MN_CONTEXT_MODEL_RUNNER_MODEL" not in env
+    assert env["MN_CONTEXT_AUTH_TOKEN"]
+    assert env["MN_CONTEXT_MODEL_COMPRESSION_ENABLED"] == "false"
+    assert server_cmds.RUNTIME_COMPOSE_ENV.stat().st_mode & 0o777 == 0o600
     assert result["status"] == "started"
-    assert result["model_status"] == "installed"
-    assert inspect_model.call_args_list[0].args[0] == server_cmds.DEFAULT_CONTEXT_MODEL_RUNNER_MODEL
-    assert run.call_args_list[0].args[0] == [
-        "docker",
-        "model",
-        "pull",
-        server_cmds.DEFAULT_CONTEXT_MODEL_RUNNER_MODEL,
-    ]
-    assert run.call_args_list[1].args[0] == [
-        "docker",
-        "model",
-        "run",
-        "--detach",
-        server_cmds.DEFAULT_CONTEXT_MODEL_RUNNER_MODEL,
-    ]
-    assert run.call_args_list[2].args[0] == runtime_compose_cmd(
+    assert result["device"] == "cpu"
+    assert result["storage"] == "markdown"
+    assert result["index"] == "duckdb_per_job"
+    assert env["MN_CONTEXT_AUTH_TOKEN"] not in str(result)
+    inspect_model.assert_not_called()
+    assert [c.args[0] for c in run.call_args_list] == [runtime_compose_cmd(
         "up", "-d", "--no-build", "membrane-context-engine"
-    )
+    )]
 
 def test_ensure_context_engine_runtime_uses_release_image_without_source_clone(mocker, monkeypatch):
     monkeypatch.setenv("PATH", "/usr/local/bin:/usr/bin:/bin")
@@ -1315,10 +1310,10 @@ def test_ensure_context_engine_runtime_uses_release_image_without_source_clone(m
     assert env["MN_MEMBRANE_ENGINE_IMAGE"] == expected_image
     assert "MEMBRANE_DIR" not in env
     assert result["status"] == "started"
-    assert result["model_status"] == "already_installed"
+    assert result["device"] == "cpu"
     assert result["engine_image"] == expected_image
     ensure_source.assert_not_called()
-    inspect_model.assert_called_once_with(server_cmds.DEFAULT_CONTEXT_MODEL_RUNNER_MODEL)
+    inspect_model.assert_not_called()
     assert run.call_args_list[0].args[0] == runtime_compose_cmd("pull", "membrane-context-engine")
     assert run.call_args_list[1].args[0] == runtime_compose_cmd("up", "-d", "--no-build", "membrane-context-engine")
     assert run.call_args_list[0].kwargs["env"]["DOCKER_CONFIG"] != str(Path.home() / ".docker")
@@ -1416,40 +1411,23 @@ def test_ensure_context_engine_runtime_skips_compose_when_already_running(mocker
     result = server_cmds.ensure_context_engine_runtime()
 
     assert result["status"] == "already_running"
-    assert result["model"] == "hf.co/acme/context"
-    assert result["model_status"] == "already_installed"
-    inspect_model.assert_called_once_with("hf.co/acme/context")
+    assert "model" not in result
+    assert "MN_CONTEXT_MODEL_RUNNER_MODEL" not in server_cmds._read_env_file(server_cmds.RUNTIME_COMPOSE_ENV)
+    assert result["device"] == "cpu"
+    inspect_model.assert_not_called()
     run.assert_not_called()
 
-def test_ensure_context_engine_runtime_installs_missing_model_without_compose_restart(mocker, tmp_path):
-    membrane_dir = tmp_path / "Membrane"
-    membrane_dir.mkdir()
-    (membrane_dir / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
-    server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
-    server_cmds.RUNTIME_COMPOSE_ENV.write_text(
-        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
-        "COMPOSE_PROFILES=context\n"
-        "MN_CONTEXT_MODEL_RUNNER_MODEL=hf.co/acme/context\n",
-        encoding="utf-8",
-    )
-    server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
-    mocker.patch("mn_cli.server_cmds._ensure_context_engine_source", return_value=membrane_dir)
-    mocker.patch("mn_cli.server_cmds._ensure_docker_model_runner")
-    mocker.patch("mn_cli.server_cmds._docker_model_inspect_ok", return_value=False)
-    mocker.patch("mn_cli.server_cmds._remove_non_mirror_neuron_container")
-    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=True)
-    run = mocker.patch(
-        "mn_cli.server_cmds.subprocess.run",
-        return_value=subprocess.CompletedProcess([], 0, "", ""),
-    )
+def test_context_auth_token_is_persistent_private_and_explicit_token_wins(tmp_path):
+    first = server_cmds._compose_runtime_env({}, None)
+    second = server_cmds._compose_runtime_env({}, None)
+    assert first["MN_CONTEXT_AUTH_TOKEN"] == second["MN_CONTEXT_AUTH_TOKEN"]
+    token_file = server_cmds.DIR / "context_auth.token"
+    assert token_file.stat().st_mode & 0o777 == 0o600
+    assert token_file.read_text().strip() == first["MN_CONTEXT_AUTH_TOKEN"]
+    explicit = server_cmds._compose_runtime_env({"MN_CONTEXT_AUTH_TOKEN": "configured"}, None)
+    assert explicit["MN_CONTEXT_AUTH_TOKEN"] == "configured"
+    assert token_file.read_text().strip() == first["MN_CONTEXT_AUTH_TOKEN"]
 
-    result = server_cmds.ensure_context_engine_runtime()
-
-    assert result["status"] == "already_running"
-    assert result["model_status"] == "installed"
-    assert run.call_args_list[0].args[0] == ["docker", "model", "pull", "hf.co/acme/context"]
-    assert run.call_args_list[1].args[0] == ["docker", "model", "run", "--detach", "hf.co/acme/context"]
-    assert len(run.call_args_list) == 2
 
 def test_resolve_network_token_generates_and_reuses_persistent_token(tmp_path, mocker):
     token_dir = tmp_path / "state"

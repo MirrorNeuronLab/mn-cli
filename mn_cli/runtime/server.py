@@ -740,8 +740,27 @@ def _ensure_node_advertisement_settings(env: dict[str, str]) -> dict[str, str]:
     return adjusted
 
 
+def _resolve_context_auth_token(env: dict[str, str]) -> str:
+    explicit = str(env.get("MN_CONTEXT_AUTH_TOKEN") or "").strip()
+    if explicit:
+        return explicit
+    token_file = DIR / "context_auth.token"
+    try:
+        existing = token_file.read_text().strip()
+        if existing:
+            return existing
+    except FileNotFoundError:
+        pass
+    DIR.mkdir(parents=True, exist_ok=True)
+    token = secrets.token_urlsafe(32)
+    write_private_text(token_file, token + "\n")
+    return token
+
+
 def _compose_runtime_env(env: dict[str, str], ip: Optional[str]) -> dict[str, str]:
     compose_env = dict(env)
+    compose_env["MN_CONTEXT_AUTH_TOKEN"] = _resolve_context_auth_token(compose_env)
+    compose_env["MN_CONTEXT_MODEL_COMPRESSION_ENABLED"] = "false"
     if not str(compose_env.get("MN_NODE_ROLE") or "").strip():
         compose_env["MN_NODE_ROLE"] = "runtime"
 
@@ -4374,30 +4393,26 @@ def ensure_context_engine_runtime(
     if environment is not None:
         env.update(environment)
     profiles = _compose_profiles_with(env.get("COMPOSE_PROFILES"), "context")
-    model = str(
-        env.get("MN_CONTEXT_MODEL_RUNNER_MODEL") or DEFAULT_CONTEXT_MODEL_RUNNER_MODEL
-    )
     engine_image = _context_engine_release_image(env)
     if not engine_image:
         engine_image = LOCAL_MEMBRANE_ENGINE_IMAGE
     updates = {
         "COMPOSE_PROFILES": profiles,
-        "MN_CONTEXT_MODEL_RUNNER_MODEL": model,
+        "MN_CONTEXT_MODEL_COMPRESSION_ENABLED": "false",
+        "MN_CONTEXT_AUTH_TOKEN": _resolve_context_auth_token(env),
         "ENGINE_IMAGE": engine_image,
         "MN_MEMBRANE_ENGINE_IMAGE": engine_image,
     }
     # MEMBRANE_DIR belonged to the legacy in-run Compose build path.  The
     # engine is now an installed image in every mode, so it is not runtime
     # configuration any more.
-    _remove_env_file_keys(RUNTIME_COMPOSE_ENV, {"MEMBRANE_DIR"})
+    _remove_env_file_keys(RUNTIME_COMPOSE_ENV, {"MEMBRANE_DIR", "MN_CONTEXT_MODEL_RUNNER_MODEL"})
     env.pop("MEMBRANE_DIR", None)
     _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
+    RUNTIME_COMPOSE_ENV.chmod(0o600)
     env.update(updates)
 
     _remove_non_mirror_neuron_container(CONTEXT_ENGINE_CONTAINER)
-    _remove_non_mirror_neuron_container(CONTEXT_ENGINE_MODEL_CONTAINER)
-    _ensure_docker_model_runner()
-    model_status = _install_context_engine_model(model)
 
     already_running = _docker_container_running(CONTEXT_ENGINE_CONTAINER)
     image_status = "already_prepared" if already_running and not force else "unknown"
@@ -4419,8 +4434,9 @@ def ensure_context_engine_runtime(
         "status": status,
         "service": CONTEXT_ENGINE_SERVICE,
         "container": CONTEXT_ENGINE_CONTAINER,
-        "model": model,
-        "model_status": model_status,
+        "storage": "markdown",
+        "index": "duckdb_per_job",
+        "device": "cpu",
         "engine_image_status": image_status,
         "compose_profiles": profiles,
         "engine_image": engine_image,

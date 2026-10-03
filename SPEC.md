@@ -1,5 +1,14 @@
 # MirrorNeuron CLI Specification
 
+`mn runtime ensure-context-engine` prepares the authenticated CPU Membrane package.
+Blueprints declare Markdown memory with `mn.context` / `text_memory.enabled`.
+Preparation uses Markdown storage and one DuckDB index per job; it does not
+prepare a GPU compressor. The private `context_auth.token` is reused across
+starts and forwarded through runtime settings. `text_memory.enabled=false`
+disables blueprint preparation, including when its source descriptor is enabled.
+The matching v2 service, SDK and persistent Compose template must be installed
+before a live run. Optional detailed logs use `MN_CONTEXT_OBSERVABILITY=true`.
+
 Model listings retain all discovered DMR installations in one model row,
 including unregistered artifacts shared by the local node and multiple remote
 owners. Deduplicating model rows must not discard their owner endpoints.
@@ -658,3 +667,14 @@ Resume is reserved for paused work and points failed runs to retry. List/show
 identify `record_source: runtime|history`; stored-only recovery is unverified or
 blocked with a practical reason. A missing stored control record and an unavailable
 runtime are distinct from an entirely unknown run ID.
+
+
+Managed Markdown context turns may bind a trusted serving-tokenizer integration
+with `MN_CONTEXT_TOKEN_COUNTER_FACTORY=package.module:create_counter`. The factory
+receives `request`, `scope` and `principal` keyword arguments and returns a
+Membrane `VerifiedCounter` calibrated against actual provider prompt usage for
+that request's serving route, including tools and schema framing. Workers receive
+the setting through native/runtime preparation. No factory means counting remains
+unavailable; errors or lexical/byte estimates never authorize dispatch. Install
+the serving integration in the worker environment before enabling live managed
+turns. Tokenization and context processing must remain on CPU.

@@ -118,10 +118,10 @@ def test_run_ensures_context_engine_when_blueprint_memory_enabled(
     (config_dir / "default.json").write_text(
         json.dumps(
             {
-                "memory_layer": {
+                "text_memory": {
                     "enabled": True,
                     "enabled_env": "MN_CONTEXT_MEMORY_ENABLED",
-                    "sdk_import_package": "mn_context_engine_sdk",
+                    "contract": "mn.context.text.v1",
                 }
             }
         ),
@@ -132,8 +132,8 @@ def test_run_ensures_context_engine_when_blueprint_memory_enabled(
 
     assert result.exit_code == 0
     stdout_text = re.sub(r"\s+", " ", result.stdout)
-    assert "This blueprint uses context memory" in result.stdout
-    assert "the context model may still download on first use" in stdout_text
+    assert "This blueprint uses Markdown context memory" in result.stdout
+    assert "Membrane CPU service with one DuckDB index per job" in stdout_text
     assert "Context memory ready" in result.stdout
     assert "Check runtime resources" in result.stderr
     assert "Package workflow" in result.stderr
@@ -150,9 +150,9 @@ def test_context_engine_prepares_on_selected_workflow_node(mocker, tmp_path):
     (config_dir / "default.json").write_text(
         json.dumps(
             {
-                "memory_layer": {
+                "text_memory": {
                     "enabled": True,
-                    "sdk_import_package": "mn_context_engine_sdk",
+                    "contract": "mn.context.text.v1",
                 }
             }
         ),
@@ -213,7 +213,7 @@ def test_context_engine_uses_compose_ensure_for_selected_local_node(
     config_dir = bundle_dir / "config"
     config_dir.mkdir(exist_ok=True)
     (config_dir / "default.json").write_text(
-        json.dumps({"memory_layer": {"enabled": True}}),
+        json.dumps({"text_memory": {"enabled": True}}),
         encoding="utf-8",
     )
     manifest = {"runtime": {"memory": {"enabled": True}}}
@@ -259,10 +259,11 @@ def test_runtime_ensure_context_engine_explains_first_launch(mocker):
 
     assert result.exit_code == 0
     stdout_text = re.sub(r"\s+", " ", result.stdout)
-    assert "This runtime service powers blueprint context memory" in result.stdout
-    assert "Docker Model Runner model before starting the service" in stdout_text
+    assert "This runtime service powers Markdown context memory" in result.stdout
+    assert "CPU package with one DuckDB index per job" in stdout_text
     assert "Context engine" in result.stdout
-    assert "hf.co/example/context-model" in result.stdout
+    assert "CPU" in result.stdout
+    assert "hf.co/example/context-model" not in result.stdout
     assert "/tmp/Membrane" in result.stdout
     mock_ensure.assert_called_once_with(force=False, prepare_image=True)
 
@@ -282,7 +283,8 @@ def test_runtime_ensure_context_engine_reports_release_image(mocker):
 
     assert result.exit_code == 0
     assert "Context engine" in result.stdout
-    assert "hf.co/example/context-model" in result.stdout
+    assert "CPU" in result.stdout
+    assert "hf.co/example/context-model" not in result.stdout
     assert "Engine image" in result.stdout
     assert "v1.2.14" in result.stdout
     mock_ensure.assert_called_once_with(force=False, prepare_image=True)
@@ -318,10 +320,10 @@ def test_run_does_not_ensure_context_engine_when_memory_disabled_by_env(
     (config_dir / "default.json").write_text(
         json.dumps(
             {
-                "memory_layer": {
+                "text_memory": {
                     "enabled": True,
                     "enabled_env": "MN_CONTEXT_MEMORY_ENABLED",
-                    "sdk_import_package": "mn_context_engine_sdk",
+                    "contract": "mn.context.text.v1",
                 }
             }
         ),

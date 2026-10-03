@@ -47,8 +47,8 @@ from mn_cli.server_cmds import (
 )
 
 CONTEXT_ENGINE_EXPECTATION = (
-    "This runtime service powers blueprint context memory. It prepares the context-engine package "
-    "and Docker Model Runner model before starting the service."
+    "This runtime service powers Markdown context memory. It prepares the Membrane "
+    "CPU package with one DuckDB index per job."
 )
 
 def start(
@@ -461,15 +461,16 @@ def ensure_context_engine(
             disable=not use_progress(),
         ) as progress:
             task = progress.add_task(
-                "[cyan]Preparing context memory: checking Membrane and Docker Model Runner...",
+                "[cyan]Preparing Markdown context memory: checking the Membrane CPU service...",
                 total=None,
             )
             summary = ensure_context_engine_runtime(force=force, prepare_image=True)
             progress.update(task, description="[green]Context memory is ready.")
         details = [
             ("Service", summary["service"]),
-            ("Model", summary["model"]),
-            ("Model status", summary.get("model_status", "unknown")),
+            ("Storage", "Markdown"),
+            ("Index", "DuckDB per job"),
+            ("Device", "CPU"),
         ]
         if summary.get("membrane_dir"):
             details.append(("Membrane", summary["membrane_dir"]))
