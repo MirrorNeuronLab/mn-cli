@@ -633,3 +633,7 @@ the setting through native/runtime preparation. No factory means counting remain
 unavailable; errors or lexical/byte estimates never authorize dispatch. Install
 the serving integration in the worker environment before enabling live managed
 turns. Tokenization and context processing must remain on CPU.
+
+Context preparation needs no dedicated compression model. Full-runtime optional
+compaction uses the normal LiteLLM `default` route only after CPU preparation
+cannot fit a complete request.
