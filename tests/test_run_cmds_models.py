@@ -1548,7 +1548,7 @@ def _write_adaptive_source_model_config(bundle_dir: Path) -> dict:
         json.dumps(
             {
                 "llm": {"configs": {"primary": {"max_tokens": 1800}}},
-                "knowledge_rag": {"backend": "milvus_lite"},
+                "knowledge_rag": {"backend": "duckdb"},
             }
         ),
         encoding="utf-8",
