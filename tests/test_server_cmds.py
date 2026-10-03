@@ -1265,7 +1265,7 @@ def test_ensure_context_engine_runtime_persists_profile_and_starts_compose(mocke
     assert env["MN_MEMBRANE_ENGINE_IMAGE"] == server_cmds.LOCAL_MEMBRANE_ENGINE_IMAGE
     assert "MN_CONTEXT_MODEL_RUNNER_MODEL" not in env
     assert env["MN_CONTEXT_AUTH_TOKEN"]
-    assert env["MN_CONTEXT_MODEL_COMPRESSION_ENABLED"] == "false"
+    assert env["MN_CONTEXT_MODEL_COMPRESSION_ENABLED"] == "true"
     assert server_cmds.RUNTIME_COMPOSE_ENV.stat().st_mode & 0o777 == 0o600
     assert result["status"] == "started"
     assert result["device"] == "cpu"

@@ -760,7 +760,7 @@ def _resolve_context_auth_token(env: dict[str, str]) -> str:
 def _compose_runtime_env(env: dict[str, str], ip: Optional[str]) -> dict[str, str]:
     compose_env = dict(env)
     compose_env["MN_CONTEXT_AUTH_TOKEN"] = _resolve_context_auth_token(compose_env)
-    compose_env["MN_CONTEXT_MODEL_COMPRESSION_ENABLED"] = "false"
+    compose_env["MN_CONTEXT_MODEL_COMPRESSION_ENABLED"] = "true"
     if not str(compose_env.get("MN_NODE_ROLE") or "").strip():
         compose_env["MN_NODE_ROLE"] = "runtime"
 
@@ -4398,7 +4398,7 @@ def ensure_context_engine_runtime(
         engine_image = LOCAL_MEMBRANE_ENGINE_IMAGE
     updates = {
         "COMPOSE_PROFILES": profiles,
-        "MN_CONTEXT_MODEL_COMPRESSION_ENABLED": "false",
+        "MN_CONTEXT_MODEL_COMPRESSION_ENABLED": "true",
         "MN_CONTEXT_AUTH_TOKEN": _resolve_context_auth_token(env),
         "ENGINE_IMAGE": engine_image,
         "MN_MEMBRANE_ENGINE_IMAGE": engine_image,
