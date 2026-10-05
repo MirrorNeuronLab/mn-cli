@@ -18,6 +18,7 @@ from mn_cli.libs import (
     blueprint_cmds,
     job_cmds,
     job_definition_cmds,
+    job_backup_cmds,
     model_cmds,
     operation_cmds,
     resource_cmds,
@@ -173,6 +174,8 @@ blueprint_app.command(name="export")(blueprint_cmds.blueprint_export)
 # Job commands
 job_app.command(name="list")(job_definition_cmds.definitions)
 job_app.command(name="create")(job_definition_cmds.create)
+job_app.command(name="backup")(job_backup_cmds.backup)
+job_app.command(name="restore")(job_backup_cmds.restore)
 job_app.command(name="show")(job_definition_cmds.inspect)
 job_app.command(name="analysis")(job_analysis)
 job_app.command(name="start")(job_definition_cmds.start)

@@ -145,7 +145,7 @@ def test_job_and_run_commands_have_distinct_resource_semantics():
     command = get_command(app)
     assert {"deployment", "schedule", "event"}.isdisjoint(command.commands)
     assert list(command.commands["job"].commands) == [
-        "list", "create", "show", "analysis", "start", "archive", "reset-data", "delete",
+        "list", "create", "backup", "restore", "show", "analysis", "start", "archive", "reset-data", "delete",
     ]
     assert list(command.commands["run"].commands) == [
         "list", "show", "watch", "logs", "result", "resources", "compare",
