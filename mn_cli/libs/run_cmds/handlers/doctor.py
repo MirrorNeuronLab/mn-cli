@@ -2,6 +2,7 @@ from ..common import *
 from ..context import *
 from ..models import *
 import re
+from pathlib import PurePosixPath
 from ..model_cluster import _cluster_node_endpoint, _local_runtime_node_name, _prepare_runtime_model_with_retry, _runtime_model_prepare_client
 from ..openshell import *
 from ..run_state import *
@@ -1149,7 +1150,7 @@ def _doctor_runtime_python_env_path(
     env_dir: Path,
     *,
     core_container: str = "",
-) -> Path:
+) -> Path | PurePosixPath:
     runtime_config = RuntimeConfig.from_env()
     resolved = env_dir.expanduser().resolve()
     host_env_root = _doctor_configured_python_envs_dir(runtime_config).resolve()
@@ -1164,6 +1165,8 @@ def _doctor_runtime_python_env_path(
         except ValueError:
             pass
         else:
+            if core_container:
+                return PurePosixPath(runtime_env_root) / PurePosixPath(*relative.parts)
             return Path(runtime_env_root).expanduser() / relative
 
     host_shared_root = Path(runtime_config.shared_storage_root).expanduser().resolve()
@@ -1172,6 +1175,8 @@ def _doctor_runtime_python_env_path(
     except ValueError:
         pass
     else:
+        if core_container:
+            return PurePosixPath(runtime_config.runtime_shared_storage_root) / PurePosixPath(*relative.parts)
         return Path(runtime_config.runtime_shared_storage_root) / relative
 
     if core_container:
@@ -1181,7 +1186,7 @@ def _doctor_runtime_python_env_path(
         except ValueError:
             pass
         else:
-            return Path("/root/.mn") / relative
+            return PurePosixPath("/root/.mn") / PurePosixPath(*relative.parts)
     return env_dir
 
 def _doctor_skill_report(

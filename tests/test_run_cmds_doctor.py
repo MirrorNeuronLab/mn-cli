@@ -33,6 +33,7 @@ runner = CliRunner()
 
 
 def test_offline_hostlocal_wheelhouse_is_mapped_into_core(tmp_path, monkeypatch, mocker):
+    from pathlib import PurePosixPath
     wheels = Path(os.environ["MN_HOME"]) / "airgap/restored/python/wheelhouse"
     wheels.mkdir(parents=True)
     mocker.patch("mn_cli.libs.run_cmds._doctor_running_core_container", return_value="mirror-neuron-core")
@@ -47,6 +48,7 @@ def test_offline_hostlocal_wheelhouse_is_mapped_into_core(tmp_path, monkeypatch,
     assert str(wheels) not in calls[-1]
     assert "/root/.mn/airgap/restored/python/wheelhouse" in calls[-1]
     assert "--no-index" in calls[-1]
+    assert isinstance(run_cmds._doctor_runtime_python_env_path(wheels, core_container="mirror-neuron-core"), PurePosixPath)
 
 
 @pytest.fixture(autouse=True)
