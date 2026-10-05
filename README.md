@@ -643,3 +643,36 @@ turns. Tokenization and context processing must remain on CPU.
 Context preparation needs no dedicated compression model. Full-runtime optional
 compaction uses the normal LiteLLM `default` route only after CPU preparation
 cannot fit a complete request.
+
+## Job backup and restore
+
+```bash
+# Pause active runs first; offline dependencies are included by default.
+mn job backup <job-id> --output /path/to/job-backup.zip
+# On the destination, create a new definition and start a fresh run.
+mn job restore --input /path/to/job-backup.zip --start
+# To restore without starting, omit --start; --job-id selects a new identity.
+mn job restore --input /path/to/job-backup.zip --job-id restored-job
+```
+
+These commands use `mn.backup.v3`. The ZIP contains the executable bundle,
+configuration, job data, available run history/events/artifacts, staged inputs and
+outputs, payload model files, transitive Python wheels, and declared Docker images.
+`--no-air-gapped` omits the offline wheel/image capsule. Missing model assets,
+unavailable images, unsupported remote service dependencies, or active runs fail
+backup instead of producing an incomplete offline capsule. Backup never replaces
+an existing destination file.
+
+Restore checks all ZIP paths and hashes, compatible OS/architecture/Python ABI,
+and destination CPU, RAM, disk, GPU and runner requirements before allocating
+resources. It creates independent storage and native resources without catalog
+access or blueprint hiring. Historical executions remain evidence under the new
+job data directory; schedules are recreated paused with new identities. Restore
+never replays source executions. A failed start keeps the new job ready for retry.
+
+The destination must already have compatible MirrorNeuron, Python and Docker /
+Docker Model Runner installations. The capsule supplies job dependencies, rather
+than operating-system or runtime installers. Keep it private: configuration and
+local data may contain sensitive values. Core, SDK, CLI and API must be upgraded
+together for the new streamed backup RPCs. `mn blueprint export <run-id>` remains
+a run report export (JSON/Markdown/HTML), with no job restore counterpart.
