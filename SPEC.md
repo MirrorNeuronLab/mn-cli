@@ -721,6 +721,7 @@ never replays source executions. A failed start keeps the new job ready for retr
 
 HostLocal wheels are built for the actual execution Python, including Docker
 Core's Linux Python, and checked against the destination before installation.
+Captured dependencies retain the versions installed in the source environments.
 The native preparation service creates fresh environments from the complete
 wheel set with package indexes and dependency URL resolution disabled.
 

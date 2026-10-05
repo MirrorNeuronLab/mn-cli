@@ -12,6 +12,7 @@ from pathlib import Path
 from mn_sdk.job_backup.airgap import _build_airgap_wheelhouse
 from mn_sdk.job_backup.archive import BackupRestoreError
 from mn_sdk.runtime_config import resolve_mn_home
+from mn_sdk.submission_preparation import manifest_nodes
 
 PROFILE_SCRIPT = (
     "import json,platform,sys; print(json.dumps({"
@@ -51,6 +52,53 @@ def prepare_job_backup_python(attrs):
     manifest = json.loads((root / "bundle" / "manifest.json").read_text())
     wheels = root / "wheels"
     wheels.mkdir(exist_ok=True)
+    pins = {}
+    for node in manifest_nodes(manifest):
+        config = node.get("config", {})
+        if config.get("runner_module") != "MirrorNeuron.Runner.HostLocal":
+            continue
+        path = config.get("python_environment", {}).get("path")
+        if not path:
+            continue
+        executable = str(
+            Path(path) / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        )
+        if container:
+            # The saved path already identifies the source Core environment.
+            executable = path.rstrip("/") + "/bin/python"
+        command = (
+            ["docker", "exec", container, executable] if container else [executable]
+        )
+        result = subprocess.run(
+            [
+                *command,
+                "-c",
+                "import importlib.metadata,json; print(json.dumps([[d.metadata['Name'],d.version] for d in importlib.metadata.distributions()]))",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+        for name, version in json.loads(result.stdout):
+            if (
+                not isinstance(name, str)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name)
+                or not isinstance(version, str)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.!+_-]*", version)
+            ):
+                raise BackupRestoreError("Source Python package metadata is invalid")
+            name = re.sub(r"[-_.]+", "-", name).lower()
+            if name in pins and pins[name] != version:
+                raise BackupRestoreError(
+                    "Job Python environments require conflicting package versions"
+                )
+            pins[name] = version
+    constraints = root / "installed-versions.txt" if pins else None
+    if constraints:
+        constraints.write_text(
+            "\n".join(f"{name}=={version}" for name, version in sorted(pins.items()))
+        )
     environment = dict(os.environ)
     for record in (
         manifest.get("metadata", {})
@@ -84,5 +132,7 @@ def prepare_job_backup_python(attrs):
             prefix.extend([container, "python3"])
         return subprocess.run([*prefix, *arguments], env=environment, **kwargs)
 
-    _build_airgap_wheelhouse(manifest, root / "bundle", wheels, command_runner=run)
+    _build_airgap_wheelhouse(
+        manifest, root / "bundle", wheels, command_runner=run, constraints=constraints
+    )
     return {"status": "ready", "compatibility": profile}
