@@ -845,6 +845,15 @@ def _doctor_prepare_python_env_from_content(
         raise RuntimeError((create.stdout + create.stderr).strip() or "venv creation failed")
     python_executable = (runtime_env_dir if core_container else env_dir) / "bin" / "python"
     pip_args = [str(python_executable), "-m", "pip", "install"]
+    if core_container:
+        # Offline wheelhouses live on the native host but pip runs in Core.
+        for index, argument in enumerate(install_packages[:-1]):
+            if argument == "--find-links":
+                links = Path(install_packages[index + 1]).expanduser()
+                if links.is_absolute() and _doctor_path_is_in_core_mount(links):
+                    install_packages[index + 1] = str(
+                        _doctor_runtime_python_env_path(links, core_container=core_container)
+                    )
     if install_requirement_file is not None:
         pip_args.extend(["-r", str(install_requirement_file)])
     pip_args.extend(install_packages)

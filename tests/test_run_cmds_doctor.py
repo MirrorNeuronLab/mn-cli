@@ -32,6 +32,23 @@ from mn_cli.runtime import server as runtime_server
 runner = CliRunner()
 
 
+def test_offline_hostlocal_wheelhouse_is_mapped_into_core(tmp_path, monkeypatch, mocker):
+    wheels = Path(os.environ["MN_HOME"]) / "airgap/restored/python/wheelhouse"
+    wheels.mkdir(parents=True)
+    mocker.patch("mn_cli.libs.run_cmds._doctor_running_core_container", return_value="mirror-neuron-core")
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="Python 3.11.2" if "--version" in command else "", stderr="")
+
+    mocker.patch("mn_cli.libs.run_cmds.subprocess.run", side_effect=run)
+    run_cmds._doctor_prepare_python_env_from_content(blueprint_id="restored", node_id="python", packages=["--no-index", "--find-links", str(wheels), "dependency==1.0"], requirements_content="", timeout=1)
+    assert str(wheels) not in calls[-1]
+    assert "/root/.mn/airgap/restored/python/wheelhouse" in calls[-1]
+    assert "--no-index" in calls[-1]
+
+
 @pytest.fixture(autouse=True)
 def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.setenv("MN_HOME", str(tmp_path / "mn-home"))

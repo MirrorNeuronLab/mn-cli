@@ -719,6 +719,11 @@ access or blueprint hiring. Historical executions remain evidence under the new
 job data directory; schedules are recreated paused with new identities. Restore
 never replays source executions. A failed start keeps the new job ready for retry.
 
+HostLocal wheels are built for the actual execution Python, including Docker
+Core's Linux Python, and checked against the destination before installation.
+The native preparation service creates fresh environments from the complete
+wheel set with package indexes and dependency URL resolution disabled.
+
 The destination must already have compatible MirrorNeuron, Python and Docker /
 Docker Model Runner installations. The capsule supplies job dependencies, rather
 than operating-system or runtime installers. Keep it private: configuration and
