@@ -839,6 +839,44 @@ def test_model_show_resolves_gemme_alias(mocker):
     assert payload["state"] == "available"
 
 
+def test_model_show_without_argument_returns_entire_static_catalog(mocker):
+    mocker.patch("subprocess.run", side_effect=AssertionError("live command"))
+    mocker.patch("mn_cli.libs.model_cmds.litellm_gateway_health", side_effect=AssertionError("live gateway"))
+
+    result = runner.invoke(app, ["model", "show", "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    models = cli_data(result)["models"]
+    assert {model["id"] for model in models} == set(model_cmds.load_model_catalog())
+    assert {model["id"] for model in models if model["default"]} == {
+        "gemma4:e2b", "nemotron-3.5-lightning:latest"
+    }
+
+
+@pytest.mark.parametrize("width", [45, 160])
+@pytest.mark.parametrize("plain", [False, True])
+def test_model_show_catalog_marks_defaults_in_human_output(monkeypatch, width, plain):
+    from rich.console import Console
+
+    monkeypatch.setattr("mn_cli.libs.model_rendering.console", Console(width=width, color_system=None))
+    if plain:
+        monkeypatch.setenv("MN_CLI_OUTPUT", "plain")
+        monkeypatch.setenv("NO_COLOR", "1")
+    result = runner.invoke(app, ["model", "show"])
+    assert result.exit_code == 0, result.stdout
+    assert result.stdout.count("default") == 2
+    assert "\x1b" not in result.stdout
+
+
+def test_model_show_honors_catalog_default_override(tmp_path, monkeypatch):
+    path = tmp_path / "catalog.json"
+    path.write_text(json.dumps({"defaults": {"llm": {"model": "nemotron3"}}, "models": []}))
+    monkeypatch.setenv("MN_MODEL_CATALOG_PATH", str(path))
+    result = runner.invoke(app, ["model", "show", "--json"])
+    assert result.exit_code == 0, result.stdout
+    assert [item["id"] for item in cli_data(result)["models"] if item["default"]] == ["nemotron3:q4_K_M"]
+
+
 def test_model_show_does_not_require_docker_binary(mocker):
     mocker.patch("subprocess.run", side_effect=FileNotFoundError("docker"))
     mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=False)
@@ -1746,6 +1784,73 @@ def test_model_add_dmr_can_become_custom_default(mocker):
     assert cli_data(result)["default"] is True
     assert load_model_registry()["default_model_id"] == "hf.co/acme/default-chat:Q4_K_M"
     fanout.assert_called_once_with(restart=True, quiet=True)
+
+
+@pytest.mark.parametrize("remote", [False, True])
+def test_model_add_bare_default_selects_feasible_cluster_model(mocker, remote):
+    from runtime_model_fakes import fake_runtime_node
+
+    local_resource, local_system = fake_runtime_node(
+        "local", memory_mb=16384, vendor="apple", host="127.0.0.1", self_node=True
+    )
+    resources, systems = [local_resource], [local_system]
+    if remote:
+        resource, system = fake_runtime_node(
+            "spark", memory_mb=131072, vendor="nvidia", host="10.0.0.2"
+        )
+        resources.append(resource)
+        systems.append(system)
+    mocker.patch.object(model_cmds.client, "get_resource", return_value=json.dumps({"nodes": resources}))
+    mocker.patch.object(model_cmds.client, "get_system_summary", return_value=json.dumps({"nodes": systems}))
+    mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=False)
+    mocker.patch("mn_cli.libs.model_cmds._installed_cluster_model_node", return_value="")
+    installed = []
+
+    def install(entry, **kwargs):
+        installed.append((entry["id"], kwargs["node"]))
+        return {"entry": entry, "docker_model": entry["model"], "compatibility": {"backend": "llama.cpp", "warnings": []}}
+
+    mocker.patch("mn_cli.libs.model_cmds._install_model_on_cluster_node", side_effect=install)
+    result = runner.invoke(app, ["model", "add", "--default", "--json"])
+    assert result.exit_code == 0, result.stdout
+    expected = "nemotron-3.5-lightning:latest" if remote else "gemma4:e2b"
+    assert installed == [(expected, "spark" if remote else "local")]
+    assert get_registered_model(expected) is not None
+    assert not load_model_registry().get("default_model_id")
+
+
+def test_model_add_bare_default_local_uses_portable_fallback(mocker):
+    mocker.patch("mn_sdk.model_runtime.detect_host_hardware", return_value=HostHardwareProfile(
+        "darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True
+    ))
+    mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=True)
+    mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
+    mocker.patch("mn_cli.libs.model_cmds.record_manual_model_install")
+    result = runner.invoke(app, ["model", "add", "--default", "--local", "--json"])
+    assert result.exit_code == 0, result.stdout
+    assert cli_data(result)["model"]["id"] == "gemma4:e2b"
+    assert not load_model_registry().get("default_model_id")
+
+
+def test_model_add_still_requires_selection():
+    result = runner.invoke(app, ["model", "add", "--json"])
+    assert result.exit_code == 2
+    assert "--default" in json.loads(result.stdout)["error"]["message"]
+
+
+def test_model_add_bare_default_reuses_operator_provider_default(mocker):
+    from mn_sdk import provider_registration, set_registered_default_model
+
+    add_registered_models([provider_registration("custom-chat", source_model="custom-chat", api_base="https://example.test/v1")])
+    set_registered_default_model("custom-chat")
+    mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", return_value={"status": "running"})
+    mocker.patch("mn_cli.libs.model_cmds._sync_default_model_across_cluster", return_value=[])
+    mocker.patch("mn_cli.libs.model_cmds.install_model_entry", side_effect=AssertionError("provider pull"))
+    result = runner.invoke(app, ["model", "add", "--default", "--json"])
+    assert result.exit_code == 0, result.stdout
+    assert cli_data(result)["model"]["id"] == "custom-chat"
+    assert cli_data(result)["reused"] is True
+    assert load_model_registry()["default_model_id"] == "custom-chat"
 
 
 def test_model_add_default_rolls_back_registry_when_cluster_fanout_fails(mocker):

@@ -295,6 +295,16 @@ SDK registry changes. If the requested DMR artifact is already installed on an
 eligible local or cluster node, `add` adopts that artifact and registers it
 without reinstalling it.
 
+`show` without an argument returns every entry in the merged catalog and marks
+the configured default/fallback chain with `default`. Its JSON data is
+`{"models": [...]}`. An explicit model retains the single-detail shape. Both
+forms are static and perform no live Docker, gateway, or hardware probes.
+Bare `add --default` prepares the first feasible configured default, respecting
+`--local`, repeated `--node`, backend, context, and force options. It reuses an
+existing registration and never records a fallback as an operator override.
+An explicit model or provider file with `--default` retains default-selection
+semantics.
+
 `probe` with no model argument force-tests every model in the federation-wide
 inventory returned by `list`; an explicit model argument retains single-model
 operation. A batch continues after individual failures, returns every per-model

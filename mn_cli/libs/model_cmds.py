@@ -91,8 +91,13 @@ from mn_sdk import (
     remove_model_ref as sdk_remove_model_ref,
 )
 from mn_sdk.model_access import is_private_owner_route, runtime_model_owner_route_name
+from mn_sdk.model_catalog import (
+    is_default_model_entry,
+    load_model_catalog_document,
+)
 
 from mn_cli.error_handler import handle_cli_error
+from mn_cli.libs.model_defaults import select_default_add_model
 from mn_cli.libs.model_probe import run_model_probe
 from mn_cli.libs.model_rendering import (
     print_compatibility as _print_compatibility,
@@ -255,17 +260,34 @@ def _runtime_model_list_payload(*, available: bool = False) -> dict[str, Any]:
 
 def show_model(
     model: Annotated[
-        str,
+        str | None,
         typer.Argument(
-            help="Registered model id, catalog id, alias, or DMR reference."
+            help="Model id, alias, or DMR reference. Omit to show the full catalog."
         ),
-    ] = DEFAULT_MODEL_ID,
+    ] = None,
     json_output: Annotated[
         bool, typer.Option("--json", help="Print machine-readable JSON.")
     ] = False,
 ):
-    """Show stored model facts. Use `mn model doctor` for live checks."""
+    """Show all catalog models or one model. Use `mn model doctor` for live checks."""
     try:
+        if model is None:
+            document = load_model_catalog_document()
+            models = []
+            for entry in list_model_entries(document.models):
+                record = get_registered_model(str(entry["id"]))
+                item = (
+                    _stored_registered_model_payload(record)
+                    if record is not None
+                    else _available_model_payload(entry)
+                )
+                item["default"] = is_default_model_entry(entry, catalog=document)
+                models.append(item)
+            if json_output:
+                record_result({"models": models})
+            else:
+                _print_model_table(models)
+            return
         record = get_registered_model(model)
         if record is not None:
             payload = _stored_registered_model_payload(record)
@@ -273,6 +295,7 @@ def show_model(
         else:
             entry = resolve_model_entry(model, catalog=load_model_catalog())
             payload = _available_model_payload(entry)
+        payload["default"] = is_default_model_entry(payload)
         if json_output:
             record_result(payload)
             return
@@ -315,7 +338,7 @@ def add_model(
         bool,
         typer.Option(
             "--default",
-            help="Make the added model the highest-priority logical default.",
+            help="Install the configured default, or make MODEL/--file the logical default.",
         ),
     ] = False,
     json_output: Annotated[
@@ -324,9 +347,10 @@ def add_model(
 ):
     """Add a DMR model or provider definition."""
     try:
-        if bool(model) == bool(definition_file):
+        installing_default = default and model is None and definition_file is None
+        if not installing_default and bool(model) == bool(definition_file):
             raise ValueError(
-                "provide exactly one MODEL argument or --file <definition.json>"
+                "provide one MODEL argument, --file <definition.json>, or --default"
             )
         if definition_file is not None:
             if local or node or backend != "auto" or context_size is not None or force:
@@ -338,9 +362,26 @@ def add_model(
             )
             return
         requested_nodes = _normalized_node_options(node)
+        if installing_default:
+            entry = select_default_add_model(
+                nodes=requested_nodes or (
+                    [] if local else _normalized_node_options(_selected_model_install_node())
+                ),
+                local=local,
+                backend=backend,
+                force=force,
+                automatic_node=_automatic_model_install_node,
+                node_endpoint=_cluster_node_endpoint,
+                remote_compatibility=_remote_node_compatibility,
+            )
+            if entry.get("provider") == "litellm_proxy" and context_size is not None:
+                raise ValueError("DMR context options cannot be used with a provider default")
+            model = str(entry["id"])
+            # Installing the policy's fallback must not pin it as an override.
+            default = False
         requested = str(model or "").strip()
         existing_record = get_registered_model(requested)
-        if existing_record is not None and not (local or requested_nodes):
+        if existing_record is not None and not (local or requested_nodes) and not installing_default:
             raise ValueError(
                 f"model {requested!r} is already registered; run 'mn model remove {requested}' before adding it again"
             )
@@ -353,6 +394,20 @@ def add_model(
                 requested, backend=backend, context_size=context_size
             )
             cataloged = False
+        if installing_default and existing_record is not None and not (local or requested_nodes):
+            sync_litellm_gateway(restart=True)
+            cluster_results = _sync_default_model_across_cluster(restart=True, quiet=json_output)
+            if any(result.get("status") == "error" for result in cluster_results):
+                raise RuntimeError("the default could not be synchronized to every cluster gateway")
+            payload = {"status": "ready", "model": existing_record, "reused": True}
+            if json_output:
+                record_result(payload)
+            else:
+                print_success_confirmation(
+                    console, "Model add", status="ready",
+                    details=[("Model", requested), ("Reused", "yes")],
+                )
+            return
         if existing_record is not None and existing_record.get("kind") != "dmr":
             raise ValueError(f"model {requested!r} is already registered as a provider")
         if (local and requested_nodes) or len(requested_nodes) > 1 or existing_record:
@@ -1984,7 +2039,7 @@ def _available_model_payload(entry: dict[str, Any]) -> dict[str, Any]:
         "api_model": entry.get("api_model") or entry.get("model") or "",
         "backend": entry.get("backend") or "",
         "cataloged": True,
-        "default": False,
+        "default": is_default_model_entry(entry),
         "verification": entry.get("verification") or "catalog",
         "requirements": entry.get("requirements") or {},
         "installations": [],

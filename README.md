@@ -109,11 +109,17 @@ job-scoped iframe handle that forwards a blueprint-owned web service.
 `mn model add --file <definition.json>`. Registrations are stored in
 `$MN_HOME/models/registry.json`; provider secrets remain environment-variable
 references. Use `mn model list --available` to include catalog-only choices.
+Use `mn model show` to display the full merged catalog with `default` markers
+for the configured default and its fallbacks; `mn model show <MODEL>` keeps
+the single-model detail view. Both forms show stored facts without live probes.
+Run `mn model add --default` to prepare the first hardware-compatible default
+on the selected local or cluster node. It honors catalog overrides and reuses
+registrations; choosing a fallback does not replace the logical default policy.
 The default list is federation-wide: it merges each connected node's published
 Docker Model Runner inventory. A discovered artifact reports `ready` when its
 LiteLLM route is live and `installed` while route reconciliation is pending;
 registry ownership is not presented as a health state.
-Add `--default` to make one newly added DMR or provider model the logical
+Add `--default` with an explicit model or file to make that model the logical
 default ahead of the built-in Nemotron/Gemma fallback chain. Provider files
 used with `--default` must contain exactly one model.
 When the requested DMR artifact is already installed locally or on a cluster

@@ -11,7 +11,8 @@ from mn_cli.shared import console
 
 def print_model_table(models: list[dict[str, Any]]) -> None:
     table = Table(title="Runtime models", show_header=True, header_style="bold")
-    table.add_column("ID")
+    table.add_column("ID", overflow="fold", min_width=8)
+    table.add_column("Default", min_width=7, no_wrap=True)
     table.add_column("Kind")
     table.add_column("Source")
     table.add_column("State")
@@ -19,6 +20,7 @@ def print_model_table(models: list[dict[str, Any]]) -> None:
     for model in models:
         table.add_row(
             str(model.get("id") or ""),
+            "default" if model.get("default") else "",
             str(model.get("kind") or ""),
             str(model.get("source") or ""),
             str(model.get("state") or ""),
@@ -33,6 +35,7 @@ def print_model_detail(payload: dict[str, Any]) -> None:
         title = f"{title} - {payload.get('name')}"
     details = [
         ("Kind", payload.get("kind")),
+        ("Default", "yes" if payload.get("default") else "no"),
         ("Model", payload.get("model")),
         ("Backend", payload.get("backend")),
         ("State", payload.get("state")),
