@@ -104,7 +104,7 @@ job-scoped iframe handle that forwards a blueprint-owned web service.
 ## Model operations
 
 `mn model` exposes one type-aware workflow: `list`, `add`, `show`, `probe`,
-`update`, `remove`, and `doctor`. Add a catalog or arbitrary DMR reference with
+`start`, `stop`, `unload`, `update`, `remove`, and `doctor`. Add a catalog or arbitrary DMR reference with
 `mn model add <MODEL>`, or register canonical provider JSON with
 `mn model add --file <definition.json>`. Registrations are stored in
 `$MN_HOME/models/registry.json`; provider secrets remain environment-variable
@@ -126,7 +126,31 @@ When the requested DMR artifact is already installed locally or on a cluster
 node, `mn model add` reuses it and creates the same managed registry record
 without pulling a second copy.
 
-A DMR model may be installed on more than one eligible node. Repeat `--node`
+The SDK catalog now identifies delivery with `source: "dmr"` or
+`source: "docker"`. NVIDIA Docker models follow the same placement, registry,
+gateway, and run cleanup contracts. The first entry is Cosmos3 Nano Reasoner,
+using the VSS NIM 1.7 Docker recipe from DGX Spark. Set `NGC_API_KEY` or
+`NGC_CLI_API_KEY` in the native runtime service environment on its Linux NVIDIA
+owner, then use:
+
+```bash
+mn model add cosmos3 --node spark
+mn model stop cosmos3 --node spark
+mn model start cosmos3 --node spark
+mn model unload cosmos3 --node spark
+mn model update cosmos3 --node spark
+mn model remove cosmos3 --node spark --yes
+```
+
+`stop` and `unload` retain downloaded images and cache; `start` waits for
+readiness and reuses the container. A later owner-gateway request restarts an
+unloaded NIM before inference. Lifecycle commands infer a single registered
+owner; select `--node` or `--local` for replicas. Preparing Cosmos does not
+reinstall Nemotron. See the SDK's
+[Docker model setup and settings](../mn-python-sdk/docs/docker-models.md),
+including NGC authentication and a shared-GPU Spark override.
+
+A managed model may be installed on more than one eligible node. Repeat `--node`
 and combine it with `--local` to add all requested replicas in one operation:
 
 ```bash

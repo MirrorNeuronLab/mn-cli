@@ -2266,6 +2266,7 @@ def _update_dmr_registration(
     include_local: bool = False,
 ) -> dict[str, Any]:
     entry = _dmr_entry_for_record_or_ref(record, str(record.get("id") or ""))
+    context_size = entry.get("context_size") if is_docker_model(entry) else record.get("context_size")
     local_node = _local_runtime_node_name() or "local"
     recorded_installations = [
         dict(item)
@@ -2301,7 +2302,7 @@ def _update_dmr_registration(
                     entry,
                     node=node,
                     backend=str(record.get("backend") or "auto"),
-                    context_size=record.get("context_size"),
+                    context_size=context_size,
                     force=force,
                     update=True,
                 )
@@ -2309,7 +2310,7 @@ def _update_dmr_registration(
                 result = install_model_entry(
                     entry,
                     backend=str(record.get("backend") or "auto"),
-                    context_size=record.get("context_size"),
+                    context_size=context_size,
                     force=force,
                 )
                 record_manual_model_install(
@@ -2367,6 +2368,10 @@ def _dmr_entry_for_record_or_ref(
     if isinstance(record, dict):
         if record.get("kind") not in {"dmr", "docker"}:
             raise ValueError(f"model {model!r} is not a DMR model")
+        if record.get("kind") == "docker":
+            # Registry definitions describe the installed recipe. Operator
+            # catalog overrides describe the recipe requested by update.
+            return resolve_model_entry(str(record["id"]))
         definition = record.get("definition")
         if isinstance(definition, dict):
             return dict(definition)

@@ -60,7 +60,7 @@ blueprint  list add show update remove run validate doctor cleanup export
 job        list create show start archive reset-data delete backup restore
 run        list show watch logs result resources compare pause resume cancel delete
 run human  list respond ack
-model      list add show probe update remove doctor
+model      list add show probe start stop unload update remove doctor
 runtime    start stop status doctor cleanup restart-sidecars ensure-context-engine upgrade
 node       list show add remove reconcile drain undrain maintenance refresh-token
 operation  show watch
@@ -283,7 +283,7 @@ operator deletes the run.
 ## Runtime-Model Launch Contract
 
 The public `mn model` command surface is exactly `list`, `add`, `show`, `probe`,
-`update`, `remove`, and `doctor`. `add` accepts either one catalog/arbitrary DMR
+`start`, `stop`, `unload`, `update`, `remove`, and `doctor`. `add` accepts either one catalog/arbitrary DMR
 reference or one canonical provider JSON file. DMR placement chooses the best
 eligible cluster node unless `--local` or one or more repeatable `--node`
 targets are supplied. `--local` and `--node` may be combined to install one
@@ -294,6 +294,19 @@ are validated in full, including required environment references, before the
 SDK registry changes. If the requested DMR artifact is already installed on an
 eligible local or cluster node, `add` adopts that artifact and registers it
 without reinstalling it.
+
+Catalog `source: "docker"` selects the SDK's NVIDIA Docker delivery; explicit
+`source: "dmr"` and omitted source use Docker Model Runner. Both sources use
+the managed placement, registration, owner-gateway, and run residency contracts.
+Docker recipes and credential resolution remain SDK-owned; NGC environment
+references resolve on the native owner rather than the submitter.
+`start`, `stop`, and `unload` accept a model, `--node`, `--local`, and `--json`.
+They infer a single registered owner, require selection for replicas, dispatch
+to the owner native service, and never install missing artifacts. Docker start
+waits for readiness; stop/unload stop the container while retaining image/cache.
+Provider registrations have no managed container lifecycle. Docker diagnostics
+use NIM readiness and container state, not DMR or node health as a substitute.
+Local direct capability probes use the configured container API port/model ID.
 
 `show` without an argument returns every entry in the merged catalog and marks
 the configured default/fallback chain with `default`. Its JSON data is
