@@ -12,6 +12,7 @@ bootstrap_environment()
 
 from mn_cli import update_cmds
 from mn_cli.libs.job_analysis_cmd import analysis as job_analysis
+from mn_cli.libs import model_lifecycle
 from mn_cli.banner import format_banner
 from mn_cli.error_handler import handle_cli_error, set_debug
 from mn_cli.libs import (
@@ -241,6 +242,9 @@ app.add_typer(blueprint_app, name="blueprint")
 app.add_typer(job_app, name="job")
 app.add_typer(run_app, name="run")
 app.add_typer(model_cmds.model_app, name="model")
+model_cmds.model_app.command(name="start")(model_lifecycle.start)
+model_cmds.model_app.command(name="stop")(model_lifecycle.stop)
+model_cmds.model_app.command(name="unload")(model_lifecycle.unload)
 app.add_typer(runtime_app, name="runtime")
 app.add_typer(node_app, name="node")
 app.add_typer(operation_app, name="operation")

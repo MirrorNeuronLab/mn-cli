@@ -66,6 +66,7 @@ from mn_sdk import (
     validate_litellm_gateway_config_file,
 )
 from mn_sdk.errors import normalize_exception
+from mn_sdk.model_sources import is_docker_model, model_source
 from mn_sdk import (
     docker_status as sdk_docker_status,
 )
@@ -124,7 +125,7 @@ from mn_cli.shared import client, console, logger
 from mn_cli.shared import config as cli_config
 
 model_app = typer.Typer(
-    help="Manage Docker Model Runner and provider-backed runtime models",
+    help="Manage Docker Model Runner, NVIDIA Docker, and provider-backed runtime models",
     cls=RemediatingTyperGroup,
 )
 
@@ -211,7 +212,7 @@ def _runtime_model_list_payload(*, available: bool = False) -> dict[str, Any]:
     registered_dmr_keys = {
         key
         for record in records
-        if record.get("kind") == "dmr"
+        if record.get("kind") in {"dmr", "docker"}
         for key in docker_model_match_keys(str(record.get("model") or ""))
     }
     for installed_model in sorted(installed_models):
@@ -233,7 +234,7 @@ def _runtime_model_list_payload(*, available: bool = False) -> dict[str, Any]:
     # even when the same unregistered artifact is installed locally or on
     # multiple peers.
     for model in models:
-        if model.get("kind") != "dmr":
+        if model.get("kind") not in {"dmr", "docker"}:
             continue
         installations = model.setdefault("installations", [])
         seen = {
@@ -315,7 +316,7 @@ def add_model(
         Path | None, typer.Option("--file", help="Provider model definition JSON file.")
     ] = None,
     backend: Annotated[
-        str, typer.Option("--backend", help="Backend: auto, llama.cpp, or vllm.")
+        str, typer.Option("--backend", help="Backend: auto, llama.cpp, vllm, or nim.")
     ] = "auto",
     context_size: Annotated[
         int | None, typer.Option("--context-size", help="Override model context size.")
@@ -332,7 +333,7 @@ def add_model(
         ),
     ] = None,
     local: Annotated[
-        bool, typer.Option("--local", help="Force local Docker Model Runner placement.")
+        bool, typer.Option("--local", help="Use the local model installation.")
     ] = False,
     default: Annotated[
         bool,
@@ -345,7 +346,7 @@ def add_model(
         bool, typer.Option("--json", help="Print machine-readable JSON.")
     ] = False,
 ):
-    """Add a DMR model or provider definition."""
+    """Add a DMR or NVIDIA Docker model, or a provider definition."""
     try:
         installing_default = default and model is None and definition_file is None
         if not installing_default and bool(model) == bool(definition_file):
@@ -408,7 +409,7 @@ def add_model(
                     details=[("Model", requested), ("Reused", "yes")],
                 )
             return
-        if existing_record is not None and existing_record.get("kind") != "dmr":
+        if existing_record is not None and existing_record.get("kind") not in {"dmr", "docker"}:
             raise ValueError(f"model {requested!r} is already registered as a provider")
         if (local and requested_nodes) or len(requested_nodes) > 1 or existing_record:
             payload = _add_dmr_replicas(
@@ -482,6 +483,9 @@ def add_model(
             )
         else:
             if local_artifact_installed:
+                if is_docker_model(entry):
+                    from mn_sdk.model_service import start_runtime_model
+                    start_runtime_model(str(entry["id"]))
                 compatibility_result = assess_model_compatibility(
                     entry, backend=backend, force=force
                 )
@@ -679,6 +683,9 @@ def _add_dmr_replicas(
         try:
             if preflight[target_node].get("local"):
                 if _model_installed(target_model):
+                    if is_docker_model(entry):
+                        from mn_sdk.model_service import start_runtime_model
+                        start_runtime_model(str(entry["id"]))
                     result = {
                         "entry": entry,
                         "docker_model": target_model,
@@ -996,7 +1003,7 @@ def remove_model(
                 "status": "planned",
                 "id": str((record or {}).get("id") or model),
                 "kind": kind,
-                "artifact_removed": kind == "dmr" and not keep_artifact,
+                "artifact_removed": kind in {"dmr", "docker"} and not keep_artifact,
             }
             if json_output:
                 record_result(payload)
@@ -1020,7 +1027,7 @@ def remove_model(
             if isinstance(item, dict) and str(item.get("node") or "").strip()
         ]
         if (
-            kind == "dmr"
+            kind in {"dmr", "docker"}
             and record is not None
             and (
                 all_nodes or local or requested_nodes or len(recorded_installations) > 1
@@ -1125,7 +1132,7 @@ def remove_model(
                     _remove_runtime_model_on_cluster_node(
                         target, node=node, force=force
                     )
-                elif _model_installed(target):
+                elif is_docker_model(entry) or _model_installed(target):
                     remove_model_ref(target, force=force)
                 artifact_removed = True
             registry_snapshot = load_model_registry()
@@ -1156,7 +1163,7 @@ def remove_model(
                     _sync_default_model_across_cluster(restart=True, quiet=True)
                 raise AppError(
                     "MN_MODEL_ROUTE_CLEANUP_FAILED",
-                    f"Route cleanup failed for {entry.get('id')!r} after its DMR artifact was {'removed' if artifact_removed else 'retained'}; the registration is degraded and retained for retry.",
+                    f"Route cleanup failed for {entry.get('id')!r} after its model artifact was {'removed' if artifact_removed else 'retained'}; the registration is degraded and retained for retry.",
                     internal_message=str(exc),
                     hint=f"Run 'mn model doctor {entry.get('id')}' and retry removal.",
                     cause=exc,
@@ -1164,7 +1171,7 @@ def remove_model(
             payload = {
                 "status": "removed",
                 "id": str((record or {}).get("id") or model),
-                "kind": "dmr",
+                "kind": model_source(entry),
                 "artifact_removed": artifact_removed,
                 "artifact": target,
                 "node": node,
@@ -1243,7 +1250,7 @@ def _remove_dmr_installations(
                 _remove_runtime_model_on_cluster_node(
                     target_model, node=target_node, force=force
                 )
-            elif _model_installed(target_model):
+            elif is_docker_model(entry) or _model_installed(target_model):
                 remove_model_ref(target_model, force=force)
         _remove_remote_model_records(
             str(record.get("id") or target_model), node=target_node
@@ -1279,7 +1286,7 @@ def _remove_dmr_installations(
     return {
         "status": "removed" if not remaining else "ready",
         "id": str(record.get("id") or target_model),
-        "kind": "dmr",
+        "kind": model_source(entry),
         "nodes": targets,
         "results": results,
         "remaining": len(remaining),
@@ -1335,6 +1342,11 @@ def doctor_model(
                 ).lower()
                 runner_running = node_status in {"healthy", "joining"}
                 endpoint_ok = True
+                if is_docker_model(entry):
+                    candidate = next((item for item in inventory if docker_model_match_keys(target)
+                                      & _model_payload_match_keys(item)), {})
+                    runner_running = candidate.get("running") is True
+                    endpoint_ok = candidate.get("endpoint_ok") is True
                 status = {
                     "node": selected_node,
                     "status": node_status,
@@ -1370,12 +1382,20 @@ def doctor_model(
         else:
             compatibility = assess_model_compatibility(entry)
             compatibility_payload = compatibility.to_dict()
-            status = _docker_status()
-            installed = _model_installed(target)
-            endpoint_ok = _endpoint_responds()
-            runner_running = (
-                bool(status.get("running")) or "running" in json.dumps(status).lower()
-            )
+            if is_docker_model(entry):
+                from mn_sdk.model_service import doctor_runtime_model
+                diagnosis = doctor_runtime_model(str(entry["id"]))
+                status = diagnosis["docker"]
+                installed = diagnosis["model"]["installed"]
+                endpoint_ok = status["endpoint_ok"]
+                runner_running = status["running"]
+            else:
+                status = _docker_status()
+                installed = _model_installed(target)
+                endpoint_ok = _endpoint_responds()
+                runner_running = (
+                    bool(status.get("running")) or "running" in json.dumps(status).lower()
+                )
             hardware_payload = detect_host_hardware().to_dict()
         gateway_health = litellm_gateway_health()
         gateway_config = build_litellm_gateway_config()
@@ -1387,7 +1407,7 @@ def doctor_model(
         payload = {
             "model": {
                 **_entry_payload(entry, installed=installed),
-                "kind": "dmr",
+                "kind": model_source(entry),
                 "registered": record is not None,
                 "verification": str(
                     (record or {}).get("verification")
@@ -1397,10 +1417,10 @@ def doctor_model(
                 "node": selected_node,
             },
             "compatibility": compatibility_payload,
-            "docker_model_runner": {
+            "docker" if is_docker_model(entry) else "docker_model_runner": {
                 "status": status,
                 "running": runner_running,
-                "endpoint": DOCKER_MODEL_RUNNER_HOST_API_BASE
+                "endpoint": (status.get("endpoint") if is_docker_model(entry) else DOCKER_MODEL_RUNNER_HOST_API_BASE)
                 if not remote_selected
                 else selected_node,
                 "endpoint_ok": endpoint_ok,
@@ -1477,6 +1497,14 @@ def _dmr_installation_health(entry: dict[str, Any], node_name: str) -> dict[str,
     target = docker_model_name(entry)
     local_node = _local_runtime_node_name() or "local"
     if node_name in {"", "local", local_node}:
+        if is_docker_model(entry):
+            from mn_sdk.model_service import doctor_runtime_model
+            diagnosis = doctor_runtime_model(str(entry["id"]))
+            return {"node": node_name or local_node, "local": True,
+                    "installed": diagnosis["model"]["installed"],
+                    "running": diagnosis["docker"]["running"],
+                    "compatibility": diagnosis["compatibility"],
+                    "health": "healthy" if diagnosis["ok"] else "unavailable"}
         compatibility = assess_model_compatibility(entry).to_dict()
         installed = _model_installed(target)
         status = _docker_status()
@@ -1505,6 +1533,10 @@ def _dmr_installation_health(entry: dict[str, Any], node_name: str) -> dict[str,
             (endpoint.get("node") or {}).get("status") or "healthy"
         ).lower()
         running = node_status in {"healthy", "joining"}
+        if is_docker_model(entry):
+            candidate = next((item for item in inventory if docker_model_match_keys(target)
+                              & _model_payload_match_keys(item)), {})
+            running = candidate.get("running") is True and candidate.get("endpoint_ok") is True
         compatibility = _remote_node_compatibility(
             entry,
             selected_node=node_name,
@@ -1863,7 +1895,7 @@ def _registered_model_payload(
         "routed": routed,
         "node": node,
         "model": record.get("model") or model_id,
-        "docker_model": record.get("model") or model_id if kind == "dmr" else None,
+        "docker_model": record.get("model") or model_id if kind in {"dmr", "docker"} else None,
         "api_model": record.get("api_model") or model_id,
         "backend": record.get("backend") or "",
         "cataloged": bool(record.get("cataloged")),
@@ -1893,9 +1925,9 @@ def _stored_registered_model_payload(record: dict[str, Any]) -> dict[str, Any]:
         "registered": True,
         "installed": None,
         "routed": None,
-        "node": str(record.get("selected_node") or "") if kind == "dmr" else "",
+        "node": str(record.get("selected_node") or "") if kind in {"dmr", "docker"} else "",
         "model": record.get("model") or model_id,
-        "docker_model": (record.get("model") or model_id) if kind == "dmr" else None,
+        "docker_model": (record.get("model") or model_id) if kind in {"dmr", "docker"} else None,
         "api_model": record.get("api_model") or model_id,
         "backend": record.get("backend") or "",
         "cataloged": bool(record.get("cataloged")),
@@ -1904,7 +1936,7 @@ def _stored_registered_model_payload(record: dict[str, Any]) -> dict[str, Any]:
         "created_at": record.get("created_at") or "",
         "updated_at": record.get("updated_at") or "",
         "installations": list(record.get("installations") or [])
-        if kind == "dmr"
+        if kind in {"dmr", "docker"}
         else [],
     }
 
@@ -1928,8 +1960,8 @@ def _discovered_dmr_payload(model: str, *, routed_names: set[str]) -> dict[str, 
     return {
         "id": model_id,
         "name": str((entry or {}).get("name") or model_id),
-        "kind": "dmr",
-        "source": "docker_model_runner",
+        "kind": model_source(entry or {}),
+        "source": "docker" if is_docker_model(entry or {}) else "docker_model_runner",
         "state": "ready" if routed else "installed",
         "registered": False,
         "installed": True,
@@ -1937,7 +1969,7 @@ def _discovered_dmr_payload(model: str, *, routed_names: set[str]) -> dict[str, 
         "node": local_node,
         "model": model,
         "docker_model": model,
-        "api_model": model,
+        "api_model": (entry or {}).get("api_model") or model,
         "backend": str((entry or {}).get("backend") or "unknown"),
         "cataloged": entry is not None,
         "verification": str(
@@ -1950,7 +1982,7 @@ def _discovered_dmr_payload(model: str, *, routed_names: set[str]) -> dict[str, 
                 "installed": True,
                 "local": True,
                 "model": model,
-                "api_model": model,
+                "api_model": (entry or {}).get("api_model") or model,
                 "route_source": "local_dmr",
             }
         ],
@@ -1992,8 +2024,8 @@ def _discovered_remote_dmr_payload(
     return {
         "id": model_id,
         "name": str((entry or {}).get("name") or model_id),
-        "kind": "dmr",
-        "source": "docker_model_runner",
+        "kind": model_source(entry or {}),
+        "source": "docker" if is_docker_model(entry or {}) else "docker_model_runner",
         "state": "ready" if routed else "installed",
         "registered": False,
         "installed": True,
@@ -2024,12 +2056,12 @@ def _discovered_remote_dmr_payload(
 
 def _available_model_payload(entry: dict[str, Any]) -> dict[str, Any]:
     provider = str(entry.get("provider") or "docker_model_runner")
-    kind = "provider" if provider == "litellm_proxy" else "dmr"
+    kind = "provider" if provider == "litellm_proxy" else model_source(entry)
     return {
         "id": str(entry.get("id") or entry.get("model") or ""),
         "name": entry.get("name") or entry.get("id") or entry.get("model"),
         "kind": kind,
-        "source": "catalog",
+        "source": str((entry.get("registry") or {}).get("source") or "provider") if kind == "provider" else model_source(entry),
         "state": "available",
         "registered": False,
         "installed": False,
@@ -2321,7 +2353,7 @@ def _update_dmr_registration(
     replace_registered_model(replacement)
     return {
         "id": replacement["id"],
-        "kind": "dmr",
+        "kind": replacement["kind"],
         "node": ", ".join(targets),
         "nodes": targets,
         "results": results,
@@ -2333,7 +2365,7 @@ def _dmr_entry_for_record_or_ref(
     record: dict[str, Any] | None, model: str
 ) -> dict[str, Any]:
     if isinstance(record, dict):
-        if record.get("kind") != "dmr":
+        if record.get("kind") not in {"dmr", "docker"}:
             raise ValueError(f"model {model!r} is not a DMR model")
         definition = record.get("definition")
         if isinstance(definition, dict):
@@ -3322,7 +3354,7 @@ def _reconcile_stale_local_model_registrations(
 
     reconciled: list[dict[str, str]] = []
     for model_id, record in records.items():
-        if not isinstance(record, dict) or record.get("kind") != "dmr":
+        if not isinstance(record, dict) or record.get("kind") not in {"dmr", "docker"}:
             continue
         previous_node = str(record.get("selected_node") or "").strip()
         if (

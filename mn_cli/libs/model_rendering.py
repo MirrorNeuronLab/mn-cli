@@ -75,7 +75,8 @@ def print_compatibility(payload: dict[str, Any]) -> None:
 
 def print_dmr_doctor(payload: dict[str, Any]) -> None:
     model = payload["model"]
-    runner = payload["docker_model_runner"]
+    docker_source = model.get("kind") == "docker"
+    runner = payload["docker" if docker_source else "docker_model_runner"]
     gateway = payload.get("litellm_gateway") or {}
     compatibility = payload.get("compatibility") or {}
     print_doctor_checks(
@@ -83,8 +84,8 @@ def print_dmr_doctor(payload: dict[str, Any]) -> None:
         f"Model doctor: {model.get('id')}",
         [
             {"check": "Compatibility", "state": compatibility.get("status"), "detail": compatibility.get("message"), "fix": compatibility.get("help")},
-            {"check": "DMR artifact", "state": "ready" if model.get("installed") else "missing", "detail": model.get("docker_model") or model.get("model"), "fix": f"mn model update {model.get('id')}" if not model.get("installed") else ""},
-            {"check": "Docker Model Runner", "state": "ready" if runner.get("running") and runner.get("endpoint_ok") else "critical", "detail": runner.get("inventory_error") or "", "fix": "Start Docker Model Runner and retry." if not runner.get("endpoint_ok") else ""},
+            {"check": "Docker container" if docker_source else "DMR artifact", "state": "ready" if model.get("installed") else "missing", "detail": model.get("docker_model") or model.get("model"), "fix": f"mn model update {model.get('id')}" if not model.get("installed") else ""},
+            {"check": "Model server" if docker_source else "Docker Model Runner", "state": "ready" if runner.get("running") and runner.get("endpoint_ok") else "critical", "detail": runner.get("inventory_error") or "", "fix": (f"mn model start {model.get('id')}" if docker_source else "Start Docker Model Runner and retry.") if not runner.get("endpoint_ok") else ""},
             {"check": "Gateway config", "state": "ready" if gateway.get("config_ok") else "critical", "detail": gateway.get("config_error") or "", "fix": "mn runtime doctor --repair" if not gateway.get("config_ok") else ""},
             {"check": "Model route", "state": "ready" if gateway.get("routed") else "critical", "detail": gateway.get("endpoint") or "", "fix": f"mn model update {model.get('id')}" if not gateway.get("routed") else ""},
         ],

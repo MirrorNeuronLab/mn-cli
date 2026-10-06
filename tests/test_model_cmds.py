@@ -80,6 +80,8 @@ _configured_windows = {}
 
 
 def _completed(command, returncode=0, stdout="", stderr=""):
+    if command[:3] == ["docker", "container", "inspect"] and not stdout:
+        returncode = 1
     # Model installation now verifies DMR configuration, rather than trusting
     # the configure exit status. Keep the fake transport stateful at that boundary.
     if returncode == 0 and not stdout and command[:2] == ["docker", "model"]:

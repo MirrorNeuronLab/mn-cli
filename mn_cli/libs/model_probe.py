@@ -199,11 +199,13 @@ def _local_model_probe_endpoint(
     target = docker_model_name(entry)
     if not model_installed(target):
         return None
+    from mn_sdk.model_sources import is_docker_model
+    from mn_sdk.docker_models import api_base
     return docker_model_runner_endpoint(
         entry,
         node=local_node or "local",
-        api_base=DOCKER_MODEL_RUNNER_HOST_API_BASE,
-        source="local_dmr_direct_probe",
+        api_base=api_base(entry) if is_docker_model(entry) else DOCKER_MODEL_RUNNER_HOST_API_BASE,
+        source="local_docker_direct_probe" if is_docker_model(entry) else "local_dmr_direct_probe",
     )
 
 
