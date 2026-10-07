@@ -539,41 +539,11 @@ def _validate_distributed_runtime_model_feasibility(
 def _workflow_placement_mode(
     manifest: dict[str, Any], *, env: Optional[dict[str, str]]
 ) -> str | None:
-    runtime = (
-        manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
-    )
-    declaration = (
-        runtime.get("placement") if isinstance(runtime.get("placement"), dict) else {}
-    )
-    raw_mode = str(declaration.get("mode") or "").strip().lower().replace("-", "_")
-    if raw_mode and raw_mode not in {"single_node", "distributed"}:
-        raise RuntimeError(
-            "runtime.placement.mode must be either 'single_node' or 'distributed'."
-        )
-    if raw_mode:
-        return raw_mode
-    return None
+    return workflow_placement_mode(manifest, env=env)
 
 
 def _workflow_requires_single_node(manifest: dict[str, Any]) -> bool:
-    runtime = (
-        manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
-    )
-    if isinstance(runtime.get("models"), dict) and runtime["models"]:
-        return True
-    if isinstance(runtime.get("memory"), dict) and runtime["memory"]:
-        return True
-    for node in manifest_nodes(manifest):
-        config = node.get("config") if isinstance(node.get("config"), dict) else {}
-        runner = str(config.get("runner_module") or "").strip()
-        if runner in {
-            "MirrorNeuron.Runner.DockerWorker",
-            "MirrorNeuron.Runner.HostLocal",
-        }:
-            return True
-        if config.get("gpus") not in (None, "", "none", "None"):
-            return True
-    return False
+    return workflow_requires_single_node(manifest)
 
 
 def _workflow_explicit_node_placements(manifest: dict[str, Any]) -> dict[str, str]:

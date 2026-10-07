@@ -1,5 +1,12 @@
 # MirrorNeuron CLI
 
+Blueprint `execution.json` can set `runtime.placement.must_run_local: true` to
+pin its Job owner and all workers to the submitting computer. `mn blueprint run`
+honors that requirement before resource/model preparation, rejects a remote
+`--node`, and cannot disable it through the single-node environment opt-out.
+`requirements.os: "darwin"` additionally requires a Mac, including sample runs.
+Install the matching updated SDK and CLI to use this contract.
+
 `mn runtime ensure-context-engine` prepares the authenticated CPU Membrane package.
 Blueprints declare Markdown memory with `mn.context` / `text_memory.enabled`.
 Preparation uses Markdown storage and one DuckDB index per job; it does not

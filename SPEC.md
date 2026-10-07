@@ -1,5 +1,12 @@
 # MirrorNeuron CLI Specification
 
+Blueprint preflight delegates placement mode and single-node eligibility to the
+shared SDK. `runtime.placement.must_run_local: true` hard-pins execution and Job
+ownership to the submitting node, rejects remote `--node` and distributed mode,
+and overrides the environment's single-node opt-out. `requirements.os` is checked
+against that node's hardware platform; `darwin` requires macOS. Local failures
+do not authorize selecting another computer.
+
 `mn runtime ensure-context-engine` prepares the authenticated CPU Membrane package.
 Blueprints declare Markdown memory with `mn.context` / `text_memory.enabled`.
 Preparation uses Markdown storage and one DuckDB index per job; it does not
