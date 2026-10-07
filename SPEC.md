@@ -417,6 +417,10 @@ gRPC credentials and client identity cannot remain stale.
 Prepared HostLocal Python environments retain separate host and Core-visible
 paths; submissions use the configured Core cache mount so console-script
 entrypoints resolve inside a containerized local runtime.
+HostLocal source staging, checkout-path rebasing, and declared-version lookup
+resolve the source location separately from its optional dependency extras.
+Staged install arguments retain the extras; trusted source-root restrictions
+still apply to the resolved location.
 For a distributed workflow forwarded to a federated owner, HostLocal Python
 environments are prepared on that owner even though no single-node placement
 marker is added to the workflow.

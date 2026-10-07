@@ -10,6 +10,8 @@ from .validate import *
 from mn_cli.runtime_mode import running_core_container
 from mn_cli.output import record_result
 from mn_sdk.runtime_config import RuntimeConfig
+from mn_sdk.requirement_extras import split_requirement_extras
+from mn_sdk.native_host_submission import NATIVE_ENVIRONMENT_KEY, native_host_python_required
 
 def doctor_bundle(
     bundle_path: str,
@@ -512,6 +514,7 @@ def _doctor_prepare_hostlocal_python_envs(
         placement.get("selected_node") or selected_runtime_node or ""
     ).strip()
     remote_selected_node = selected_node and selected_node != _local_runtime_node_name()
+    native_host = native_host_python_required(manifest)
     for node in manifest_nodes(manifest):
         config = node.get("config") if isinstance(node.get("config"), dict) else {}
         if config.get("runner_module") != "MirrorNeuron.Runner.HostLocal":
@@ -535,6 +538,8 @@ def _doctor_prepare_hostlocal_python_envs(
             failures.append({"node_id": node_id, "status": "skipped", "detail": "Not prepared in --check-only mode."})
             continue
         try:
+            if native_host and remote_selected_node:
+                raise RuntimeError("A local host-OS workflow cannot prepare Python on a remote runtime node")
             if remote_selected_node:
                 requirements_content = _doctor_requirements_content(
                     bundle_dir,
@@ -570,13 +575,16 @@ def _doctor_prepare_hostlocal_python_envs(
                     requirements_path=requirements_path,
                     timeout=timeout,
                     local_source_versions=local_source_versions,
+                    **({"native_host": True} if native_host else {}),
                 )
-                runtime_env_dir = _doctor_runtime_python_env_path(
+                runtime_env_dir = env_dir if native_host else _doctor_runtime_python_env_path(
                     env_dir,
                     core_container=_doctor_running_core_container(timeout),
                 )
             python_env["path"] = str(runtime_env_dir)
             config["python_environment"] = python_env
+            if native_host:
+                config[NATIVE_ENVIRONMENT_KEY] = {"python": str(env_dir / "bin" / "python")}
             prepared.append(
                 {
                     "node_id": node_id,
@@ -621,6 +629,7 @@ def _doctor_prepare_python_env(
     requirements_path: str,
     timeout: float,
     local_source_versions: dict[str, str] | None = None,
+    native_host: bool = False,
 ) -> Path:
     requirements_content = _doctor_requirements_content(
         bundle_dir,
@@ -638,6 +647,7 @@ def _doctor_prepare_python_env(
             bundle_dir / "payloads" / "agents",
         ],
         local_source_versions=local_source_versions,
+        **({"native_host": True} if native_host else {}),
     )
 
 
@@ -645,33 +655,9 @@ def _doctor_hostlocal_local_source_versions(
     manifest: dict[str, Any],
     packages: list[str],
 ) -> dict[str, str]:
-    """Return declared versions for localized HostLocal dependency paths."""
+    from mn_sdk.dependency_versions import localized_source_versions
 
-    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
-    local = (
-        metadata.get("mn_local_skill_dependencies")
-        if isinstance(metadata.get("mn_local_skill_dependencies"), dict)
-        else {}
-    )
-    sources = local.get("sources") if isinstance(local.get("sources"), list) else []
-    versions_by_path: dict[str, str] = {}
-    for entry in sources:
-        if not isinstance(entry, dict):
-            continue
-        source = str(entry.get("source") or "").strip()
-        version = _doctor_local_source_version(entry.get("version"))
-        if source and version:
-            versions_by_path.setdefault(str(Path(source).expanduser().resolve()), version)
-
-    local_versions: dict[str, str] = {}
-    for package in packages:
-        candidate = Path(package).expanduser()
-        if not candidate.is_absolute():
-            continue
-        version = versions_by_path.get(str(candidate.resolve()))
-        if version:
-            local_versions[package] = version
-    return local_versions
+    return localized_source_versions(manifest, packages)
 
 
 def _doctor_requirements_content(
@@ -697,8 +683,9 @@ def _doctor_prepare_python_env_from_content(
     local_source_roots: list[Path] | None = None,
     local_source_versions: dict[str, str] | None = None,
     force_local_core: bool = False,
+    native_host: bool = False,
 ) -> Path:
-    core_container = _doctor_running_core_container(
+    core_container = "" if native_host else _doctor_running_core_container(
         timeout,
         allow_remote_target=force_local_core,
     )
@@ -822,6 +809,7 @@ def _doctor_prepare_python_env_from_content(
             )
         install_packages = [
             str(staged_sources[str(local_sources_by_argument[package])])
+            + split_requirement_extras(package)[1]
             if package in local_sources_by_argument
             else package
             for package in packages
@@ -880,7 +868,7 @@ def _doctor_prepare_python_env_from_content(
         env={**os.environ, "PIP_DISABLE_PIP_VERSION_CHECK": "1", "PIP_NO_INPUT": "1"},
     )
     if install.returncode != 0:
-        raise RuntimeError(_truncate_doctor_detail((install.stdout + install.stderr).strip() or "pip install failed"))
+        raise RuntimeError(_truncate_doctor_detail((install.stderr + "\n" + install.stdout).strip() or "pip install failed"))
     ready.write_text(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + "\n", encoding="utf-8")
     return env_dir
 
@@ -914,7 +902,8 @@ def _doctor_rebase_missing_local_sources(
 
 
 def _doctor_rebase_missing_local_source(package: str) -> str:
-    candidate = Path(package).expanduser()
+    location, extras = split_requirement_extras(package)
+    candidate = Path(location).expanduser()
     if not candidate.is_absolute() or candidate.exists():
         return package
 
@@ -929,9 +918,9 @@ def _doctor_rebase_missing_local_source(package: str) -> str:
         for root in source_roots:
             replacement = root / relative
             if replacement.is_dir() and replacement.joinpath("pyproject.toml").is_file():
-                return str(replacement)
+                return str(replacement) + extras
             if replacement.is_file() and replacement.suffix == ".whl":
-                return str(replacement)
+                return str(replacement) + extras
     return package
 
 
@@ -1010,7 +999,8 @@ def _doctor_workspace_local_source(
     extra_roots: list[Path] | None = None,
 ) -> Path | None:
     runtime_config = RuntimeConfig.from_env()
-    candidate = Path(package).expanduser()
+    location, _extras = split_requirement_extras(package)
+    candidate = Path(location).expanduser()
     if not candidate.is_absolute() or not candidate.exists():
         return None
     source = candidate.resolve()

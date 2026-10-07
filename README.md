@@ -257,6 +257,10 @@ CPU-only HostLocal workflows stay on the submitting runtime node by default.
 When the local Core runs in Docker, prepared HostLocal Python environments are
 reported to submissions through the Core-visible cache mount rather than the
 host filesystem path.
+Local source requirements such as `/workspace/mn-python-sdk[context]` are
+staged into that cache with their extras and declared source version preserved.
+The extras are separate from the source path when checking trusted roots or
+rebasing a checkout path for a selected runtime node.
 Automatic HostLocal service ports use `MN_AUTO_PORT_START` through
 `MN_AUTO_PORT_END` (62000-62049 by default in the local Docker runtime). That
 range is published only on host loopback; the runtime's internal proxy marker
