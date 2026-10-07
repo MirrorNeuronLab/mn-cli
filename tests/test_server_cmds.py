@@ -43,6 +43,9 @@ ORIGINAL_WEB_UI_DIRS = server_cmds.WEB_UI_DIRS
 
 @pytest.fixture(autouse=True)
 def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
+    mocker.patch('mn_cli.server_cmds.wait_for_context_engine', return_value={
+        'status': 'ready', 'protocol': 'mirrorneuron.context.v2'
+    })
     mocker.patch('mn_cli.server_cmds.probe_core_identity', return_value=True)
     mocker.patch('mn_cli.server_cmds.observe_core_identity', return_value=None)
     monkeypatch.delenv("MN_COOKIE", raising=False)
@@ -1415,6 +1418,28 @@ def test_ensure_context_engine_runtime_skips_compose_when_already_running(mocker
     assert "MN_CONTEXT_MODEL_RUNNER_MODEL" not in server_cmds._read_env_file(server_cmds.RUNTIME_COMPOSE_ENV)
     assert result["device"] == "cpu"
     inspect_model.assert_not_called()
+    run.assert_not_called()
+
+def test_running_context_engine_must_pass_protocol_readiness(mocker):
+    server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
+    server_cmds.RUNTIME_COMPOSE_ENV.write_text(
+        "COMPOSE_PROJECT_NAME=mirror-neuron\n"
+        "ENGINE_IMAGE=registry.example/membrane:v1\n"
+        "MN_CONTEXT_HOST_PORT=50152\n"
+        "MN_CONTEXT_AUTH_TOKEN=test-token\n",
+        encoding="utf-8",
+    )
+    server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
+    mocker.patch("mn_cli.server_cmds._remove_non_mirror_neuron_container")
+    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=True)
+    run = mocker.patch("mn_cli.server_cmds.subprocess.run")
+    probe = mocker.patch(
+        "mn_cli.server_cmds.wait_for_context_engine",
+        side_effect=RuntimeError("Context Engine does not implement mirrorneuron.context.v2"),
+    )
+    with pytest.raises(RuntimeError, match="does not implement mirrorneuron.context.v2"):
+        server_cmds.ensure_context_engine_runtime()
+    probe.assert_called_once_with(address="127.0.0.1:50152", token="test-token")
     run.assert_not_called()
 
 def test_context_auth_token_is_persistent_private_and_explicit_token_wins(tmp_path):

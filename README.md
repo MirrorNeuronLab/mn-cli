@@ -15,6 +15,10 @@ starts and forwarded through runtime settings. `text_memory.enabled=false`
 disables blueprint preparation, including when its source descriptor is enabled.
 The matching v2 service, SDK and persistent Compose template must be installed
 before a live run. Optional detailed logs use `MN_CONTEXT_OBSERVABILITY=true`.
+Preparation checks the authenticated v2 protocol even when the container is
+already running. An older image fails before submission with a matching-image
+instruction. Local development can prepare the current engine with
+`mn-deploy/install.sh --mode local --build-membrane`; a data reset is unnecessary.
 
 `mn model list` shows every discovered installation of a DMR model, including
 local and multiple remote owners of the same unregistered artifact.
@@ -261,6 +265,10 @@ Local source requirements such as `/workspace/mn-python-sdk[context]` are
 staged into that cache with their extras and declared source version preserved.
 The extras are separate from the source path when checking trusted roots or
 rebasing a checkout path for a selected runtime node.
+When a local-only workflow also requires a host OS, HostLocal Python workers run
+on the native host through the SDK service. Core uses a separate prepared SDK
+proxy environment for supervision and cancellation. Source skills retain their
+own SCM versions; CLI installation includes the SDK's `local-source` extra.
 Automatic HostLocal service ports use `MN_AUTO_PORT_START` through
 `MN_AUTO_PORT_END` (62000-62049 by default in the local Docker runtime). That
 range is published only on host loopback; the runtime's internal proxy marker

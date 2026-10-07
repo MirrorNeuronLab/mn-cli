@@ -15,6 +15,12 @@ starts and forwarded through runtime settings. `text_memory.enabled=false`
 disables blueprint preparation, including when its source descriptor is enabled.
 The matching v2 service, SDK and persistent Compose template must be installed
 before a live run. Optional detailed logs use `MN_CONTEXT_OBSERVABILITY=true`.
+Before reporting context memory ready, preparation checks authenticated v2
+`CompilePrompt` with a small deterministic request. The check does not access
+stored memory or invoke a model. Startup retries share a ten-second deadline;
+protocol and authentication failures are immediate. A running container alone
+does not establish compatibility. Source image preparation remains an explicit
+installer operation (`--mode local --build-membrane`), without a data reset.
 
 Model listings retain all discovered DMR installations in one model row,
 including unregistered artifacts shared by the local node and multiple remote
@@ -421,6 +427,11 @@ HostLocal source staging, checkout-path rebasing, and declared-version lookup
 resolve the source location separately from its optional dependency extras.
 Staged install arguments retain the extras; trusted source-root restrictions
 still apply to the resolved location.
+Local-only, OS-bound HostLocal Python workers prepare native dependencies and a
+separate Core SDK proxy. Native invocation uses the SDK's bounded, scoped host
+Python protocol, preserving Core supervision and cancellation. Dynamic skill
+source versions are resolved before staging through the SDK's `local-source`
+extra and retained in copied build contexts.
 For a distributed workflow forwarded to a federated owner, HostLocal Python
 environments are prepared on that owner even though no single-node placement
 marker is added to the workflow.

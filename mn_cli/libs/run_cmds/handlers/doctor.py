@@ -12,6 +12,7 @@ from mn_cli.output import record_result
 from mn_sdk.runtime_config import RuntimeConfig
 from mn_sdk.requirement_extras import split_requirement_extras
 from mn_sdk.native_host_submission import NATIVE_ENVIRONMENT_KEY, native_host_python_required
+from mn_cli.runtime.hostlocal_python_bridge import prepare_hostlocal_python_bridge
 
 def doctor_bundle(
     bundle_path: str,
@@ -584,7 +585,15 @@ def _doctor_prepare_hostlocal_python_envs(
             python_env["path"] = str(runtime_env_dir)
             config["python_environment"] = python_env
             if native_host:
-                config[NATIVE_ENVIRONMENT_KEY] = {"python": str(env_dir / "bin" / "python")}
+                bridge = prepare_hostlocal_python_bridge(timeout=timeout)
+                config[NATIVE_ENVIRONMENT_KEY] = {"python": str(env_dir / "bin" / "python"),
+                                                "environment": dict(python_env)}
+                config["python_environment"] = {
+                    "packages": ["mirrorneuron-python-sdk>1.3,<2"],
+                    "path": str(_doctor_runtime_python_env_path(
+                        bridge, core_container=_doctor_running_core_container(timeout, allow_remote_target=True),
+                    )),
+                }
             prepared.append(
                 {
                     "node_id": node_id,

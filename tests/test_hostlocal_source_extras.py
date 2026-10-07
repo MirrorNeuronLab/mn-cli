@@ -121,10 +121,12 @@ def test_mac_local_only_workflow_prepares_native_python(tmp_path, mocker):
     manifest = {"runtime": {"placement": {"must_run_local": True}},
                 "requirements": {"os": "darwin"}, "agents": {"nodes": [{"node_id": "collector", "config": config}]}}
     prepare = mocker.patch.object(doctor, "_doctor_prepare_python_env", return_value=env)
-    core = mocker.patch.object(doctor, "_doctor_running_core_container")
+    mocker.patch.object(doctor, "prepare_hostlocal_python_bridge", return_value=tmp_path / "bridge")
+    mocker.patch.object(doctor, "_doctor_running_core_container", return_value="")
+    mocker.patch.object(doctor, "_doctor_runtime_python_env_path", return_value=tmp_path / "bridge")
     report = doctor._doctor_prepare_hostlocal_python_envs(tmp_path, manifest, timeout=1, check_only=False)
     assert report["status"] == "passing"
     assert prepare.call_args.kwargs["native_host"] is True
-    assert config["mn_native_host_python"] == {"python": str(env / "bin/python")}
-    assert config["python_environment"]["path"] == str(env)
-    core.assert_not_called()
+    assert config["mn_native_host_python"]["python"] == str(env / "bin/python")
+    assert config["mn_native_host_python"]["environment"]["path"] == str(env)
+    assert config["python_environment"]["path"] == str(tmp_path / "bridge")

@@ -24,6 +24,8 @@ from mn_sdk.blueprint_source import (
     normalize_blueprint_repo_value,
 )
 from mn_sdk import is_default_model_entry, runtime_model_selection_policy
+from mn_sdk.context_engine_readiness import wait_for_context_engine
+from mn_sdk.context_session.client import connection_settings as context_connection_settings
 from mn_sdk.model_runtime import DEFAULT_CONTEXT_ENGINE_MODEL
 from mn_sdk.native_resources import (
     DEFAULT_MODEL_RUNNER_PROXY_PORT as SDK_DEFAULT_MODEL_RUNNER_PROXY_PORT,
@@ -4430,8 +4432,12 @@ def ensure_context_engine_runtime(
     else:
         status = "already_running"
 
+    context_address, context_token = context_connection_settings(env=env, runtime_env=env)
+    readiness = wait_for_context_engine(address=context_address, token=context_token)
+
     return {
         "status": status,
+        "protocol": readiness["protocol"],
         "service": CONTEXT_ENGINE_SERVICE,
         "container": CONTEXT_ENGINE_CONTAINER,
         "storage": "markdown",
@@ -4471,7 +4477,7 @@ def _ensure_context_engine_image_available(
     ):
         raise RuntimeError(
             f"Local context engine package image {image} is not prepared. "
-            "Run mn-deploy install --mode local --context-engine to build the local package before starting context memory."
+            "Run mn-deploy/install.sh --mode local --build-membrane to build the local package before starting context memory."
         )
 
     compose_env, anonymous_docker_config = _anonymous_public_gar_docker_env(env, image)
