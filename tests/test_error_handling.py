@@ -203,7 +203,7 @@ def test_memory_failure_explains_requirements_without_debug(mocker, monkeypatch,
         handle_cli_error(error, console, "blueprint run", debug=False)
     output = " ".join(stream.getvalue().split())
     assert "MN_MEMORY_REQUIREMENT_UNMET" in output
-    assert "requires 48 GiB; available 24 GiB" in output
+    assert "has 24 GiB of host memory; this work requires 48 GiB" in output
     assert "reduce the workflow's memory requirement" in output
     assert "private" not in output
     payload = _error_payload(normalize_exception(error))
@@ -212,3 +212,38 @@ def test_memory_failure_explains_requirements_without_debug(mocker, monkeypatch,
     assert payload["category"] == "hardware"
     assert payload["retryable"] is False
     assert payload["details"]["blockers"][0]["required"] == 48
+
+
+@pytest.mark.parametrize("plain", [False, True])
+def test_cli_explains_core_gpu_memory_shortage_with_shared_problem_code(mocker, monkeypatch, plain):
+    import grpc
+    import json
+    from mn_cli.output import _error_payload
+    from mn_sdk.errors import normalize_exception
+
+    class MemoryRpcError(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.INTERNAL
+
+        def details(self):
+            return "placement_failed: private node token=secret\nmn_admission_v1:" + json.dumps({"blockers": [{
+                "code": "MN_GPU_MEMORY_UNAVAILABLE", "node_index": 1, "node_label": "spark",
+                "resource": "gpu_memory_free_mb", "available": 8.17, "required": 48, "unit": "GiB",
+            }]})
+
+    if plain:
+        monkeypatch.setenv("MN_CLI_OUTPUT", "plain")
+    console, stream = _console_stream()
+    console.width = 120
+    mocker.patch("mn_cli.error_handler.logger.exception")
+    with pytest.raises(typer.Exit):
+        handle_cli_error(MemoryRpcError(), console, "blueprint run", debug=False)
+    output = " ".join(stream.getvalue().split())
+    assert "spark has 8.17 GiB of free GPU memory" in output
+    assert "this work requires 48 GiB" in output
+    assert "unload unused models" in output
+    assert "Problem code: 2001 (capacity)" in output
+    assert "secret" not in output and "private" not in output
+    payload = _error_payload(normalize_exception(MemoryRpcError()))
+    assert payload["problem_code"] == 2001 and payload["retryable"] is True
+    assert payload["details"]["blockers"][0]["node_label"] == "spark"

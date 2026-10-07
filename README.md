@@ -142,9 +142,13 @@ mn model update cosmos3 --node spark
 mn model remove cosmos3 --node spark --yes
 ```
 
-`stop` and `unload` retain downloaded images and cache; `start` waits for
-readiness and reuses the container. A later owner-gateway request restarts an
-unloaded NIM before inference. Lifecycle commands infer a single registered
+`add`, `update`, and preparation cache/configure models without starting
+inference. `stop` and `unload` retain images and cache; explicit `start` waits
+for readiness. An owner-gateway request starts an idle NIM before inference,
+recreating a deleted managed container from its image/cache when necessary.
+The last run/request owner releases model memory. Docker model containers use
+`restart=no`; `doctor` reports a cached/stopped installation as `idle` without
+loading it. Lifecycle commands infer a single registered
 owner; select `--node` or `--local` for replicas. Preparing Cosmos does not
 reinstall Nemotron. See the SDK's
 [Docker model setup and settings](../mn-python-sdk/docs/docker-models.md),
@@ -611,6 +615,11 @@ CLI JSON and API Problem Details include numeric `problem_code` (for example,
 1001 for memory requirements or 3001 for scheduling), `category`, `retryable`, and bounded
 structured placement `details.blockers`. See [SPEC.md](SPEC.md#shared-admission-error-contract)
 for codes and retry semantics.
+Measured admission blockers also identify a validated friendly PC name and the
+available/required resource amounts. GPU memory shortages use `2001` and suggest
+stopping other GPU workloads or unloading unused models before retrying. Updated
+Core and SDK services are required for measured run-start errors; admission
+requirements remain enforced.
 
 ## Job performance
 

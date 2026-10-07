@@ -20,6 +20,7 @@ from mn_sdk import (
     resolve_model_entry,
 )
 from mn_sdk.model_access import runtime_model_gateway_name
+from mn_sdk.model_context_admission import model_request
 
 
 def run_model_probe(
@@ -43,14 +44,15 @@ def run_model_probe(
         local_node=local_node,
     )
     if direct_endpoint is not None:
-        direct_report = ensure_model_capabilities(
-            str(entry.get("id") or model),
-            required,
-            entry=entry,
-            endpoint=direct_endpoint,
-            force=True,
-            persist=False,
-        )
+        with model_request(docker_model_name(entry)):
+            direct_report = ensure_model_capabilities(
+                str(entry.get("id") or model),
+                required,
+                entry=entry,
+                endpoint=direct_endpoint,
+                force=True,
+                persist=False,
+            )
 
     proxy_report = ensure_model_capabilities(
         str(entry.get("id") or model),

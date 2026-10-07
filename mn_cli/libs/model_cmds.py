@@ -483,9 +483,6 @@ def add_model(
             )
         else:
             if local_artifact_installed:
-                if is_docker_model(entry):
-                    from mn_sdk.model_service import start_runtime_model
-                    start_runtime_model(str(entry["id"]))
                 compatibility_result = assess_model_compatibility(
                     entry, backend=backend, force=force
                 )
@@ -683,9 +680,6 @@ def _add_dmr_replicas(
         try:
             if preflight[target_node].get("local"):
                 if _model_installed(target_model):
-                    if is_docker_model(entry):
-                        from mn_sdk.model_service import start_runtime_model
-                        start_runtime_model(str(entry["id"]))
                     result = {
                         "entry": entry,
                         "docker_model": target_model,
@@ -1464,7 +1458,7 @@ def doctor_model(
             for node_name in dict.fromkeys(installation_nodes)
         ]
         healthy_count = sum(
-            item.get("health") == "healthy" for item in installation_health
+            item.get("health") in {"healthy", "idle"} for item in installation_health
         )
         payload["installations"] = installation_health
         payload["aggregate_status"] = (
@@ -1504,7 +1498,9 @@ def _dmr_installation_health(entry: dict[str, Any], node_name: str) -> dict[str,
                     "installed": diagnosis["model"]["installed"],
                     "running": diagnosis["docker"]["running"],
                     "compatibility": diagnosis["compatibility"],
-                    "health": "healthy" if diagnosis["ok"] else "unavailable"}
+                    "health": diagnosis["docker"]["lifecycle_state"]
+                    if diagnosis["ok"] and not diagnosis["docker"]["running"]
+                    else "healthy" if diagnosis["ok"] else "unavailable"}
         compatibility = assess_model_compatibility(entry).to_dict()
         installed = _model_installed(target)
         status = _docker_status()
@@ -1542,14 +1538,15 @@ def _dmr_installation_health(entry: dict[str, Any], node_name: str) -> dict[str,
             selected_node=node_name,
             node=endpoint.get("node") or {},
         )
-        healthy = bool(installed and running and compatibility.get("ok") is not False)
+        idle = is_docker_model(entry) and candidate.get("lifecycle_state") == "idle"
+        healthy = bool(installed and (running or idle) and compatibility.get("ok") is not False)
         return {
             "node": node_name,
             "local": False,
             "installed": installed,
             "running": running,
             "compatibility": compatibility,
-            "health": "healthy" if healthy else "unavailable",
+            "health": "idle" if healthy and idle else "healthy" if healthy else "unavailable",
         }
     except (RuntimeError, StopIteration) as exc:
         return {

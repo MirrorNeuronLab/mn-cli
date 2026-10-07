@@ -123,6 +123,60 @@ def test_remote_docker_health_does_not_confuse_node_health_with_container_readin
     )
 
 
+@pytest.mark.parametrize("lifecycle,running,endpoint_ok,expected", [
+    ("idle", False, False, "idle"),
+    ("ready", True, True, "healthy"),
+    ("unavailable", True, False, "unavailable"),
+])
+def test_docker_health_distinguishes_cold_installation_from_failed_serving(
+    lifecycle, running, endpoint_ok, expected, monkeypatch,
+):
+    entry = resolve_model_entry("cosmos3")
+    monkeypatch.setattr(model_cmds, "_cluster_runtime_status_endpoints", lambda **_kw: [{"node_name": "spark", "node": {"status": "healthy"}}])
+    monkeypatch.setattr(model_cmds, "_runtime_model_inventory_for_node", lambda _ep: [{**entry, "running": running, "endpoint_ok": endpoint_ok, "lifecycle_state": lifecycle}])
+    monkeypatch.setattr(model_cmds, "_remote_node_compatibility", lambda *_a, **_kw: {"ok": True})
+    health = model_cmds._dmr_installation_health(entry, "spark")
+    assert health["installed"] and health["health"] == expected
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_local_docker_probe_owns_readiness_and_always_releases(failure, monkeypatch):
+    from contextlib import contextmanager
+    from mn_sdk import ModelCapabilityReport
+
+    entry = resolve_model_entry("cosmos3")
+    calls = []
+
+    @contextmanager
+    def lease(model):
+        assert model == entry["model"]
+        calls.append("start")
+        try:
+            yield
+        finally:
+            calls.append("release")
+
+    def probe(_model, required, **kwargs):
+        if not kwargs["persist"]:
+            assert calls == ["start"]
+            if failure:
+                raise RuntimeError("inference failed")
+        else:
+            assert calls == ["start", "release"]
+        return ModelCapabilityReport(entry["id"], required, {"streaming": True})
+
+    monkeypatch.setattr(model_probe, "model_request", lease)
+    monkeypatch.setattr(model_probe, "ensure_model_capabilities", probe)
+    monkeypatch.setattr(model_probe, "model_installed", lambda _model: True)
+    monkeypatch.setattr(model_probe, "litellm_gateway_health", lambda: {"ok": True, "url": "http://127.0.0.1:4000/v1/models", "models": [entry["id"]]})
+    if failure:
+        with pytest.raises(RuntimeError, match="inference failed"):
+            model_probe.run_model_probe(entry["id"], ["streaming"], local_node="local")
+    else:
+        assert model_probe.run_model_probe(entry["id"], ["streaming"], local_node="local")["parity"]
+    assert calls == ["start", "release"]
+
+
 @pytest.mark.parametrize("node", ["local", "spark"])
 def test_docker_update_uses_new_catalog_context_and_replaces_snapshot(
     node, monkeypatch

@@ -62,6 +62,7 @@ def isolate_model_ownership(monkeypatch, tmp_path):
     monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
     monkeypatch.setenv("MN_MODEL_REMOTES_PATH", str(tmp_path / "model-remotes.json"))
     monkeypatch.setenv("MN_MODEL_PROXIES_PATH", str(tmp_path / "model-proxies.json"))
+    monkeypatch.setattr("mn_sdk.native_resource_registry._run_command", lambda *_a: _completed([]))
     monkeypatch.setattr("mn_cli.libs.model_cmds._endpoint_responds", lambda: False)
     monkeypatch.setattr("mn_sdk.model_service.endpoint_responds", lambda: False)
     monkeypatch.setattr(
@@ -80,9 +81,9 @@ _configured_windows = {}
 
 
 def _completed(command, returncode=0, stdout="", stderr=""):
-    if command[:3] == ["docker", "container", "inspect"] and not stdout:
+    if command[:3] in (["docker", "container", "inspect"], ["docker", "volume", "inspect"]) and not stdout:
         returncode = 1
-        stderr = "No such container"
+        stderr = f"No such {command[1]}"
     # Model installation now verifies DMR configuration, rather than trusting
     # the configure exit status. Keep the fake transport stateful at that boundary.
     if returncode == 0 and not stdout and command[:2] == ["docker", "model"]:
@@ -2337,7 +2338,7 @@ def test_model_add_syncs_provider_definition_to_all_cluster_nodes(
     assert node_syncs[0][1]["restart"] is True
 
 
-def test_model_install_pulls_and_runs_compatible_model(mocker):
+def test_model_install_pulls_and_configures_without_loading(mocker):
     calls = []
 
     def fake_run(command, **kwargs):
@@ -2385,9 +2386,7 @@ def test_model_install_pulls_and_runs_compatible_model(mocker):
         "docker.io/ai/gemma4:E2B",
     ] in calls
 
-    configured = ["docker", "model", "configure", "--context-size", "8192", "--mode", "completion", "docker.io/ai/gemma4:E2B"]
-    started = ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"]
-    assert calls.index(configured) < calls.index(started)
+    assert not any(command[:3] == ["docker", "model", "run"] for command in calls)
 
 
 def test_model_install_syncs_local_dmr_gateway_route(mocker, monkeypatch):
@@ -2657,7 +2656,7 @@ def test_model_update_refreshes_local_dmr_gateway_route(mocker, monkeypatch):
 
     assert result.exit_code == 0
     assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] in calls
-    assert ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"] in calls
+    assert ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"] not in calls
     assert (
         synced[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"]
         == "http://model-runner.docker.internal/engines/v1"
@@ -2880,7 +2879,7 @@ def test_model_install_retries_transient_pull_failure(mocker):
 
     assert result.exit_code == 0
     assert calls.count(["docker", "model", "pull", "docker.io/ai/gemma4:E2B"]) == 2
-    assert ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"] in calls
+    assert ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"] not in calls
 
 
 def test_model_install_persists_manual_ownership_record(mocker):
@@ -2998,7 +2997,7 @@ def test_model_install_verifies_context_with_configure_when_run_help_omits_it(mo
     )
 
     assert result.exit_code == 0
-    assert ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"] in calls
+    assert ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"] not in calls
     assert ["docker", "model", "configure", "--context-size", "8192", "--mode", "completion", "docker.io/ai/gemma4:E2B"] in calls
     assert calls.count(["docker", "model", "configure", "show", "docker.io/ai/gemma4:E2B"]) >= 2
     assert [
@@ -3100,7 +3099,7 @@ def test_model_install_prefers_dmr_rest_pull_when_runner_api_reachable(
 
     assert result.exit_code == 0
     assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] not in calls
-    assert ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"] in calls
+    assert ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"] not in calls
     assert any(
         url.endswith("/models/create") and method == "POST"
         for url, method, _data, _timeout in requests
