@@ -432,6 +432,8 @@ separate Core SDK proxy. Native invocation uses the SDK's bounded, scoped host
 Python protocol, preserving Core supervision and cancellation. Dynamic skill
 source versions are resolved before staging through the SDK's `local-source`
 extra and retained in copied build contexts.
+The installed SDK dependency floor is `1.3.58.dev46`, below `2.0`, to include
+native host execution and local-source preparation support.
 For a distributed workflow forwarded to a federated owner, HostLocal Python
 environments are prepared on that owner even though no single-node placement
 marker is added to the workflow.

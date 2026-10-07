@@ -269,6 +269,7 @@ When a local-only workflow also requires a host OS, HostLocal Python workers run
 on the native host through the SDK service. Core uses a separate prepared SDK
 proxy environment for supervision and cancellation. Source skills retain their
 own SCM versions; CLI installation includes the SDK's `local-source` extra.
+The CLI requires SDK `>=1.3.58.dev46,<2` for this native execution contract.
 Automatic HostLocal service ports use `MN_AUTO_PORT_START` through
 `MN_AUTO_PORT_END` (62000-62049 by default in the local Docker runtime). That
 range is published only on host loopback; the runtime's internal proxy marker
