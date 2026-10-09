@@ -581,6 +581,11 @@ The installed API, native SDK, and Web UI executables are resolved under
 
 ## Automatic federation storage recovery
 
+Syncthing runs as the owner of its shared mount, detected inside Docker. Private
+outputs and token ledgers therefore replicate when the host user is not UID
+1000. Startup preserves shared-file permissions and adjusts only Syncthing's
+own configuration directory.
+
 The supervised native runtime checks shared-storage pairing every 30 seconds,
 independently of model reconciliation. Incomplete pairing is retried every five
 seconds, including when an already-registered peer starts after the local runtime.

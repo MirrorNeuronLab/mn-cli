@@ -38,6 +38,7 @@ from mn_sdk.runtime_config import (
     DEFAULT_WEB_UI_PORT as SDK_DEFAULT_WEB_UI_PORT,
 )
 from mn_cli.runtime.watchdog import launch_watchdog, watchdog_restart_settings
+from mn_cli.runtime.syncthing_bootstrap import SYNCTHING_LAN_ONLY_ENTRYPOINT_SCRIPT
 from mn_cli.config import CliConfig
 from mn_cli.runtime.identity import resolve_identity, probe_core_identity, observe_core_identity
 from mn_cli.libs.ui import (
@@ -289,32 +290,7 @@ SYNCTHING_FOLDER_ID = "mirror-neuron-shared"
 SYNCTHING_FOLDER_LABEL = "MirrorNeuron shared storage"
 SYNCTHING_FOLDER_PATH = "/var/syncthing/MirrorNeuronShared"
 SYNCTHING_LAN_ONLY_MARKER = "1"
-SYNCTHING_LAN_ONLY_ENTRYPOINT_SCRIPT = """set -eu
-config_dir="${STHOMEDIR:-/var/syncthing/config}"
-config_file="$config_dir/config.xml"
-mkdir -p "$config_dir"
 
-if [ ! -f "$config_file" ]; then
-  /bin/syncthing generate --home "$config_dir" --no-port-probing
-fi
-
-sed -i \\
-  -e 's#<relaysEnabled>[^<]*</relaysEnabled>#<relaysEnabled>false</relaysEnabled>#' \\
-  -e 's#<globalAnnounceEnabled>[^<]*</globalAnnounceEnabled>#<globalAnnounceEnabled>false</globalAnnounceEnabled>#' \\
-  -e 's#<natEnabled>[^<]*</natEnabled>#<natEnabled>false</natEnabled>#' \\
-  -e 's#<localAnnounceEnabled>[^<]*</localAnnounceEnabled>#<localAnnounceEnabled>true</localAnnounceEnabled>#' \\
-  -e 's#<stunKeepaliveStartS>[^<]*</stunKeepaliveStartS>#<stunKeepaliveStartS>0</stunKeepaliveStartS>#' \\
-  -e 's#<urAccepted>[^<]*</urAccepted>#<urAccepted>-1</urAccepted>#' \\
-  -e 's#<autoUpgradeIntervalH>[^<]*</autoUpgradeIntervalH>#<autoUpgradeIntervalH>0</autoUpgradeIntervalH>#' \\
-  -e 's#<crashReportingEnabled>[^<]*</crashReportingEnabled>#<crashReportingEnabled>false</crashReportingEnabled>#' \\
-  "$config_file"
-
-# The Syncthing image starts as root for setup, then drops to PUID:PGID.  Its
-# generated config files otherwise remain root-owned and make the sidecar
-# crash-loop on its next start when Syncthing needs to update its certificates.
-chown -R "${PUID:-1000}:${PGID:-1000}" "$config_dir"
-
-exec /bin/entrypoint.sh /bin/syncthing serve"""
 SYNCTHING_MANAGED_IGNORE_PATTERNS = (
     "/blueprint-python-envs",
     "/blueprint-python-sources",
@@ -1422,6 +1398,7 @@ __SYNCTHING_LAN_ONLY_ENTRYPOINT__
       STGUIADDRESS: 0.0.0.0:8384
       STGUIAPIKEY: ${MN_SYNCTHING_API_KEY:-}
       STHOMEDIR: /var/syncthing/config
+      MN_SYNCTHING_FOLDER_PATH: ${MN_SYNCTHING_FOLDER_PATH:-/var/syncthing/MirrorNeuronShared}
       MN_SYNCTHING_LAN_ONLY: "1"
       MN_HOST_SHARED_STORAGE_ROOT: ${MN_HOST_SHARED_STORAGE_ROOT:-${MN_SHARED_STORAGE_ROOT:-${MN_HOST_SHARED_ARTIFACT_ROOT:-./mn/shared}}}
       MN_SYNCTHING_API_KEY: ${MN_SYNCTHING_API_KEY:-}
@@ -1742,11 +1719,15 @@ def _ensure_syncthing_for_runtime(
                 SYNCTHING_CONTAINER, "MN_SYNCTHING_LAN_ONLY"
             )
             current_user = _docker_container_user(SYNCTHING_CONTAINER)
+            current_folder_path = _docker_container_env_value(
+                SYNCTHING_CONTAINER, "MN_SYNCTHING_FOLDER_PATH"
+            )
             if (
                 current_root != host_root
                 or current_api_key != api_key
                 or lan_only_marker != SYNCTHING_LAN_ONLY_MARKER
                 or current_user != "0:0"
+                or current_folder_path != folder_path
             ):
                 recreate = True
         if recreate:
@@ -1771,6 +1752,8 @@ def _ensure_syncthing_for_runtime(
                 f"STGUIAPIKEY={api_key}",
                 "-e",
                 "STHOMEDIR=/var/syncthing/config",
+                "-e",
+                f"MN_SYNCTHING_FOLDER_PATH={folder_path}",
                 "-e",
                 f"MN_SYNCTHING_LAN_ONLY={SYNCTHING_LAN_ONLY_MARKER}",
                 "-e",

@@ -544,7 +544,9 @@ def test_ensure_syncthing_for_runtime_starts_sidecar_without_sudo(mocker, tmp_pa
         encoding="utf-8"
     )
     assert 'MN_SYNCTHING_LAN_ONLY: "1"' in override
-    assert 'chown -R "$${PUID:-1000}:$${PGID:-1000}" "$$config_dir"' in override
+    assert 'MN_SYNCTHING_FOLDER_PATH: ${MN_SYNCTHING_FOLDER_PATH:-/var/syncthing/MirrorNeuronShared}' in override
+    assert "stat -c '%u:%g' \"$$shared_dir\"" in override
+    assert 'chown -R "$$PUID:$$PGID" "$$config_dir"' in override
     for setting in (
         "<relaysEnabled>false</relaysEnabled>",
         "<globalAnnounceEnabled>false</globalAnnounceEnabled>",
@@ -586,6 +588,7 @@ def test_ensure_syncthing_for_runtime_direct_container_is_lan_only(
         if call_args.args[0][:3] == ["docker", "run", "-d"]
     )
     assert f"MN_SYNCTHING_LAN_ONLY={server_cmds.SYNCTHING_LAN_ONLY_MARKER}" in run_command
+    assert f"MN_SYNCTHING_FOLDER_PATH={server_cmds.SYNCTHING_FOLDER_PATH}" in run_command
     entrypoint_index = run_command.index("--entrypoint")
     assert run_command[entrypoint_index:] == [
         "--entrypoint",

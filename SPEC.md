@@ -588,6 +588,12 @@ The installed API, native SDK, and Web UI executables are resolved under
 
 ## Automatic federation storage recovery
 
+Syncthing derives its daemon UID and GID from the shared mount inside Docker
+before dropping privileges. This keeps private host-owned outputs and numeric
+usage ledgers readable on each node, including non-1000 host users and Docker
+user namespaces. Only its own configuration directory is handed to that owner;
+shared-file modes and ownership are preserved. An unreadable mount fails startup.
+
 The supervised native runtime checks shared-storage pairing every 30 seconds,
 independently of model reconciliation. Incomplete pairing is retried every five
 seconds, including when an already-registered peer starts after the local runtime.
