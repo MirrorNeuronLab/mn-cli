@@ -694,3 +694,24 @@ def test_openshell_definition_revisions_have_separate_sandboxes(tmp_path, mocker
     assert len(records) == 2
     assert len({r["external_id"] for r in records}) == 2
     assert {r["job_id"] for r in records} == {"job-one"}
+
+
+def test_configured_policy_is_rendered_before_sandbox_creation(mocker, tmp_path):
+    from mn_cli.libs.run_cmds import openshell
+    mocker.patch.object(openshell, 'mn_home', return_value=tmp_path/'mn')
+    mocker.patch.object(openshell, '_openshell_executable', return_value='openshell')
+    mocker.patch.object(openshell, '_openshell_env', return_value={})
+    mocker.patch.object(openshell, 'register_native_resource')
+    policy=tmp_path/'bundle/payloads/policy.yaml'
+    policy.parent.mkdir(parents=True)
+    policy.write_text('version: 1\nhost: ${config.gateway.host}\n')
+    config={'policy':'policy.yaml','policy_config_bindings':True,
+            'environment':{'MN_BLUEPRINT_CONFIG_JSON':json.dumps({'gateway':{'host':'test-gateway'}})}}
+    run=mocker.patch.object(openshell.subprocess,'run',side_effect=[
+        subprocess.CompletedProcess([],1,'','missing'), subprocess.CompletedProcess([],0,'created','')])
+    openshell._prepare_openshell_shared_sandbox(tmp_path/'bundle',config,job_id='job',
+        submission_id='definition',node_id='review')
+    command=run.call_args_list[1].args[0]
+    rendered=Path(command[command.index('--policy')+1])
+    assert rendered.read_text()=='version: 1\nhost: "test-gateway"\n'
+    assert policy.read_text()=='version: 1\nhost: ${config.gateway.host}\n'

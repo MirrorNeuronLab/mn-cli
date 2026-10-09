@@ -1,5 +1,6 @@
 from mn_sdk.native_resource_registry import register_native_resource
 from mn_sdk.errors import AppError
+from mn_sdk.openshell_policy import materialize_worker_policy, render_worker_policy
 from mn_sdk.submission_preparation import (
     _ensure_docker_worker_requirements_install,
     _local_skill_dependency_source_records,
@@ -54,6 +55,11 @@ def _prepare_openshell_custom_images(
             continue
         if config.get("runner_module") not in OPENSHELL_RUNNER_MODULES:
             continue
+        if config.get("policy_config_bindings") is True:
+            policy = _openshell_policy_path(bundle_dir, config.get("policy"))
+            if policy is None:
+                raise ValueError("Configured OpenShell policy is missing")
+            render_worker_policy(policy.read_text(encoding="utf-8"), config)
 
         # Resolve before image builds or native-resource registration.
         _openshell_executable()
@@ -274,6 +280,8 @@ def _prepare_openshell_shared_sandbox(
                 command.extend([option, value.strip()])
         policy = _openshell_policy_path(bundle_dir, config.get("policy"))
         if policy is not None:
+            if config.get("policy_config_bindings") is True:
+                policy = materialize_worker_policy(policy, config, mn_home() / "openshell" / "policies")
             command.extend(["--policy", str(policy)])
         for provider in config.get("providers") or []:
             if isinstance(provider, str) and provider.strip():

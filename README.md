@@ -1,5 +1,12 @@
 # MirrorNeuron CLI
 
+OpenShell worker policies may declare `policy_config_bindings: true` and bind
+unquoted `${config.path.to.scalar}` values from their SDK-resolved configuration.
+The SDK renders bounded JSON-quoted scalars before native provisioning and
+payload staging, preserving source policy files and existing network rules.
+Missing bindings fail before image preparation. This requires SDK
+`>=1.3.58.dev63,<2`; workers without the declaration retain their policy behavior.
+
 Blueprint `execution.json` can set `runtime.placement.must_run_local: true` to
 pin its Job owner and all workers to the submitting computer. `mn blueprint run`
 honors that requirement before resource/model preparation, rejects a remote

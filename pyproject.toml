@@ -9,7 +9,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    "mirrorneuron-python-sdk[local-source]>=1.3.58.dev46,<2.0",
+    "mirrorneuron-python-sdk[local-source]>=1.3.58.dev63,<2.0",
     "click>=8.1.0",
     "jsonschema>=4.25",
     "typer>=0.9.0",

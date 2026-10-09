@@ -800,3 +800,12 @@ than operating-system or runtime installers. Keep it private: configuration and
 local data may contain sensitive values. Core, SDK, CLI and API must be upgraded
 together for the new streamed backup RPCs. `mn blueprint export <run-id>` remains
 a run report export (JSON/Markdown/HTML), with no job restore counterpart.
+# Configured OpenShell policies
+
+OpenShell workers may declare `policy_config_bindings: true` and bind unquoted
+`${config.path.to.scalar}` values from the SDK-resolved configuration snapshot.
+The SDK owns scalar validation and rendering. The CLI validates before image
+preparation and uses the derived policy for native sandbox provisioning; SDK
+payload staging carries the same policy to Core without changing source files.
+Missing or invalid bindings fail; existing undeclared policies remain unchanged.
+This contract requires SDK `>=1.3.58.dev63,<2`.
