@@ -1772,10 +1772,10 @@ def blueprint_install(
     force: bool = typer.Option(
         False,
         "--force",
-        help="Replace cached library storage, or force model install compatibility for a blueprint.",
+        help="Replace cached library storage.",
     ),
 ):
-    """Install the blueprint library or one blueprint plus its required runtime models."""
+    """Add the blueprint library or one blueprint with validated lazy model policies."""
     if blueprint_id:
         _install_catalog_blueprint_with_models(
             ctx,
@@ -1857,15 +1857,17 @@ def _install_catalog_blueprint_with_models(
     except ValueError as exc:
         print_error(console, exc)
         raise typer.Exit(1)
-    model_summary = _install_blueprint_model_dependencies(
-        blueprint_id=blueprint_id,
-        blueprint_revision=revision or _git_revision(storage_dir),
-        bundle_root=bundle_root,
-        manifest=manifest,
-        config=config,
-        install_source=install_source,
-        force=force,
+    from mn_cli.libs.run_cmds.models import _defer_runtime_models_for_run_or_exit
+
+    model_summary = _defer_runtime_models_for_run_or_exit(
+        bundle_root,
+        manifest,
+        config_overrides=config,
+        quiet=True,
     )
+    if not model_summary.get("ok", True):
+        _print_model_install_summary(model_summary)
+        raise typer.Exit(1)
     _record_blueprint_install(
         blueprint_id=blueprint_id,
         storage_dir=storage_dir,
@@ -1887,6 +1889,7 @@ def _install_catalog_blueprint_with_models(
         next_steps=f"mn blueprint run {blueprint_id}",
     )
     _print_model_install_summary(model_summary)
+    console.print("Runtime models will be selected and installed if missing on first use.")
 
 
 def _install_blueprint_model_dependencies(

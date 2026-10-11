@@ -1568,7 +1568,7 @@ def test_runtime_model_plan_reads_source_manifest_defaults(tmp_path):
     assert {
         (requirement["path"], requirement["model"])
         for requirement in plan["requirements"]
-    } == {("llm.configs.primary", "medium")}
+    } == {("llm.configs.primary", "default")}
 
 
 @pytest.mark.parametrize(
@@ -1677,10 +1677,10 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
     assert "action=inspect selected-node DMR, install if missing" in debug_output
     assert "Runtime model prepare responses" in debug_output
     if include_spark:
-        assert "default -> medium -> nemotron-3.5-lightning:latest" in debug_output
+        assert "default -> nemotron-3.5-lightning:latest" in debug_output
         assert "fallback=" not in debug_output
     else:
-        assert "default -> medium -> gemma4:e2b" in debug_output
+        assert "default -> gemma4:e2b" in debug_output
         assert "fallback=nemotron-3.5-lightning:latest is not runnable" in debug_output
 
 

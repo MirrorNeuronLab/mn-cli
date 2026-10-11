@@ -39,7 +39,7 @@ from mn_sdk.runtime_config import (
 )
 from mn_cli.runtime.watchdog import launch_watchdog, watchdog_restart_settings
 from mn_cli.runtime.syncthing_bootstrap import SYNCTHING_LAN_ONLY_ENTRYPOINT_SCRIPT
-from mn_cli.config import CliConfig
+from mn_cli.config import CONFIG_FIELDS, CliConfig, parse_path
 from mn_cli.runtime.identity import resolve_identity, probe_core_identity, observe_core_identity
 from mn_cli.libs.ui import (
     print_confirmed,
@@ -124,7 +124,7 @@ def _mn_home() -> Path:
     return _runtime_mn_home()
 
 
-DIR = _mn_home()
+DIR = _mn_home().resolve()
 PID_DIR = DIR / "pids"
 LOG_DIR = DIR / "logs"
 API_PID_FILE = PID_DIR / "api.pid"
@@ -196,10 +196,24 @@ def _source_checkout_sdk_dir() -> Optional[Path]:
 
 
 def _sidecar_workdir() -> Path:
-    try:
-        return Path.cwd()
-    except OSError:
-        return DIR
+    # Installer and caller directories may disappear after runtime startup.
+    # Both sidecars receive resolved configuration through their environment.
+    return DIR
+
+
+def _sidecar_environment(env: dict[str, str]) -> dict[str, str]:
+    # Preserve caller-relative settings before changing the service directory.
+    resolved = env
+    for key, field in CONFIG_FIELDS.items():
+        value = env.get(key)
+        if field.kind != "path" or not value or not value.strip():
+            continue
+        path = parse_path(key, value)
+        if not path.is_absolute():
+            if resolved is env:
+                resolved = env.copy()
+            resolved[key] = str(path.resolve())
+    return resolved
 
 
 def _prepend_pythonpath(env: dict[str, str], path: Path) -> None:
@@ -6271,7 +6285,7 @@ def _start_native_sdk_grpc_watchdog(env: dict[str, str]) -> subprocess.Popen:
     }
     return launch_watchdog(
         config,
-        env=env,
+        env=_sidecar_environment(env),
         watchdog_log=NATIVE_SDK_GRPC_WATCHDOG_LOG,
         script=_web_ui_watchdog_script(),
     )
@@ -6464,7 +6478,7 @@ def _start_api_watchdog(env: dict[str, str]) -> subprocess.Popen:
     }
     return launch_watchdog(
         config,
-        env=env,
+        env=_sidecar_environment(env),
         watchdog_log=API_WATCHDOG_LOG,
         script=_web_ui_watchdog_script(),
     )

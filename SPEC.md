@@ -809,3 +809,19 @@ preparation and uses the derived policy for native sandbox provisioning; SDK
 payload staging carries the same policy to Core without changing source files.
 Missing or invalid bindings fail; existing undeclared policies remain unchanged.
 This contract requires SDK `>=1.3.58.dev63,<2`.
+
+Blueprint add and update validate lazy runtime model policies without pulling
+model artifacts. As with blueprint run, the SDK selects, reuses or installs,
+and routes each model when a worker first needs it. Explicit model commands
+retain their existing installation behavior.
+
+## Sidecar process lifetime
+
+The REST API and native SDK gRPC helper use the resolved runtime home as their
+working directory rather than inheriting an installer or caller folder. Prepared
+runtime settings are passed through their environment. Caller-relative path
+settings are resolved before changing directories. Watchdogs use their
+service's configured working directory; Web UI source and installed application
+working directories remain explicit. Removing the launch folder after startup
+must not break runtime configuration, model preparation, or HostLocal Python
+preparation.

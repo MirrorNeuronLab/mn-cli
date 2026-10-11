@@ -510,6 +510,7 @@ snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
 - Use `mn blueprint validate` before `mn blueprint run ./folder` when checking a local bundle.
 - Validation honors first-use runtime-model preparation, so a compatible
   declared model need not already be installed.
+- Blueprint add and update validate lazy model policies without pulling model artifacts.
 - `mn blueprint run` validates model declarations but does not install models.
   Workers select, install, and route each managed model on its first actual use.
 - Docker workers receive a worker-reachable model-control target and use the
@@ -747,3 +748,13 @@ than operating-system or runtime installers. Keep it private: configuration and
 local data may contain sensitive values. Core, SDK, CLI and API must be upgraded
 together for the new streamed backup RPCs. `mn blueprint export <run-id>` remains
 a run report export (JSON/Markdown/HTML), with no job restore counterpart.
+
+### Stable sidecar working directories
+
+The REST API and native SDK gRPC helper start in the resolved MirrorNeuron
+runtime home (`MN_HOME`), with their prepared runtime environment preserved.
+Caller-relative configuration paths are resolved before changing directories.
+Their watchdogs use the configured service working directory. Installer and
+caller folders may therefore be removed after startup without breaking model
+or HostLocal Python preparation. Web UI services keep their selected application
+working directory, including source-checkout launches.

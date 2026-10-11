@@ -35,6 +35,7 @@ def launch_watchdog(
     with open(watchdog_log, "w") as out:
         return subprocess.Popen(
             [sys.executable, "-c", script, json.dumps(config)],
+            cwd=config.get("cwd"),
             stdout=out,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,

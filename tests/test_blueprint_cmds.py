@@ -2289,3 +2289,43 @@ def test_blueprint_run_zip_uses_the_folder_pipeline(mocker, tmp_path):
     assert result.exit_code == 0, result.output
     assert len(roots) == 1
     assert not roots[0].exists()
+
+
+@pytest.mark.parametrize("model", ["default", "nemotron-3.5-lightning:latest"])
+def test_blueprint_add_defers_model_installation(monkeypatch, tmp_path, mocker, model):
+    catalog = tmp_path / "catalog"
+    catalog.mkdir()
+    _write_catalog(catalog / "index.json", [{"id": "worker", "path": "worker"}])
+    _write_manifest(catalog / "worker" / "manifest.json", _manifest_text(_runtime_model_manifest(model)))
+    _use_local_blueprint_source(monkeypatch, catalog)
+    eager = mocker.patch.object(blueprint_cmds, "_install_blueprint_model_dependencies")
+    pull = mocker.patch.object(blueprint_cmds, "_install_model_entry")
+    prepare = mocker.patch("mn_cli.libs.run_cmds.model_cluster._install_runtime_cluster_model")
+
+    result = runner.invoke(app, ["blueprint", "add", "worker"])
+
+    assert result.exit_code == 0, result.stdout
+    eager.assert_not_called()
+    pull.assert_not_called()
+    prepare.assert_not_called()
+    record = json.loads((tmp_path / ".mn" / "blueprint_installs" / "worker.json").read_text())
+    requirement = record["models"][0]
+    assert requirement["model"] == model
+    assert requirement["install_policy"] == "on_first_model_call"
+    assert requirement["status"] == "deferred_runtime_install"
+    expected = ["nemotron-3.5-lightning:latest", "gemma4:e2b"] if model == "default" else [model]
+    assert requirement["selection_policy"] == expected
+    assert "first use" in result.stdout
+
+
+def test_blueprint_add_rejects_invalid_model_without_installing(monkeypatch, tmp_path, mocker):
+    catalog = tmp_path / "catalog"
+    catalog.mkdir()
+    _write_catalog(catalog / "index.json", [{"id": "worker", "path": "worker"}])
+    _write_manifest(catalog / "worker" / "manifest.json", _manifest_text(_runtime_model_manifest("unknown-model:latest")))
+    _use_local_blueprint_source(monkeypatch, catalog)
+    eager = mocker.patch.object(blueprint_cmds, "_install_blueprint_model_dependencies")
+    result = runner.invoke(app, ["blueprint", "add", "worker"])
+    assert result.exit_code == 1
+    eager.assert_not_called()
+    assert not (tmp_path / ".mn" / "blueprint_installs" / "worker.json").exists()
