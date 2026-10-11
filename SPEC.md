@@ -450,13 +450,15 @@ Detached output relays remain active until the run becomes terminal unless
 `MN_RUN_EVENT_RELAY_MAX_SECONDS` explicitly supplies an operator limit. A
 blueprint's stream-duration budget does not truncate output materialization.
 
-The blueprint run adapter prepares declared models before it submits a job. A
-logical `default` remains blueprint-owned intent; launch uses the
-operator-selected registry default, then chooses Nemotron on a healthy 48
-GB-or-above accelerator node or Gemma when no compatible Nemotron node exists.
-Explicit catalog declarations keep their exact artifact identity. Debug launch
-output reports the selected model, node, install/reuse result, and complete
-DockerWorker build command/output details.
+The blueprint run adapter validates model declarations and feasible workflow
+placement before submission without pulling model artifacts, including with
+`--force`. Workers prepare each managed model on its first actual call. A logical
+`default` remains blueprint-owned intent; the runtime uses the operator-selected
+registry default, choosing Nemotron on a healthy 48 GB-or-above accelerator node
+or Gemma when no compatible Nemotron node exists. Explicit catalog declarations
+keep their exact artifact identity. Debug launch output reports deferred model
+policies, selected workflow placement, and complete DockerWorker build details;
+first-use events report the actual model, node, and install/reuse result.
 Skill-owned RAG/OCR model details are absent from launch preparation and appear
 in runtime events only when invoked. The first-use SDK path holds the requesting
 call while the model is prepared, then reports the actual model, selected node,

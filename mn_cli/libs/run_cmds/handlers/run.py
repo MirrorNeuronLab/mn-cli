@@ -192,6 +192,7 @@ def run_bundle(
             manifest_dict,
             config_overrides=config_overrides,
             dependencies=runtime_model_dependencies,
+            lazy=True,
         )
         runtime_resource_report = (
             runtime_model_dependencies.resource_report()
@@ -229,7 +230,7 @@ def run_bundle(
             model_fallbacks = placement.get("model_fallbacks")
             if isinstance(model_fallbacks, list) and model_fallbacks:
                 # The placement preflight selected the portable catalog model.
-                # Keep that decision through preparation so the native runtime
+                # Keep that decision through first-use preparation so the runtime
                 # installs it on the same pinned node while workers continue to
                 # call LiteLLM's logical ``default`` alias.
                 env_overrides["MN_SELECTED_RUNTIME_MODEL_FALLBACKS_JSON"] = json.dumps(
@@ -273,10 +274,10 @@ def run_bundle(
                 config_overrides=config_overrides,
             )
             _print_launch_progress(
-                "Prepare runtime models",
-                "resolving declared models and installing any missing artifacts before the job starts.",
+                "Check model policies",
+                "validating declared models; installation waits until their first use.",
             )
-            model_install_summary = _prepare_runtime_models_for_run_or_exit(
+            model_install_summary = _defer_runtime_models_for_run_or_exit(
                 bundle_dir,
                 manifest_dict,
                 env_overrides=env_overrides,
@@ -298,13 +299,13 @@ def run_bundle(
             )
         else:
             console.print(
-                "[yellow]Validation skipped because --force was provided; required runtime models will still be prepared before the job is scheduled.[/yellow]"
+                "[yellow]Validation skipped because --force was provided; runtime models will be installed on their first use.[/yellow]"
             )
             _print_launch_progress(
-                "Prepare runtime models",
-                "resolving declared models and installing any missing artifacts before the job starts.",
+                "Check model policies",
+                "validating declared models; installation waits until their first use.",
             )
-            model_install_summary = _prepare_runtime_models_for_run_or_exit(
+            model_install_summary = _defer_runtime_models_for_run_or_exit(
                 bundle_dir,
                 manifest_dict,
                 env_overrides=env_overrides,
