@@ -766,5 +766,6 @@ for both Docker Compose and native installations. An API-only restart does not
 restart the Web UI or remove its proxy address from `runtime-endpoints.json`.
 
 Bonsai2's catalog preparation recipe automatically prepares Prism-backed DMR
-when adding `small` or on first use. The initial build requires Git, Go 1.25.8+
-and a C toolchain; later uses reuse the SDK cache. See [catalog DMR preparation](../mn-docs/model-runtime.md#bonsai2-on-docker-model-runner).
+when adding `small` or on first use. The SDK downloads checksum-pinned prepared
+native runners from public GAR; users need no Go, Git, compiler or Google Cloud
+credentials. Later uses reuse the SDK cache. See [catalog DMR preparation](../mn-docs/model-runtime.md#bonsai2-on-docker-model-runner).
