@@ -827,3 +827,7 @@ service's configured working directory; Web UI source and installed application
 working directories remain explicit. Removing the launch folder after startup
 must not break runtime configuration, model preparation, or HostLocal Python
 preparation.
+
+`mn runtime restart-sidecars --api` republishes the configured Web UI endpoint
+for both Docker Compose and native installations. An API-only restart does not
+restart the Web UI or remove its proxy address from `runtime-endpoints.json`.

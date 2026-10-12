@@ -38,6 +38,7 @@ from mn_cli.server_cmds import (
     DEFAULT_WEB_UI_PORT,
     DEFAULT_DOCKER_NETWORK_NAME,
     find_web_ui_dir,
+    compose_web_ui_enabled,
     runtime_compose_available,
     runtime_compose_cmd,
     stop_matching_sidecar_processes as _stop_matching_sidecar_processes,
@@ -433,7 +434,9 @@ def restart_sidecars(
         details.append(("Web UI", "restarted" if web_ui_started else "skipped"))
         restarted_any = restarted_any or web_ui_started
 
-    _write_runtime_endpoints_file(env, web_ui_available=find_web_ui_dir() is not None)
+    _write_runtime_endpoints_file(
+        env, web_ui_available=compose_web_ui_enabled() or find_web_ui_dir() is not None
+    )
 
     if not restarted_any:
         print_error(console, "No selected sidecars could be restarted.")

@@ -758,3 +758,7 @@ Their watchdogs use the configured service working directory. Installer and
 caller folders may therefore be removed after startup without breaking model
 or HostLocal Python preparation. Web UI services keep their selected application
 working directory, including source-checkout launches.
+
+`mn runtime restart-sidecars --api` republishes the configured Web UI endpoint
+for both Docker Compose and native installations. An API-only restart does not
+restart the Web UI or remove its proxy address from `runtime-endpoints.json`.

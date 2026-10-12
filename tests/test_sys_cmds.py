@@ -1,5 +1,8 @@
 import importlib
+import json
 from unittest.mock import call
+
+import pytest
 
 import mn_cli.libs.sys_cmds as sys_cmds
 import mn_cli.server_cmds as server_cmds
@@ -136,6 +139,36 @@ def test_restart_sidecars_api_only_restarts_api_without_web_ui(mocker, tmp_path)
     assert env["MN_API_PORT"] == "54001"
     start_web_ui.assert_not_called()
     write_endpoints.assert_called_once_with(env, web_ui_available=False)
+
+
+@pytest.mark.parametrize("profile,native_ui,available", [
+    ("web-ui,openshell", False, True),
+    ("openshell", False, False),
+    ("openshell", True, True),
+])
+def test_api_restart_publishes_installed_web_ui_endpoint(mocker, tmp_path, profile, native_ui, available):
+    compose = tmp_path / "docker-compose.yml"
+    compose.write_text("services:\n  web-ui:\n    image: node:22-alpine\n")
+    compose_env = tmp_path / "docker-compose.env"
+    compose_env.write_text(f"COMPOSE_PROFILES={profile}\n")
+    endpoint_file = tmp_path / "runtime-endpoints.json"
+    mocker.patch.object(server_cmds, "RUNTIME_COMPOSE_FILE", compose)
+    mocker.patch.object(server_cmds, "RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch.object(server_cmds, "RUNTIME_ENDPOINTS_FILE", endpoint_file)
+    mocker.patch.object(sys_cmds, "_runtime_base_env", return_value={"MN_WEB_UI_HOST": "127.0.0.1", "MN_WEB_UI_PORT": "55222"})
+    mocker.patch.object(sys_cmds, "find_web_ui_dir", return_value=tmp_path / "webui" if native_ui else None)
+    mocker.patch.object(sys_cmds, "_stop_sidecar_processes")
+    mocker.patch.object(sys_cmds, "_stop_matching_sidecar_processes")
+    mocker.patch.object(sys_cmds, "_start_api_if_installed", return_value=True)
+    start_web_ui = mocker.patch.object(sys_cmds, "_start_web_ui_if_installed")
+
+    sys_cmds.restart_sidecars(api=True, web_ui=False)
+
+    endpoints = json.loads(endpoint_file.read_text())
+    assert ("web_ui" in endpoints) is available
+    if available:
+        assert endpoints["web_ui"] == {"url": "http://127.0.0.1:55222", "host": "127.0.0.1", "port": "55222"}
+    start_web_ui.assert_not_called()
 
 
 def test_restart_sidecars_web_ui_only_restarts_web_ui_without_api(mocker, tmp_path):
