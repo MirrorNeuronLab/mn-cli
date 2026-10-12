@@ -102,6 +102,12 @@ definition-scoped response engines while the remaining runtime is reconciled.
 If reconciliation recreates Core, the CLI also restarts the local API so its
 gRPC client identity matches the recreated runtime.
 
+Runtime Compose commands also load the SDK-generated managed-model override
+when present. This keeps the owner gateway connected to its existing private
+model credentials when startup or a sidecar restart recreates LiteLLM. The CLI
+passes the credential file reference to Compose without reading or printing
+secret values.
+
 `mn node list` shows each node's hostname, health, and role (connection mode
 plus job-ownership eligibility) without artifact-only fields such as kind,
 owner, or update time. Use `mn node show <node>` for the complete endpoint and

@@ -5976,6 +5976,14 @@ def runtime_compose_cmd(*args: str) -> list[str]:
     syncthing_override = _runtime_compose_syncthing_override_file()
     if syncthing_override.exists():
         cmd.extend(["-f", str(syncthing_override)])
+    from mn_sdk.dmr_gateway import OVERRIDE_FILE
+    from mn_sdk.litellm_gateway import default_litellm_gateway_dir
+
+    managed_models_override = (
+        default_litellm_gateway_dir(mn_home=RUNTIME_COMPOSE_FILE.parent) / OVERRIDE_FILE
+    )
+    if managed_models_override.is_file():
+        cmd.extend(["-f", str(managed_models_override)])
     workers_override = RUNTIME_COMPOSE_FILE.parent / RUNTIME_WORKERS_OVERRIDE_FILE
     if workers_override.exists() and _runtime_compose_args_need_worker_override(args):
         cmd.extend(["-f", str(workers_override)])

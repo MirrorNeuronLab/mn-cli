@@ -471,6 +471,13 @@ progress grid. The underlying events retain phase, timing, source-to-final-tag
 mapping, and DMR byte telemetry for logs and structured consumers. Missing byte
 progress does not fail the job; only an actual DMR or prepare-RPC error does.
 
+All installed-runtime Compose commands include the SDK-generated
+`models/litellm-gateway/managed-dmr.compose.json` override when it is a file.
+Startup and sidecar recreation therefore preserve the owner gateway's managed
+model credential environment. CLI command arguments contain only the override
+path; credential values are neither read nor printed. Missing managed-model
+state does not add a Compose file.
+
 `default` is a logical LiteLLM model group. Its available routes are ordered
 medium → small → nano, with the largest available route as its alias and the
 remaining routes as ordered fallbacks. Catalog `preparation` recipes are executed
