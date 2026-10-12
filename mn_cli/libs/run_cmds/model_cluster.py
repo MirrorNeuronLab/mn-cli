@@ -3,6 +3,7 @@ from .common import *
 from contextlib import contextmanager
 from contextvars import ContextVar
 from mn_sdk.workflow_placement import (
+    model_requirement_variants,
     resolve_and_apply_workflow_placement as sdk_resolve_and_apply_workflow_placement,
     workflow_placement_mode,
     workflow_requires_single_node,
@@ -478,12 +479,9 @@ def _validate_distributed_runtime_model_feasibility(
         )
 
     for model_requirement in runtime_model_requirements:
-        variants = [model_requirement]
-        fallback_requirements, fallback_records = _workflow_model_fallback_requirements(
-            [model_requirement]
+        variants = model_requirement_variants(
+            model_requirement, model_entry_resolver=resolve_model_entry,
         )
-        if fallback_records:
-            variants.append(fallback_requirements[0])
 
         final_rejections: dict[str, list[str]] = {}
         feasible = False
@@ -517,13 +515,13 @@ def _validate_distributed_runtime_model_feasibility(
             or model_requirement.get("model")
             or "runtime model"
         )
-        if fallback_records:
-            fallback_entry = fallback_requirements[0].get("entry")
+        if len(variants) > 1:
+            fallback_entry = variants[-1].get("entry")
             fallback_label = str(
                 (fallback_entry or {}).get("id")
                 if isinstance(fallback_entry, dict)
-                else fallback_requirements[0].get("label")
-                or fallback_requirements[0].get("model")
+                else variants[-1].get("label")
+                or variants[-1].get("model")
                 or "catalog fallback"
             )
             label = f"{label} or fallback {fallback_label}"

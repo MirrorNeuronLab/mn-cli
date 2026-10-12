@@ -203,10 +203,12 @@ def _local_model_probe_endpoint(
         return None
     from mn_sdk.model_sources import is_docker_model
     from mn_sdk.docker_models import api_base
+    from mn_sdk.dmr_managed import managed_endpoint
+    custom = managed_endpoint(entry, host="127.0.0.1") if entry.get("preparation") else None
     return docker_model_runner_endpoint(
         entry,
         node=local_node or "local",
-        api_base=api_base(entry) if is_docker_model(entry) else DOCKER_MODEL_RUNNER_HOST_API_BASE,
+        api_base=api_base(entry) if is_docker_model(entry) else (custom or {}).get("api_base", DOCKER_MODEL_RUNNER_HOST_API_BASE),
         source="local_docker_direct_probe" if is_docker_model(entry) else "local_dmr_direct_probe",
     )
 

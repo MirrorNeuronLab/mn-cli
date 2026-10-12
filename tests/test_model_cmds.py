@@ -345,7 +345,7 @@ def test_model_list_hides_private_owner_route_names(mocker):
     remotes = load_model_remotes()
     next(iter(remotes["remotes"].values()))["managed_by"] = "mirror-neuron-cluster"
     save_model_remotes(remotes)
-    entry = resolve_model_entry("small")
+    entry = resolve_model_entry("nano")
     add_registered_models(
         [
             dmr_registration(
@@ -853,7 +853,7 @@ def test_model_show_without_argument_returns_entire_static_catalog(mocker):
     models = cli_data(result)["models"]
     assert {model["id"] for model in models} == set(model_cmds.load_model_catalog())
     assert {model["id"] for model in models if model["default"]} == {
-        "gemma4:e2b", "nemotron-3.5-lightning:latest"
+        "gemma4:e2b", "bonsai2:ptq1_0", "nemotron-3.5-lightning:latest"
     }
 
 
@@ -868,7 +868,7 @@ def test_model_show_catalog_marks_defaults_in_human_output(monkeypatch, width, p
         monkeypatch.setenv("NO_COLOR", "1")
     result = runner.invoke(app, ["model", "show"])
     assert result.exit_code == 0, result.stdout
-    assert result.stdout.count("default") == 2
+    assert result.stdout.count("default") == 3
     assert "\x1b" not in result.stdout
 
 
@@ -1808,6 +1808,9 @@ def test_model_add_bare_default_selects_feasible_cluster_model(mocker, remote):
     mocker.patch.object(model_cmds.client, "get_system_summary", return_value=json.dumps({"nodes": systems}))
     mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=False)
     mocker.patch("mn_cli.libs.model_cmds._installed_cluster_model_node", return_value="")
+    mocker.patch("mn_sdk.model_runtime.detect_host_hardware", return_value=HostHardwareProfile(
+        "darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True
+    ))
     installed = []
 
     def install(entry, **kwargs):

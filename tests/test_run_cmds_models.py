@@ -1572,23 +1572,31 @@ def test_runtime_model_plan_reads_source_manifest_defaults(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("include_spark", "expected_node", "expected_chat_model"),
+    ("include_spark", "local_memory_mb", "expected_node", "expected_chat_model"),
     [
-        (False, "mirror_neuron@mac", "docker.io/ai/gemma4:E2B"),
-        (True, "mirror_neuron@spark", "nemotron-3.5-lightning:latest"),
+        (False, 16384, "mirror_neuron@mac", "docker.io/ai/gemma4:E2B"),
+        (False, 24576, "mirror_neuron@mac", "bonsai2:ptq1_0"),
+        (False, 32768, "mirror_neuron@mac", "bonsai2:ptq1_0"),
+        (False, 49152, "mirror_neuron@mac", "nemotron-3.5-lightning:latest"),
+        (True, 16384, "mirror_neuron@spark", "nemotron-3.5-lightning:latest"),
     ],
 )
+@pytest.mark.parametrize("already_installed", [False, True])
 def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_through_litellm(
     tmp_path,
     fake_runtime_model_cluster_factory,
     capsys,
     include_spark,
+    local_memory_mb,
+    already_installed,
     expected_node,
     expected_chat_model,
 ):
     bundle_dir = tmp_path / "source-assistant"
     manifest = _write_adaptive_source_model_config(bundle_dir)
-    cluster = fake_runtime_model_cluster_factory(include_spark=include_spark)
+    cluster = fake_runtime_model_cluster_factory(include_spark=include_spark, local_memory_mb=local_memory_mb)
+    if already_installed:
+        cluster.installed_by_node[expected_node] = {expected_chat_model}
     dependencies = cluster.dependencies()
 
     plan = run_cmds._build_runtime_model_prepare_plan(
@@ -1597,6 +1605,7 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
         dependencies=dependencies,
     )
     assert set(plan["catalog"]) == {
+        "bonsai2:ptq1_0",
         "gemma4:e2b",
         "nemotron-3.5-lightning:latest",
         "nemotron3:q4_K_M",
@@ -1625,6 +1634,9 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
 
     assert placement["selected_node"] == expected_node
     assert {item["node"] for item in cluster.prepare_calls} == {expected_node}
+    assert {item["status"] for item in cluster.prepare_calls} == {
+        "already_installed" if already_installed else "installed"
+    }
     assert {item["runtime_model"] for item in cluster.prepare_calls} == {
         expected_chat_model,
     }
@@ -1670,15 +1682,18 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
     assert worker_environment["MN_LLM_PROVIDER"] == "litellm"
     assert worker_environment["MN_LLM_MODEL"] == "default"
     assert worker_environment["MN_LLM_API_BASE"] == ("http://mn-litellm-proxy:4000/v1")
-    debug_output = capsys.readouterr().err
+    debug_output = " ".join(capsys.readouterr().err.split())
     assert "Runtime model prepare plan" in debug_output
     assert f"on {expected_node}" in debug_output
     assert expected_chat_model in debug_output
     assert "action=inspect selected-node DMR, install if missing" in debug_output
     assert "Runtime model prepare responses" in debug_output
-    if include_spark:
+    if expected_chat_model == "nemotron-3.5-lightning:latest":
         assert "default -> nemotron-3.5-lightning:latest" in debug_output
         assert "fallback=" not in debug_output
+    elif expected_chat_model == "bonsai2:ptq1_0":
+        assert "default -> bonsai2:ptq1_0" in debug_output
+        assert "fallback=nemotron-3.5-lightning:latest is not runnable" in debug_output
     else:
         assert "default -> gemma4:e2b" in debug_output
         assert "fallback=nemotron-3.5-lightning:latest is not runnable" in debug_output
@@ -1782,7 +1797,7 @@ def test_runtime_model_preflight_rejects_ineligible_node_before_prepare(mocker):
         )
 
     assert (
-        "model nemotron-3.5-lightning:latest: gpu_memory_free_mb=32768 < required=49152"
+        "model nemotron-3.5-lightning:latest: gpu_memory_total_mb=32768 < required=49152"
         in str(error.value)
     )
     prepare.assert_not_called()
@@ -1843,7 +1858,7 @@ def test_runtime_model_preflight_selects_small_fallback_for_default_on_small_nod
     )
 
     assert placement["selected_node"] == "mirror_neuron@mac"
-    assert placement["requirements"]["min_gpu_memory_mb"] == 16384
+    assert placement["requirements"]["model_requirements"][0]["min_memory_mb"] == 16384
     assert placement["model_fallbacks"][0]["fallback"]["id"] == "gemma4:e2b"
     with run_cmds._runtime_model_placement_scope(
         {

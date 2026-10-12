@@ -20,7 +20,7 @@ def fake_model_catalog() -> dict[str, dict[str, Any]]:
             "provider": "docker_model_runner",
             "model": "docker.io/ai/gemma4:E2B",
             "api_model": "docker.io/ai/gemma4:E2B",
-            "aliases": ["default", "small", "gemma4"],
+            "aliases": ["nano", "gemma4"],
             "backend": "llama.cpp",
             "context_size": 4096,
             "requirements": {
@@ -28,6 +28,19 @@ def fake_model_catalog() -> dict[str, dict[str, Any]]:
                 "min_unified_memory_gb": 16,
                 "min_cpu_ram_gb": 32,
             },
+        },
+        {
+            "id": "bonsai2:ptq1_0",
+            "provider": "docker_model_runner",
+            "model": "bonsai2:ptq1_0",
+            "tag_name": "bonsai2:ptq1_0",
+            "api_model": "bonsai2:ptq1_0",
+            "aliases": ["small", "bonsai2"],
+            "route_aliases": ["small", "bonsai2:ptq1_0"],
+            "backend": "llama.cpp",
+            "context_size": 32768,
+            "fallback_model": "nano",
+            "requirements": {"min_vram_gb": 24, "min_unified_memory_gb": 24},
         },
         {
             "id": "nemotron-3.5-lightning:latest",
@@ -38,7 +51,7 @@ def fake_model_catalog() -> dict[str, dict[str, Any]]:
             "aliases": ["medium", "nemotron-3.5-lightning:latest"],
             "backend": "llama.cpp",
             "context_size": 8192,
-            "fallback_model": "gemma4:e2b",
+            "fallback_model": "small",
             "requirements": {
                 "min_vram_gb": 48,
                 "min_unified_memory_gb": 48,
@@ -122,6 +135,7 @@ class FakeRuntimeModelCluster:
     """In-memory cluster implementing all injected model preparation effects."""
 
     include_spark: bool = False
+    local_memory_mb: int = 16384
     catalog: dict[str, dict[str, Any]] = field(default_factory=fake_model_catalog)
     installed_by_node: dict[str, set[str]] = field(default_factory=dict)
     prepare_calls: list[dict[str, Any]] = field(default_factory=list)
@@ -131,7 +145,7 @@ class FakeRuntimeModelCluster:
     def __post_init__(self) -> None:
         local_resource, local_system = fake_runtime_node(
             "mirror_neuron@mac",
-            memory_mb=16384,
+            memory_mb=self.local_memory_mb,
             vendor="apple",
             host="10.0.0.1",
             self_node=True,

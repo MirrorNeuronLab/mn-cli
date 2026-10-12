@@ -488,6 +488,9 @@ def add_model(
                 )
                 if not compatibility_result.ok:
                     raise RuntimeError(compatibility_result.message)
+                if entry.get("preparation"):
+                    from mn_sdk import prepare_dmr_model
+                    entry = prepare_dmr_model(entry, accelerator=compatibility_result.accelerator)
                 result = {
                     "entry": entry,
                     "docker_model": target,
@@ -503,6 +506,7 @@ def add_model(
                 result = install_model_entry_with_progress(
                     entry, backend=backend, context_size=context_size, force=force
                 )
+        entry = result.get("entry") if isinstance(result.get("entry"), dict) else entry
         compatibility = result["compatibility"]
         target = result["docker_model"]
         if not selected_node:
@@ -680,6 +684,9 @@ def _add_dmr_replicas(
         try:
             if preflight[target_node].get("local"):
                 if _model_installed(target_model):
+                    if entry.get("preparation"):
+                        from mn_sdk import prepare_dmr_model
+                        entry = prepare_dmr_model(entry, accelerator=preflight[target_node]["compatibility"].get("accelerator"))
                     result = {
                         "entry": entry,
                         "docker_model": target_model,
@@ -700,6 +707,7 @@ def _add_dmr_replicas(
                         context_size=context_size,
                         force=force,
                     )
+                entry = result.get("entry") if isinstance(result.get("entry"), dict) else entry
                 resolved_backend = str(
                     (result.get("compatibility") or {}).get("backend")
                     or backend
@@ -1336,7 +1344,7 @@ def doctor_model(
                 ).lower()
                 runner_running = node_status in {"healthy", "joining"}
                 endpoint_ok = True
-                if is_docker_model(entry):
+                if is_docker_model(entry) or entry.get("preparation"):
                     candidate = next((item for item in inventory if docker_model_match_keys(target)
                                       & _model_payload_match_keys(item)), {})
                     runner_running = candidate.get("running") is True
@@ -1376,10 +1384,10 @@ def doctor_model(
         else:
             compatibility = assess_model_compatibility(entry)
             compatibility_payload = compatibility.to_dict()
-            if is_docker_model(entry):
+            if is_docker_model(entry) or entry.get("preparation"):
                 from mn_sdk.model_service import doctor_runtime_model
                 diagnosis = doctor_runtime_model(str(entry["id"]))
-                status = diagnosis["docker"]
+                status = diagnosis["docker"] if is_docker_model(entry) else diagnosis["docker_model_runner"]
                 installed = diagnosis["model"]["installed"]
                 endpoint_ok = status["endpoint_ok"]
                 runner_running = status["running"]
@@ -1414,7 +1422,7 @@ def doctor_model(
             "docker" if is_docker_model(entry) else "docker_model_runner": {
                 "status": status,
                 "running": runner_running,
-                "endpoint": (status.get("endpoint") if is_docker_model(entry) else DOCKER_MODEL_RUNNER_HOST_API_BASE)
+                "endpoint": (status.get("endpoint") if is_docker_model(entry) or entry.get("preparation") else DOCKER_MODEL_RUNNER_HOST_API_BASE)
                 if not remote_selected
                 else selected_node,
                 "endpoint_ok": endpoint_ok,
@@ -1491,6 +1499,14 @@ def _dmr_installation_health(entry: dict[str, Any], node_name: str) -> dict[str,
     target = docker_model_name(entry)
     local_node = _local_runtime_node_name() or "local"
     if node_name in {"", "local", local_node}:
+        if entry.get("preparation"):
+            from mn_sdk.model_service import doctor_runtime_model
+            diagnosis = doctor_runtime_model(str(entry["id"]))
+            return {"node": node_name or local_node, "local": True,
+                    "installed": diagnosis["model"]["installed"],
+                    "running": diagnosis["docker_model_runner"]["running"],
+                    "compatibility": diagnosis["compatibility"],
+                    "health": "healthy" if diagnosis["ok"] else "unavailable"}
         if is_docker_model(entry):
             from mn_sdk.model_service import doctor_runtime_model
             diagnosis = doctor_runtime_model(str(entry["id"]))
@@ -1529,7 +1545,7 @@ def _dmr_installation_health(entry: dict[str, Any], node_name: str) -> dict[str,
             (endpoint.get("node") or {}).get("status") or "healthy"
         ).lower()
         running = node_status in {"healthy", "joining"}
-        if is_docker_model(entry):
+        if is_docker_model(entry) or entry.get("preparation"):
             candidate = next((item for item in inventory if docker_model_match_keys(target)
                               & _model_payload_match_keys(item)), {})
             running = candidate.get("running") is True and candidate.get("endpoint_ok") is True
@@ -2071,6 +2087,7 @@ def _available_model_payload(entry: dict[str, Any]) -> dict[str, Any]:
         "default": is_default_model_entry(entry),
         "verification": entry.get("verification") or "catalog",
         "requirements": entry.get("requirements") or {},
+        **({"preparation": entry["preparation"]} if entry.get("preparation") else {}),
         "installations": [],
     }
 
@@ -2950,6 +2967,7 @@ def _sync_installed_model_gateway_route(
     node: str | None,
     strict: bool = False,
 ) -> None:
+    entry = result.get("entry") if isinstance(result.get("entry"), dict) else entry
     endpoint = (
         result.get("endpoint") if isinstance(result.get("endpoint"), dict) else None
     )
@@ -4004,6 +4022,8 @@ def _docker(
     timeout: float = 120,
     stream: bool = False,
 ) -> subprocess.CompletedProcess[str]:
+    from mn_sdk.dmr_managed import command_environment
+    from mn_sdk.model_runtime import docker_cli_path_environment
     command = ["docker", *args]
     try:
         result = subprocess.run(
@@ -4012,6 +4032,7 @@ def _docker(
             text=True,
             timeout=timeout,
             check=False,
+            env=command_environment(command, docker_cli_path_environment()),
         )
     except FileNotFoundError as exc:
         result = subprocess.CompletedProcess(command, 127, "", str(exc))

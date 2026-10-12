@@ -376,8 +376,7 @@ placement/fan-out orchestration, progress, and rendering.
 
 `mn model add ... --default` records exactly one operator-selected default in
 the SDK registry. It may be a DMR registration or a single-model provider file.
-The selected route precedes Nemotron and Gemma; the built-ins remain ordered
-fallbacks. Selecting another default does not remove the earlier registration,
+The selected route takes precedence over automatic built-in selection. Selecting another default does not remove the earlier registration,
 and removing the selected registration restores built-in selection.
 
 `mn blueprint run` blocks before job submission until every effective
@@ -454,8 +453,10 @@ The blueprint run adapter validates model declarations and feasible workflow
 placement before submission without pulling model artifacts, including with
 `--force`. Workers prepare each managed model on its first actual call. A logical
 `default` remains blueprint-owned intent; the runtime uses the operator-selected
-registry default, choosing Nemotron on a healthy 48 GB-or-above accelerator node
-or Gemma when no compatible Nemotron node exists. Explicit catalog declarations
+registry default, otherwise traversing medium → small → nano: Nemotron on a
+healthy 48 GB-or-above accelerator, Bonsai2 PTQ1_0 on a 24 GB-or-above
+accelerator, then Gemma. Integrated/shared GPU memory counts toward the same
+tier; CPU-only host RAM does not. Explicit catalog declarations
 keep their exact artifact identity. Debug launch output reports deferred model
 policies, selected workflow placement, and complete DockerWorker build details;
 first-use events report the actual model, node, and install/reuse result.
@@ -470,9 +471,13 @@ progress grid. The underlying events retain phase, timing, source-to-final-tag
 mapping, and DMR byte telemetry for logs and structured consumers. Missing byte
 progress does not fail the job; only an actual DMR or prepare-RPC error does.
 
-`default` is a logical LiteLLM model group. When a medium route is available it
-aliases to Nemotron and has Gemma as its fallback; without a medium route it
-aliases to Gemma. `run_cluster_model_monitor` remains the single dynamic route
+`default` is a logical LiteLLM model group. Its available routes are ordered
+medium → small → nano, with the largest available route as its alias and the
+remaining routes as ordered fallbacks. Catalog `preparation` recipes are executed
+by the SDK on the selected owner during installation or first use. Bonsai2's
+recipe prepares/reuses a native Prism-backed DMR and routes model control and
+owner LiteLLM upstreams there. Static catalog commands do not prepare a backend.
+`run_cluster_model_monitor` remains the single dynamic route
 lifecycle: complete joined-node inventories add routes, complete membership
 after departure removes routes, and incomplete snapshots do not destructively
 replace the last known route set.

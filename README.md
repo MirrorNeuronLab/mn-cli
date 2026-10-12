@@ -138,7 +138,8 @@ Docker Model Runner inventory. A discovered artifact reports `ready` when its
 LiteLLM route is live and `installed` while route reconciliation is pending;
 registry ownership is not presented as a health state.
 Add `--default` with an explicit model or file to make that model the logical
-default ahead of the built-in Nemotron/Gemma fallback chain. Provider files
+default ahead of the built-in medium → small → nano selection chain (Nemotron 3.5 Lightning at
+48 GB+, Bonsai2 PTQ1_0 at 24 GB+, and Gemma4 below that). Provider files
 used with `--default` must contain exactly one model.
 When the requested DMR artifact is already installed locally or on a cluster
 node, `mn model add` reuses it and creates the same managed registry record
@@ -226,6 +227,7 @@ Run the focused gate from this workspace:
 The runtime-selection scenarios are:
 
 - a local-only 16 GB Apple node validates the portable Gemma fallback policy;
+- a 24–47 GB VRAM or integrated-memory node selects Bonsai2 through Prism-backed DMR;
 - adding a healthy 128 GB CUDA node validates that Nemotron is feasible;
 - already-installed remote models remain usable without a second install;
 - blueprint launch selects and prepares the owner node before job submission,
@@ -762,3 +764,7 @@ working directory, including source-checkout launches.
 `mn runtime restart-sidecars --api` republishes the configured Web UI endpoint
 for both Docker Compose and native installations. An API-only restart does not
 restart the Web UI or remove its proxy address from `runtime-endpoints.json`.
+
+Bonsai2's catalog preparation recipe automatically prepares Prism-backed DMR
+when adding `small` or on first use. The initial build requires Git, Go 1.25.8+
+and a C toolchain; later uses reuse the SDK cache. See [catalog DMR preparation](../mn-docs/model-runtime.md#bonsai2-on-docker-model-runner).
