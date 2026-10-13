@@ -148,27 +148,9 @@ default ahead of the built-in medium → small → nano selection chain (Nemotro
 48 GB+, Bonsai2 PTQ1_0 at 24 GB+, and Gemma4 below that). Provider files
 used with `--default` must contain exactly one model.
 
-The [OpenRouter Nemotron 3 Ultra sample](samples/openrouter-nemotron-3-ultra-free.json)
-registers `nvidia/nemotron-3-ultra-550b-a55b:free`. From this checkout, run:
-
-```bash
-mn model add --file samples/openrouter-nemotron-3-ultra-free.json --default --json
-mn model doctor nvidia/nemotron-3-ultra-550b-a55b:free --json
-```
-
-Set `OPENROUTER_API_KEY` in the CLI environment and each participating gateway's
-private runtime environment file before adding the model. The default Compose
-gateway reads `$MN_HOME/docker-compose.env`; exporting the key in a shell alone
-does not pass it into an existing container. Keep the key out of the sample and
-source control. The CLI synchronizes the provider route and selected default to
-connected nodes; an explicit default does not fall back to a local model.
-
-The sample disables reasoning and caps routing at 20 requests per minute; this
-does not override OpenRouter's account or provider limits. Use non-sensitive
-synthetic context for the free endpoint. It supports tool calling but does not
-enforce JSON output, so planner-format failures and provider rate limits must
-be distinguished from local resource contention. See the
-[OpenRouter model details](https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b:free).
+Remote provider fixtures and default-override tests live in
+[mn-system-tests](../mn-system-tests/README.md#remote-provider-default-overrides),
+including OpenRouter Nemotron 3 Ultra.
 
 When the requested DMR artifact is already installed locally or on a cluster
 node, `mn model add` reuses it and creates the same managed registry record
