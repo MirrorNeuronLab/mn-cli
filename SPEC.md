@@ -843,3 +843,10 @@ preparation.
 `mn runtime restart-sidecars --api` republishes the configured Web UI endpoint
 for both Docker Compose and native installations. An API-only restart does not
 restart the Web UI or remove its proxy address from `runtime-endpoints.json`.
+
+## Standard runtime activity
+
+Runtime events use the shared [`mn.runtime.event.v1` contract](../mn-python-sdk/docs/runtime-activity.md),
+including level, blueprint owner, UTC timestamp and actor attribution.
+The SDK selects meaningful activity for the CLI, API, desktop and web monitors;
+raw events remain available for diagnostics.

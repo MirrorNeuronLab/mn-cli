@@ -414,13 +414,8 @@ def test_blueprint_workflow_progress_records_events_for_the_shared_monitor_tail(
     )
 
     snapshot = view.snapshot()
-    assert snapshot["recent_events"] == [
-        {
-            "timestamp": "2026-08-29T10:24:00Z",
-            "type": "worker_assigned",
-            "payload": {"worker": "worker-2"},
-        }
-    ]
+    assert snapshot["recent_events"] == []
+    assert view._recent_events[0]["type"] == "worker_assigned"
 
 
 def test_workflow_monitor_labels_running_service_live_and_downstream_pending_waiting():
@@ -870,3 +865,12 @@ def test_workflow_monitor_state_controls_with_shared_renderer():
     assert state.handle_key("\x7f", 2) is True
     assert state.detail_mode is False
     assert state.handle_key("\x04", 2) is True
+
+
+def test_activity_survives_more_noise_than_the_raw_tail_limit():
+    from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress
+    view = BlueprintWorkflowProgress({'workflow': {'steps': [{'id': 'detect'}]}})
+    view.update({'type': 'agent_activity', 'payload': {'step_id': 'detect', 'message': 'Checking frames for people'}})
+    for _ in range(250):
+        view.update({'type': 'docker_worker_command_started', 'payload': {'step_id': 'detect'}})
+    assert view.snapshot()['recent_events'][-1]['message'] == 'Checking frames for people'

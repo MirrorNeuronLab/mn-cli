@@ -147,6 +147,29 @@ Add `--default` with an explicit model or file to make that model the logical
 default ahead of the built-in medium → small → nano selection chain (Nemotron 3.5 Lightning at
 48 GB+, Bonsai2 PTQ1_0 at 24 GB+, and Gemma4 below that). Provider files
 used with `--default` must contain exactly one model.
+
+The [OpenRouter Nemotron 3 Ultra sample](samples/openrouter-nemotron-3-ultra-free.json)
+registers `nvidia/nemotron-3-ultra-550b-a55b:free`. From this checkout, run:
+
+```bash
+mn model add --file samples/openrouter-nemotron-3-ultra-free.json --default --json
+mn model doctor nvidia/nemotron-3-ultra-550b-a55b:free --json
+```
+
+Set `OPENROUTER_API_KEY` in the CLI environment and each participating gateway's
+private runtime environment file before adding the model. The default Compose
+gateway reads `$MN_HOME/docker-compose.env`; exporting the key in a shell alone
+does not pass it into an existing container. Keep the key out of the sample and
+source control. The CLI synchronizes the provider route and selected default to
+connected nodes; an explicit default does not fall back to a local model.
+
+The sample disables reasoning and caps routing at 20 requests per minute; this
+does not override OpenRouter's account or provider limits. Use non-sensitive
+synthetic context for the free endpoint. It supports tool calling but does not
+enforce JSON output, so planner-format failures and provider rate limits must
+be distinguished from local resource contention. See the
+[OpenRouter model details](https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b:free).
+
 When the requested DMR artifact is already installed locally or on a cluster
 node, `mn model add` reuses it and creates the same managed registry record
 without pulling a second copy.
@@ -775,3 +798,10 @@ Bonsai2's catalog preparation recipe automatically prepares Prism-backed DMR
 when adding `small` or on first use. The SDK downloads checksum-pinned prepared
 native runners from public GAR; users need no Go, Git, compiler or Google Cloud
 credentials. Later uses reuse the SDK cache. See [catalog DMR preparation](../mn-docs/model-runtime.md#bonsai2-on-docker-model-runner).
+
+## Standard runtime activity
+
+Runtime events use the shared [`mn.runtime.event.v1` contract](../mn-python-sdk/docs/runtime-activity.md),
+including level, blueprint owner, UTC timestamp and actor attribution.
+The SDK selects meaningful activity for the CLI, API, desktop and web monitors;
+raw events remain available for diagnostics.

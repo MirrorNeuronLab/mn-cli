@@ -767,9 +767,7 @@ def _event_summary_text(event: Mapping[str, Any]) -> Text:
     event_type = _monitor_safe_text(event.get("type") or event.get("event") or "event")
     label = event_type.replace("-", "_").replace(" ", "_").upper()
     detail = _event_detail_text(event)
-    text = Text(label, style="cyan")
-    if detail:
-        text.append(f" {detail}", style="")
+    text = Text(detail or label, style="")
     text.no_wrap = True
     text.overflow = "ellipsis"
     return text

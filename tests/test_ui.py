@@ -413,3 +413,10 @@ def test_child_tree_shows_descriptive_labels_and_unique_ids():
         assert 'r1:scan-3' in text
         assert '└─' in text
         assert 'inspection remains' in text
+
+
+def test_activity_feed_leads_with_domain_message_in_plain_output():
+    from mn_cli.libs.ui import _event_summary_text
+    text = _event_summary_text({'type': 'agent_activity', 'message': 'Person presence confirmed'})
+    assert text.plain == 'Person presence confirmed'
+    assert 'AGENT_ACTIVITY' not in text.plain

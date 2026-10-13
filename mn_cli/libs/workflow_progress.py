@@ -132,8 +132,6 @@ class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
         snapshot = super().snapshot()
         if self._resource_token_total is not None:
             snapshot["resource_tokens"] = self._resource_token_total
-        if self._recent_events:
-            snapshot["recent_events"] = list(self._recent_events)
         if not self._workflow_token_usage:
             return snapshot
         _attach_workflow_token_usage(snapshot, self._workflow_token_usage)

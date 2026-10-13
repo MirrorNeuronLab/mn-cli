@@ -137,6 +137,8 @@ class JobLogWriter:
         payload = event.get("payload", {})
         if not isinstance(payload, dict):
             payload = {}
+        if event.get("event_id") or payload.get("event_id"):
+            return ("event_id", event.get("event_id") or payload.get("event_id"))
         return (
             event.get("timestamp"),
             event.get("type"),
