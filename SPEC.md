@@ -1,5 +1,7 @@
 # MirrorNeuron CLI Specification
 
+The CLI requires Python 3.12 or newer. The managed runtime and contributor/CI toolchains use Python 3.12, matching Core HostLocal, the SDK, and the API.
+
 Blueprint preflight delegates placement mode and single-node eligibility to the
 shared SDK. `runtime.placement.must_run_local: true` hard-pins execution and Job
 ownership to the submitting node, rejects remote `--node` and distributed mode,

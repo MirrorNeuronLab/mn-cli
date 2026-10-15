@@ -407,7 +407,7 @@ def test_prepare_openshell_shared_sandbox_injects_prepared_runtime_config(
 def test_openshell_skill_dependency_context_injects_pinned_gar_install(tmp_path):
     sandbox_dir = tmp_path / "openshell_sandbox"
     sandbox_dir.mkdir()
-    (sandbox_dir / "Dockerfile").write_text("FROM python:3.11-slim\n", encoding="utf-8")
+    (sandbox_dir / "Dockerfile").write_text("FROM python:3.12-slim\n", encoding="utf-8")
     manifest = {
         "skill_dependencies": [
             {
@@ -450,7 +450,7 @@ def test_openshell_skill_dependency_context_injects_local_dev_sources(tmp_path):
     sandbox_dir = tmp_path / "openshell_sandbox"
     sandbox_dir.mkdir()
     (sandbox_dir / "Dockerfile").write_text(
-        "FROM python:3.11-slim\nUSER sandbox\n", encoding="utf-8"
+        "FROM python:3.12-slim\nUSER sandbox\n", encoding="utf-8"
     )
     local_skill = tmp_path / "example_skill"
     local_skill.mkdir()

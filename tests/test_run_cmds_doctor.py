@@ -41,7 +41,7 @@ def test_offline_hostlocal_wheelhouse_is_mapped_into_core(tmp_path, monkeypatch,
 
     def run(command, **kwargs):
         calls.append(command)
-        return subprocess.CompletedProcess(command, 0, stdout="Python 3.11.2" if "--version" in command else "", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="Python 3.12.2" if "--version" in command else "", stderr="")
 
     mocker.patch("mn_cli.libs.run_cmds.subprocess.run", side_effect=run)
     run_cmds._doctor_prepare_python_env_from_content(blueprint_id="restored", node_id="python", packages=["--no-index", "--find-links", str(wheels), "dependency==1.0"], requirements_content="", timeout=1)
@@ -508,7 +508,7 @@ def test_doctor_prepares_hostlocal_python_environment_inside_docker_core(
         calls.append((args, kwargs))
         if args[-1] == "--version":
             return subprocess.CompletedProcess(
-                args, 0, stdout="Python 3.11.2\n", stderr=""
+                args, 0, stdout="Python 3.12.2\n", stderr=""
             )
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
@@ -598,7 +598,7 @@ def test_doctor_stages_local_hostlocal_packages_outside_read_only_source(
             return subprocess.CompletedProcess(
                 args,
                 0,
-                stdout="Python 3.11.2\n",
+                stdout="Python 3.12.2\n",
                 stderr="",
             )
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
@@ -652,7 +652,7 @@ def test_doctor_preserves_declared_version_in_staged_local_hostlocal_package(
         side_effect=lambda args, **_kwargs: subprocess.CompletedProcess(
             args,
             0,
-            stdout="Python 3.11.2\n" if args[-1] == "--version" else "",
+            stdout="Python 3.12.2\n" if args[-1] == "--version" else "",
             stderr="",
         ),
     )
@@ -822,7 +822,7 @@ def test_doctor_removes_partial_core_owned_python_environment_in_core(
             return subprocess.CompletedProcess(
                 args,
                 0,
-                stdout="Python 3.11.2\n",
+                stdout="Python 3.12.2\n",
                 stderr="",
             )
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")

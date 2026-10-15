@@ -46,7 +46,7 @@ def test_preparation_stages_source_with_extras_and_declared_version(tmp_path, mo
     def run(command, **_kwargs):
         calls.append(command)
         return subprocess.CompletedProcess(
-            command, 0, stdout="Python 3.11.2\n" if "--version" in command else "", stderr="",
+            command, 0, stdout="Python 3.12.2\n" if "--version" in command else "", stderr="",
         )
 
     mocker.patch.object(doctor.subprocess, "run", side_effect=run)
@@ -104,7 +104,7 @@ def test_pip_failure_retains_error_before_verbose_install_progress(mocker):
                 command, 1, stdout="Collecting dependency\n" * 100,
                 stderr="ERROR: dependency resolution failed\n",
             )
-        return subprocess.CompletedProcess(command, 0, stdout="Python 3.11.2\n", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="Python 3.12.2\n", stderr="")
 
     mocker.patch.object(doctor.subprocess, "run", side_effect=run)
     with pytest.raises(RuntimeError, match="ERROR: dependency resolution failed"):

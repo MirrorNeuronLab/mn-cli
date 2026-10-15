@@ -230,7 +230,7 @@ def test_prepare_manifest_auto_patches_skill_binary_deps_to_dockerworker(tmp_pat
                     "upload_path": "worker",
                     "upload_as": "worker",
                     "workdir": "/sandbox/job/worker",
-                    "command": ["python3.11", "run.py"],
+                    "command": ["python3.12", "run.py"],
                     "python_environment": {"requirements": "worker/requirements.txt"},
                     "environment": {},
                 },
@@ -375,7 +375,7 @@ def test_prepare_manifest_stages_local_skill_dependencies_in_dev(tmp_path, monke
             }
         ],
     }
-    payloads = {"worker/docker_worker/Dockerfile": b"FROM python:3.11-slim\n"}
+    payloads = {"worker/docker_worker/Dockerfile": b"FROM python:3.12-slim\n"}
 
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
     remaining = [item["name"] for item in prepared["skill_dependencies"]]
@@ -454,7 +454,7 @@ def test_prepare_manifest_stages_local_skill_dependencies_from_runtime_env(tmp_p
             }
         ],
     }
-    payloads = {"worker/docker_worker/Dockerfile": b"FROM python:3.11-slim\n"}
+    payloads = {"worker/docker_worker/Dockerfile": b"FROM python:3.12-slim\n"}
 
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
     assert prepared["skill_dependencies"] == []
@@ -499,7 +499,7 @@ def test_prepare_manifest_stages_declared_rag_components_for_dockerworker_source
             "docker_worker_image":"worker/docker_worker", "environment":{},
         }}],
     }
-    payloads = {"worker/docker_worker/Dockerfile": b"FROM python:3.11-slim\n"}
+    payloads = {"worker/docker_worker/Dockerfile": b"FROM python:3.12-slim\n"}
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
     stage_skill_dependency_payloads_for_manifest(prepared, payloads, bundle_dir=bundle_dir)
     requirements = payloads["worker/docker_worker/requirements.txt"].decode()
@@ -609,7 +609,7 @@ def test_prepare_manifest_localizes_skill_dependencies_for_hostlocal_dev(tmp_pat
                 "node_id": "worker",
                 "config": {
                     "runner_module": "MirrorNeuron.Runner.HostLocal",
-                    "command": ["python3.11", "run.py"],
+                    "command": ["python3.12", "run.py"],
                     "environment": {},
                 },
             }
@@ -810,7 +810,7 @@ def test_stage_skill_dependency_payloads_injects_pinned_gar_requirements_for_doc
             ]
         },
     }
-    payloads = {"worker/docker_worker/Dockerfile": b"FROM python:3.11-slim\n"}
+    payloads = {"worker/docker_worker/Dockerfile": b"FROM python:3.12-slim\n"}
 
     staged = stage_skill_dependency_payloads_for_manifest(
         manifest,
@@ -856,7 +856,7 @@ def test_stage_skill_dependency_payloads_ignores_comment_only_dependency_text(tm
     }
     payloads = {
         "worker/docker_worker/Dockerfile": (
-            b"FROM python:3.11-slim\n"
+            b"FROM python:3.12-slim\n"
             b"# __mn_skill_dependencies are documented here only.\n"
         )
     }
@@ -901,7 +901,7 @@ def test_prepare_manifest_localizes_sdk_with_dev_skill_worker(tmp_path, monkeypa
         encoding="utf-8",
     )
     (worker_dir / "Dockerfile").write_text(
-        "FROM python:3.11-slim\n"
+        "FROM python:3.12-slim\n"
         "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt\n"
         "# mirrorneuron: skill-dependencies\n"
         "# mirrorneuron: skill-dependencies-end\n"
@@ -1115,7 +1115,7 @@ def test_prepare_manifest_leaves_manual_docker_worker_skill_policy_alone(tmp_pat
                 "node_id": "worker",
                 "config": {
                     "runner_module": "MirrorNeuron.Runner.HostLocal",
-                    "command": ["python3.11", "run.py"],
+                    "command": ["python3.12", "run.py"],
                     "environment": {},
                 },
             }

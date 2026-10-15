@@ -1,5 +1,7 @@
 # MirrorNeuron CLI
 
+The CLI requires Python 3.12 or newer. The managed runtime and contributor/CI toolchains use Python 3.12, matching Core HostLocal, the SDK, and the API.
+
 OpenShell worker policies may declare `policy_config_bindings: true` and bind
 unquoted `${config.path.to.scalar}` values from their SDK-resolved configuration.
 The SDK renders bounded JSON-quoted scalars before native provisioning and
@@ -61,7 +63,7 @@ Requires `mirrorneuron-python-sdk>1.3,<2.0`.
 Install locally and run tests:
 
 ```bash
-python3.11 -m venv .venv
+python3.12 -m venv .venv
 . .venv/bin/activate
 .venv/bin/python -m pip install -e .
 .venv/bin/python -m pytest -q
