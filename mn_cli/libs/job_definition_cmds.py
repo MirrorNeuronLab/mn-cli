@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import typer
@@ -117,6 +118,7 @@ def create(
                 job_id=job_id,
                 cluster_client=client,
                 env={
+                    **os.environ,
                     **blueprint_runtime_environment(
                         bundle_path,
                         config=resolved,

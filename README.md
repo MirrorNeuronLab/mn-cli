@@ -345,6 +345,8 @@ IP.
 requirements before preparing workers. That selected node owns the submitted
 definition. `--node` explicitly constrains this selection. The blueprint source
 is unchanged; `mn job start` reuses the stored placement and resources.
+Preparation respects `MN_HOME` and configured host/runtime shared-storage and
+job-data paths, just like `mn blueprint run`.
 
 Create a reusable job once, then start independent runs that share its declared
 job data:

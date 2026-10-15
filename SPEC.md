@@ -38,6 +38,9 @@ the SDK materializer rather than acknowledged as complete.
 Job creation delegates hardware placement and selected-owner routing to the
 shared SDK before preparing and submitting native resources. Explicit `--node`
 constrains preparation as well as ownership. Starts reuse the stored definition.
+Preparation preserves the caller's runtime environment, including `MN_HOME`
+and configured host/runtime shared-storage and job-data paths, before applying
+the blueprint runtime environment and selected-node constraint.
 `mn blueprint run` executes the SDK-owned input validation used by
 `mn blueprint validate` before runtime resource checks, model preparation, local
 hooks, or submission. Missing required inputs therefore fail without creating a

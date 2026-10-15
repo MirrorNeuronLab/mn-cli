@@ -8,6 +8,20 @@ import mn_cli.libs.sys_cmds as sys_cmds
 import mn_cli.server_cmds as server_cmds
 
 
+@pytest.fixture(autouse=True)
+def isolated_runtime_files(monkeypatch, tmp_path):
+    monkeypatch.setenv("MN_HOME", str(tmp_path))
+    # Server paths are resolved at import time. Control the actual files read by
+    # Compose discovery instead of depending on the developer's installation.
+    for name, relative in {
+        "RUNTIME_COMPOSE_FILE": "docker-compose.yml",
+        "RUNTIME_COMPOSE_ENV": "docker-compose.env",
+        "RUNTIME_ENDPOINTS_FILE": "runtime-endpoints.json",
+        "JOIN_CLAIM_FILE": "join-claim.json",
+    }.items():
+        monkeypatch.setattr(server_cmds, name, tmp_path / relative)
+
+
 def test_runtime_cleanup_dry_run_reports_confirmed_candidates(monkeypatch):
     registry = importlib.import_module("mn_sdk.native_resource_registry")
     native_service = importlib.import_module("mn_sdk.native_runtime_service")
@@ -142,15 +156,18 @@ def test_restart_sidecars_api_only_restarts_api_without_web_ui(mocker, tmp_path)
 
 
 @pytest.mark.parametrize("profile,native_ui,available", [
+    (None, False, False),
+    (None, True, True),
     ("web-ui,openshell", False, True),
     ("openshell", False, False),
     ("openshell", True, True),
 ])
 def test_api_restart_publishes_installed_web_ui_endpoint(mocker, tmp_path, profile, native_ui, available):
     compose = tmp_path / "docker-compose.yml"
-    compose.write_text("services:\n  web-ui:\n    image: node:22-alpine\n")
     compose_env = tmp_path / "docker-compose.env"
-    compose_env.write_text(f"COMPOSE_PROFILES={profile}\n")
+    if profile is not None:
+        compose.write_text("services:\n  web-ui:\n    image: node:22-alpine\n")
+        compose_env.write_text(f"COMPOSE_PROFILES={profile}\n")
     endpoint_file = tmp_path / "runtime-endpoints.json"
     mocker.patch.object(server_cmds, "RUNTIME_COMPOSE_FILE", compose)
     mocker.patch.object(server_cmds, "RUNTIME_COMPOSE_ENV", compose_env)

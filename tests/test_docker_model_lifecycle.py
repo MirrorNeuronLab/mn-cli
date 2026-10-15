@@ -14,6 +14,24 @@ def isolated_owner(monkeypatch, tmp_path):
     monkeypatch.setenv("MN_HOME", str(tmp_path))
     monkeypatch.delenv("MN_MODEL_CATALOG_PATH", raising=False)
     monkeypatch.setattr(model_cmds, "_local_runtime_node_name", lambda: "local")
+    # Docker recipes are operator/blueprint owned; lifecycle behavior must not
+    # rely on a retired entry in the SDK's shared model catalog.
+    from mn_sdk.model_catalog import (
+        load_builtin_model_catalog_document,
+        update_model_catalog_entry,
+    )
+
+    assert "test-video:1" not in load_builtin_model_catalog_document().models
+    update_model_catalog_entry("test-video:1", {
+        "id": "test-video:1", "model": "test-video:1", "api_model": "test/video",
+        "provider": "docker_model_runner", "source": "docker",
+        "backend": "nim", "backends": ["nim"], "context_size": 32768,
+        "input_modalities": ["text", "image", "video"],
+        "requirements": {"min_vram_gb": 48, "required_capabilities": ["cuda"]},
+        "docker": {"image": "example.test/nim/video:1", "port": 30082,
+                   "container_port": 8000, "gpus": "all",
+                   "environment": {"NIM_MAX_MODEL_LEN": "32768"}},
+    })
 
 
 @pytest.mark.parametrize(
@@ -31,14 +49,14 @@ def test_local_lifecycle_commands(action, status, plain, width, monkeypatch):
         ),
     )
     env = {"COLUMNS": str(width), "MN_CLI_OUTPUT": "plain" if plain else "rich"}
-    result = CliRunner().invoke(app, ["model", action, "cosmos3", "--local"], env=env)
+    result = CliRunner().invoke(app, ["model", action, "test-video:1", "--local"], env=env)
     assert result.exit_code == 0, result.output
-    assert calls == ["cosmos3"] and status in result.output
+    assert calls == ["test-video:1"] and status in result.output
 
 
 def test_remote_lifecycle_uses_selected_owner_without_local_commands(monkeypatch):
     add_registered_models(
-        [dmr_registration(resolve_model_entry("cosmos3"), selected_node="spark")]
+        [dmr_registration(resolve_model_entry("test-video:1"), selected_node="spark")]
     )
     calls = []
     monkeypatch.setattr(
@@ -59,17 +77,17 @@ def test_remote_lifecycle_uses_selected_owner_without_local_commands(monkeypatch
         "unload_runtime_model",
         lambda *_a: pytest.fail("local operation"),
     )
-    result = CliRunner().invoke(app, ["model", "unload", "cosmos3", "--json"])
+    result = CliRunner().invoke(app, ["model", "unload", "test-video:1", "--json"])
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["data"]["status"] == "unloaded"
-    assert calls == [{"action": "unload", "model": "cosmos3", "node": "spark"}]
+    assert calls == [{"action": "unload", "model": "test-video:1", "node": "spark"}]
 
 
 def test_replicated_lifecycle_requires_explicit_owner(monkeypatch):
     add_registered_models(
         [
             dmr_registration(
-                resolve_model_entry("cosmos3"),
+                resolve_model_entry("test-video:1"),
                 installations=[{"node": "spark"}, {"node": "gpu-2"}],
             )
         ]
@@ -79,29 +97,29 @@ def test_replicated_lifecycle_requires_explicit_owner(monkeypatch):
         "stop_runtime_model",
         lambda *_a: pytest.fail("ambiguous operation"),
     )
-    result = CliRunner().invoke(app, ["model", "stop", "cosmos3"])
+    result = CliRunner().invoke(app, ["model", "stop", "test-video:1"])
     assert result.exit_code == 2 and "--node" in result.output
 
 
 def test_docker_discovery_and_probe_use_nim_identity_and_port(monkeypatch):
-    entry = resolve_model_entry("cosmos3")
+    entry = resolve_model_entry("test-video:1")
     payload = model_cmds._discovered_dmr_payload(
         entry["model"], routed_names={entry["id"]}
     )
     assert payload["kind"] == payload["source"] == "docker"
-    assert payload["api_model"] == "nvidia/cosmos3-nano-reasoner"
+    assert payload["api_model"] == "test/video"
     monkeypatch.setattr(model_probe, "model_installed", lambda model: True)
     endpoint = model_probe._local_model_probe_endpoint(
         entry, record=None, local_node="local"
     )
     assert endpoint["api_base"] == "http://127.0.0.1:30082/v1"
-    assert endpoint["api_model"] == "nvidia/cosmos3-nano-reasoner"
+    assert endpoint["api_model"] == "test/video"
 
 
 def test_remote_docker_health_does_not_confuse_node_health_with_container_readiness(
     monkeypatch,
 ):
-    entry = resolve_model_entry("cosmos3")
+    entry = resolve_model_entry("test-video:1")
     monkeypatch.setattr(
         model_cmds,
         "_cluster_runtime_status_endpoints",
@@ -131,7 +149,7 @@ def test_remote_docker_health_does_not_confuse_node_health_with_container_readin
 def test_docker_health_distinguishes_cold_installation_from_failed_serving(
     lifecycle, running, endpoint_ok, expected, monkeypatch,
 ):
-    entry = resolve_model_entry("cosmos3")
+    entry = resolve_model_entry("test-video:1")
     monkeypatch.setattr(model_cmds, "_cluster_runtime_status_endpoints", lambda **_kw: [{"node_name": "spark", "node": {"status": "healthy"}}])
     monkeypatch.setattr(model_cmds, "_runtime_model_inventory_for_node", lambda _ep: [{**entry, "running": running, "endpoint_ok": endpoint_ok, "lifecycle_state": lifecycle}])
     monkeypatch.setattr(model_cmds, "_remote_node_compatibility", lambda *_a, **_kw: {"ok": True})
@@ -144,7 +162,7 @@ def test_local_docker_probe_owns_readiness_and_always_releases(failure, monkeypa
     from contextlib import contextmanager
     from mn_sdk import ModelCapabilityReport
 
-    entry = resolve_model_entry("cosmos3")
+    entry = resolve_model_entry("test-video:1")
     calls = []
 
     @contextmanager
@@ -184,7 +202,7 @@ def test_docker_update_uses_new_catalog_context_and_replaces_snapshot(
     from mn_sdk import get_registered_model
     from mn_sdk.model_catalog import update_model_catalog_entry
 
-    entry = resolve_model_entry("cosmos3")
+    entry = resolve_model_entry("test-video:1")
     add_registered_models([dmr_registration(entry, selected_node=node)])
     record = get_registered_model(entry["id"])
     update_model_catalog_entry(

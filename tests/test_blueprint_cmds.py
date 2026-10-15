@@ -2313,7 +2313,7 @@ def test_blueprint_add_defers_model_installation(monkeypatch, tmp_path, mocker, 
     assert requirement["model"] == model
     assert requirement["install_policy"] == "on_first_model_call"
     assert requirement["status"] == "deferred_runtime_install"
-    expected = ["nemotron-3.5-lightning:latest", "gemma4:e2b"] if model == "default" else [model]
+    expected = ["nemotron-3.5-lightning:latest", "bonsai2:ptq1_0", "gemma4:e2b"] if model == "default" else [model]
     assert requirement["selection_policy"] == expected
     assert "first use" in result.stdout
 

@@ -156,6 +156,14 @@ def test_create_prepares_source_bundle_before_stable_submission(monkeypatch, tmp
         payloads={"runtime.py": b"prepared"},
     )
     calls = {}
+    runtime_paths = {
+        "MN_HOME": str(tmp_path / "mn-home"),
+        "MN_HOST_SHARED_STORAGE_ROOT": str(tmp_path / "host-shared"),
+        "MN_RUNTIME_SHARED_STORAGE_ROOT": "/runtime/shared",
+        "MN_JOB_DATA_ROOT": str(tmp_path / "job-data"),
+    }
+    for key, value in runtime_paths.items():
+        monkeypatch.setenv(key, value)
 
     monkeypatch.setattr(
         job_definition_cmds,
@@ -233,6 +241,8 @@ def test_create_prepares_source_bundle_before_stable_submission(monkeypatch, tmp
     monkeypatch.setattr(job_definition_cmds, "record_result", printed.append)
 
     job_definition_cmds.create(str(bundle), job_id="stable-job", config=None, node=owner_node)
+    for key, value in runtime_paths.items():
+        assert calls["prepare"][2]["env"][key] == value
     if owner_node:
         assert calls["prepare"][2]["env"]["MN_SELECTED_RUNTIME_NODE"] == owner_node
 
