@@ -74,6 +74,10 @@ def use_cli_model_pull_for_legacy_install_tests(request, monkeypatch):
 def current_job_run_contract(monkeypatch):
     """Provide a deterministic v1 StartRun response for command-focused tests."""
     from mn_cli.libs import run_cmds
+    monkeypatch.setenv('MN_OUTPUT_COPY_TIMEOUT_SECONDS', '0.1')
+
+    monkeypatch.setattr(run_cmds.client, 'get_run', lambda run_id: json.dumps(
+        {'run_id':run_id, 'status':'completed'}))
 
     monkeypatch.setattr(
         run_cmds.client,

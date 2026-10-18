@@ -399,6 +399,27 @@ def _materialize_completed_blueprint_outputs(
         logger.exception("Failed to materialize blueprint outputs to %s", output_folder)
 
 
+def _materialize_terminal_run_outputs(storage, execution_id, status, snapshot_path=None):
+    if status != 'completed' or not storage.get('output_copy'):
+        return False
+    try:
+        from mn_sdk.output_delivery import completed_output_run_id
+        snapshot = json.loads(Path(snapshot_path).read_text()) if snapshot_path and Path(snapshot_path).is_file() else None
+        if not isinstance(snapshot, dict) or snapshot.get('status') != 'completed':
+            snapshot = json.loads(client.get_run(execution_id))
+        physical_id = completed_output_run_id(snapshot, storage, execution_id)
+    except Exception:
+        logger.exception('Could not resolve completed output run')
+        print_warning(console, 'Analysis completed, but output delivery could not resolve the completed run. The analysis is preserved; retry delivery without rerunning it.')
+        return False
+    try:
+        return _materialize_shared_storage_outputs(storage, execution_id=physical_id)
+    except Exception:
+        logger.exception('Completed analysis output delivery failed')
+        print_warning(console, 'Analysis completed, but output delivery did not finish. The analysis is preserved; retry the copy after resolving delivery diagnostics.')
+        return False
+
+
 def _materialize_shared_storage_outputs(storage: dict[str, Any], *, execution_id: str | None = None) -> bool:
     if not isinstance(storage, dict):
         return False
@@ -416,10 +437,12 @@ def _materialize_shared_storage_outputs(storage: dict[str, Any], *, execution_id
         logger.warning("Shared output materialization warning: %s", warning)
     for error in result.get("errors") or []:
         logger.error("Shared output materialization error: %s", error)
+    if result.get('errors'):
+        print_warning(console, 'Analysis completed, but output delivery failed. Completed analysis is preserved; inspect delivery diagnostics before retrying the copy.')
     targets = result.get("target_paths") or []
-    if targets:
+    if targets and not result.get('errors'):
         console.print(f"[green]Materialized shared outputs:[/green] {targets[-1]}")
-    return bool(result.get("copied"))
+    return bool(result.get("copied")) and not result.get('errors')
 
 
 def _shared_output_copy_timeout_seconds() -> float:

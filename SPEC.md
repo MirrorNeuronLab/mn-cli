@@ -855,3 +855,14 @@ Runtime events use the shared [`mn.runtime.event.v1` contract](../mn-python-sdk/
 including level, blueprint owner, UTC timestamp and actor attribution.
 The SDK selects meaningful activity for the CLI, API, desktop and web monitors;
 raw events remain available for diagnostics.
+
+
+## Completed analysis and host delivery
+
+The attached run command and background relay resolve host output sources using
+Core's completed result reference, including its physical workflow run ID. The
+public CLI run label stays available for monitoring. Completion manifests and
+all declared files must still be ready before the configured host copy is delivered.
+A copy failure is reported separately: completed analysis is retained and does
+not require repeating model calls. Delivery uses the SDK's UTC run archives and
+latest.html entry point, with host receipts outside frozen analysis artifacts.

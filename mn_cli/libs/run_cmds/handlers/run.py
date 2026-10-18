@@ -599,9 +599,10 @@ def run_bundle(
                 stable_job_id=stable_job_id,
             )
         if final_status in FINAL_STATUSES:
-            materialized_shared = _materialize_shared_storage_outputs(
+            materialized_shared = _materialize_terminal_run_outputs(
                 prepared_submission.metadata,
-                execution_id=execution_id,
+                execution_id, final_status,
+                snapshot_path=log_writer.log_dir / 'job_snapshot.json',
             )
             if not materialized_shared:
                 _materialize_completed_blueprint_outputs(

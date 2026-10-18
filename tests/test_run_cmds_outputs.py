@@ -534,7 +534,7 @@ def test_materialize_publishes_result_for_actual_execution_id(tmp_path):
         }],
     }, execution_id="actual-run")
     assert copied is True
-    event = json.loads((actual_run / "events.jsonl").read_text().splitlines()[0])
+    event = json.loads((submission / "delivery/actual-run/events.jsonl").read_text().splitlines()[0])
     assert event["payload"]["run_id"] == "actual-run"
     assert not (submission / "outputs" / "runs" / "planned-run").exists()
 
@@ -698,3 +698,18 @@ def test_detached_batch_run_starts_output_event_relay_for_shared_storage(
         str(tmp_path / "runs" / "batch-output-run"),
         str(target_path),
     }
+
+
+def test_terminal_delivery_passes_physical_result_reference_and_does_not_fail_analysis(monkeypatch, tmp_path, capsys):
+    from mn_cli.libs import run_cmds
+    storage={'host_submission_path':str(tmp_path / 'sub-1'), 'output_copy':[{}]}
+    ref={'version':'mn.staged_artifact/v1','storage':'syncthing','submission_id':'sub-1',
+        'run_id':'physical','relative_path':'outputs/runs/physical/result.json','sha256':'a'*64,'size_bytes':2}
+    monkeypatch.setattr(run_cmds.client, 'get_run', lambda _: json.dumps({'status':'completed','result_ref':ref}))
+    captured=[]
+    monkeypatch.setattr(run_cmds, '_materialize_shared_storage_outputs', lambda s, **kw: captured.append(kw['execution_id']) or True)
+    assert run_cmds._materialize_terminal_run_outputs(storage, 'cli-label', 'completed') is True
+    assert captured==['physical']
+    monkeypatch.setattr(run_cmds.client, 'get_run', lambda _: (_ for _ in ()).throw(OSError('transport unavailable')))
+    assert run_cmds._materialize_terminal_run_outputs(storage, 'cli-label', 'completed') is False
+    assert 'Analysis completed' in capsys.readouterr().err
