@@ -260,7 +260,7 @@ def retry_run(
             run_id, expected_attempt=plan["expected_attempt"], checkpoint_revision=plan["checkpoint_revision"],
             configuration_overrides=overrides, idempotency_key=key))
         result["idempotency_key"] = key
-        print_detail(console, "Retry accepted", result)
+        print_detail(console, "Retry queued" if result.get("status") == "queued" else "Retry accepted", result)
     except Exception as exc:
         handle_cli_error(exc, console, "run retry", command_context=context)
 

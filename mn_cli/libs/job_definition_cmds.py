@@ -314,9 +314,13 @@ def start(
         if result.get("cleanup_deferred"):
             pending = ", ".join(result.get("cleanup_pending_nodes") or [])
             details.append(("Cleanup", f"deferred{f' on {pending}' if pending else ''}"))
+        if result.get("status") == "queued":
+            admission = result.get("admission") or {}
+            print_info(console, admission.get("message") or result.get("message") or "Queued. It will start automatically when resources are available.")
+            details.extend([("PC", admission.get("node_label") or admission.get("owner_node")), ("Queue position", admission.get("position"))])
         print_success_confirmation(
             console,
-            "Run replace" if force else "Run start",
+            "Run queued" if result.get("status") == "queued" else "Run replace" if force else "Run start",
             details=details,
             next_steps=f"mn run show {result.get('run_id')}",
         )
@@ -379,10 +383,10 @@ def run_resume(run_id: str):
     )
 
 
-def run_cancel(run_id: str):
+def run_cancel(run_id: str, queued_only: bool = typer.Option(False, "--queued-only", help="Cancel only if execution has not started.")):
     """Cancel one execution run without deleting job data."""
     _print_run(
-        client.cancel_run,
+        (lambda value: client.cancel_run(value, queued_only=True)) if queued_only is True else client.cancel_run,
         run_id,
         "run cancel",
         activity_message=f"Cancelling run {run_id}…",

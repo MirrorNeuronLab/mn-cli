@@ -1,6 +1,7 @@
 import json
 import subprocess
 import urllib.error
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -948,6 +949,7 @@ def test_model_show_help_does_not_offer_runtime_compatibility_probe():
 def test_model_probe_checks_local_dmr_and_litellm_then_persists_proxy_matrix(
     mocker,
 ):
+    mocker.patch("mn_cli.libs.model_probe.model_request", return_value=nullcontext())
     matrix = {
         "embeddings": False,
         "image_input": True,
@@ -1201,6 +1203,7 @@ def test_model_probe_plain_output_is_readable(mocker):
 
 
 def test_model_probe_fails_when_litellm_changes_local_capabilities(mocker):
+    mocker.patch("mn_cli.libs.model_probe.model_request", return_value=nullcontext())
     direct = _capability_report({"structured_output": True})
     proxy = _capability_report(
         {"structured_output": False},

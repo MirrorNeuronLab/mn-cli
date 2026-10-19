@@ -449,3 +449,18 @@ def test_delete_cleans_historical_runs_from_v2_items_response(monkeypatch):
 
     assert cleaned == ["run-1", "stable-job"]
     assert printed == [{"job_id": "stable-job", "status": "deleted", "confirmed": True}]
+
+
+def test_busy_start_acknowledges_automatic_queue_without_confirmation(monkeypatch):
+    messages, rendered = [], []
+    receipt = {"run_id": "run-b", "status": "queued", "admission": {
+        "owner_node": "spark@pc", "position": 1,
+        "message": "Queued on Spark behind Research assistant. It will start automatically when the current run finishes."}}
+    monkeypatch.setattr(job_definition_cmds, "client", SimpleNamespace(start_run=lambda *_args, **_kwargs: json.dumps(receipt)))
+    monkeypatch.setattr(job_definition_cmds, "require_confirmation", lambda *_args, **_kwargs: pytest.fail("queueing must not ask for confirmation"))
+    monkeypatch.setattr(job_definition_cmds, "print_info", lambda _console, message: messages.append(message))
+    monkeypatch.setattr(job_definition_cmds, "print_success_confirmation", lambda _console, label, **kwargs: rendered.append(label))
+    monkeypatch.setattr(job_definition_cmds, "record_result", lambda _result: None)
+    job_definition_cmds.start("job-b", run_id="run-b", inputs=None, force=False, yes=False)
+    assert messages == [receipt["admission"]["message"]]
+    assert rendered == ["Run queued"]

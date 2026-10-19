@@ -528,6 +528,9 @@ def run_bundle(
                 inputs=config_overrides,
             )
         )
+        if started.get("status") == "queued":
+            from rich.text import Text
+            console.print(Text((started.get("admission") or {}).get("message") or started.get("message") or "Queued. It will start automatically when resources are available."))
         execution_id = str(started["run_id"])
         submitted_run_id = execution_id
         submitted_stable_job_id = stable_job_id

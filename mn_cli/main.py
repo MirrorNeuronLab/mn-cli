@@ -26,6 +26,7 @@ from mn_cli.libs import (
     run_cmds,
     run_public,
     service_cmds,
+    schedule_cmds,
     sys_cmds,
 )
 from mn_cli.output import RemediatingTyperGroup, instrument_typer
@@ -88,6 +89,12 @@ app = typer.Typer(
     pretty_exceptions_enable=False,
     cls=RemediatingTyperGroup,
 )
+schedule_app = typer.Typer(help="Inspect schedules and automatically queued starts.", context_settings=CONTEXT_SETTINGS, cls=RemediatingTyperGroup)
+schedule_app.command(name="list")(schedule_cmds.list_schedules)
+schedule_app.command(name="show")(schedule_cmds.show)
+schedule_app.command(name="set-time")(schedule_cmds.set_time)
+schedule_app.command(name="cancel")(schedule_cmds.cancel)
+
 job_app = typer.Typer(help=JOB_HELP, context_settings=CONTEXT_SETTINGS, cls=RemediatingTyperGroup)
 node_app = typer.Typer(help=NODE_HELP, context_settings=CONTEXT_SETTINGS, cls=RemediatingTyperGroup)
 operation_app = typer.Typer(help="Inspect or reattach to durable group operations.", context_settings=CONTEXT_SETTINGS, cls=RemediatingTyperGroup)
@@ -240,6 +247,7 @@ service_app.command(name="show")(service_cmds.resolve_service)
 # Sub-apps
 app.add_typer(blueprint_app, name="blueprint")
 app.add_typer(job_app, name="job")
+app.add_typer(schedule_app, name="schedule")
 app.add_typer(run_app, name="run")
 app.add_typer(model_cmds.model_app, name="model")
 model_cmds.model_app.command(name="start")(model_lifecycle.start)

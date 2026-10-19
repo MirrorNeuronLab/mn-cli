@@ -802,3 +802,22 @@ all declared files must still be ready before the configured host copy is delive
 A copy failure is reported separately: completed analysis is retained and does
 not require repeating model calls. Delivery uses the SDK's UTC run archives and
 latest.html entry point, with host receipts outside frozen analysis artifacts.
+
+
+## Automatic waiting and queue inspection
+
+`mn job start` and blueprint starts accept busy-PC work automatically and print
+its queued acknowledgement without asking for confirmation. A queued receipt is
+not a started execution. Each selected PC owns one run with its CPU, memory and
+all advertised GPUs; multiple models share it. Different PCs run independently.
+Pause retains ownership; terminal cleanup releases it before the next FIFO entry.
+
+Inspect admission with `mn run show <run-id>` or
+`mn schedule list --node <owner-node>`. `mn schedule show queue_<run-id>` displays
+the same durable scheduling record. `mn run cancel <run-id> --queued-only` and
+`mn schedule cancel queue_<run-id>` cannot stop an admitted run. Use
+`mn schedule set-time queue_<run-id> --at <future-ISO-timestamp>` to defer that
+same request. Schedule commands accept `--node` and use the current revision.
+Owner commands pass through authenticated Core federation, using existing runtime
+credentials. Queuing survives CLI exit/restart; stale inventory grants no claim.
+Core and native SDK must advertise `exclusive_run_v1`. Deployment is separate.

@@ -299,6 +299,9 @@ def test_single_node_placement_scores_gpu_headroom_then_load():
 def test_single_node_placement_reports_per_node_rejections():
     manifest = _cctv_placement_manifest()
     resources = _mac_and_spark_resources(spark_memory_mb=12000)
+    # Preparation rejects incompatible total capacity, while temporary low free
+    # memory is handled by the owner Core's automatic waiting queue.
+    resources["nodes"][1]["devices"][0]["memory_total_mb"] = 12000
 
     with pytest.raises(RuntimeError, match="Per-node rejection reasons") as exc_info:
         run_cmds._resolve_and_apply_workflow_placement(

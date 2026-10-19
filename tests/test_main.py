@@ -143,7 +143,8 @@ def test_command_help_includes_argument_description_and_examples():
 
 def test_job_and_run_commands_have_distinct_resource_semantics():
     command = get_command(app)
-    assert {"deployment", "schedule", "event"}.isdisjoint(command.commands)
+    assert {"deployment", "event"}.isdisjoint(command.commands)
+    assert list(command.commands["schedule"].commands) == ["list", "show", "set-time", "cancel"]
     assert list(command.commands["job"].commands) == [
         "list", "create", "backup", "restore", "show", "analysis", "start", "archive", "reset-data", "delete",
     ]
