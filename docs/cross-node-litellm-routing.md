@@ -179,33 +179,36 @@ a deterministic preference order:
 - remote deployments: `order=2`, sorted deterministically by node and
   endpoint.
 
-When deployments are equally idle, sequential requests stay local. When the
-local deployment is already decoding, overlapping work spills to an idle
-remote replica.
+When deployments are equally idle, sequential requests stay local. Overlapping
+work is balanced across available local and remote deployment capacity.
 
-Each private owner route sets `max_parallel_requests: 1`. The queue callback on
-the owner proxy is the physical decoder lock. If another ingress proxy reaches
-a busy owner, that private route returns a retryable `owner_busy` response
+Each private owner route sets `max_parallel_requests: 5`. The queue callback on
+the owner proxy bounds physical model concurrency to five calls per lane. If
+another ingress proxy reaches a saturated owner, that private route returns a
+retryable `owner_busy` response
 immediately; it does not queue privately. The ingress LiteLLM router can then
 try another deployment.
 
-The public logical group owns the FIFO admission queue. With
-`MN_LITELLM_MAX_CONCURRENT_REQUESTS=auto`, its capacity equals the number of
-configured deployments in that group. An integer value is a hard upper bound:
+The public logical group owns the FIFO admission queue. Completion and embedding
+lanes each default to five calls per group. With
+`MN_LITELLM_MAX_CONCURRENT_REQUESTS=auto`, capacity is the sum of deployment
+parallel limits, using five slots when a route has no explicit limit. An integer
+value is a hard upper bound:
 
 ```text
-effective public capacity = min(replica count, configured integer limit)
+effective public capacity = min(sum of deployment slots, configured integer limit)
 ```
 
-For example, three `medium` installations admit three overlapping medium
-requests through one ingress proxy. A fourth request waits until a public slot
-is released. Completion and embedding calls use separate lanes.
+For example, one `medium` installation admits five overlapping requests through
+one ingress proxy; a sixth waits until a public slot is released. Three replicas
+provide fifteen slots in `auto` mode. Completion and embedding calls use separate
+lanes.
 
 Relevant limits are:
 
 ```text
-MN_LITELLM_MAX_CONCURRENT_REQUESTS=auto
-MN_LITELLM_MAX_CONCURRENT_EMBEDDINGS=1
+MN_LITELLM_MAX_CONCURRENT_REQUESTS=5
+MN_LITELLM_MAX_CONCURRENT_EMBEDDINGS=5
 MN_LITELLM_MAX_QUEUED_REQUESTS=64
 MN_LITELLM_QUEUE_TIMEOUT_SECONDS=1800
 MN_LITELLM_MAX_SLOT_SECONDS=3600
