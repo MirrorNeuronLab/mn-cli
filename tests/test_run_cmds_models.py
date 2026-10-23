@@ -1682,9 +1682,10 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
     worker_environment = prepared_worker_manifest["agents"]["nodes"][0]["config"][
         "environment"
     ]
-    assert worker_environment["MN_LLM_PROVIDER"] == "litellm"
+    assert worker_environment["MN_LLM_PROVIDER"] == "docker_model_runner"
     assert worker_environment["MN_LLM_MODEL"] == "default"
-    assert worker_environment["MN_LLM_API_BASE"] == ("http://mn-litellm-proxy:4000/v1")
+    assert worker_environment["MN_LLM_API_BASE"] == "auto"
+    assert worker_environment["MN_RUNTIME_MODEL_MANAGED"] == "1"
     debug_output = " ".join(capsys.readouterr().err.split())
     assert "Runtime model prepare plan" in debug_output
     assert f"on {expected_node}" in debug_output
