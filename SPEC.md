@@ -158,6 +158,12 @@ those contracts.
 
 ## Output Contract
 
+`mn run info <run-id>` and `mn run show <run-id>` use the same detailed Run read.
+Human output puts assigned node and reserved quantities first, with separate
+CPU/RAM/disk/GPU rows that remain readable in narrow/plain terminals. Structured
+output preserves Core's `placement` object unchanged. Reserved amounts are not
+measured utilization. Unknown or historical claims cannot report zero capacity.
+
 Blocking blueprint-launch and job-creation stages expose descriptive activity
 messages and elapsed time. Interactive terminals use a transient spinner;
 plain/non-interactive human output uses ten-second stderr heartbeats without

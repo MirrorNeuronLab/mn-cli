@@ -22,6 +22,7 @@ from mn_cli.error_handler import handle_cli_error
 from mn_cli.libs.bundles import read_bundle
 from mn_cli.libs.job_cleanup import JobResourceCleanupError, cleanup_job_resources
 from mn_cli.libs.run_cmds.common import _stage_bundle_payloads
+from mn_cli.libs.run_info import run_info_display
 from mn_cli.libs.ui import (
     activity,
     launch_activity,
@@ -31,7 +32,7 @@ from mn_cli.libs.ui import (
     print_success_confirmation,
     require_confirmation,
 )
-from mn_cli.output import record_result
+from mn_cli.output import json_enabled, record_result
 from mn_cli.shared import client, console, logger
 
 
@@ -367,7 +368,9 @@ def run_status(run_id: str):
         missing = isinstance(exc, grpc.RpcError) and exc.code() == grpc.StatusCode.NOT_FOUND
         record = {**record, "record_source": "history", "retry": {"available": False,
             "reason": "Core control record is missing. Start a new run." if missing else "Core is unavailable. Retry eligibility cannot be checked yet."}}
-    print_detail(console, "Run", record)
+    if record.get("record_source") == "history":
+        record = {**record, "placement": None}
+    print_detail(console, "Run", record if json_enabled() else run_info_display(record))
 
 
 def run_pause(run_id: str):

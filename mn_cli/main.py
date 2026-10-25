@@ -195,6 +195,7 @@ job_app.command(name="delete")(job_definition_cmds.delete)
 # Run commands
 run_app.command(name="list")(run_public.list_runs)
 run_app.command(name="show")(run_public.show_run)
+run_app.command(name="info")(run_public.show_run)
 run_app.command(name="watch")(run_public.watch_run)
 run_app.command(name="logs")(run_public.logs)
 run_app.command(name="result")(run_public.result)

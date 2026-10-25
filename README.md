@@ -341,6 +341,13 @@ IP.
 
 ## Stable jobs and execution runs
 
+`mn run info <run-id>` (also `mn run show <run-id>`) displays the assigned node
+and reserved CPU, RAM, disk, GPU count and GPU memory first. It uses Core's
+current `placement` projection, separate from measured `mn run resources` usage.
+Paused work and terminal cleanup may retain reservations; queued, released,
+and unavailable reservations are labeled explicitly. `--json` preserves the
+complete placement object. Upgrade Core with the CLI to receive these fields.
+
 `mn job create` selects an eligible runtime from hardware and workflow
 requirements before preparing workers. That selected node owns the submitted
 definition. `--node` explicitly constrains this selection. The blueprint source

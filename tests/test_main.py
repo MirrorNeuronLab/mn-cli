@@ -149,7 +149,7 @@ def test_job_and_run_commands_have_distinct_resource_semantics():
         "list", "create", "backup", "restore", "show", "relocate", "analysis", "start", "archive", "reset-data", "delete",
     ]
     assert list(command.commands["run"].commands) == [
-        "list", "show", "watch", "logs", "result", "resources", "compare",
+        "list", "show", "info", "watch", "logs", "result", "resources", "compare",
         "pause", "resume", "retry", "cancel", "delete", "human",
     ]
     assert list(command.commands["run"].commands["human"].commands) == [
