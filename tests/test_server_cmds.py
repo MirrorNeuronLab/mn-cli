@@ -1942,6 +1942,9 @@ def test_start_worker_node_clears_state_and_starts_worker(mocker, tmp_path):
     start_web_ui.assert_not_called()
 
 def test_stop_local_runtime_for_worker_stops_compose_and_sidecars(mocker):
+    # Server paths are isolated by this fixture, but the SDK resolves MN_HOME
+    # independently. Never call the installed worker cleanup service in a unit test.
+    cleanup_workers = mocker.patch("mn_sdk.native_resources.cleanup_docker_worker_services")
     server_cmds.RUNTIME_COMPOSE_FILE.parent.mkdir(parents=True, exist_ok=True)
     server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n")
     server_cmds.RUNTIME_COMPOSE_ENV.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
@@ -1956,6 +1959,7 @@ def test_stop_local_runtime_for_worker_stops_compose_and_sidecars(mocker):
 
     _stop_local_runtime_for_worker()
 
+    cleanup_workers.assert_called_once_with(all_services=True)
     stop_network.assert_called_once_with()
     run.assert_any_call(runtime_compose_cmd("down"), stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
     assert call(1234) in kill.call_args_list
