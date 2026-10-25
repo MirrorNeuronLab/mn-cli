@@ -263,6 +263,7 @@ def _run_resolved_blueprint(
     detached: bool = False,
     web_ui: bool = False,
     auto_schedule: bool = False,
+    queue: bool = False,
     schedule: str | None = None,
     fake_llm: bool = False,
     fake_skills: bool = False,
@@ -338,6 +339,7 @@ def _run_resolved_blueprint(
         detached=detached,
         web_ui=web_ui,
         auto_schedule=auto_schedule,
+        queue=queue,
         schedule=schedule,
         debug=debug,
         job_id=job_id,
@@ -889,6 +891,7 @@ def run_catalog_blueprint(
     detached: bool = False,
     web_ui: bool = False,
     auto_schedule: bool = False,
+    queue: bool = False,
     schedule: str | None = None,
     fake_llm: bool = False,
     fake_skills: bool = False,
@@ -955,6 +958,7 @@ def run_catalog_blueprint(
         detached=detached,
         web_ui=web_ui,
         auto_schedule=auto_schedule,
+        queue=queue,
         schedule=schedule,
         fake_llm=fake_llm,
         fake_skills=fake_skills,
@@ -976,6 +980,7 @@ def run_local_blueprint_folder(
     detached: bool = False,
     web_ui: bool = False,
     auto_schedule: bool = False,
+    queue: bool = False,
     schedule: str | None = None,
     fake_llm: bool = False,
     fake_skills: bool = False,
@@ -1000,6 +1005,7 @@ def run_local_blueprint_folder(
                 detached=detached,
                 web_ui=web_ui,
                 auto_schedule=auto_schedule,
+        queue=queue,
                 schedule=schedule,
                 fake_llm=fake_llm,
                 fake_skills=fake_skills,
@@ -1044,6 +1050,7 @@ def run_local_blueprint_folder(
         detached=detached,
         web_ui=web_ui,
         auto_schedule=auto_schedule,
+        queue=queue,
         schedule=schedule,
         fake_llm=fake_llm,
         fake_skills=fake_skills,
@@ -1065,6 +1072,7 @@ def _run_local_folder(
     detached: bool = False,
     web_ui: bool = False,
     auto_schedule: bool = False,
+    queue: bool = False,
     schedule: str | None = None,
     fake_llm: bool = False,
     fake_skills: bool = False,
@@ -1088,6 +1096,7 @@ def _run_local_folder(
                 detached=detached,
                 web_ui=web_ui,
                 auto_schedule=auto_schedule,
+        queue=queue,
                 schedule=schedule,
                 fake_llm=fake_llm,
                 fake_skills=fake_skills,
@@ -1108,6 +1117,7 @@ def _run_local_folder(
             detached=detached,
             web_ui=web_ui,
             auto_schedule=auto_schedule,
+        queue=queue,
             schedule=schedule,
             fake_llm=fake_llm,
             fake_skills=fake_skills,
@@ -1157,6 +1167,7 @@ def _run_local_folder(
         detached=detached,
         web_ui=web_ui,
         auto_schedule=auto_schedule,
+        queue=queue,
         schedule=schedule,
         debug=debug,
         job_id=job_id,
@@ -1625,6 +1636,7 @@ def blueprint_run(
             help="Override the blueprint Web UI listener port for this run.",
         ),
     ] = None,
+    queue: Annotated[bool, typer.Option("--queue", help="Queue this run when resources are busy.")] = False,
     auto_schedule: Annotated[
         bool,
         typer.Option(
@@ -1686,6 +1698,10 @@ def blueprint_run(
         )
         run_id = run_id or _make_blueprint_run_id(job_id)
 
+    queue = queue is True
+    if queue and (auto_schedule or schedule):
+        print_error(console, "Pass --queue on its own, without --auto-schedule or --schedule.")
+        raise typer.Exit(2)
     if auto_schedule and schedule:
         print_error(console, "Pass either --auto-schedule or --schedule, not both.")
         raise typer.Exit(2)
@@ -1721,6 +1737,7 @@ def blueprint_run(
             detached=detached,
             web_ui=web_ui,
             auto_schedule=auto_schedule,
+        queue=queue,
             schedule=schedule,
             fake_llm=fake_llm,
             fake_skills=fake_skills,
@@ -1745,6 +1762,7 @@ def blueprint_run(
         detached=detached,
         web_ui=web_ui,
         auto_schedule=auto_schedule,
+        queue=queue,
         schedule=schedule,
         fake_llm=fake_llm,
         fake_skills=fake_skills,

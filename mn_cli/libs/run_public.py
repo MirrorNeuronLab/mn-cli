@@ -221,6 +221,7 @@ def show_run(run_id: str = typer.Argument(help="Execution run ID.")) -> None:
 
 def retry_run(
     run_id: str = typer.Argument(help="Failed execution run ID."),
+    queue: bool = typer.Option(False, "--queue", help="Queue this retry when resources are busy."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Verify recovery without starting work."),
     settings: list[str] = typer.Option([], "--set", help="Explicit declared retry setting: path=value. Repeatable."),
     idempotency_key: str | None = typer.Option(None, "--idempotency-key", help="Reuse this key after a lost response."),
@@ -258,7 +259,8 @@ def retry_run(
             console.print(f"Retry request: {key}\nAttempt: {plan['expected_attempt']}\nCheckpoint: {plan['checkpoint_revision']}")
         result = json.loads(client.retry_run(
             run_id, expected_attempt=plan["expected_attempt"], checkpoint_revision=plan["checkpoint_revision"],
-            configuration_overrides=overrides, idempotency_key=key))
+            configuration_overrides=overrides, idempotency_key=key,
+            **({"admission_policy": "enqueue_if_busy"} if queue is True else {})))
         result["idempotency_key"] = key
         print_detail(console, "Retry queued" if result.get("status") == "queued" else "Retry accepted", result)
     except Exception as exc:

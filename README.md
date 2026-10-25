@@ -821,3 +821,15 @@ same request. Schedule commands accept `--node` and use the current revision.
 Owner commands pass through authenticated Core federation, using existing runtime
 credentials. Queuing survives CLI exit/restart; stale inventory grants no claim.
 Core and native SDK must advertise `exclusive_run_v1`. Deployment is separate.
+
+## Busy resources and moving a Job
+
+Manual starts stop early when capacity is busy. Use `mn job start JOB --queue`,
+`mn blueprint run BLUEPRINT --queue`, or `mn run retry RUN --queue` to explicitly
+wait for compatible capacity. Scheduled work queues automatically. Paused work can
+still hold resources; stop/cancel it to make capacity reusable.
+
+Move an idle Job and its data with `mn job relocate JOB --node NODE`. Pause its
+schedules and wait for cleanup first. Retrying resumes a durable transfer; add
+`--abort` to cancel before ownership commits. After commit, retry finishes activation
+on the destination. No running execution is silently migrated or replayed.

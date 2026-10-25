@@ -183,6 +183,20 @@ def inspect(job_id: str = typer.Argument(help="Durable job ID.")):
         handle_cli_error(exc, console, "job show", command_context={"job_id": job_id})
 
 
+def relocate(
+    job_id: str = typer.Argument(help="Durable job ID."),
+    node: str = typer.Option(..., "--node", help="Connected destination PC."),
+    abort: bool = typer.Option(False, "--abort", help="Cancel a move before ownership has committed."),
+):
+    """Move an idle job and its data to another PC. Pause its schedules first."""
+    try:
+        with activity(console, "Move job and verify its data"):
+            result = json.loads(client.relocate_job(job_id, node, action="abort" if abort is True else "move"))
+        print_detail(console, "Job relocation", result)
+    except Exception as exc:
+        handle_cli_error(exc, console, "job relocate", command_context={"job_id": job_id})
+
+
 def archive(job_id: str = typer.Argument(help="Durable job ID.")):
     """Archive a job while retaining its persistent data."""
     try:
@@ -272,6 +286,7 @@ def delete(
 def start(
     job_id: str = typer.Argument(help="Durable job ID."),
     run_id: str | None = typer.Option(None, "--run-id"),
+    queue: bool = typer.Option(False, "--queue", help="Queue this run when resources are busy."),
     inputs: str | None = typer.Option(None, "--inputs", help="Run-input JSON file."),
     force: bool = typer.Option(
         False,
@@ -301,6 +316,7 @@ def start(
                 run_id=run_id or "",
                 inputs=_read_json_object(inputs) if inputs else {},
                 replace_existing_run=force,
+                **({"admission_policy": "enqueue_if_busy"} if queue is True else {}),
             )
         )
         details = [

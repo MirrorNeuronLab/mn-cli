@@ -887,3 +887,9 @@ same request. Schedule commands accept `--node` and use the current revision.
 Owner commands pass through authenticated Core federation, using existing runtime
 credentials. Queuing survives CLI exit/restart; stale inventory grants no claim.
 Core and native SDK must advertise `exclusive_run_v1`. Deployment is separate.
+
+Manual starts default to immediate admission. `mn job start`, `mn blueprint run`
+and `mn run retry` accept `--queue` to wait for compatible capacity explicitly.
+`mn job relocate JOB --node NODE` moves an idle Job and its data using Core's
+fenced transfer. Pause schedules and finish resource cleanup first. Repeating
+an interrupted move resumes it; `--abort` is valid only before ownership commit.

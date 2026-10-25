@@ -113,6 +113,7 @@ def run_bundle(
     detached: bool = False,
     web_ui: bool = False,
     auto_schedule: bool = False,
+    queue: bool = False,
     schedule: Optional[str] = None,
     debug: bool = False,
     runtime_model_dependencies: RuntimeModelDependencies | None = None,
@@ -526,6 +527,7 @@ def run_bundle(
                 stable_job_id,
                 run_id=str(blueprint_run_id or ""),
                 inputs=config_overrides,
+                **({"admission_policy": "enqueue_if_busy"} if queue is True else {}),
             )
         )
         if started.get("status") == "queued":
