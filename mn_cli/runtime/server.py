@@ -38,6 +38,7 @@ from mn_sdk.runtime_config import (
     DEFAULT_WEB_UI_PORT as SDK_DEFAULT_WEB_UI_PORT,
 )
 from mn_cli.runtime.watchdog import launch_watchdog, watchdog_restart_settings
+from mn_cli.runtime import native_sdk_config
 from mn_cli.runtime.syncthing_bootstrap import SYNCTHING_LAN_ONLY_ENTRYPOINT_SCRIPT
 from mn_cli.config import CONFIG_FIELDS, CliConfig, parse_path
 from mn_cli.runtime.identity import resolve_identity, probe_core_identity, observe_core_identity
@@ -6341,10 +6342,14 @@ def _start_native_sdk_grpc_if_installed(
     )
     env["MN_NATIVE_SDK_GRPC_HOST"] = native_host
     env["MN_NATIVE_SDK_GRPC_PORT"] = native_port
+    env["OPENSHELL_GATEWAY_ENDPOINT"] = _openshell_gateway_endpoint(env)
 
     watchdog_status = check_status(NATIVE_SDK_GRPC_WATCHDOG_PID_FILE)
     child_status = check_status(NATIVE_SDK_GRPC_PID_FILE)
     if watchdog_status == 0:
+        if not native_sdk_config.matches(NATIVE_SDK_GRPC_WATCHDOG_PID_FILE, env):
+            restart_running = True
+            restart_reason = "native SDK gateway configuration changed or unrecorded"
         if (
             _wait_for_tcp(native_host, native_port, timeout_seconds=2.0)
             and not restart_running
@@ -6407,6 +6412,7 @@ def _start_native_sdk_grpc_if_installed(
     NATIVE_SDK_GRPC_WATCHDOG_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
     NATIVE_SDK_GRPC_WATCHDOG_PID_FILE.write_text(str(p_watchdog.pid))
     if _wait_for_tcp(native_host, native_port, timeout_seconds=10.0):
+        native_sdk_config.record(NATIVE_SDK_GRPC_WATCHDOG_PID_FILE, p_watchdog.pid, env)
         print_info(
             console, f"Native SDK gRPC watchdog is running (PID {p_watchdog.pid})."
         )

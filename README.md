@@ -99,8 +99,15 @@ shared-storage connection creates no new Core federation pair and tells the
 operator to correct the sidecars before retrying.
 
 Runtime startup readies the host-native SDK service before Core. Calling
-`mn runtime start` again reuses a healthy native service, preserving warm
-definition-scoped response engines while the remaining runtime is reconciled.
+`mn runtime start` again reuses a healthy native service when its effective
+OpenShell gateway configuration matches its watchdog launch receipt, preserving
+warm definition-scoped response engines. Changed or missing configuration
+receipts refresh only the native SDK service and watchdog with resolved settings.
+The private `MN_HOME/pids/native-sdk-grpc-watchdog.config.json` receipt binds a
+configuration fingerprint to its watchdog PID; it stores no environment dump or
+credentials. Existing services without a receipt refresh once at startup.
+Schedule startup/repair after active native work finishes when configuration
+needs refreshing; hiring itself never restarts the service.
 If reconciliation recreates Core, the CLI also restarts the local API so its
 gRPC client identity matches the recreated runtime.
 

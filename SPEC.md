@@ -123,6 +123,14 @@ selected remote node without exposing its LAN URL to the browser.
 
 ## Behavior Boundary
 
+Runtime startup resolves OpenShell gateway configuration before launching the
+native SDK watchdog. Reuse requires both a responsive native service and a
+versioned configuration fingerprint matching that watchdog PID. A missing,
+malformed, stale-PID or mismatched receipt refreshes only the native SDK service
+and watchdog during startup/repair. Explicit gateway endpoint overrides remain
+authoritative. The private receipt stores no raw environment or credentials;
+successful native readiness precedes recording it. Hiring never restarts services.
+
 OpenShell preparation resolves the submitting host's CLI from `~/.local/bin`
 or `PATH` before building images or registering sandboxes. A missing executable
 raises `MN_FAILED_PRECONDITION` with installation guidance; it is not a missing
