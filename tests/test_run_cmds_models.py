@@ -62,7 +62,7 @@ def isolated_mn_home(tmp_path, monkeypatch):
     )
 
 
-def test_manifest_for_model_validation_filters_dmr_models_for_fake_llm():
+def test_manifest_for_model_validation_excludes_all_live_models_for_fake_llm():
     manifest = {
         "runtime": {
             "models": {
@@ -77,7 +77,7 @@ def test_manifest_for_model_validation_filters_dmr_models_for_fake_llm():
         manifest, {"llm": {"mode": "fake"}}
     )
 
-    assert set(filtered["runtime"]["models"]) == {"external"}
+    assert filtered["runtime"]["models"] == {}
     assert set(manifest["runtime"]["models"]) == {"primary", "secondary", "external"}
 
 

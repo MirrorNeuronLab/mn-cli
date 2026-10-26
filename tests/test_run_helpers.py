@@ -1361,17 +1361,19 @@ def test_prepare_manifest_injects_docker_model_runner_llm_env_by_node_runtime(tm
 
     host_env = prepared["agents"]["nodes"][0]["config"]["environment"]
     sandbox_env = prepared["agents"]["nodes"][1]["config"]["environment"]
-    assert host_env["MN_LLM_PROVIDER"] == "litellm"
-    assert sandbox_env["MN_LLM_PROVIDER"] == "litellm"
+    assert host_env["MN_RUNTIME_MODEL_MANAGED"] == "1"
+    assert sandbox_env["MN_RUNTIME_MODEL_MANAGED"] == "1"
+    assert host_env["MN_LLM_PROVIDER"] == "docker_model_runner"
+    assert sandbox_env["MN_LLM_PROVIDER"] == "docker_model_runner"
     assert host_env["MN_LLM_MODEL"] == "docker.io/ai/gemma4:E2B"
     assert host_env["MN_LLM_RUNTIME_MODEL"] == "docker.io/ai/gemma4:E2B"
-    assert host_env["MN_LLM_API_BASE"] == "http://127.0.0.1:4000/v1"
-    assert sandbox_env["MN_LLM_API_BASE"] == "http://mn-litellm-proxy:4000/v1"
+    assert host_env["MN_LLM_API_BASE"] == "auto"
+    assert sandbox_env["MN_LLM_API_BASE"] == "auto"
     assert host_env["MN_LLM_CONTEXT_SIZE"] == "4096"
     assert host_env["MN_LLM_MAX_TOKENS"] == "800"
 
 
-def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_http_llm(tmp_path):
+def test_prepare_manifest_retains_managed_model_requirements_for_deferred_owner_preparation(tmp_path):
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     config_dir = bundle_dir / "config"
@@ -1446,22 +1448,17 @@ def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_h
 
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
 
-    assert prepared["required_services"] == [{"name": "vector-db"}]
-    assert prepared["runtime"]["models"] == {"service_model": {"provider": "nvidia_service", "model": "remote/model"}}
-    assert "model" not in prepared["runtime"]["bindings"]["startup_folder_watcher"]["workers"][0]
-    assert prepared["agents"]["nodes"][0]["requires_services"] == [{"name": "redis"}]
-    assert prepared["agents"]["nodes"][0]["placement_requirements"] == {
-        "models": [
-            {
-                "id": "remote-service-model",
-                "provider": "nvidia_service",
-                "service": {"name": "nvidia-service"},
-            }
-        ]
-    }
+    # A managed owner route must retain the declarations needed for admission
+    # and SDK first-use preparation, even when the authored endpoint is HTTP.
+    assert prepared["required_services"] == manifest["required_services"]
+    assert prepared["runtime"] == manifest["runtime"]
+    worker = prepared["agents"]["nodes"][0]
+    assert worker["requires_services"] == manifest["nodes"][0]["requires_services"]
+    assert worker["placement_requirements"] == manifest["nodes"][0]["placement_requirements"]
     env = prepared["agents"]["nodes"][0]["config"]["environment"]
-    assert env["MN_LLM_PROVIDER"] == "litellm"
-    assert env["MN_LLM_API_BASE"] == "http://mn-litellm-proxy:4000/v1"
+    assert env["MN_RUNTIME_MODEL_MANAGED"] == "1"
+    assert env["MN_LLM_PROVIDER"] == "docker_model_runner"
+    assert env["MN_LLM_API_BASE"] == "auto"
 
 
 def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_fake_llm(tmp_path):
@@ -1528,7 +1525,7 @@ def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_f
     assert prepared["agents"]["nodes"][0]["config"]["environment"]["MN_LLM_PROVIDER"] == "fake"
 
 
-def test_prepare_manifest_model_only_llm_config_does_not_request_scheduler_model(tmp_path):
+def test_prepare_manifest_model_only_llm_config_retains_first_use_preparation(tmp_path):
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     config_dir = bundle_dir / "config"
@@ -1551,7 +1548,8 @@ def test_prepare_manifest_model_only_llm_config_does_not_request_scheduler_model
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
 
     env = prepared["agents"]["nodes"][0]["config"]["environment"]
-    assert env["MN_LLM_PROVIDER"] == "litellm"
+    assert env["MN_RUNTIME_MODEL_MANAGED"] == "1"
+    assert env["MN_LLM_PROVIDER"] == "docker_model_runner"
     assert env["MN_LLM_MODEL"] == "default"
     assert "MN_LLM_RUNTIME_MODEL" not in env
 
