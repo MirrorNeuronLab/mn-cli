@@ -13,6 +13,7 @@ from mn_sdk.runtime_config import RuntimeConfig
 from mn_sdk.requirement_extras import split_requirement_extras
 from mn_sdk.native_host_submission import NATIVE_ENVIRONMENT_KEY, native_host_python_required
 from mn_cli.runtime.hostlocal_python_bridge import prepare_hostlocal_python_bridge
+from mn_cli.runtime.local_source_paths import rebase_local_source_requirement
 
 def doctor_bundle(
     bundle_path: str,
@@ -911,26 +912,7 @@ def _doctor_rebase_missing_local_sources(
 
 
 def _doctor_rebase_missing_local_source(package: str) -> str:
-    location, extras = split_requirement_extras(package)
-    candidate = Path(location).expanduser()
-    if not candidate.is_absolute() or candidate.exists():
-        return package
-
-    parts = candidate.parts
-    source_roots = _doctor_source_checkout_roots()
-    for segment in ("mn-skills", "mn-agents", "mn-python-sdk", "mn-cli", "mn-api"):
-        try:
-            index = parts.index(segment)
-        except ValueError:
-            continue
-        relative = Path(*parts[index:])
-        for root in source_roots:
-            replacement = root / relative
-            if replacement.is_dir() and replacement.joinpath("pyproject.toml").is_file():
-                return str(replacement) + extras
-            if replacement.is_file() and replacement.suffix == ".whl":
-                return str(replacement) + extras
-    return package
+    return rebase_local_source_requirement(package, _doctor_source_checkout_roots())
 
 
 def _doctor_source_checkout_roots() -> list[Path]:

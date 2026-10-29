@@ -445,6 +445,11 @@ HostLocal source staging, checkout-path rebasing, and declared-version lookup
 resolve the source location separately from its optional dependency extras.
 Staged install arguments retain the extras; trusted source-root restrictions
 still apply to the resolved location.
+Cross-machine checkout rebasing parses POSIX and Windows drive/UNC paths
+independently of the receiving OS. It resolves a unique project or wheel by its
+checkout-relative suffix without a repository-name allowlist, including Membrane
+context SDK dependencies. Missing, ambiguous, traversing or checkout-escaping
+sources remain unresolved for normal dependency validation.
 Local-only, OS-bound HostLocal Python workers prepare native dependencies and a
 separate Core SDK proxy. Native invocation uses the SDK's bounded, scoped host
 Python protocol, preserving Core supervision and cancellation. Dynamic skill

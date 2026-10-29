@@ -294,6 +294,11 @@ Local source requirements such as `/workspace/mn-python-sdk[context]` are
 staged into that cache with their extras and declared source version preserved.
 The extras are separate from the source path when checking trusted roots or
 rebasing a checkout path for a selected runtime node.
+Cross-machine preparation accepts POSIX paths and Windows drive/UNC paths,
+resolving a unique Python project or wheel inside the execution node's checkout.
+Repository names and submitter home directories are not fixed; Membrane context
+SDK sources follow the same staging path as other blueprint dependencies.
+Ambiguous matches, traversal and symlinks outside that checkout are not rebased.
 When a local-only workflow also requires a host OS, HostLocal Python workers run
 on the native host through the SDK service. Core uses a separate prepared SDK
 proxy environment for supervision and cancellation. Source skills retain their
