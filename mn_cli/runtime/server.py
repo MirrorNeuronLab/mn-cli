@@ -63,8 +63,6 @@ logger = configure_logging("mn-cli", CliConfig.from_env().log_path)
 GRPC_ADMIN_TOKEN_ENV = "MN_GRPC_ADMIN_TOKEN"
 GRPC_AUTH_TOKEN_FILE_ENV = "MN_GRPC_AUTH_TOKEN_FILE"
 GRPC_ADMIN_TOKEN_FILE_ENV = "MN_GRPC_ADMIN_TOKEN_FILE"
-FIXED_GRPC_AUTH_TOKEN = "mirror_neuron_password"
-FIXED_GRPC_ADMIN_TOKEN = "mirror_neuron_password_admin"
 DEV_REDIS_PASSWORD = "mirror_neuron_redis_dev"
 
 
@@ -1077,11 +1075,13 @@ def _resolve_mn_cookie() -> str:
 
 
 def _resolve_grpc_auth_token() -> str:
-    return FIXED_GRPC_AUTH_TOKEN
+    from mn_cli.runtime.credentials import resolve_grpc_token
+    return resolve_grpc_token(DIR, "auth")
 
 
 def _resolve_grpc_admin_token() -> str:
-    return FIXED_GRPC_ADMIN_TOKEN
+    from mn_cli.runtime.credentials import resolve_grpc_token
+    return resolve_grpc_token(DIR, "admin")
 
 
 def _runtime_env_name(env: Optional[dict[str, str]] = None) -> str:
@@ -1148,9 +1148,9 @@ def _ensure_runtime_grpc_tokens(
     env: dict[str, str], *, persist_compose: bool = False
 ) -> dict[str, str]:
     resolved = dict(env)
-    fixed_tokens = {
-        "MN_GRPC_AUTH_TOKEN": FIXED_GRPC_AUTH_TOKEN,
-        GRPC_ADMIN_TOKEN_ENV: FIXED_GRPC_ADMIN_TOKEN,
+    installation_tokens = {
+        "MN_GRPC_AUTH_TOKEN": _resolve_grpc_auth_token(),
+        GRPC_ADMIN_TOKEN_ENV: _resolve_grpc_admin_token(),
     }
     stale_token_keys = {
         "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN",
@@ -1159,17 +1159,17 @@ def _ensure_runtime_grpc_tokens(
     }
     for key in stale_token_keys:
         resolved.pop(key, None)
-    resolved.update(fixed_tokens)
+    resolved.update(installation_tokens)
     if persist_compose:
-        _write_env_file_values(RUNTIME_COMPOSE_ENV, fixed_tokens)
+        _write_env_file_values(RUNTIME_COMPOSE_ENV, installation_tokens)
         _remove_env_file_keys(RUNTIME_COMPOSE_ENV, stale_token_keys)
     return resolved
 
 
 def _grpc_tokens_from_handshake(handshake: Optional[dict]) -> dict[str, str]:
     return {
-        "MN_GRPC_AUTH_TOKEN": FIXED_GRPC_AUTH_TOKEN,
-        GRPC_ADMIN_TOKEN_ENV: FIXED_GRPC_ADMIN_TOKEN,
+        "MN_GRPC_AUTH_TOKEN": _resolve_grpc_auth_token(),
+        GRPC_ADMIN_TOKEN_ENV: _resolve_grpc_admin_token(),
     }
 
 
@@ -2064,8 +2064,8 @@ def _recreate_compose_core_for_shared_storage(env: dict[str, str]) -> None:
 
 def _runtime_grpc_tokens_from_running_container() -> dict[str, str]:
     return {
-        "MN_GRPC_AUTH_TOKEN": FIXED_GRPC_AUTH_TOKEN,
-        GRPC_ADMIN_TOKEN_ENV: FIXED_GRPC_ADMIN_TOKEN,
+        "MN_GRPC_AUTH_TOKEN": _resolve_grpc_auth_token(),
+        GRPC_ADMIN_TOKEN_ENV: _resolve_grpc_admin_token(),
     }
 
 
@@ -2589,8 +2589,8 @@ def _running_core_has_stale_grpc_tokens(
     container_name: str = "mirror-neuron-core",
 ) -> bool:
     expected = {
-        "MN_GRPC_AUTH_TOKEN": FIXED_GRPC_AUTH_TOKEN,
-        GRPC_ADMIN_TOKEN_ENV: FIXED_GRPC_ADMIN_TOKEN,
+        "MN_GRPC_AUTH_TOKEN": _resolve_grpc_auth_token(),
+        GRPC_ADMIN_TOKEN_ENV: _resolve_grpc_admin_token(),
     }
     return any(
         _docker_container_env_value(container_name, key) != value
@@ -2816,8 +2816,8 @@ def _network_core_env(
             "MN_BUNDLE_CACHE_DIR": runtime_bundle_cache_dir,
             "MN_DIST_PORT": str(dist_port),
             "MN_COOKIE": _derive_network_secret(token, "cookie"),
-            "MN_GRPC_AUTH_TOKEN": FIXED_GRPC_AUTH_TOKEN,
-            GRPC_ADMIN_TOKEN_ENV: FIXED_GRPC_ADMIN_TOKEN,
+            "MN_GRPC_AUTH_TOKEN": _resolve_grpc_auth_token(),
+            GRPC_ADMIN_TOKEN_ENV: _resolve_grpc_admin_token(),
             "MN_NATIVE_SDK_GRPC_HOST": env.get("MN_NATIVE_SDK_GRPC_HOST") or "0.0.0.0",
             "MN_NATIVE_SDK_GRPC_PORT": _valid_port_text(
                 str(env.get("MN_NATIVE_SDK_GRPC_PORT") or DEFAULT_NATIVE_SDK_GRPC_PORT),
@@ -6959,13 +6959,13 @@ def _build_core_docker_run_command(
     cmd.extend(
         [
             "-e",
-            f"MN_GRPC_AUTH_TOKEN={env.get('MN_GRPC_AUTH_TOKEN', FIXED_GRPC_AUTH_TOKEN)}",
+            f"MN_GRPC_AUTH_TOKEN={env.get('MN_GRPC_AUTH_TOKEN') or _resolve_grpc_auth_token()}",
         ]
     )
     cmd.extend(
         [
             "-e",
-            f"{GRPC_ADMIN_TOKEN_ENV}={env.get(GRPC_ADMIN_TOKEN_ENV, FIXED_GRPC_ADMIN_TOKEN)}",
+            f"{GRPC_ADMIN_TOKEN_ENV}={env.get(GRPC_ADMIN_TOKEN_ENV) or _resolve_grpc_admin_token()}",
         ]
     )
     cmd.extend(["-e", f"MN_NETWORK_JOIN_TOKEN={env['MN_NETWORK_JOIN_TOKEN']}"])
@@ -7199,6 +7199,24 @@ def _build_core_docker_run_command(
 
 
 def _start_server(
+    ip: str = None,
+    *,
+    token: Optional[str] = None,
+    host: Optional[str] = None,
+    grpc_port: int = int(DEFAULT_GRPC_PORT),
+    dist_port: int = int(DEFAULT_DIST_PORT),
+    redis_port: Optional[int] = None,
+    docker_network_mode: Optional[str] = None,
+    docker_network_name: Optional[str] = None,
+):
+    from mn_cli.runtime.lifecycle import runtime_start_guard
+    with runtime_start_guard(DIR):
+        return _start_server_unlocked(ip, token=token, host=host, grpc_port=grpc_port,
+            dist_port=dist_port, redis_port=redis_port, docker_network_mode=docker_network_mode,
+            docker_network_name=docker_network_name)
+
+
+def _start_server_unlocked(
     ip: str = None,
     *,
     token: Optional[str] = None,

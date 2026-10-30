@@ -713,3 +713,12 @@ def test_terminal_delivery_passes_physical_result_reference_and_does_not_fail_an
     monkeypatch.setattr(run_cmds.client, 'get_run', lambda _: (_ for _ in ()).throw(OSError('transport unavailable')))
     assert run_cmds._materialize_terminal_run_outputs(storage, 'cli-label', 'completed') is False
     assert 'Analysis completed' in capsys.readouterr().err
+
+
+@pytest.fixture(autouse=True)
+def isolated_relay_installation(tmp_path, monkeypatch):
+    home = tmp_path / "relay-installation"
+    home.mkdir()
+    (home / "grpc_auth.token").write_text("isolated-cli-credential")
+    monkeypatch.setenv("MN_HOME", str(home))
+    monkeypatch.setattr("mn_sdk.blueprint_support.relay_ownership.process_identity", lambda pid: "fixture-relay")

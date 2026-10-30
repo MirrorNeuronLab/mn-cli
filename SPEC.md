@@ -1,5 +1,22 @@
 # MirrorNeuron CLI Specification
 
+## Fresh installation and observer ownership
+
+Core auth/admin credentials live in private `grpc_auth.token` and
+`grpc_admin.token` files under `MN_HOME`. They are generated per installation,
+remain stable on ordinary restart, and replace historical fixed defaults.
+Compose, direct Docker starts, API/native helpers and SDK clients consume the
+same credentials. Federation retains each node's own credential authority.
+Runtime start and installer reset serialize through an installation lifecycle
+lock outside the removable tree. Only the owning installer may start the fresh
+runtime while reset is in progress.
+
+Detached output relays carry the SDK installation fingerprint and use an OS
+execution lock. Permanent deletion/revocation ends observation; temporary
+transport failures reconnect without a run lifetime cutoff. PID metadata also
+records process birth identity.
+
+
 The CLI requires Python 3.12 or newer. The managed runtime and contributor/CI toolchains use Python 3.12, matching Core HostLocal, the SDK, and the API.
 
 Blueprint preflight delegates placement mode and single-node eligibility to the

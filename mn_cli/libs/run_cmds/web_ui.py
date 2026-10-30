@@ -335,6 +335,10 @@ def _start_background_event_relay_if_needed(
     if max_seconds is not None:
         command.extend(["--max-seconds", f"{max_seconds:g}"])
 
+    from mn_sdk.blueprint_support.relay_ownership import relay_owner, process_identity
+    ownership = relay_owner(dict(os.environ))
+    if ownership:
+        command.extend(["--owner-home", ownership["home"], "--owner-stamp", ownership["stamp"]])
     from mn_cli.runtime.idle_sleep import awake_command
 
     command = awake_command(command)
@@ -350,6 +354,8 @@ def _start_background_event_relay_if_needed(
         )
     relay_info = {
         "run_id": run_id,
+        "ownership": ownership,
+        "process_identity": process_identity(process.pid),
         "pid": process.pid,
         "poll_seconds": poll_seconds,
         "max_seconds": max_seconds,

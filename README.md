@@ -1,5 +1,17 @@
 # MirrorNeuron CLI
 
+## Starting after a full reset
+
+Close OtterDesk, run `install.sh --reset` and confirm `YES`, then launch OtterDesk
+with `--reset`. Runtime and desktop resets remain separate. Runtime reset removes
+managed state, downloads and owned host processes; desktop reset removes its own
+state and conversation-model assets. Source checkouts and external documents and
+outputs remain intact. Normal `mn runtime start` preserves state and credentials.
+Core credentials are generated per installation and shared with API/native/SDK
+clients through private files; installer reset rotates them. Concurrent startup
+is rejected while another start or reset owns the lifecycle lock.
+
+
 The CLI requires Python 3.12 or newer. The managed runtime and contributor/CI toolchains use Python 3.12, matching Core HostLocal, the SDK, and the API.
 
 OpenShell worker policies may declare `policy_config_bindings: true` and bind

@@ -348,14 +348,14 @@ def test_resolve_grpc_auth_token_generates_persistent_token(tmp_path, mocker):
 
     token = _resolve_grpc_auth_token()
 
-    assert token == "mirror_neuron_password"
-    assert not (token_dir / "grpc_auth.token").exists()
+    assert len(token) == 64 and token != "mirror_neuron_password"
+    assert (token_dir / "grpc_auth.token").read_text().strip() == token
     assert _resolve_grpc_auth_token() == token
 
 def test_resolve_grpc_auth_token_prefers_env(monkeypatch):
     monkeypatch.setenv("MN_GRPC_AUTH_TOKEN", "auth-token")
 
-    assert _resolve_grpc_auth_token() == "mirror_neuron_password"
+    assert _resolve_grpc_auth_token() == "auth-token"
 
 def test_runtime_blueprint_env_updates_prefers_host_home_dir(tmp_path):
     host_home = tmp_path / "mn-home"
@@ -994,19 +994,19 @@ def test_resolve_grpc_admin_token_generates_persistent_token(tmp_path, mocker):
 
     token = _resolve_grpc_admin_token()
 
-    assert token == "mirror_neuron_password_admin"
-    assert not (token_dir / "grpc_admin.token").exists()
+    assert len(token) == 64 and token != "mirror_neuron_password_admin"
+    assert (token_dir / "grpc_admin.token").read_text().strip() == token
     assert _resolve_grpc_admin_token() == token
 
 def test_resolve_grpc_admin_token_prefers_env(monkeypatch):
     monkeypatch.setenv("MN_GRPC_ADMIN_TOKEN", "admin-token")
 
-    assert _resolve_grpc_admin_token() == "mirror_neuron_password_admin"
+    assert _resolve_grpc_admin_token() == "admin-token"
 
 def test_resolve_grpc_admin_token_ignores_legacy_env(monkeypatch):
     monkeypatch.setenv("MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN", "legacy-admin-token")
 
-    assert _resolve_grpc_admin_token() == "mirror_neuron_password_admin"
+    assert len(_resolve_grpc_admin_token()) == 64
 
 def test_resolve_redis_password_uses_fixed_dev_password():
     assert server_cmds._resolve_redis_password({"MN_ENV": "dev"}) == "mirror_neuron_redis_dev"
@@ -1071,13 +1071,13 @@ def test_start_server_persists_env_grpc_tokens_for_later_cli_process(mocker, mon
         cmd[:5] for cmd in commands if cmd[:3] == ["docker", "run", "-d"]
     )
     docker_run = next(cmd for cmd in commands if cmd[:3] == ["docker", "run", "-d"])
-    assert "MN_GRPC_AUTH_TOKEN=mirror_neuron_password" in docker_run
-    assert "MN_GRPC_ADMIN_TOKEN=mirror_neuron_password_admin" in docker_run
+    assert f"MN_GRPC_AUTH_TOKEN={_resolve_grpc_auth_token()}" in docker_run
+    assert f"MN_GRPC_ADMIN_TOKEN={_resolve_grpc_admin_token()}" in docker_run
     assert not any(value.startswith("MN_GRPC_AUTH_TOKEN_FILE=") for value in docker_run)
     assert not any(value.startswith("MN_GRPC_ADMIN_TOKEN_FILE=") for value in docker_run)
     assert not any(value.startswith("MN_ARTIFACT_AUTH_TOKEN=") for value in docker_run)
-    assert not (server_cmds.DIR / "grpc_auth.token").exists()
-    assert not (server_cmds.DIR / "grpc_admin.token").exists()
+    assert (server_cmds.DIR / "grpc_auth.token").read_text().strip() == _resolve_grpc_auth_token()
+    assert (server_cmds.DIR / "grpc_admin.token").read_text().strip() == _resolve_grpc_admin_token()
 
 def test_start_server_refreshes_token_files_from_compose_runtime_env(mocker, tmp_path):
     compose_file = tmp_path / "docker-compose.yml"
@@ -1105,8 +1105,8 @@ def test_start_server_refreshes_token_files_from_compose_runtime_env(mocker, tmp
 
     assert (server_cmds.DIR / "grpc_auth.token").read_text().strip() == "stale-auth-token"
     assert (server_cmds.DIR / "grpc_admin.token").read_text().strip() == "stale-admin-token"
-    assert "MN_GRPC_AUTH_TOKEN=mirror_neuron_password" in compose_env.read_text()
-    assert "MN_GRPC_ADMIN_TOKEN=mirror_neuron_password_admin" in compose_env.read_text()
+    assert f"MN_GRPC_AUTH_TOKEN={_resolve_grpc_auth_token()}" in compose_env.read_text()
+    assert f"MN_GRPC_ADMIN_TOKEN={_resolve_grpc_admin_token()}" in compose_env.read_text()
     assert "MN_GRPC_AUTH_TOKEN_FILE=" not in compose_env.read_text()
     assert "MN_GRPC_ADMIN_TOKEN_FILE=" not in compose_env.read_text()
 
@@ -1121,8 +1121,8 @@ def test_runtime_grpc_tokens_from_running_container_reads_normal_and_admin_token
     )
 
     assert server_cmds._runtime_grpc_tokens_from_running_container() == {
-        "MN_GRPC_AUTH_TOKEN": "mirror_neuron_password",
-        "MN_GRPC_ADMIN_TOKEN": "mirror_neuron_password_admin",
+        "MN_GRPC_AUTH_TOKEN": _resolve_grpc_auth_token(),
+        "MN_GRPC_ADMIN_TOKEN": _resolve_grpc_admin_token(),
     }
 
 def test_runtime_grpc_tokens_from_running_container_refreshes_compose_env(mocker):
@@ -1141,11 +1141,11 @@ def test_runtime_grpc_tokens_from_running_container_refreshes_compose_env(mocker
 
     server_cmds._ensure_runtime_grpc_tokens(tokens, persist_compose=True)
 
-    assert not (server_cmds.DIR / "grpc_auth.token").exists()
-    assert not (server_cmds.DIR / "grpc_admin.token").exists()
+    assert (server_cmds.DIR / "grpc_auth.token").read_text().strip() == _resolve_grpc_auth_token()
+    assert (server_cmds.DIR / "grpc_admin.token").read_text().strip() == _resolve_grpc_admin_token()
     compose_text = compose_env.read_text(encoding="utf-8")
-    assert "MN_GRPC_AUTH_TOKEN=mirror_neuron_password" in compose_text
-    assert "MN_GRPC_ADMIN_TOKEN=mirror_neuron_password_admin" in compose_text
+    assert f"MN_GRPC_AUTH_TOKEN={_resolve_grpc_auth_token()}" in compose_text
+    assert f"MN_GRPC_ADMIN_TOKEN={_resolve_grpc_admin_token()}" in compose_text
 
 def test_runtime_base_env_rejects_retired_artifact_auth_token(monkeypatch):
     compose_env = server_cmds.RUNTIME_COMPOSE_ENV
@@ -2213,8 +2213,8 @@ def test_start_server_already_running(mocker, tmp_path):
     _start_server()
 
     mock_container_tokens.assert_called_once()
-    assert not (server_cmds.DIR / "grpc_auth.token").exists()
-    assert not (server_cmds.DIR / "grpc_admin.token").exists()
+    assert (server_cmds.DIR / "grpc_auth.token").read_text().strip() == _resolve_grpc_auth_token()
+    assert (server_cmds.DIR / "grpc_admin.token").read_text().strip() == _resolve_grpc_admin_token()
     mock_start_web.assert_called_once()
     mock_start_native_sdk.assert_called_once()
     assert mock_start_native_sdk.call_args.kwargs == {}
@@ -2315,13 +2315,13 @@ def test_start_server_join_compose_imports_primary_grpc_tokens(mocker, tmp_path)
     _start_server(ip="192.168.4.20", token="join-token")
 
     compose_up = next(call for call in mock_run.call_args_list if call.args[0] == runtime_compose_cmd("up", "-d"))
-    assert compose_up.kwargs["env"]["MN_GRPC_AUTH_TOKEN"] == "mirror_neuron_password"
-    assert compose_up.kwargs["env"]["MN_GRPC_ADMIN_TOKEN"] == "mirror_neuron_password_admin"
-    assert not (server_cmds.DIR / "grpc_auth.token").exists()
-    assert not (server_cmds.DIR / "grpc_admin.token").exists()
+    assert compose_up.kwargs["env"]["MN_GRPC_AUTH_TOKEN"] == _resolve_grpc_auth_token()
+    assert compose_up.kwargs["env"]["MN_GRPC_ADMIN_TOKEN"] == _resolve_grpc_admin_token()
+    assert (server_cmds.DIR / "grpc_auth.token").read_text().strip() == _resolve_grpc_auth_token()
+    assert (server_cmds.DIR / "grpc_admin.token").read_text().strip() == _resolve_grpc_admin_token()
     compose_text = compose_env.read_text(encoding="utf-8")
-    assert "MN_GRPC_AUTH_TOKEN=mirror_neuron_password" in compose_text
-    assert "MN_GRPC_ADMIN_TOKEN=mirror_neuron_password_admin" in compose_text
+    assert f"MN_GRPC_AUTH_TOKEN={_resolve_grpc_auth_token()}" in compose_text
+    assert f"MN_GRPC_ADMIN_TOKEN={_resolve_grpc_admin_token()}" in compose_text
 
 def test_start_server_join_docker_imports_primary_grpc_tokens(mocker, tmp_path):
     redis_password = "remote-redis-password"
@@ -2355,10 +2355,10 @@ def test_start_server_join_docker_imports_primary_grpc_tokens(mocker, tmp_path):
     _start_server(ip="192.168.4.20", token="join-token")
 
     docker_run = next(cmd for cmd in commands if cmd[:3] == ["docker", "run", "-d"])
-    assert "MN_GRPC_AUTH_TOKEN=mirror_neuron_password" in docker_run
-    assert "MN_GRPC_ADMIN_TOKEN=mirror_neuron_password_admin" in docker_run
-    assert not (server_cmds.DIR / "grpc_auth.token").exists()
-    assert not (server_cmds.DIR / "grpc_admin.token").exists()
+    assert f"MN_GRPC_AUTH_TOKEN={_resolve_grpc_auth_token()}" in docker_run
+    assert f"MN_GRPC_ADMIN_TOKEN={_resolve_grpc_admin_token()}" in docker_run
+    assert (server_cmds.DIR / "grpc_auth.token").read_text().strip() == _resolve_grpc_auth_token()
+    assert (server_cmds.DIR / "grpc_admin.token").read_text().strip() == _resolve_grpc_admin_token()
 
 def test_start_network_seed_uses_primary_persisted_grpc_tokens(mocker, monkeypatch):
     monkeypatch.setenv("MN_GRPC_AUTH_TOKEN", "primary-auth-token")
@@ -2376,10 +2376,10 @@ def test_start_network_seed_uses_primary_persisted_grpc_tokens(mocker, monkeypat
 
     assert token
     env = start_core.call_args.args[0]
-    assert env["MN_GRPC_AUTH_TOKEN"] == "mirror_neuron_password"
-    assert env["MN_GRPC_ADMIN_TOKEN"] == "mirror_neuron_password_admin"
-    assert not (server_cmds.DIR / "grpc_auth.token").exists()
-    assert not (server_cmds.DIR / "grpc_admin.token").exists()
+    assert env["MN_GRPC_AUTH_TOKEN"] == _resolve_grpc_auth_token()
+    assert env["MN_GRPC_ADMIN_TOKEN"] == _resolve_grpc_admin_token()
+    assert (server_cmds.DIR / "grpc_auth.token").read_text().strip() == _resolve_grpc_auth_token()
+    assert (server_cmds.DIR / "grpc_admin.token").read_text().strip() == _resolve_grpc_admin_token()
 
 def test_start_server_existing_api_starts_missing_compose_core(mocker, tmp_path):
     mocker.patch('mn_cli.server_cmds.API_PID_FILE', tmp_path / "api.pid")
@@ -2462,11 +2462,11 @@ def test_start_server_existing_api_recreates_compose_core_with_stale_grpc_tokens
         for item in calls
         if item[0] == runtime_compose_cmd("up", "-d", "--force-recreate", "redis", "mirror-neuron-core")
     )
-    assert compose_up[1]["env"]["MN_GRPC_AUTH_TOKEN"] == server_cmds.FIXED_GRPC_AUTH_TOKEN
-    assert compose_up[1]["env"]["MN_GRPC_ADMIN_TOKEN"] == server_cmds.FIXED_GRPC_ADMIN_TOKEN
+    assert compose_up[1]["env"]["MN_GRPC_AUTH_TOKEN"] == _resolve_grpc_auth_token()
+    assert compose_up[1]["env"]["MN_GRPC_ADMIN_TOKEN"] == _resolve_grpc_admin_token()
     compose_text = compose_env.read_text(encoding="utf-8")
-    assert "MN_GRPC_AUTH_TOKEN=mirror_neuron_password" in compose_text
-    assert "MN_GRPC_ADMIN_TOKEN=mirror_neuron_password_admin" in compose_text
+    assert f"MN_GRPC_AUTH_TOKEN={_resolve_grpc_auth_token()}" in compose_text
+    assert f"MN_GRPC_ADMIN_TOKEN={_resolve_grpc_admin_token()}" in compose_text
     start_api.assert_called_once()
     assert start_api.call_args.kwargs == {
         "restart_running": True,
@@ -2489,8 +2489,8 @@ def test_start_server_existing_api_recreates_only_for_invalid_identity(mocker, t
     mocker.patch(
         'mn_cli.server_cmds._docker_container_env_value',
         side_effect=lambda _name, key: {
-            "MN_GRPC_AUTH_TOKEN": server_cmds.FIXED_GRPC_AUTH_TOKEN,
-            "MN_GRPC_ADMIN_TOKEN": server_cmds.FIXED_GRPC_ADMIN_TOKEN,
+            "MN_GRPC_AUTH_TOKEN": _resolve_grpc_auth_token(),
+            "MN_GRPC_ADMIN_TOKEN": _resolve_grpc_admin_token(),
         }.get(key),
     )
     mocker.patch('mn_cli.server_cmds._start_api_if_installed')
@@ -2966,8 +2966,8 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
     assert "MN_CLUSTER_NODES=mirror_neuron@192.168.4.99" in compose_env_text
     assert "MN_NETWORK_REDIS_HOST=192.168.4.99" in compose_env_text
     assert "MN_NETWORK_REDIS_PORT=56379" in compose_env_text
-    assert "MN_GRPC_AUTH_TOKEN=mirror_neuron_password" in compose_env_text
-    assert "MN_GRPC_ADMIN_TOKEN=mirror_neuron_password_admin" in compose_env_text
+    assert f"MN_GRPC_AUTH_TOKEN={_resolve_grpc_auth_token()}" in compose_env_text
+    assert f"MN_GRPC_ADMIN_TOKEN={_resolve_grpc_admin_token()}" in compose_env_text
     assert "MN_GRPC_AUTH_TOKEN_FILE=" not in compose_env_text
     assert "MN_GRPC_ADMIN_TOKEN_FILE=" not in compose_env_text
     assert "MN_COOKIE=" in compose_env_text
@@ -3177,15 +3177,15 @@ def test_start_server_preserves_persisted_join_profile_on_restart(mocker, tmp_pa
     compose_call = next(item for item in calls if item[0] == runtime_compose_cmd("up", "-d"))
     env = compose_call[1]["env"]
     assert env["MN_NETWORK_JOIN_TOKEN"] == "join-token"
-    assert env["MN_GRPC_AUTH_TOKEN"] == "mirror_neuron_password"
-    assert env["MN_GRPC_ADMIN_TOKEN"] == "mirror_neuron_password_admin"
+    assert env["MN_GRPC_AUTH_TOKEN"] == _resolve_grpc_auth_token()
+    assert env["MN_GRPC_ADMIN_TOKEN"] == _resolve_grpc_admin_token()
     assert env["MN_NODE_NAME"] == "mirror_neuron@192.168.4.173"
     assert env["MN_CLUSTER_NODES"] == "mirror_neuron@192.168.4.35"
     assert env["MN_NETWORK_REDIS_HOST"] == "192.168.4.35"
     assert env["MN_NETWORK_REDIS_PORT"] == "56381"
     assert env["MN_REDIS_URL"] == f"redis://:{redis_password}@192.168.4.35:56381/0"
-    assert not (server_cmds.DIR / "grpc_auth.token").exists()
-    assert not (server_cmds.DIR / "grpc_admin.token").exists()
+    assert (server_cmds.DIR / "grpc_auth.token").read_text().strip() == _resolve_grpc_auth_token()
+    assert (server_cmds.DIR / "grpc_admin.token").read_text().strip() == _resolve_grpc_admin_token()
     ensure_redis.assert_not_called()
 
 
@@ -3664,8 +3664,8 @@ def test_start_server_passes_slack_env_to_docker(mocker, tmp_path, monkeypatch):
     runs_root_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_RUNS_ROOT="))
     bundle_cache_env = next(value for flag, value in zip(docker_run, docker_run[1:]) if flag == "-e" and value.startswith("MN_BUNDLE_CACHE_DIR="))
     assert cookie_env != "MN_COOKIE=mirrorneuron"
-    assert auth_env == "MN_GRPC_AUTH_TOKEN=mirror_neuron_password"
-    assert admin_env == "MN_GRPC_ADMIN_TOKEN=mirror_neuron_password_admin"
+    assert auth_env == f"MN_GRPC_AUTH_TOKEN={_resolve_grpc_auth_token()}"
+    assert admin_env == f"MN_GRPC_ADMIN_TOKEN={_resolve_grpc_admin_token()}"
     assert not any(
         value.startswith("MN_GRPC_AUTH_TOKEN_FILE=")
         for flag, value in zip(docker_run, docker_run[1:])
@@ -4213,3 +4213,9 @@ def test_print_service_endpoints_shows_advertised_cluster_host(mocker, monkeypat
     assert "redis://192.168.4.173:56379/0" not in rendered
     assert "Redis and Erlang cluster traffic use Docker internal networking." not in rendered
     assert "0.0.0.0" not in rendered
+
+
+@pytest.fixture(autouse=True)
+def injected_lifecycle_guard(monkeypatch):
+    from contextlib import nullcontext
+    monkeypatch.setattr("mn_cli.runtime.lifecycle.runtime_start_guard", lambda home: nullcontext())
