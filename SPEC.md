@@ -496,7 +496,7 @@ placement before submission without pulling model artifacts, including with
 `default` remains blueprint-owned intent; the runtime uses the operator-selected
 registry default, otherwise traversing medium → small → nano: Nemotron on a
 healthy 48 GB-or-above accelerator, Bonsai2 PTQ1_0 on a 24 GB-or-above
-accelerator, then Gemma. Integrated/shared GPU memory counts toward the same
+accelerator, then Nemotron 3.5 Bolt E4B Q4_K_M. Integrated/shared GPU memory counts toward the same
 tier; CPU-only host RAM does not. Explicit catalog declarations
 keep their exact artifact identity. Debug launch output reports deferred model
 policies, selected workflow placement, and complete DockerWorker build details;

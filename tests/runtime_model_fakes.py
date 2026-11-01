@@ -9,18 +9,20 @@ from typing import Any
 from mn_cli.libs import run_cmds
 from mn_sdk import BlueprintModelOps
 from mn_sdk.model_access import runtime_model_gateway_name
+from mn_sdk.model_catalog import load_builtin_model_catalog_document
 
 
 def fake_model_catalog() -> dict[str, dict[str, Any]]:
     """Return the smallest catalog that exercises adaptive foundational LLMs."""
 
     entries = [
+        load_builtin_model_catalog_document().entry("nano"),
         {
             "id": "gemma4:e2b",
             "provider": "docker_model_runner",
             "model": "docker.io/ai/gemma4:E2B",
             "api_model": "docker.io/ai/gemma4:E2B",
-            "aliases": ["nano", "gemma4"],
+            "aliases": ["gemma4"],
             "backend": "llama.cpp",
             "context_size": 4096,
             "requirements": {

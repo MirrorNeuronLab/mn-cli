@@ -351,7 +351,7 @@ def test_injected_cluster_run_defers_models_until_first_use(
     """Real launch preserves placement and model intent without DMR side effects."""
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     cluster = fake_runtime_model_cluster_factory(include_spark=include_spark)
-    installed = {"nemotron-3.5-lightning:latest"} if include_spark else {"docker.io/ai/gemma4:E2B"}
+    installed = {"nemotron-3.5-lightning:latest"} if include_spark else {"nemotron-3.5-bolt-e4b:q4_k_m"}
     if already_installed:
         cluster.installed_by_node[expected_node] = installed
 

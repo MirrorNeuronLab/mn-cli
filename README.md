@@ -166,7 +166,7 @@ LiteLLM route is live and `installed` while route reconciliation is pending;
 registry ownership is not presented as a health state.
 Add `--default` with an explicit model or file to make that model the logical
 default ahead of the built-in medium → small → nano selection chain (Nemotron 3.5 Lightning at
-48 GB+, Bonsai2 PTQ1_0 at 24 GB+, and Gemma4 below that). Provider files
+48 GB+, Bonsai2 PTQ1_0 at 24 GB+, and Nemotron 3.5 Bolt E4B below that). Provider files
 used with `--default` must contain exactly one model.
 
 Remote provider fixtures and default-override tests live in
@@ -258,7 +258,7 @@ Run the focused gate from this workspace:
 
 The runtime-selection scenarios are:
 
-- a local-only 16 GB Apple node validates the portable Gemma fallback policy;
+- a local-only 16 GB Apple node validates the portable Bolt E4B fallback policy;
 - a 24–47 GB VRAM or integrated-memory node selects Bonsai2 through Prism-backed DMR;
 - adding a healthy 128 GB CUDA node validates that Nemotron is feasible;
 - already-installed remote models remain usable without a second install;

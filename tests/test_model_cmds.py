@@ -854,7 +854,7 @@ def test_model_show_without_argument_returns_entire_static_catalog(mocker):
     models = cli_data(result)["models"]
     assert {model["id"] for model in models} == set(model_cmds.load_model_catalog())
     assert {model["id"] for model in models if model["default"]} == {
-        "gemma4:e2b", "bonsai2:ptq1_0", "nemotron-3.5-lightning:latest"
+        "nemotron-3.5-bolt-e4b:q4_k_m", "bonsai2:ptq1_0", "nemotron-3.5-lightning:latest"
     }
 
 
@@ -1823,7 +1823,7 @@ def test_model_add_bare_default_selects_feasible_cluster_model(mocker, remote):
     mocker.patch("mn_cli.libs.model_cmds._install_model_on_cluster_node", side_effect=install)
     result = runner.invoke(app, ["model", "add", "--default", "--json"])
     assert result.exit_code == 0, result.stdout
-    expected = "nemotron-3.5-lightning:latest" if remote else "gemma4:e2b"
+    expected = "nemotron-3.5-lightning:latest" if remote else "nemotron-3.5-bolt-e4b:q4_k_m"
     assert installed == [(expected, "spark" if remote else "local")]
     assert get_registered_model(expected) is not None
     assert not load_model_registry().get("default_model_id")
@@ -1838,7 +1838,7 @@ def test_model_add_bare_default_local_uses_portable_fallback(mocker):
     mocker.patch("mn_cli.libs.model_cmds.record_manual_model_install")
     result = runner.invoke(app, ["model", "add", "--default", "--local", "--json"])
     assert result.exit_code == 0, result.stdout
-    assert cli_data(result)["model"]["id"] == "gemma4:e2b"
+    assert cli_data(result)["model"]["id"] == "nemotron-3.5-bolt-e4b:q4_k_m"
     assert not load_model_registry().get("default_model_id")
 
 

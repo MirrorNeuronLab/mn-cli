@@ -1577,7 +1577,7 @@ def test_runtime_model_plan_reads_source_manifest_defaults(tmp_path):
 @pytest.mark.parametrize(
     ("include_spark", "local_memory_mb", "expected_node", "expected_chat_model"),
     [
-        (False, 16384, "mirror_neuron@mac", "docker.io/ai/gemma4:E2B"),
+        (False, 16384, "mirror_neuron@mac", "nemotron-3.5-bolt-e4b:q4_k_m"),
         (False, 24576, "mirror_neuron@mac", "bonsai2:ptq1_0"),
         (False, 32768, "mirror_neuron@mac", "bonsai2:ptq1_0"),
         (False, 49152, "mirror_neuron@mac", "nemotron-3.5-lightning:latest"),
@@ -1608,6 +1608,7 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
         dependencies=dependencies,
     )
     assert set(plan["catalog"]) == {
+        "nemotron-3.5-bolt-e4b:q4_k_m",
         "bonsai2:ptq1_0",
         "gemma4:e2b",
         "nemotron-3.5-lightning:latest",
@@ -1699,7 +1700,7 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
         assert "default -> bonsai2:ptq1_0" in debug_output
         assert "fallback=nemotron-3.5-lightning:latest is not runnable" in debug_output
     else:
-        assert "default -> gemma4:e2b" in debug_output
+        assert "default -> nemotron-3.5-bolt-e4b:q4_k_m" in debug_output
         assert "fallback=nemotron-3.5-lightning:latest is not runnable" in debug_output
 
 
