@@ -40,9 +40,7 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_RUNTIME_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_CONTAINER_SHARED_STORAGE_ROOT", raising=False)
-    monkeypatch.setattr(
-        run_cmds,
-        "sync_litellm_gateway",
+    monkeypatch.setattr('mn_cli.libs.run_cmds.handlers.monitor.sync_litellm_gateway',
         lambda **_kwargs: {
             "status": "running",
             "api_base": "http://mn-litellm-proxy:4000/v1",
@@ -213,7 +211,7 @@ def test_post_submit_keyboard_interrupt_detaches_without_stopping_job(mocker, tm
         return_value=json.dumps({"job_id": "job-started"}),
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds._stream_and_format_events",
+        "mn_cli.libs.run_cmds.handlers.run._stream_and_format_events",
         side_effect=KeyboardInterrupt,
     )
     mocker.patch(

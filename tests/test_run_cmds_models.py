@@ -389,7 +389,7 @@ def test_selected_workflow_node_controls_model_placement_and_gateway_sync(mocker
     assert placement["source"] == "workflow_placement"
 
     sync = mocker.patch(
-        "mn_cli.libs.run_cmds.sync_litellm_gateway", return_value={"status": "running"}
+        "mn_cli.libs.run_cmds.models.sync_litellm_gateway", return_value={"status": "running"}
     )
     endpoints = run_cmds._sync_litellm_gateway_for_runtime_models(
         {
@@ -443,10 +443,10 @@ def test_prepare_runtime_models_installs_missing_model_for_run(
             "backend": "llama.cpp",
         }
     }
-    mocker.patch("mn_cli.libs.run_cmds.load_model_catalog", return_value=catalog)
-    mocker.patch("mn_cli.libs.run_cmds.model_installed", return_value=False)
+    mocker.patch("mn_cli.libs.run_cmds.models.load_model_catalog", return_value=catalog)
+    mocker.patch("mn_cli.libs.run_cmds.models.model_installed", return_value=False)
     install_model = mocker.patch(
-        "mn_cli.libs.run_cmds.install_model_entry",
+        "mn_cli.libs.run_cmds.models.install_model_entry",
         return_value={
             "entry": catalog["gemma4:e2b"],
             "docker_model": "docker.io/ai/gemma4:E2B",
@@ -511,12 +511,12 @@ def test_prepare_runtime_models_uses_cluster_model_endpoint(
         "tags": ["model:ai/qwen3-coder", "model-id:qwen3-coder"],
         "meta": {"model": "ai/qwen3-coder", "api_model": "ai/qwen3-coder"},
     }
-    mocker.patch("mn_cli.libs.run_cmds.load_model_catalog", return_value=catalog)
+    mocker.patch("mn_cli.libs.run_cmds.models.load_model_catalog", return_value=catalog)
     mocker.patch(
         "mn_cli.libs.run_cmds.client.resolve_service",
         return_value=json.dumps({"services": [service]}),
     )
-    install_model = mocker.patch("mn_cli.libs.run_cmds.install_model_entry")
+    install_model = mocker.patch("mn_cli.libs.run_cmds.models.install_model_entry")
     env_overrides = {}
 
     summary = run_cmds._prepare_runtime_models_for_run_or_exit(
@@ -573,13 +573,13 @@ def test_prepare_runtime_models_preserves_node_owned_remote_while_rechecking_tar
         api_model="nemotron-3.5-lightning:latest",
         node="spark",
     )
-    mocker.patch("mn_cli.libs.run_cmds.load_model_catalog", return_value=catalog)
+    mocker.patch("mn_cli.libs.run_cmds.models.load_model_catalog", return_value=catalog)
     mocker.patch(
         "mn_cli.libs.run_cmds.client.resolve_service",
         return_value=json.dumps({"services": []}),
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds.resolve_cluster_model_placement",
+        "mn_cli.libs.run_cmds.model_cluster.resolve_cluster_model_placement",
         return_value={
             "source": "cluster_node",
             "status": "cluster_node",
@@ -587,7 +587,7 @@ def test_prepare_runtime_models_preserves_node_owned_remote_while_rechecking_tar
         },
     )
     cluster_install = mocker.patch(
-        "mn_cli.libs.run_cmds._install_runtime_cluster_model",
+        "mn_cli.libs.run_cmds.models._install_runtime_cluster_model",
         return_value={
             "install": {"status": "already_installed"},
             "endpoint": {
@@ -601,7 +601,7 @@ def test_prepare_runtime_models_preserves_node_owned_remote_while_rechecking_tar
             },
         },
     )
-    install_model = mocker.patch("mn_cli.libs.run_cmds.install_model_entry")
+    install_model = mocker.patch("mn_cli.libs.run_cmds.models.install_model_entry")
     env_overrides = {}
 
     summary = run_cmds._prepare_runtime_models_for_run_or_exit(
@@ -763,7 +763,7 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
             }
         ]
     }
-    mocker.patch("mn_cli.libs.run_cmds.load_model_catalog", return_value=catalog)
+    mocker.patch("mn_cli.libs.run_cmds.models.load_model_catalog", return_value=catalog)
     mocker.patch(
         "mn_cli.libs.run_cmds.client.resolve_service",
         return_value=json.dumps({"services": []}),
@@ -772,9 +772,9 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
         "mn_cli.libs.run_cmds.client.get_resource",
         return_value=json.dumps(resource_report),
     )
-    mocker.patch("mn_cli.libs.run_cmds.model_installed", return_value=False)
+    mocker.patch("mn_cli.libs.run_cmds.models.model_installed", return_value=False)
     cluster_install = mocker.patch(
-        "mn_cli.libs.run_cmds._install_runtime_cluster_model",
+        "mn_cli.libs.run_cmds.models._install_runtime_cluster_model",
         return_value={
             "endpoint": {
                 "provider": "docker_model_runner",
@@ -788,7 +788,7 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
         },
     )
     install_model = mocker.patch(
-        "mn_cli.libs.run_cmds.install_model_entry",
+        "mn_cli.libs.run_cmds.models.install_model_entry",
         return_value={"compatibility": {"backend": "llama.cpp"}},
     )
 
@@ -1080,7 +1080,7 @@ def test_prepare_runtime_models_promotes_preferred_large_profile_on_capable_clus
     )
     manifest = {"metadata": {"blueprint_id": "assistant"}}
     catalog = _preferred_large_model_catalog()
-    mocker.patch("mn_cli.libs.run_cmds.load_model_catalog", return_value=catalog)
+    mocker.patch("mn_cli.libs.run_cmds.models.load_model_catalog", return_value=catalog)
     mocker.patch(
         "mn_cli.libs.run_cmds.client.resolve_service",
         return_value=json.dumps({"services": []}),
@@ -1089,9 +1089,9 @@ def test_prepare_runtime_models_promotes_preferred_large_profile_on_capable_clus
         "mn_cli.libs.run_cmds.client.get_resource",
         return_value=json.dumps(_spark_gb10_resource_report()),
     )
-    mocker.patch("mn_cli.libs.run_cmds.model_installed", return_value=False)
+    mocker.patch("mn_cli.libs.run_cmds.models.model_installed", return_value=False)
     cluster_install = mocker.patch(
-        "mn_cli.libs.run_cmds._install_runtime_cluster_model",
+        "mn_cli.libs.run_cmds.models._install_runtime_cluster_model",
         return_value={
             "install": {
                 "status": "already_installed",
@@ -1108,7 +1108,7 @@ def test_prepare_runtime_models_promotes_preferred_large_profile_on_capable_clus
             },
         },
     )
-    install_model = mocker.patch("mn_cli.libs.run_cmds.install_model_entry")
+    install_model = mocker.patch("mn_cli.libs.run_cmds.models.install_model_entry")
 
     env_overrides = {}
     summary = run_cmds._prepare_runtime_models_for_run_or_exit(
@@ -1207,7 +1207,7 @@ def test_prepare_runtime_models_keeps_default_model_without_capable_cluster_node
             }
         ]
     }
-    mocker.patch("mn_cli.libs.run_cmds.load_model_catalog", return_value=catalog)
+    mocker.patch("mn_cli.libs.run_cmds.models.load_model_catalog", return_value=catalog)
     mocker.patch(
         "mn_cli.libs.run_cmds.client.resolve_service",
         return_value=json.dumps({"services": []}),
@@ -1217,13 +1217,13 @@ def test_prepare_runtime_models_keeps_default_model_without_capable_cluster_node
         return_value=json.dumps(resource_report),
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds.model_installed",
+        "mn_cli.libs.run_cmds.models.model_installed",
         side_effect=lambda model: model == "docker.io/ai/gemma4:E2B",
     )
     cluster_install = mocker.patch(
-        "mn_cli.libs.run_cmds._install_runtime_cluster_model"
+        "mn_cli.libs.run_cmds.models._install_runtime_cluster_model"
     )
-    install_model = mocker.patch("mn_cli.libs.run_cmds.install_model_entry")
+    install_model = mocker.patch("mn_cli.libs.run_cmds.models.install_model_entry")
 
     env_overrides = {}
     summary = run_cmds._prepare_runtime_models_for_run_or_exit(
@@ -1258,7 +1258,7 @@ def test_prepare_runtime_models_surfaces_large_profile_prepare_failure_without_f
     )
     manifest = {"metadata": {"blueprint_id": "assistant"}}
     catalog = _preferred_large_model_catalog()
-    mocker.patch("mn_cli.libs.run_cmds.load_model_catalog", return_value=catalog)
+    mocker.patch("mn_cli.libs.run_cmds.models.load_model_catalog", return_value=catalog)
     mocker.patch(
         "mn_cli.libs.run_cmds.client.resolve_service",
         return_value=json.dumps({"services": []}),
@@ -1267,12 +1267,12 @@ def test_prepare_runtime_models_surfaces_large_profile_prepare_failure_without_f
         "mn_cli.libs.run_cmds.client.get_resource",
         return_value=json.dumps(_spark_gb10_resource_report()),
     )
-    mocker.patch("mn_cli.libs.run_cmds.model_installed", return_value=False)
+    mocker.patch("mn_cli.libs.run_cmds.models.model_installed", return_value=False)
     cluster_install = mocker.patch(
-        "mn_cli.libs.run_cmds._install_runtime_cluster_model",
+        "mn_cli.libs.run_cmds.models._install_runtime_cluster_model",
         side_effect=RuntimeError("remote prepare failed"),
     )
-    install_model = mocker.patch("mn_cli.libs.run_cmds.install_model_entry")
+    install_model = mocker.patch("mn_cli.libs.run_cmds.models.install_model_entry")
 
     with pytest.raises(typer.Exit) as exc:
         run_cmds._prepare_runtime_models_for_run_or_exit(
@@ -1327,9 +1327,9 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
             }
         ),
     )
-    mocker.patch("mn_cli.libs.run_cmds.use_progress", return_value=True)
-    mocker.patch("mn_cli.libs.run_cmds.Progress", FakeProgress)
-    remote_client_class = mocker.patch("mn_cli.libs.run_cmds.Client")
+    mocker.patch("mn_cli.libs.run_cmds.model_cluster.use_progress", return_value=True)
+    mocker.patch("mn_cli.libs.run_cmds.model_cluster.Progress", FakeProgress)
+    remote_client_class = mocker.patch("mn_cli.libs.run_cmds.model_cluster.Client")
     remote_client = remote_client_class.return_value
     remote_client.prepare_runtime_model.return_value = json.dumps(
         {
@@ -1410,7 +1410,7 @@ def test_runtime_cluster_model_install_uses_long_timeout_for_local_runtime_coord
             }
         ),
     )
-    local_client_class = mocker.patch("mn_cli.libs.run_cmds.Client")
+    local_client_class = mocker.patch("mn_cli.libs.run_cmds.model_cluster.Client")
     local_client = local_client_class.return_value
     local_client.prepare_runtime_model.return_value = json.dumps(
         {
@@ -1511,7 +1511,7 @@ def test_runtime_model_preflight_ignores_skill_owned_rag_model(mocker, tmp_path)
             "embedding_model": "huggingface.co/zenmagnets/Nemotron-3-Embed-1B-Q4_K_M-GGUF:Q4_K_M",
         },
     }
-    mocker.patch("mn_cli.libs.run_cmds.load_blueprint_config", return_value=config)
+    mocker.patch("mn_cli.libs.run_cmds.models.load_blueprint_config", return_value=config)
 
     plan = run_cmds._build_runtime_model_prepare_plan(tmp_path, {"nodes": []})
 
@@ -1790,7 +1790,7 @@ def test_runtime_model_preflight_rejects_ineligible_node_before_prepare(mocker):
             }
         ]
     }
-    prepare = mocker.patch("mn_cli.libs.run_cmds._install_runtime_cluster_model")
+    prepare = mocker.patch("mn_cli.libs.run_cmds.model_cluster._install_runtime_cluster_model")
 
     with pytest.raises(RuntimeError, match="Per-node rejection reasons") as error:
         run_cmds._preflight_and_apply_runtime_model_placement(
@@ -1917,7 +1917,7 @@ def test_distributed_runtime_model_preflight_rejects_before_prepare(mocker):
             }
         ]
     }
-    prepare = mocker.patch("mn_cli.libs.run_cmds._install_runtime_cluster_model")
+    prepare = mocker.patch("mn_cli.libs.run_cmds.model_cluster._install_runtime_cluster_model")
 
     with pytest.raises(
         RuntimeError,
@@ -1971,7 +1971,7 @@ def test_cluster_node_endpoint_is_local_uses_local_host_alias(monkeypatch):
         "host": "192.168.6.28",
         "port": "55051",
     }
-    monkeypatch.setattr(run_cmds, "_local_host_addresses", lambda: {"192.168.6.28"})
+    monkeypatch.setattr('mn_cli.libs.run_cmds.model_cluster._local_host_addresses', lambda: {"192.168.6.28"})
 
     assert run_cmds._cluster_node_endpoint_is_local(node_endpoint) is True
 
@@ -1982,7 +1982,7 @@ def test_cluster_node_endpoint_is_not_local_for_remote_host(monkeypatch):
         "host": "192.168.4.173",
         "port": "55051",
     }
-    monkeypatch.setattr(run_cmds, "_local_host_addresses", lambda: {"192.168.6.28"})
+    monkeypatch.setattr('mn_cli.libs.run_cmds.model_cluster._local_host_addresses', lambda: {"192.168.6.28"})
 
     assert run_cmds._cluster_node_endpoint_is_local(node_endpoint) is False
 
@@ -2002,7 +2002,7 @@ def test_runtime_cluster_model_install_requires_native_sdk_grpc_metadata(mocker)
             }
         ),
     )
-    remote_client_class = mocker.patch("mn_cli.libs.run_cmds.Client")
+    remote_client_class = mocker.patch("mn_cli.libs.run_cmds.model_cluster.Client")
     shell = mocker.patch("mn_cli.libs.run_cmds.subprocess.run")
 
     with pytest.raises(RuntimeError, match="does not advertise native SDK gRPC"):
@@ -2122,8 +2122,8 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
             }
         ]
     }
-    mocker.patch("mn_cli.libs.run_cmds.load_model_catalog", return_value=catalog)
-    mocker.patch("mn_cli.libs.run_cmds.model_installed", return_value=False)
+    mocker.patch("mn_cli.libs.run_cmds.models.load_model_catalog", return_value=catalog)
+    mocker.patch("mn_cli.libs.run_cmds.models.model_installed", return_value=False)
     mocker.patch(
         "mn_cli.libs.run_cmds.client.resolve_service",
         return_value=json.dumps({"services": []}),
@@ -2133,11 +2133,11 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
         return_value=json.dumps(resource_report),
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds.model_installed",
+        "mn_cli.libs.run_cmds.models.model_installed",
         side_effect=lambda model: model == "docker.io/ai/gemma4:E2B",
     )
     install_model = mocker.patch(
-        "mn_cli.libs.run_cmds.install_model_entry",
+        "mn_cli.libs.run_cmds.models.install_model_entry",
     )
 
     env_overrides = {}
@@ -2275,7 +2275,7 @@ def test_custom_runtime_model_selects_most_powerful_capable_node(mocker):
 
 def test_custom_runtime_model_prepare_payload_carries_risk_contract(mocker):
     mocker.patch(
-        "mn_cli.libs.run_cmds._cluster_node_endpoint",
+        "mn_cli.libs.run_cmds.model_cluster._cluster_node_endpoint",
         return_value={
             "grpc_target": "gpu-128.local:55051",
             "host": "gpu-128.local",
@@ -2295,7 +2295,7 @@ def test_custom_runtime_model_prepare_payload_carries_risk_contract(mocker):
         }
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds._runtime_model_prepare_client",
+        "mn_cli.libs.run_cmds.model_cluster._runtime_model_prepare_client",
         return_value=runtime_client,
     )
 

@@ -22,7 +22,8 @@ def test_command_readable_and_json(monkeypatch, plain, width):
     result = CliRunner().invoke(app, ["job-a", "--json"])
     assert result.exit_code == 0, result.exception
     assert json.loads(stream.getvalue())["job_id"] == "job-a"
-    stream.truncate(0); stream.seek(0)
+    stream.truncate(0)
+    stream.seek(0)
     result = CliRunner().invoke(app, ["job-a"])
     assert result.exit_code == 0, result.exception
     assert "Successful" in stream.getvalue()

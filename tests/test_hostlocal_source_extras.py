@@ -40,7 +40,7 @@ def test_preparation_stages_source_with_extras_and_declared_version(tmp_path, mo
     ]}}}
     versions = doctor._doctor_hostlocal_local_source_versions(manifest, [package])
     assert versions == {package: "1.3.58.dev45"}
-    mocker.patch.object(doctor, "_doctor_running_core_container", return_value=container)
+    mocker.patch("mn_sdk.hostlocal_python.running_core_container", return_value=container)
     calls = []
 
     def run(command, **_kwargs):
@@ -70,7 +70,7 @@ def test_preparation_stages_source_with_extras_and_declared_version(tmp_path, mo
 def test_rebasing_retains_extras_and_version_identity(tmp_path, mocker):
     source = source_project(tmp_path / "workspace")
     missing = "/missing/checkout/mn-python-sdk[context]"
-    mocker.patch.object(doctor, "_doctor_source_checkout_roots", return_value=[source.parent])
+    mocker.patch("mn_sdk.hostlocal_python._source_checkout_roots", return_value=[source.parent])
     packages, versions = doctor._doctor_rebase_missing_local_sources(
         [missing, "requests==2.32.0"], local_source_versions={missing: "1.3.58.dev45"},
     )
@@ -96,7 +96,7 @@ def test_staged_wheel_preserves_extras(tmp_path):
 
 
 def test_pip_failure_retains_error_before_verbose_install_progress(mocker):
-    mocker.patch.object(doctor, "_doctor_running_core_container", return_value="")
+    mocker.patch("mn_sdk.hostlocal_python.running_core_container", return_value="")
 
     def run(command, **_kwargs):
         if "install" in command:
@@ -122,8 +122,8 @@ def test_mac_local_only_workflow_prepares_native_python(tmp_path, mocker):
                 "requirements": {"os": "darwin"}, "agents": {"nodes": [{"node_id": "collector", "config": config}]}}
     prepare = mocker.patch.object(doctor, "_doctor_prepare_python_env", return_value=env)
     mocker.patch.object(doctor, "prepare_hostlocal_python_bridge", return_value=tmp_path / "bridge")
-    mocker.patch.object(doctor, "_doctor_running_core_container", return_value="")
-    mocker.patch.object(doctor, "_doctor_runtime_python_env_path", return_value=tmp_path / "bridge")
+    mocker.patch("mn_sdk.hostlocal_python.running_core_container", return_value="")
+    mocker.patch("mn_sdk.hostlocal_python.runtime_python_environment_path", return_value=tmp_path / "bridge")
     report = doctor._doctor_prepare_hostlocal_python_envs(tmp_path, manifest, timeout=1, check_only=False)
     assert report["status"] == "passing"
     assert prepare.call_args.kwargs["native_host"] is True

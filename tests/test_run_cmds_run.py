@@ -62,9 +62,7 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_RUNTIME_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_CONTAINER_SHARED_STORAGE_ROOT", raising=False)
-    monkeypatch.setattr(
-        run_cmds,
-        "sync_litellm_gateway",
+    monkeypatch.setattr('mn_cli.libs.run_cmds.handlers.run.sync_litellm_gateway',
         lambda **_kwargs: {
             "status": "running",
             "api_base": "http://mn-litellm-proxy:4000/v1",
@@ -109,7 +107,7 @@ def test_runtime_model_progress_event_reports_dmr_bytes_and_elapsed_time():
 def test_run_success(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch(
-        "mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="run-bundle-auto"
+        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id", return_value="run-bundle-auto"
     )
     mock_submit = mocker.patch(
         "mn_cli.libs.run_cmds.client.create_job",
@@ -212,7 +210,7 @@ def test_run_rejects_invalid_web_ui_port(tmp_path):
 def test_run_stream_error_falls_back_to_status_polling(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch(
-        "mn_cli.libs.run_cmds._make_blueprint_run_id",
+        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id",
         return_value="run-stream-fallback",
     )
     mocker.patch(
@@ -256,7 +254,7 @@ def test_run_validates_inputs_before_runtime_dependencies(
 ):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch(
-        "mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="run-order"
+        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id", return_value="run-order"
     )
     mocker.patch(
         "mn_cli.libs.run_cmds.client.create_job",
@@ -271,23 +269,23 @@ def test_run_validates_inputs_before_runtime_dependencies(
     order: list[str] = []
 
     mocker.patch(
-        "mn_cli.libs.run_cmds._validate_manifest_services_or_exit",
+        "mn_cli.libs.run_cmds.handlers.run._validate_manifest_services_or_exit",
         side_effect=lambda *args, **kwargs: order.append("services") or {"ok": True},
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds._defer_runtime_models_for_run_or_exit",
+        "mn_cli.libs.run_cmds.handlers.run._defer_runtime_models_for_run_or_exit",
         side_effect=lambda *args, **kwargs: (
             order.append("defer_models") or {"ok": True}
         ),
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds._validate_manifest_models_or_exit",
+        "mn_cli.libs.run_cmds.handlers.run._validate_manifest_models_or_exit",
         side_effect=lambda *args, **kwargs: (
             order.append("validate_models") or {"ok": True}
         ),
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds._validate_manifest_inputs_or_exit",
+        "mn_cli.libs.run_cmds.handlers.run._validate_manifest_inputs_or_exit",
         side_effect=lambda *args, **kwargs: order.append("inputs") or {"ok": True},
     )
 
@@ -308,13 +306,13 @@ def test_run_does_not_submit_when_a_required_input_is_missing(
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     submit = mocker.patch("mn_cli.libs.run_cmds.client.create_job")
     check_resources = mocker.patch(
-        "mn_cli.libs.run_cmds._build_runtime_model_prepare_plan"
+        "mn_cli.libs.run_cmds.handlers.run._build_runtime_model_prepare_plan"
     )
     prepare_models = mocker.patch(
-        "mn_cli.libs.run_cmds._prepare_runtime_models_for_run_or_exit"
+        "mn_cli.libs.run_cmds.handlers.run._prepare_runtime_models_for_run_or_exit"
     )
     validate_services = mocker.patch(
-        "mn_cli.libs.run_cmds._validate_manifest_services_or_exit"
+        "mn_cli.libs.run_cmds.handlers.run._validate_manifest_services_or_exit"
     )
     bundle_dir = tmp_path / "required_input_bundle"
     bundle_dir.mkdir()
@@ -399,7 +397,7 @@ def test_run_auto_schedule_creates_resource_wait_schedule(
 ):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch(
-        "mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="run-scheduled"
+        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id", return_value="run-scheduled"
     )
     mock_submit = mocker.patch(
         "mn_cli.libs.run_cmds.client.create_job",
@@ -433,7 +431,7 @@ def test_run_auto_schedule_creates_resource_wait_schedule(
 def test_run_force_skips_input_validation(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch(
-        "mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="forced-run"
+        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id", return_value="forced-run"
     )
     mock_submit = mocker.patch(
         "mn_cli.libs.run_cmds.client.create_job",
@@ -490,7 +488,7 @@ def test_run_prevalidates_command_rules_before_core_submission(
 ):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch(
-        "mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="prevalidated-run"
+        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id", return_value="prevalidated-run"
     )
     mock_submit = mocker.patch(
         "mn_cli.libs.run_cmds.client.create_job",
@@ -624,7 +622,7 @@ def test_run_submits_python_environment_requirements_payload(
 ):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch(
-        "mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="python-env-run"
+        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id", return_value="python-env-run"
     )
     mock_submit = mocker.patch(
         "mn_cli.libs.run_cmds.client.create_job",
@@ -656,7 +654,7 @@ def test_run_submits_python_environment_requirements_payload(
     )
     env_dir = tmp_path / "prepared-python"
     mocker.patch(
-        "mn_cli.libs.run_cmds._doctor_prepare_python_env", return_value=env_dir
+        "mn_cli.libs.run_cmds.handlers.doctor._doctor_prepare_python_env", return_value=env_dir
     )
 
     bundle_dir = tmp_path / "run_bundle"
@@ -803,7 +801,7 @@ def test_run_auto_creates_run_store_identity_for_local_blueprint(
         return_value=[json.dumps({"type": "job_completed"})],
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="bp-1-auto-run"
+        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id", return_value="bp-1-auto-run"
     )
 
     bundle_dir = tmp_path / "run_bundle"
@@ -968,7 +966,7 @@ def test_run_starts_pre_launch_hook_before_submit(mocker, tmp_path, monkeypatch)
         return process
 
     popen = mocker.Mock(side_effect=fake_popen)
-    mocker.patch("mn_cli.libs.run_cmds.subprocess",
+    mocker.patch("mn_cli.libs.run_cmds.run_state.subprocess",
                  SimpleNamespace(**{**vars(subprocess), "Popen": popen}))
 
     run_cmds.run_bundle(str(bundle_dir), follow_seconds=0)
@@ -1119,7 +1117,7 @@ def test_run_executes_post_launch_hook_after_terminal_status(
         )
         return process
 
-    mocker.patch("mn_cli.libs.run_cmds.subprocess",
+    mocker.patch("mn_cli.libs.run_cmds.run_state.subprocess",
                  SimpleNamespace(**{**vars(subprocess), "Popen": mocker.Mock(side_effect=fake_popen)}))
 
     run_cmds.run_bundle(
@@ -1239,7 +1237,7 @@ def test_run_uses_detach_log_seconds_env(mocker, tmp_path, monkeypatch):
         ],
     )
     mock_follow = mocker.patch(
-        "mn_cli.libs.run_cmds._follow_job_events",
+        "mn_cli.libs.run_cmds.events._follow_job_events",
         return_value=("running", {}),
     )
 
@@ -1269,7 +1267,7 @@ def test_run_follow_seconds_option_overrides_env(mocker, tmp_path, monkeypatch):
         ],
     )
     mock_follow = mocker.patch(
-        "mn_cli.libs.run_cmds._follow_job_events",
+        "mn_cli.libs.run_cmds.events._follow_job_events",
         return_value=("running", {}),
     )
 
@@ -1294,7 +1292,7 @@ def test_run_detached_starts_without_live_workflow_ui(
 ):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch(
-        "mn_cli.libs.run_cmds._make_blueprint_run_id",
+        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id",
         return_value=f"detached-{flag.strip('-')}",
     )
     mock_submit = mocker.patch(
@@ -1356,14 +1354,14 @@ def test_run_uncertain_submission_preserves_resources(mocker, tmp_path):
         "mn_cli.libs.run_cmds.client.create_job", side_effect=Exception("API failure")
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds.prepare_job_submission",
+        "mn_cli.libs.run_cmds.handlers.run.prepare_job_submission",
         return_value=SimpleNamespace(
             manifest_json='{"nodes": []}',
             payloads={},
             metadata={"submission_id": "submission-that-failed"},
         ),
     )
-    cleanup = mocker.patch("mn_cli.libs.run_cmds.cleanup_job_definition_resources")
+    cleanup = mocker.patch("mn_cli.libs.run_cmds.handlers.run.cleanup_job_definition_resources")
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
@@ -1478,14 +1476,14 @@ def test_run_existing_job_preserves_definition_when_update_outcome_is_uncertain(
         side_effect=RuntimeError("atomic update rejected"),
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds.prepare_job_submission",
+        "mn_cli.libs.run_cmds.handlers.run.prepare_job_submission",
         return_value=SimpleNamespace(
             manifest_json='{"nodes": [], "metadata": {"definition": "fresh"}}',
             payloads={},
             metadata={"submission_id": "job-existing-def-fresh"},
         ),
     )
-    cleanup = mocker.patch("mn_cli.libs.run_cmds.cleanup_job_definition_resources")
+    cleanup = mocker.patch("mn_cli.libs.run_cmds.handlers.run.cleanup_job_definition_resources")
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
@@ -1505,7 +1503,7 @@ def test_run_existing_job_preserves_definition_when_update_outcome_is_uncertain(
 
 def test_run_command_debug_prints_preparation_diagnostic(mocker, tmp_path):
     prepare = mocker.patch(
-        "mn_cli.libs.run_cmds.prepare_job_submission",
+        "mn_cli.libs.run_cmds.handlers.run.prepare_job_submission",
         side_effect=RuntimeError(
             "DockerWorker startup_folder_watcher has no eligible node: "
             "status_ineligible (offline)"
@@ -1531,7 +1529,7 @@ def test_run_command_debug_prints_preparation_diagnostic(mocker, tmp_path):
 
 def test_run_reports_remote_docker_worker_preparation(mocker, tmp_path):
     mocker.patch(
-        "mn_cli.libs.run_cmds._resolve_and_apply_workflow_placement",
+        "mn_cli.libs.run_cmds.model_cluster._resolve_and_apply_workflow_placement",
         return_value={
             "mode": "single_node",
             "selected_node": "mirror_neuron@spark",
@@ -1543,7 +1541,7 @@ def test_run_reports_remote_docker_worker_preparation(mocker, tmp_path):
         return_value=json.dumps({"job_id": "job-docker-worker"}),
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds.prepare_job_submission",
+        "mn_cli.libs.run_cmds.handlers.run.prepare_job_submission",
         return_value=SimpleNamespace(
             manifest_json=json.dumps(
                 {

@@ -13,7 +13,7 @@ from mn_cli.sdk_path import add_local_sdk_path
 
 add_local_sdk_path("runtime_config.py")
 
-from mn_sdk.config import (
+from mn_sdk.config import (  # noqa: E402 - local SDK bootstrap above
     SUPPORTED_CONFIG_KEYS as SDK_CONFIG_KEYS,
     ConfigError,
     bootstrap_environment as sdk_bootstrap_environment,
@@ -30,8 +30,8 @@ from mn_sdk.config import (
     parse_url,
     parse_url_or_auto,
 )
-from mn_sdk.config.types import MISSING
-from mn_sdk.runtime_config import RuntimeConfig, default_logs_root
+from mn_sdk.config.types import MISSING  # noqa: E402
+from mn_sdk.runtime_config import RuntimeConfig, default_logs_root  # noqa: E402
 
 
 TRUE_VALUES = {"1", "true", "yes", "on"}

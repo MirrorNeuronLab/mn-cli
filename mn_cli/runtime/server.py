@@ -422,13 +422,6 @@ def _network_publish_host(host: str) -> str:
     return "0.0.0.0"
 
 
-def _loopback_host(host: str) -> bool:
-    normalized = (host or "").strip().lower()
-    return normalized in {"", "localhost", "127.0.0.1", "::1"} or normalized.startswith(
-        "127."
-    )
-
-
 def _valid_lan_ip(value: object) -> bool:
     try:
         ip = ipaddress.ip_address(str(value or "").strip())

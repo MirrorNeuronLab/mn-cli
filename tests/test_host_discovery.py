@@ -3,6 +3,7 @@ from unittest.mock import Mock
 import pytest
 
 from mn_cli.libs import model_cmds, run_cmds
+from mn_cli.libs.run_cmds import model_cluster
 from mn_cli.runtime import host_discovery
 
 
@@ -101,7 +102,8 @@ def test_cached_callers_preserve_injected_resolver_and_environment(
 ):
     commands._local_host_addresses.cache_clear()
     calls = Mock(return_value={"192.0.2.7"})
-    monkeypatch.setattr(commands, "_resolved_local_hostnames", calls)
+    owner = model_cluster if commands is run_cmds else commands
+    monkeypatch.setattr(owner, "_resolved_local_hostnames", calls)
     monkeypatch.setenv("MN_API_HOST", "alias.example")
     try:
         addresses = commands._local_host_addresses()

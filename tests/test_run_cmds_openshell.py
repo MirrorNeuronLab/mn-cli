@@ -46,9 +46,7 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_RUNTIME_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_CONTAINER_SHARED_STORAGE_ROOT", raising=False)
-    monkeypatch.setattr(
-        run_cmds,
-        "sync_litellm_gateway",
+    monkeypatch.setattr('mn_cli.libs.run_cmds.openshell.sync_litellm_gateway',
         lambda **_kwargs: {
             "status": "running",
             "api_base": "http://mn-litellm-proxy:4000/v1",
@@ -153,8 +151,8 @@ def test_missing_openshell_fails_before_preparation(tmp_path, monkeypatch, mocke
     from mn_cli.error_handler import contextualize_cli_error
 
     monkeypatch.setattr(run_cmds.shutil, "which", lambda _: None)
-    register = mocker.patch("mn_cli.libs.run_cmds.register_native_resource")
-    build = mocker.patch("mn_cli.libs.run_cmds._build_openshell_from_image")
+    register = mocker.patch("mn_cli.libs.run_cmds.openshell.register_native_resource")
+    build = mocker.patch("mn_cli.libs.run_cmds.openshell._build_openshell_from_image")
     manifest = {"flow": {"nodes": [{"node_id": "review", "config": {
         "runner_module": "MirrorNeuron.Runner.OpenShell",
         "reuse_shared_sandbox": True,
@@ -180,7 +178,7 @@ def test_run_prebuilds_custom_openshell_image_from_payload_directory(
     monkeypatch.delenv("OPENSHELL_GATEWAY", raising=False)
     monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
     mocker.patch(
-        "mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="openshell-from-run"
+        "mn_cli.libs.run_cmds.openshell._make_blueprint_run_id", return_value="openshell-from-run"
     )
     mock_submit = mocker.patch(
         "mn_cli.libs.run_cmds.client.create_job",
@@ -253,7 +251,7 @@ def test_run_prebuilds_legacy_openshell_from_directory(mocker, tmp_path, monkeyp
     monkeypatch.delenv("OPENSHELL_GATEWAY", raising=False)
     monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
     mocker.patch(
-        "mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="openshell-from-run"
+        "mn_cli.libs.run_cmds.openshell._make_blueprint_run_id", return_value="openshell-from-run"
     )
     mock_submit = mocker.patch(
         "mn_cli.libs.run_cmds.client.create_job",
@@ -318,7 +316,7 @@ def test_prepare_openshell_builds_conventional_context_for_local_image(
     }
     manifest = {"flow": {"nodes": [{"node_id": "sandbox", "config": config}]}}
     build = mocker.patch(
-        "mn_cli.libs.run_cmds._build_openshell_from_image",
+        "mn_cli.libs.run_cmds.openshell._build_openshell_from_image",
         return_value="openshell/sandbox-from:prepared",
     )
 
@@ -503,7 +501,7 @@ def test_local_docker_openshell_build_uses_plain_progress(mocker, tmp_path):
     sandbox_dir.mkdir()
     (sandbox_dir / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
     mock_build = mocker.patch(
-        "mn_cli.libs.run_cmds._run_streaming_local_docker_build",
+        "mn_cli.libs.run_cmds.openshell._run_streaming_local_docker_build",
         return_value=subprocess.CompletedProcess(["docker"], 0, "ok", ""),
     )
 
@@ -566,7 +564,7 @@ def test_managed_gateway_builds_with_docker_without_named_metadata(tmp_path, mon
     context.mkdir()
     (context / "Dockerfile").write_text("FROM scratch\n")
     build = mocker.patch(
-        "mn_cli.libs.run_cmds._run_streaming_local_docker_build",
+        "mn_cli.libs.run_cmds.openshell._run_streaming_local_docker_build",
         return_value=subprocess.CompletedProcess(["docker"], 0, "ok", ""),
     )
     openshell = mocker.patch("mn_cli.libs.run_cmds.subprocess.run")
@@ -623,8 +621,8 @@ def test_launch_commits_openshell_ownership_and_survives_gc(
     durable_job = existing_job or "job-generated"
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     monkeypatch.delenv("MN_NODE_NAME", raising=False)
-    mocker.patch("mn_cli.libs.run_cmds.generate_stable_job_id", return_value=durable_job)
-    mocker.patch("mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="blueprint-run-label")
+    mocker.patch("mn_cli.libs.run_cmds.handlers.run.generate_stable_job_id", return_value=durable_job)
+    mocker.patch("mn_cli.libs.run_cmds.run_state._make_blueprint_run_id", return_value="blueprint-run-label")
     mocker.patch("mn_cli.libs.run_cmds.client.create_job", return_value=json.dumps({"job_id": durable_job}))
     mocker.patch("mn_cli.libs.run_cmds.client.update_job", return_value=json.dumps({"job_id": durable_job}))
     mocker.patch("mn_cli.libs.run_cmds.client.stream_events", return_value=[json.dumps({"type": "job_completed"})])

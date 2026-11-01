@@ -40,9 +40,7 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_RUNTIME_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_CONTAINER_SHARED_STORAGE_ROOT", raising=False)
-    monkeypatch.setattr(
-        run_cmds,
-        "sync_litellm_gateway",
+    monkeypatch.setattr('mn_cli.libs.run_cmds.outputs.sync_litellm_gateway',
         lambda **_kwargs: {
             "status": "running",
             "api_base": "http://mn-litellm-proxy:4000/v1",
@@ -383,7 +381,7 @@ def test_resolve_job_result_reads_staged_snapshot(monkeypatch):
 
     monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.setattr(run_cmds.RuntimeConfig, "from_env", lambda: RuntimeConfig())
-    monkeypatch.setattr(run_cmds, "resolve_json_reference", resolve)
+    monkeypatch.setattr('mn_cli.libs.run_cmds.outputs.resolve_json_reference', resolve)
 
     assert run_cmds._resolve_job_result({"result_ref": reference}) == {
         "final_artifact": {"ok": True}
@@ -395,9 +393,7 @@ def test_fetch_and_save_results_preserves_failed_worker_payload(
     monkeypatch,
     tmp_path,
 ):
-    monkeypatch.setattr(
-        run_cmds,
-        "_resolve_job_result",
+    monkeypatch.setattr('mn_cli.libs.run_cmds.outputs._resolve_job_result',
         lambda _job: {"status": "failed", "error": "worker failed"},
     )
     monkeypatch.setattr(run_cmds.client, "stream_events", lambda *_args, **_kwargs: [])
@@ -604,7 +600,7 @@ def test_detached_batch_run_starts_output_event_relay_for_shared_storage(
     monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", str(tmp_path / "shared"))
     monkeypatch.setenv("MN_RUNTIME_SHARED_STORAGE_ROOT", "/runtime/shared")
     mocker.patch(
-        "mn_cli.libs.run_cmds._make_blueprint_run_id", return_value="batch-output-run"
+        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id", return_value="batch-output-run"
     )
     mocker.patch(
         "mn_cli.libs.run_cmds.client.create_job",
@@ -707,7 +703,7 @@ def test_terminal_delivery_passes_physical_result_reference_and_does_not_fail_an
         'run_id':'physical','relative_path':'outputs/runs/physical/result.json','sha256':'a'*64,'size_bytes':2}
     monkeypatch.setattr(run_cmds.client, 'get_run', lambda _: json.dumps({'status':'completed','result_ref':ref}))
     captured=[]
-    monkeypatch.setattr(run_cmds, '_materialize_shared_storage_outputs', lambda s, **kw: captured.append(kw['execution_id']) or True)
+    monkeypatch.setattr('mn_cli.libs.run_cmds.outputs._materialize_shared_storage_outputs', lambda s, **kw: captured.append(kw['execution_id']) or True)
     assert run_cmds._materialize_terminal_run_outputs(storage, 'cli-label', 'completed') is True
     assert captured==['physical']
     monkeypatch.setattr(run_cmds.client, 'get_run', lambda _: (_ for _ in ()).throw(OSError('transport unavailable')))

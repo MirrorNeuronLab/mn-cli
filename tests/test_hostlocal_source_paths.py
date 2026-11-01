@@ -42,7 +42,7 @@ def test_rebases_verified_checkout_projects_from_any_system(tmp_path, mocker, or
     workspace = tmp_path / "workspace"
     source = project(workspace / relative)
     missing = origin + "/" + relative + "[grpc,context]"
-    mocker.patch.object(doctor, "_doctor_source_checkout_roots", return_value=[workspace])
+    mocker.patch("mn_sdk.hostlocal_python._source_checkout_roots", return_value=[workspace])
 
     packages, versions = doctor._doctor_rebase_missing_local_sources(
         [missing, "requests==2.32.0"], local_source_versions={missing: "2.1.7"},
@@ -57,8 +57,8 @@ def test_remote_context_source_reaches_staged_pip_transaction(tmp_path, mocker, 
     workspace = tmp_path / "workspace"
     source = project(workspace / "Membrane" / "mn-context-engine-python-sdk")
     missing = origin + "/Membrane/mn-context-engine-python-sdk[grpc]"
-    mocker.patch.object(doctor, "_doctor_source_checkout_roots", return_value=[workspace])
-    mocker.patch.object(doctor, "_doctor_running_core_container", return_value="mirror-neuron-core")
+    mocker.patch("mn_sdk.hostlocal_python._source_checkout_roots", return_value=[workspace])
+    mocker.patch("mn_sdk.hostlocal_python.running_core_container", return_value="mirror-neuron-core")
     calls = []
 
     def run(command, **_kwargs):
@@ -91,7 +91,7 @@ def test_remote_context_source_reaches_staged_pip_transaction(tmp_path, mocker, 
 def test_unresolved_or_unsafe_requirements_are_left_for_validation(tmp_path, mocker, requirement):
     workspace = tmp_path / "workspace"
     project(workspace / "mn-python-sdk")
-    mocker.patch.object(doctor, "_doctor_source_checkout_roots", return_value=[workspace])
+    mocker.patch("mn_sdk.hostlocal_python._source_checkout_roots", return_value=[workspace])
     assert doctor._doctor_rebase_missing_local_source(requirement) == requirement
 
 
@@ -100,7 +100,7 @@ def test_rebasing_does_not_follow_a_checkout_symlink_outside_its_root(tmp_path, 
     workspace.mkdir()
     outside = project(tmp_path / "outside")
     workspace.joinpath("context-sdk").symlink_to(outside, target_is_directory=True)
-    mocker.patch.object(doctor, "_doctor_source_checkout_roots", return_value=[workspace])
+    mocker.patch("mn_sdk.hostlocal_python._source_checkout_roots", return_value=[workspace])
     missing = "/submitter/context-sdk[grpc]"
     assert doctor._doctor_rebase_missing_local_source(missing) == missing
 
@@ -109,14 +109,14 @@ def test_ambiguous_checkout_sources_are_not_selected(tmp_path, mocker):
     roots = [tmp_path / "first", tmp_path / "second"]
     for root in roots:
         project(root / "Membrane" / "context-sdk")
-    mocker.patch.object(doctor, "_doctor_source_checkout_roots", return_value=roots)
+    mocker.patch("mn_sdk.hostlocal_python._source_checkout_roots", return_value=roots)
     missing = "/submitter/Membrane/context-sdk[grpc]"
     assert doctor._doctor_rebase_missing_local_source(missing) == missing
 
 
 def test_rebasing_preserves_existing_local_sources(tmp_path, mocker):
     source = project(tmp_path / "own-checkout" / "context-sdk")
-    mocker.patch.object(doctor, "_doctor_source_checkout_roots", return_value=[])
+    mocker.patch("mn_sdk.hostlocal_python._source_checkout_roots", return_value=[])
     requirement = str(source) + "[grpc]"
     assert doctor._doctor_rebase_missing_local_source(requirement) == requirement
 
@@ -126,6 +126,6 @@ def test_rebases_a_local_wheel_without_repository_name_assumptions(tmp_path, moc
     wheel = workspace / "new-component" / "client-2.1.7-py3-none-any.whl"
     wheel.parent.mkdir(parents=True)
     wheel.write_bytes(b"wheel fixture")
-    mocker.patch.object(doctor, "_doctor_source_checkout_roots", return_value=[workspace])
+    mocker.patch("mn_sdk.hostlocal_python._source_checkout_roots", return_value=[workspace])
     missing = "D:/checkout/new-component/" + wheel.name + "[grpc]"
     assert doctor._doctor_rebase_missing_local_source(missing) == str(wheel) + "[grpc]"
