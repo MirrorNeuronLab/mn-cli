@@ -2344,7 +2344,19 @@ def test_model_add_syncs_provider_definition_to_all_cluster_nodes(
     assert node_syncs[0][1]["restart"] is True
 
 
-def test_model_install_pulls_and_configures_without_loading(mocker):
+def _assert_cold_configuration_unloaded(calls):
+    # Configure starts an asynchronous DMR preload. Synchronize with readiness
+    # before unloading, so a successful add/update cannot leave cold weights resident.
+    target = "docker.io/ai/gemma4:E2B"
+    configure = next(i for i, command in enumerate(calls)
+                     if command[:4] == ["docker", "model", "configure", "--context-size"])
+    ready = calls.index(["docker", "model", "run", "--detach", target])
+    unload = calls.index(["docker", "model", "unload", target])
+    assert configure < ready < unload
+    assert not any(command[:3] == ["docker", "model", "run"] for command in calls[unload + 1:])
+
+
+def test_model_install_pulls_configures_and_leaves_cold_model_unloaded(mocker):
     calls = []
 
     def fake_run(command, **kwargs):
@@ -2392,7 +2404,7 @@ def test_model_install_pulls_and_configures_without_loading(mocker):
         "docker.io/ai/gemma4:E2B",
     ] in calls
 
-    assert not any(command[:3] == ["docker", "model", "run"] for command in calls)
+    _assert_cold_configuration_unloaded(calls)
 
 
 def test_model_install_syncs_local_dmr_gateway_route(mocker, monkeypatch):
@@ -2662,7 +2674,7 @@ def test_model_update_refreshes_local_dmr_gateway_route(mocker, monkeypatch):
 
     assert result.exit_code == 0
     assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] in calls
-    assert ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"] not in calls
+    _assert_cold_configuration_unloaded(calls)
     assert (
         synced[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"]
         == "http://model-runner.docker.internal/engines/v1"
@@ -2885,7 +2897,7 @@ def test_model_install_retries_transient_pull_failure(mocker):
 
     assert result.exit_code == 0
     assert calls.count(["docker", "model", "pull", "docker.io/ai/gemma4:E2B"]) == 2
-    assert ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"] not in calls
+    _assert_cold_configuration_unloaded(calls)
 
 
 def test_model_install_persists_manual_ownership_record(mocker):
@@ -3003,7 +3015,7 @@ def test_model_install_verifies_context_with_configure_when_run_help_omits_it(mo
     )
 
     assert result.exit_code == 0
-    assert ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"] not in calls
+    _assert_cold_configuration_unloaded(calls)
     assert ["docker", "model", "configure", "--context-size", "8192", "--mode", "completion", "docker.io/ai/gemma4:E2B"] in calls
     assert calls.count(["docker", "model", "configure", "show", "docker.io/ai/gemma4:E2B"]) >= 2
     assert [
@@ -3105,7 +3117,7 @@ def test_model_install_prefers_dmr_rest_pull_when_runner_api_reachable(
 
     assert result.exit_code == 0
     assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] not in calls
-    assert ["docker", "model", "run", "--detach", "docker.io/ai/gemma4:E2B"] not in calls
+    _assert_cold_configuration_unloaded(calls)
     assert any(
         url.endswith("/models/create") and method == "POST"
         for url, method, _data, _timeout in requests

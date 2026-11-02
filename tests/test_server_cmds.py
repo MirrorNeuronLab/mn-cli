@@ -1203,7 +1203,7 @@ def test_runtime_base_env_merges_explicit_and_installed_runtime_models(mocker):
 
     assert env["MN_NODE_RUNTIME_MODELS"] == "custom:model,gemma4:e2b"
 
-def test_record_runtime_model_install_advertises_model():
+def test_record_vision_model_install_advertises_model_without_changing_default():
     server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
     server_cmds.RUNTIME_COMPOSE_ENV.write_text(
         "COMPOSE_PROJECT_NAME=mirror-neuron\n"
@@ -1214,13 +1214,13 @@ def test_record_runtime_model_install_advertises_model():
         {
             "id": "gemma4:e2b",
             "model": "docker.io/ai/gemma4:E2B",
-            "aliases": ["default", "gemma4"],
+            "aliases": ["vision", "gemma4"],
         }
     )
 
     env = server_cmds._read_env_file(server_cmds.RUNTIME_COMPOSE_ENV)
     assert env["MN_NODE_RUNTIME_MODELS"] == "gemma4:e2b"
-    assert env["MN_LLM_MODEL_RUNNER_MODEL"] == "gemma4:e2b"
+    assert env["MN_LLM_MODEL_RUNNER_MODEL"] == "nemotron-3.5-lightning:latest"
     assert path is None
 
 
