@@ -864,3 +864,13 @@ Move an idle Job and its data with `mn job relocate JOB --node NODE`. Pause its
 schedules and wait for cleanup first. Retrying resumes a durable transfer; add
 `--abort` to cancel before ownership commits. After commit, retry finishes activation
 on the destination. No running execution is silently migrated or replayed.
+
+
+## Native tools on co-worker addition
+
+`mn blueprint add <id>` prepares declared `setup: on_install` skill dependencies
+through the matching SDK before writing the installation record. A failed setup
+exits unsuccessfully and leaves the co-worker unadded. Adding the catalog library,
+listing blueprints, and installing or starting the runtime do not run these hooks.
+Computer Use downloads its signed, notarized `mn computer use.app` from public
+GAR at this point; the end user needs neither Xcode nor gcloud.

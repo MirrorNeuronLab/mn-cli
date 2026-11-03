@@ -1886,6 +1886,12 @@ def _install_catalog_blueprint_with_models(
     if not model_summary.get("ok", True):
         _print_model_install_summary(model_summary)
         raise typer.Exit(1)
+    from mn_sdk.blueprint_install import prepare_blueprint_install_skills, SkillInstallError
+    try:
+        prepare_blueprint_install_skills(bundle_root, config_overrides=config)
+    except SkillInstallError as exc:
+        print_error(console, str(exc))
+        raise typer.Exit(1) from exc
     _record_blueprint_install(
         blueprint_id=blueprint_id,
         storage_dir=storage_dir,

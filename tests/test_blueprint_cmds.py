@@ -2329,3 +2329,27 @@ def test_blueprint_add_rejects_invalid_model_without_installing(monkeypatch, tmp
     assert result.exit_code == 1
     eager.assert_not_called()
     assert not (tmp_path / ".mn" / "blueprint_installs" / "worker.json").exists()
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_blueprint_add_prepares_native_skills_before_install_record(monkeypatch, tmp_path, mocker, fail):
+    from mn_sdk import blueprint_install
+    catalog = tmp_path / "catalog"
+    catalog.mkdir()
+    _write_catalog(catalog / "index.json", [{"id": "worker", "path": "worker"}])
+    _write_manifest(catalog / "worker" / "manifest.json", _manifest_text(_runtime_model_manifest("default")))
+    _use_local_blueprint_source(monkeypatch, catalog)
+    record = tmp_path / ".mn/blueprint_installs/worker.json"
+    calls = []
+    def setup(root, **kwargs):
+        assert root == catalog / "worker"
+        assert not record.exists()
+        calls.append(root)
+        if fail:
+            raise blueprint_install.SkillInstallError("native-skill")
+        return [{"name": "native-skill", "status": "ready"}]
+    monkeypatch.setattr(blueprint_install, "prepare_blueprint_install_skills", setup)
+    result = runner.invoke(app, ["blueprint", "add", "worker"])
+    assert result.exit_code == (1 if fail else 0), result.output
+    assert record.exists() is not fail
+    assert calls == [catalog / "worker"]

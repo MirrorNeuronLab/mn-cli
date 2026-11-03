@@ -929,3 +929,13 @@ and `mn run retry` accept `--queue` to wait for compatible capacity explicitly.
 `mn job relocate JOB --node NODE` moves an idle Job and its data using Core's
 fenced transfer. Pause schedules and finish resource cleanup first. Repeating
 an interrupted move resumes it; `--abort` is valid only before ownership commit.
+
+
+## Native tools on co-worker addition
+
+`mn blueprint add <id>` prepares declared `setup: on_install` skill dependencies
+through the matching SDK before writing the installation record. A failed setup
+exits unsuccessfully and leaves the co-worker unadded. Adding the catalog library,
+listing blueprints, and installing or starting the runtime do not run these hooks.
+Computer Use downloads its signed, notarized `mn computer use.app` from public
+GAR at this point; the end user needs neither Xcode nor gcloud.
