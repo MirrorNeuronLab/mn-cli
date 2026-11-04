@@ -8,6 +8,8 @@ from uuid import uuid4
 import grpc
 import typer
 from mn_sdk.errors import ValidationError
+from mn_sdk.integrations.run_reads import history_reason
+from mn_sdk.public.monitor import TERMINAL_EVENT_TYPES
 from mn_sdk.run_retry import parse_retry_settings
 from mn_sdk.shared_run_store import mapped_run_record
 from mn_cli.error_handler import handle_cli_error
@@ -98,8 +100,11 @@ def _runtime_run_items(*, blueprint_id: str | None, limit: int, local_items: lis
 
     try:
         jobs_payload = json.loads(client.list_jobs(include_archived=True, page_size=max(limit, 50)))
-    except Exception:
-        logger.debug("Unable to list runtime jobs for run listing", exc_info=True)
+    except Exception as exc:
+        reason = history_reason(exc)
+        if reason is None:
+            raise
+        logger.debug("Run list using history category=%s", reason)
         return []
 
     jobs = (
@@ -144,8 +149,11 @@ def _runs_for_job(job_id: str, job_blueprint_id: str, limit: int) -> list[dict]:
             runs_payload = json.loads(
                 client.list_runs(job_id, page_size=max(limit, 50), page_token=page_token)
             )
-        except Exception:
-            logger.debug("Unable to list runs for durable job %s", job_id, exc_info=True)
+        except Exception as exc:
+            reason = history_reason(exc)
+            if reason is None:
+                raise
+            logger.debug("Run list using history job_id=%s category=%s", job_id[:160], reason)
             break
         runs = (
             runs_payload.get("data")
@@ -192,11 +200,15 @@ def _merge_run_items(
         live_ids.add(run_id)
         combined = dict(merged.get(run_id) or {})
         combined.update(item)
+        if "placement" in combined:
+            combined["placement"] = item.get("placement")
         merged[run_id] = combined
 
     for run_id, item in merged.items():
         item["record_source"] = "runtime" if run_id in live_ids else "history"
         if run_id not in live_ids:
+            if "placement" in item:
+                item["placement"] = None
             item["retry"] = {"available": False, "reason": "Recovery is unverified. Check Core availability and plan a retry."}
         if run_id not in live_ids and str(item.get("status") or "").lower() not in {
             "completed", "failed", "cancelled", "canceled", "unknown",
@@ -279,17 +291,22 @@ def watch_run(run_id: str = typer.Argument(help="Execution run ID.")) -> None:
         )
         return
     try:
-        snapshot = json.loads(client.get_run(run_id))
-        emit_stream_record("snapshot", data=snapshot)
-        for event_json in client.stream_events(
-            runtime_job_id,
-            follow=True,
-            timeout=None,
-            heartbeat_interval_ms=1_000,
-        ):
-            event = json.loads(event_json)
-            if event.get("type") not in {"heartbeat", "stream_heartbeat"}:
-                emit_stream_record("event", data=event)
+        emit_stream_record("snapshot", data=run_record)
+        stream = client.stream_events(
+            runtime_job_id, follow=True, timeout=None, heartbeat_interval_ms=1_000,
+        )
+        try:
+            for event_json in stream:
+                event = json.loads(event_json)
+                kind = str(event.get("type") or "").lower()
+                if kind not in {"heartbeat", "stream_heartbeat"}:
+                    emit_stream_record("event", data=event)
+                if kind in TERMINAL_EVENT_TYPES:
+                    break
+        finally:
+            close = getattr(stream, "close", None)
+            if close is not None:
+                close()
         record_result({"run_id": run_id, "runtime_job_id": runtime_job_id, "detached": False})
     except KeyboardInterrupt:
         record_result({"run_id": run_id, "runtime_job_id": runtime_job_id, "detached": True})

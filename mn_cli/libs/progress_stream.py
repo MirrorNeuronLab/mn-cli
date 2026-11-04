@@ -73,41 +73,68 @@ class ProgressSnapshotStream:
         return "failed" in normalized or "error" in normalized or "timed_out" in normalized
 
 
-def stream_api_workflow_progress(
-    api_base_url: str,
-    run_id: str,
-    *,
-    api_token: str = "",
-    timeout: float = 10.0,
-):
+def _progress_request(api_base_url, run_id, api_token):
     base = str(api_base_url or "").rstrip("/")
-    if not base:
-        return
-    quoted_run_id = urllib.parse.quote(str(run_id), safe="")
-    url = f"{base}/runs/{quoted_run_id}/events/stream"
+    path = urllib.parse.quote(str(run_id), safe="")
     headers = {"Accept": "text/event-stream"}
     if api_token:
         headers["Authorization"] = f"Bearer {api_token}"
-    request = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        event_name = "message"
-        data_lines: list[str] = []
-        for raw_line in response:
-            line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
-            if line == "":
-                if event_name in {"snapshot", "run.snapshot", "message"} and data_lines:
-                    payload = json.loads("\n".join(data_lines))
-                    if isinstance(payload, dict):
-                        if payload.get("type") == "run.snapshot" and isinstance(payload.get("data"), dict):
-                            yield payload["data"]
-                        elif "type" not in payload:
-                            yield payload
-                event_name = "message"
-                data_lines = []
-                continue
-            if line.startswith(":"):
-                continue
-            if line.startswith("event:"):
-                event_name = line[6:].strip()
-            elif line.startswith("data:"):
-                data_lines.append(line[5:].lstrip())
+    return f"{base}/runs/{path}/events/stream", headers
+
+
+class _SnapshotDecoder:
+    def __init__(self):
+        self.event = "message"
+        self.data = []
+
+    def feed(self, line):
+        if line.startswith("event:"):
+            self.event = line[6:].strip()
+        elif line.startswith("data:"):
+            self.data.append(line[5:].lstrip())
+        elif not line:
+            event, data = self.event, self.data
+            self.event, self.data = "message", []
+            if event in {"snapshot", "run.snapshot", "message"} and data:
+                payload = json.loads("\n".join(data))
+                if isinstance(payload, dict):
+                    if payload.get("type") == "run.snapshot" and isinstance(payload.get("data"), dict):
+                        return payload["data"]
+                    if "type" not in payload:
+                        return payload
+        return None
+
+
+def stream_api_workflow_progress(
+    api_base_url: str, run_id: str, *, api_token: str = "", timeout: float = 10.0,
+):
+    if not api_base_url:
+        return
+    url, headers = _progress_request(api_base_url, run_id, api_token)
+    decoder = _SnapshotDecoder()
+    with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout) as response:
+        for raw in response:
+            snapshot = decoder.feed(raw.decode("utf-8", errors="replace").rstrip("\r\n"))
+            if snapshot is not None:
+                yield snapshot
+
+
+async def watch_api_workflow_progress(api_base_url, run_id, *, api_token="", timeout=10.0):
+    import httpx
+    from mn_sdk.errors import AppError
+
+    url, headers = _progress_request(api_base_url, run_id, api_token)
+    decoder = _SnapshotDecoder()
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with client.stream("GET", url, headers=headers) as response:
+            if response.status_code in (401, 403):
+                raise AppError("MN_PERMISSION_DENIED", "Permission was denied for this MirrorNeuron operation.",
+                               exit_code=13, http_status=response.status_code)
+            if 400 <= response.status_code < 500 and response.status_code != 404:
+                from mn_sdk.errors import ValidationError
+                raise ValidationError("The workflow progress request was rejected.")
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                snapshot = decoder.feed(line)
+                if snapshot is not None:
+                    yield snapshot

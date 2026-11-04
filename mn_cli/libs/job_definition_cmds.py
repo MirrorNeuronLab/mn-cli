@@ -15,6 +15,7 @@ from mn_sdk import (
     run_input_validation,
 )
 from mn_sdk.blueprint_support import make_run_id
+from mn_sdk.integrations.run_reads import history_reason
 from mn_sdk.shared_run_store import mapped_run_record
 from mn_sdk.submission_preparation import prepare_manifest_for_submission
 
@@ -359,13 +360,14 @@ def run_status(run_id: str):
     try:
         record = json.loads(client.get_run(run_id))
     except Exception as exc:
-        record = mapped_run_record(run_id)
+        reason = history_reason(exc)
+        record = mapped_run_record(run_id) if reason is not None else None
         if record is None:
             handle_cli_error(exc, console, "run show", command_context={"run_id": run_id})
             return
         if record.get("status") not in {"completed", "failed", "cancelled"}:
             record = {**record, "status": "unknown"}
-        missing = isinstance(exc, grpc.RpcError) and exc.code() == grpc.StatusCode.NOT_FOUND
+        missing = reason == "missing"
         record = {**record, "record_source": "history", "retry": {"available": False,
             "reason": "Core control record is missing. Start a new run." if missing else "Core is unavailable. Retry eligibility cannot be checked yet."}}
     if record.get("record_source") == "history":

@@ -1,4 +1,5 @@
 import json
+import grpc
 import pytest
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -8,9 +9,13 @@ from mn_cli.libs.job_cleanup import JobResourceCleanupError
 
 
 def test_run_show_uses_verified_shared_record_when_core_lost_run(monkeypatch):
+    class Missing(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.NOT_FOUND
+
     rendered = []
     monkeypatch.setattr(job_definition_cmds, "client", SimpleNamespace(
-        get_run=lambda _run_id: (_ for _ in ()).throw(LookupError("missing")),
+        get_run=lambda _run_id: (_ for _ in ()).throw(Missing()),
     ))
     monkeypatch.setattr(job_definition_cmds, "mapped_run_record", lambda _run_id: {
         "run_id": "run-old", "status": "failed",
@@ -464,3 +469,21 @@ def test_busy_start_acknowledges_automatic_queue_without_confirmation(monkeypatc
     job_definition_cmds.start("job-b", run_id="run-b", inputs=None, force=False, yes=False)
     assert messages == [receipt["admission"]["message"]]
     assert rendered == ["Run queued"]
+
+
+@pytest.mark.parametrize("code", [grpc.StatusCode.PERMISSION_DENIED, grpc.StatusCode.INVALID_ARGUMENT])
+def test_run_show_preserves_owner_error_when_verified_history_exists(monkeypatch, code):
+    from unittest.mock import Mock
+    class Failure(grpc.RpcError):
+        def code(self):
+            return code
+    error = Failure()
+    history, render, handle = Mock(return_value={"status": "completed"}), Mock(), Mock()
+    monkeypatch.setattr(job_definition_cmds, "mapped_run_record", history)
+    monkeypatch.setattr(job_definition_cmds, "print_detail", render)
+    monkeypatch.setattr(job_definition_cmds, "handle_cli_error", handle)
+    monkeypatch.setattr(job_definition_cmds, "client", SimpleNamespace(get_run=Mock(side_effect=error)))
+    job_definition_cmds.run_status("r")
+    history.assert_not_called()
+    render.assert_not_called()
+    handle.assert_called_once_with(error, job_definition_cmds.console, "run show", command_context={"run_id": "r"})

@@ -1,4 +1,10 @@
-from contextlib import contextmanager
+import asyncio
+from contextlib import contextmanager, suppress
+
+from mn_sdk._rpc_timeout import observation_timeout
+from mn_sdk.errors import AppError, ValidationError
+from mn_cli.libs.progress_stream import watch_api_workflow_progress
+from mn_cli.shared import LazyClient
 
 from mn_sdk import (
     is_lowered_runtime_projection as _is_lowered_runtime_projection,
@@ -102,25 +108,15 @@ def _monitor_rpc_timeout_seconds() -> float:
 def _temporary_monitor_rpc_timeout():
     """Give monitor-only RPCs enough time to read large running job ledgers."""
 
-    missing = object()
-    original = getattr(client, "timeout", missing)
-    if original is missing or original is None:
-        yield
-        return
-
+    observed = client._get() if isinstance(client, LazyClient) else client
+    original = getattr(observed, "timeout", None)
     try:
-        should_extend = float(original) < _monitor_rpc_timeout_seconds()
+        seconds = max(float(original), _monitor_rpc_timeout_seconds())
     except (TypeError, ValueError):
-        should_extend = False
-    if not should_extend:
         yield
         return
-
-    client.timeout = _monitor_rpc_timeout_seconds()
-    try:
+    with observation_timeout(observed, seconds):
         yield
-    finally:
-        client.timeout = original
 
 
 def _monitor_rpc_code_name(exc: Exception) -> str:
@@ -138,8 +134,7 @@ def _is_transient_monitor_fetch_error(exc: Exception) -> bool:
     if _monitor_rpc_code_name(exc) in {"DEADLINE_EXCEEDED", "UNAVAILABLE"}:
         return True
 
-    text = str(exc).upper()
-    return "DEADLINE_EXCEEDED" in text or "UNAVAILABLE" in text
+    return isinstance(exc, (ConnectionError, TimeoutError))
 
 
 def _monitor_fetch_warning(exc: Exception) -> str:
@@ -181,10 +176,10 @@ def _get_run_for_monitor(run_id: str) -> str:
                 raise
             delay = backoff * (attempt + 1)
             logger.warning(
-                "Transient monitor run fetch failure for run_id=%s; retrying in %.2fs: %s",
-                run_id,
+                "Monitor read retry run_id=%s delay=%.2fs category=%s",
+                run_id[:160],
                 delay,
-                exc,
+                _monitor_rpc_code_name(exc) or "unavailable",
             )
             if delay:
                 time.sleep(delay)
@@ -764,29 +759,17 @@ def _live_monitor_api_stream(
     ).strip().lower() in {"1", "true", "yes", "on"}:
         return False
 
-    import queue
+    try:
+        return asyncio.run(_watch_api_stream(api_base_url, job_id, run_id, stable_job_id))
+    except KeyboardInterrupt:
+        return True
+
+
+async def _watch_api_stream(api_base_url, job_id, run_id, stable_job_id):
     import select
     import sys
-    import threading
 
-    event_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
     shape = _monitor_workflow_shape(stable_job_id, run_id)
-
-    def reader() -> None:
-        try:
-            for snapshot in stream_api_workflow_progress(
-                api_base_url,
-                run_id or job_id,
-                api_token=str(getattr(config, "api_token", "") or ""),
-                timeout=_monitor_api_stream_timeout_seconds(),
-            ):
-                event_queue.put(("snapshot", snapshot))
-                if str(snapshot.get("status") or "").lower() in FINAL_STATUSES:
-                    break
-        except Exception as exc:
-            event_queue.put(("error", exc))
-        finally:
-            event_queue.put(("done", None))
 
     class MonitorView:
         def __init__(
@@ -819,20 +802,22 @@ def _live_monitor_api_stream(
     ), shape)
     monitor_state = JobMonitorState()
     view = MonitorView(monitor_state, initial_progress)
-    worker = threading.Thread(target=reader, daemon=True)
-    worker.start()
     is_tty = _interactive_live_output()
     old_settings = None
-    if is_tty:
-        import termios
-        import tty
-
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        tty.setcbreak(fd)
-
+    stream = watch_api_workflow_progress(
+        api_base_url, run_id or job_id, api_token=str(getattr(config, "api_token", "") or ""),
+        timeout=_monitor_api_stream_timeout_seconds(),
+    )
+    pending = None
     terminal_received = False
     try:
+        if is_tty:
+            import termios
+            import tty
+
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd)
+            tty.setcbreak(fd)
         with Live(
             view,
             refresh_per_second=12,
@@ -851,26 +836,24 @@ def _live_monitor_api_stream(
                     # A handled detach must not fall through to the polling
                     # monitor in _live_monitor.
                     return True
+                if terminal_received:
+                    continue
+                if pending is None:
+                    pending = asyncio.create_task(anext(stream))
+                done, _ = await asyncio.wait({pending}, timeout=0.05 if is_tty else 0.5)
+                if not done:
+                    continue
+                finished, pending = pending, None
                 try:
-                    kind, payload = event_queue.get(timeout=0.05 if is_tty else 0.5)
-                except queue.Empty:
-                    continue
-                if terminal_received and kind in {"error", "done"}:
-                    continue
-                if kind == "error":
-                    # A local run-store snapshot is useful while connecting,
-                    # but it does not prove that the API stream attached.  If
-                    # the stream cannot stay open, fall back to the gRPC
-                    # monitor instead of treating that initial snapshot as a
-                    # successful watch and returning immediately.
-                    logger.warning("Workflow progress stream ended: %s", payload)
+                    payload = finished.result()
+                except StopAsyncIteration:
                     return False
-                if kind == "done":
-                    # Streams only complete normally after a terminal update.
-                    # A non-terminal close must continue through the polling
-                    # monitor so `mn run watch` remains attached.
+                except (AppError, ValidationError):
+                    raise
+                except Exception as exc:
+                    logger.warning("Workflow progress stream ended category=%s", type(exc).__name__)
                     return False
-                if kind == "snapshot" and isinstance(payload, dict):
+                if isinstance(payload, dict):
                     progress = _with_monitor_shape(_with_monitor_identity(
                         _public_progress_from_api_snapshot(job_id, payload),
                         run_id=run_id,
@@ -885,15 +868,23 @@ def _live_monitor_api_stream(
                     }
                     if str(progress.get("status") or "").lower() in FINAL_STATUSES:
                         terminal_received = True
+                        await stream.aclose()
                         if not is_tty:
                             return True
     except KeyboardInterrupt:
         return True
     finally:
-        if is_tty and old_settings:
-            import termios
-
-            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
+        try:
+            if pending is not None:
+                pending.cancel()
+                with suppress(asyncio.CancelledError, StopAsyncIteration):
+                    await pending
+        finally:
+            try:
+                await stream.aclose()
+            finally:
+                if is_tty and old_settings:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
     return False
 
 

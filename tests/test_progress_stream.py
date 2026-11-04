@@ -77,3 +77,40 @@ def test_monitor_manifest_keeps_child_metadata_and_live_steps():
         'steps_added': [{'id': 'review:r1:scan', 'parent_step_id': 'review',
                          'child_round': 1, 'child_phase': 'executing'}]}})
     assert view.steps_by_id['review:r1:scan'].child_round == 1
+
+
+
+def test_async_watch_closes_open_http_response_on_cancel(monkeypatch):
+    import asyncio
+    import httpx
+    from mn_cli.libs.progress_stream import watch_api_workflow_progress
+
+    async def observe():
+        reading, closed = asyncio.Event(), asyncio.Event()
+        class Body(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                reading.set()
+                await asyncio.Event().wait()
+                yield b""
+
+            async def aclose(self):
+                closed.set()
+
+        async def respond(request):
+            assert request.url.path == "/api/v1/runs/example/events/stream"
+            assert request.headers["authorization"] == "Bearer fixture"
+            return httpx.Response(200, stream=Body())
+        real_client = httpx.AsyncClient
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(respond), **kw))
+        stream = watch_api_workflow_progress("http://owner/api/v1", "example", api_token="fixture")
+        pending = asyncio.create_task(anext(stream))
+        await asyncio.wait_for(reading.wait(), 2)
+        pending.cancel()
+        try:
+            await pending
+        except asyncio.CancelledError:
+            pass
+        assert closed.is_set()
+        await stream.aclose()
+
+    asyncio.run(observe())

@@ -9,13 +9,15 @@ runner = CliRunner()
 
 
 def test_run_list_marks_unconfirmed_local_running_record_unknown():
-    local = [{"run_id": "old", "status": "running"}, {"run_id": "live", "status": "running"}]
+    local = [{"run_id": identifier, "status": "running", "placement": {"owner_node": "old"}}
+             for identifier in ("old", "live")]
     core = [{"run_id": "live", "status": "completed"}]
 
     result = {item["run_id"]: item for item in _merge_run_items(local, core, limit=10)}
 
     assert result["old"]["status"] == "unknown"
     assert result["live"]["status"] == "completed"
+    assert result["old"]["placement"] is None and result["live"]["placement"] is None
 
 
 def test_run_list_reads_archived_and_locally_mapped_job_runs(mocker):
@@ -110,8 +112,7 @@ def test_run_watch_json_is_ndjson_and_resolves_runtime_job(mocker):
     records = _documents(result.stdout)
     assert [record["type"] for record in records] == ["snapshot", "event", "complete"]
     assert all(record["schema"] == "mn.cli.stream/v1" for record in records)
-    assert get_run.call_count == 2
-    get_run.assert_called_with("run-1")
+    get_run.assert_called_once_with("run-1")
 
 
 def test_run_watch_uses_the_v1_run_id_not_the_job_id(mocker):
