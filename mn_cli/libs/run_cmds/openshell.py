@@ -1,6 +1,7 @@
 from mn_sdk.native_resource_registry import register_native_resource
 from mn_sdk.errors import AppError
 from mn_sdk.openshell_policy import materialize_worker_policy, render_worker_policy
+from mn_sdk.openshell_gateway import built_gateway_image, gateway_environment
 from mn_sdk.submission_preparation import (
     _ensure_docker_worker_requirements_install,
     _local_skill_dependency_source_records,
@@ -133,25 +134,7 @@ def _openshell_gateway_endpoint() -> str:
     return f"http://127.0.0.1:{os.getenv('OPENSHELL_GATEWAY_PORT', '58080')}"
 
 def _openshell_env() -> dict[str, str]:
-    env = os.environ.copy()
-    if env.get("OPENSHELL_GATEWAY_ENDPOINT"):
-        return env
-
-    if env.get("OPENSHELL_GATEWAY", "").strip():
-        return env
-
-    runtime_endpoint = _openshell_runtime_gateway_endpoint()
-    if runtime_endpoint:
-        env["OPENSHELL_GATEWAY_ENDPOINT"] = runtime_endpoint
-        env.pop("OPENSHELL_GATEWAY", None)
-        return env
-
-    gateway_name = _openshell_gateway_name(env=env)
-    if gateway_name:
-        env.setdefault("OPENSHELL_GATEWAY", gateway_name)
-    else:
-        env.setdefault("OPENSHELL_GATEWAY_ENDPOINT", _openshell_gateway_endpoint())
-    return env
+    return gateway_environment(os.environ, {"OPENSHELL_GATEWAY_ENDPOINT": _openshell_runtime_gateway_endpoint()})[0]
 
 def _openshell_runtime_gateway_endpoint() -> str:
     runtime_env = read_env_file(mn_home() / "docker-compose.env")
@@ -464,8 +447,8 @@ def _build_openshell_from_image(source_path: Path, node_id: Any) -> str:
             console.print(output.strip())
         raise typer.Exit(1)
 
-    matches = re.findall(r"Image\s+([^\s]+)\s+is available in the gateway", output)
-    if not matches:
+    image_ref = built_gateway_image(output)
+    if not image_ref:
         console.print(
             f"[red]OpenShell did not report an image reference for {node_id}.[/red]"
         )
@@ -473,7 +456,6 @@ def _build_openshell_from_image(source_path: Path, node_id: Any) -> str:
             console.print(output.strip())
         raise typer.Exit(1)
 
-    image_ref = ANSI_ESCAPE_RE.sub("", matches[-1])
     print_success_confirmation(
         console,
         "OpenShell sandbox image build",
@@ -483,24 +465,7 @@ def _build_openshell_from_image(source_path: Path, node_id: Any) -> str:
     return image_ref
 
 def _openshell_gateway_uses_local_docker() -> bool:
-    # Match the endpoint precedence used by _openshell_env. Managed Compose
-    # gateways need not have a named gateway in the user's OpenShell config.
-    endpoint = os.getenv("OPENSHELL_GATEWAY_ENDPOINT", "").strip()
-    explicit_gateway = os.getenv("OPENSHELL_GATEWAY", "").strip()
-    if not endpoint and not explicit_gateway:
-        endpoint = _openshell_runtime_gateway_endpoint()
-    if not endpoint:
-        gateway_name = explicit_gateway or _openshell_gateway_name()
-        if not gateway_name:
-            return False
-        metadata = _openshell_gateway_metadata(gateway_name)
-        if metadata.get("is_remote") is True:
-            return False
-        endpoint = metadata.get("gateway_endpoint")
-    if not isinstance(endpoint, str):
-        return False
-    parsed = urllib.parse.urlparse(endpoint)
-    return parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+    return gateway_environment(os.environ, {"OPENSHELL_GATEWAY_ENDPOINT": _openshell_runtime_gateway_endpoint()})[1]
 
 def _build_local_docker_sandbox_image(source_path: Path) -> str:
     source_path = source_path.resolve()

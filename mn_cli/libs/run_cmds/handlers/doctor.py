@@ -27,6 +27,7 @@ from ..run_state import *
 from .validate import *
 from mn_cli.output import record_result
 from mn_sdk.native_host_submission import NATIVE_ENVIRONMENT_KEY, native_host_python_required
+from mn_sdk.runner_types import RUNNERS, runner_nodes
 from mn_cli.runtime.hostlocal_python_bridge import prepare_hostlocal_python_bridge
 
 def doctor_bundle(
@@ -51,9 +52,12 @@ def doctor_bundle(
     if debug:
         env_overrides.setdefault("MN_DEBUG", "1")
 
-    prepared_submission_id = ""
+    prepared_manifest = None
+    failure = None
     try:
-        bundle_dir, manifest_file, manifest_dict = _load_bundle_manifest(bundle_path)
+        bundle_dir, manifest_file, manifest_dict = _load_bundle_manifest(
+            bundle_path, config_overrides=config_overrides
+        )
         manifest_dict = _configure_bundle_if_required(bundle_dir, manifest_file, manifest_dict)
         blueprint_id = _doctor_blueprint_id(bundle_dir, manifest_dict, config_overrides)
         report["blueprint"].update(
@@ -166,8 +170,6 @@ def doctor_bundle(
             submission_metadata=submission_metadata,
             config_overrides=config_overrides,
         )
-        if not check_only:
-            _prepare_openshell_custom_images(bundle_dir, manifest_dict)
         host_env_report = _doctor_prepare_hostlocal_python_envs(
             bundle_dir,
             manifest_dict,
@@ -193,29 +195,7 @@ def doctor_bundle(
                 )
                 context_report = _doctor_component("context_memory", "passing", "Context engine is ready.")
 
-        docker_report = _doctor_component("docker_worker", "skipped", "No DockerWorker nodes declared.")
-        if _doctor_has_runner(manifest_dict, "MirrorNeuron.Runner.DockerWorker"):
-            if check_only:
-                docker_report = _doctor_component("docker_worker", "warning", "DockerWorker nodes declared but not prepared in --check-only mode.")
-            else:
-                prepared = prepare_job_submission(
-                    manifest_dict,
-                    payloads,
-                    bundle_dir=bundle_dir,
-                    run_id=env_overrides.get("MN_RUN_ID"),
-                    submission_id=_doctor_submission_id(blueprint_id, manifest_dict),
-                    cluster_client=client,
-                    env={**os.environ, **env_overrides},
-                )
-                prepared_submission_id = str(prepared.metadata.get("submission_id") or "")
-                prepared_manifest = json.loads(prepared.manifest_json)
-                docker_summary = (
-                    prepared_manifest.get("metadata", {}).get("mn_docker_workers")
-                    if isinstance(prepared_manifest.get("metadata"), dict)
-                    else None
-                )
-                docker_report = _doctor_docker_worker_report(docker_summary)
-        elif not check_only:
+        if not check_only:
             prepared = prepare_job_submission(
                 manifest_dict,
                 payloads,
@@ -225,11 +205,19 @@ def doctor_bundle(
                 cluster_client=client,
                 env={**os.environ, **env_overrides},
             )
-            prepared_submission_id = str(prepared.metadata.get("submission_id") or "")
+            prepared_manifest = json.loads(prepared.manifest_json)
+
+        inspected = prepared_manifest if prepared_manifest is not None else manifest_dict
+        docker_report = _doctor_component("docker_worker", "skipped", "No DockerWorker nodes declared.")
+        if _doctor_has_runner(inspected, RUNNERS["docker_worker"]):
+            if check_only:
+                docker_report = _doctor_component("docker_worker", "warning", "DockerWorker nodes declared but not prepared in --check-only mode.")
+            else:
+                docker_report = _doctor_docker_worker_report(inspected.get("metadata", {}).get("mn_docker_workers"))
 
         report["environments"] = {
             "docker_worker": docker_report,
-            "openshell": _doctor_openshell_report(manifest_dict, prepared=not check_only),
+            "openshell": _doctor_openshell_report(inspected, prepared=not check_only),
             "host_local_python": host_env_report,
         }
         report["context_memory"] = context_report
@@ -245,26 +233,24 @@ def doctor_bundle(
                 timeout=timeout,
             )
         )
-        if cleanup and prepared_submission_id:
-            report["cleanup"] = _doctor_cleanup(prepared_submission_id, timeout=timeout)
-        elif cleanup:
-            report["cleanup"] = _doctor_component("cleanup", "skipped", "No doctor submission resources were created.")
-    except typer.Exit:
-        if not report.get("summary", {}).get("status"):
-            report["summary"] = _doctor_summary(report)
-        _doctor_print_report(report, json_output=json_output)
-        raise
+    except typer.Exit as exc:
+        failure = exc
     except Exception as exc:
         logger.exception("Blueprint doctor failed")
         report.setdefault("errors", []).append(str(exc))
-        report["summary"] = _doctor_summary(report, extra_status="critical")
         if "preparation" not in report:
             report["preparation"] = _doctor_component("preparation", "critical", str(exc))
-        _doctor_print_report(report, json_output=json_output)
-        raise typer.Exit(1) from exc
+        failure = exc
+    finally:
+        if cleanup:
+            report["cleanup"] = _doctor_cleanup(prepared_manifest)
 
     report["summary"] = _doctor_summary(report)
     _doctor_print_report(report, json_output=json_output)
+    if isinstance(failure, typer.Exit):
+        raise failure
+    if failure is not None:
+        raise typer.Exit(1) from failure
     if report["summary"]["status"] == "critical":
         raise typer.Exit(1)
     return report
@@ -491,12 +477,8 @@ def _doctor_docker_worker_report(summary: Any) -> dict[str, Any]:
     )
 
 def _doctor_openshell_report(manifest: dict[str, Any], *, prepared: bool = True) -> dict[str, Any]:
-    nodes = [
-        node
-        for node in manifest_nodes(manifest)
-        if isinstance(node.get("config"), dict)
-        and node["config"].get("runner_module") == "MirrorNeuron.Sandbox.OpenShell"
-    ]
+    nodes = list(dict.fromkeys(str(node.get("node_id") or node.get("id") or "openshell")
+                               for node in runner_nodes(manifest, RUNNERS["openshell"])))
     if not nodes:
         return _doctor_component("openshell", "skipped", "No OpenShell nodes declared.")
     if not prepared:
@@ -504,13 +486,13 @@ def _doctor_openshell_report(manifest: dict[str, Any], *, prepared: bool = True)
             "openshell",
             "warning",
             "OpenShell nodes declared but not prepared in --check-only mode.",
-            nodes=[str(node.get("node_id") or node.get("id") or "openshell") for node in nodes],
+            nodes=nodes,
         )
     return _doctor_component(
         "openshell",
         "passing",
         f"Prepared {len(nodes)} OpenShell node(s).",
-        nodes=[str(node.get("node_id") or node.get("id") or "openshell") for node in nodes],
+        nodes=nodes,
     )
 
 def _doctor_prepare_hostlocal_python_envs(
@@ -921,10 +903,12 @@ def _doctor_post_openai_payload(name: str, url: str, payload: dict[str, Any], *,
     except Exception as exc:
         return {"name": name, "status": "critical", "url": url, "detail": _truncate_doctor_detail(str(exc))}
 
-def _doctor_cleanup(submission_id: str, *, timeout: float) -> dict[str, Any]:
+def _doctor_cleanup(manifest: dict[str, Any] | None) -> dict[str, Any]:
+    if manifest is None:
+        return _doctor_component("cleanup", "skipped", "No doctor submission resources were created.")
     try:
-        result = cleanup_docker_worker_services(submission_id=submission_id, timeout=max(timeout, 1.0))
-        return _doctor_component("cleanup", "passing", f"Removed {result.get('removed', 0)} DockerWorker ledger entrie(s).", report=result)
+        result = cleanup_job_definition_resources(manifest)
+        return _doctor_component("cleanup", "passing", "Retired the prepared diagnostic resources.", report=result)
     except Exception as exc:
         return _doctor_component("cleanup", "warning", str(exc))
 

@@ -139,7 +139,9 @@ def run_bundle(
         config_overrides = dict(config_overrides or {})
         submitted_config_overrides = config_overrides
         submission_metadata = dict(submission_metadata or {})
-        bundle_dir, manifest_file, manifest_dict = _load_bundle_manifest(bundle_path)
+        bundle_dir, manifest_file, manifest_dict = _load_bundle_manifest(
+            bundle_path, config_overrides=config_overrides
+        )
         submitted_bundle_dir = bundle_dir
         manifest_dict = _configure_bundle_if_required(
             bundle_dir,
@@ -389,18 +391,6 @@ def run_bundle(
                 )
         if force:
             _mark_manifest_force(manifest_dict)
-        with launch_activity(
-            console,
-            "Prepare sandbox images",
-            "checking or building declared OpenShell images and shared sandboxes",
-        ):
-            _prepare_openshell_custom_images(
-                bundle_dir,
-                manifest_dict,
-                shared_sandbox_job_id=stable_job_id,
-                shared_sandbox_submission_id=definition_submission_id,
-            )
-
         with launch_activity(
             console,
             "Stage workflow files",

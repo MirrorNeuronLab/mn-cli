@@ -96,7 +96,6 @@ def test_doctor_bundle_prepares_without_submitting_job(mocker, tmp_path):
         "mn_cli.libs.run_cmds.handlers.doctor.prepare_manifest_for_submission",
         side_effect=lambda _bundle_dir, manifest, **_kwargs: manifest,
     )
-    mocker.patch("mn_cli.libs.run_cmds.handlers.doctor._prepare_openshell_custom_images")
     mocker.patch(
         "mn_cli.libs.run_cmds.handlers.doctor._doctor_prepare_hostlocal_python_envs",
         return_value={"status": "skipped", "detail": "none"},
@@ -115,11 +114,15 @@ def test_doctor_bundle_prepares_without_submitting_job(mocker, tmp_path):
     )
     mock_submit = mocker.patch("mn_cli.libs.run_cmds.client.create_job")
     mocker.patch("mn_cli.libs.run_cmds.handlers.doctor._doctor_print_report")
+    cleanup = mocker.patch("mn_cli.libs.run_cmds.handlers.doctor.cleanup_job_definition_resources",
+                           return_value={"storage_removed": True})
 
-    report = run_cmds.doctor_bundle(str(bundle_dir), no_llm_call=True)
+    report = run_cmds.doctor_bundle(str(bundle_dir), no_llm_call=True, cleanup=True)
 
     assert report["summary"]["status"] == "passing"
     mock_prepare.assert_called_once()
+    cleanup.assert_called_once_with({"metadata": {}})
+    assert report["cleanup"]["status"] == "passing"
     mock_submit.assert_not_called()
 
 

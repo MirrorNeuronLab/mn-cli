@@ -33,6 +33,28 @@ from mn_cli.main import app
 runner = CliRunner()
 
 
+def test_source_package_entrypoint_receives_launch_config_before_staging(tmp_path):
+    from mn_sdk.blueprints.authoring import write_blueprint_definition
+    from mn_sdk.submission_preparation import lower_manifest_topology_for_runtime_submission
+    from mn_cli.libs.run_cmds.common import _load_bundle_manifest
+
+    package = tmp_path / "scan"
+    write_blueprint_definition(
+        package,
+        {
+            "kind": "WorkflowSource", "id": "scan",
+            "defaults": {"worker": {"with": {"image": "fixture:test"}}},
+            "workflow": {"steps": [{"id": "inspect", "needs": [], "run": {"handler": "scan.steps.inspect"}}]},
+            "contracts": {"inputs": {"task": {"type": "string"}, "ct_file": {"type": "string"}}},
+        },
+        config={"inputs": {"payload": {"task": "", "ct_file": ""}}},
+    )
+    inputs = {"task": "Read the heading.", "ct_file": str(tmp_path / "example.nii")}
+    _, _, manifest = _load_bundle_manifest(str(package), config_overrides={"inputs": {"payload": inputs}})
+    lower_manifest_topology_for_runtime_submission(manifest)
+    assert manifest["initial_inputs"]["inspect"] == [{"args": [], "kwargs": inputs}]
+
+
 def _workflow_manifest(fields: dict | None = None) -> dict:
     values = dict(fields or {})
     nodes = values.pop("nodes", [])
@@ -1619,6 +1641,45 @@ def test_run_reports_remote_docker_worker_preparation(mocker, tmp_path):
     assert "#1 build complete" in result.stderr
     submitted = json.loads(submit.call_args.args[0])
     assert "build" not in submitted["metadata"]["mn_docker_workers"]["services"][0]
+
+
+def test_blueprint_run_prepares_openshell_only_on_the_selected_owner(tmp_path, mocker, monkeypatch):
+    from mn_sdk.openshell_native import CAPABILITY, PROTOCOL, sandbox_name
+
+    monkeypatch.setenv("MN_NODE_NAME", "mini")
+    monkeypatch.setenv("MN_SYNCTHING_ENABLED", "0")
+    node = {"node_id": "review", "agent_type": "executor", "type": "generic",
+            "config": {"runner_module": "MirrorNeuron.Runner.OpenShell", "from": "base",
+                       "reuse_shared_sandbox": True}}
+    write_package_manifest(tmp_path / "manifest.json", json.dumps(_workflow_manifest({"nodes": [node]})))
+    mocker.patch("mn_cli.libs.run_cmds.model_cluster._resolve_and_apply_workflow_placement",
+                 return_value={"mode": "single_node", "selected_node": "spark", "selection": "configured"})
+    summary = json.dumps({"nodes": [{"name": "spark", "status": "healthy", "native_sdk_grpc": {
+        "enabled": True, "target": "spark:55052", "capabilities": [CAPABILITY]}}]})
+    mocker.patch("mn_cli.libs.run_cmds.client.get_resource", return_value=summary)
+    mocker.patch("mn_cli.libs.run_cmds.client.get_system_summary", return_value=summary)
+    mocker.patch("mn_cli.libs.run_cmds.openshell._openshell_executable", side_effect=AssertionError("local CLI"))
+    mocker.patch("mn_sdk.openshell_preparation.prepare_openshell", side_effect=AssertionError("local SDK"))
+
+    def prepare(request):
+        if request.get("operation") == "commit":
+            return {"updated": 1}
+        name = sandbox_name(request["submission_id"], request["node_id"])
+        return {**request, "protocol": PROTOCOL, "prepared": True, "from": "base",
+                "sandbox_name": name, "ssh_host": "openshell-" + name}
+
+    remote = mocker.Mock()
+    remote.set_resource.side_effect = prepare
+    factory = mocker.patch("mn_sdk.client.Client", return_value=remote)
+    submit = mocker.patch("mn_cli.libs.run_cmds.client.create_job", return_value='{"job_id":"job-test"}')
+    mocker.patch("mn_cli.libs.run_cmds.client.stream_events", return_value=[json.dumps({"type": "job_completed"})])
+    result = runner.invoke(app, ["blueprint", "run", str(tmp_path)])
+    assert result.exit_code == 0, result.stdout
+    factory.assert_any_call(target="spark:55052", timeout=1800)
+    assert len([c for c in remote.set_resource.call_args_list if c.args[0].get("node_id") == "review"]) == 1
+    assert any(c.args[0].get("operation") == "commit" for c in remote.set_resource.call_args_list)
+    sent = json.loads(submit.call_args.args[0])
+    assert sent["metadata"]["mn_native_resources"]["resources"][0]["owner_node"] == "spark"
 
 
 def test_run_keyboard_interrupt(mocker, tmp_path):

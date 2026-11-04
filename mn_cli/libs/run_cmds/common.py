@@ -313,7 +313,9 @@ def _duration_ms_for_schedule(value: str) -> int:
     return int(float(raw) * 1000)
 
 
-def _load_bundle_manifest(bundle_path: str) -> tuple[Path, Path, dict[str, Any]]:
+def _load_bundle_manifest(
+    bundle_path: str, *, config_overrides: dict[str, Any] | None = None
+) -> tuple[Path, Path, dict[str, Any]]:
     bundle_dir = Path(bundle_path)
     if not bundle_dir.is_dir():
         print_error(
@@ -328,10 +330,11 @@ def _load_bundle_manifest(bundle_path: str) -> tuple[Path, Path, dict[str, Any]]
 
     with open(manifest_file, "r") as f:
         manifest_dict = json.load(f)
-    from mn_sdk.blueprints import MANIFEST_SCHEMA, compile_blueprint, read_blueprint
+    from mn_sdk.blueprints import MANIFEST_SCHEMA, compile_blueprint, read_blueprint, resolve_config
 
     if manifest_dict.get("$schema") == MANIFEST_SCHEMA:
-        manifest_dict = compile_blueprint(read_blueprint(bundle_dir)).manifest
+        package = read_blueprint(bundle_dir)
+        manifest_dict = compile_blueprint(package, resolve_config(package, config_overrides)).manifest
     return bundle_dir, manifest_file, manifest_dict
 
 

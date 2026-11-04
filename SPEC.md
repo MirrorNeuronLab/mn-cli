@@ -148,10 +148,10 @@ and watchdog during startup/repair. Explicit gateway endpoint overrides remain
 authoritative. The private receipt stores no raw environment or credentials;
 successful native readiness precedes recording it. Hiring never restarts services.
 
-OpenShell preparation resolves the submitting host's CLI from `~/.local/bin`
-or `PATH` before building images or registering sandboxes. A missing executable
-raises `MN_FAILED_PRECONDITION` with installation guidance; it is not a missing
-blueprint. The host CLI must match the deployed gateway version.
+Blueprint run and doctor stage OpenShell files with the other worker payloads.
+The shared SDK selects the execution node and prepares the image and sandbox
+once there. The selected host must have the OpenShell CLI for its gateway.
+A remote selection requires the native SDK's OpenShell preparation capability.
 Local gateway detection follows the same explicit-endpoint, explicit-gateway,
 managed-runtime, and named-gateway precedence as sandbox preparation. Managed
 loopback endpoints do not require named gateway metadata. Their image builds
@@ -170,8 +170,7 @@ The CLI owns:
 - interactive confirmations and human-readable rendering;
 - plain/machine-readable terminal behavior;
 - local process, Docker, Redis, sidecar, and cluster service orchestration; and
-- pre-submission preparation of job-scoped OpenShell sandboxes and their
-  concrete runtime configuration; and
+- reporting SDK preparation results for job-scoped native resources; and
 - streaming blueprint payloads into content-addressed storage and preparing
   local payload models; and
 - conversion of SDK/runtime failures into actionable terminal errors.
@@ -930,6 +929,12 @@ and `mn run retry` accept `--queue` to wait for compatible capacity explicitly.
 fenced transfer. Pause schedules and finish resource cleanup first. Repeating
 an interrupted move resumes it; `--abort` is valid only before ownership commit.
 
+
+## Source package launch configuration
+
+`mn blueprint run` and the run doctor compile source packages with the
+effective launch configuration. Generated entrypoint messages therefore carry
+the same scalar and local-file inputs used by validation and worker preparation.
 
 ## Native tools on co-worker addition
 

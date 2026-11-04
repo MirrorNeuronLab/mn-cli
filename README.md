@@ -573,10 +573,11 @@ snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
 - OpenShell workers that reuse a job-scoped sandbox are prepared before
   submission; the submitted node receives the concrete sandbox name and SSH
   host instead of asking Core to create host resources.
-  The submitting host must have an OpenShell CLI matching the gateway version
-  in `~/.local/bin` or `PATH`, even when Core runs in Docker. A missing CLI is
-  reported as a preparation prerequisite before image builds or sandbox
-  registration, rather than as a missing blueprint.
+  The SDK prepares the sandbox once on the selected execution node for both
+  `mn blueprint run` and `mn blueprint doctor`. That node needs an OpenShell
+  CLI matching its gateway and reports preparation failures. A remote worker
+  uses the selected node's native SDK. `doctor --check-only` skips preparation.
+  `doctor --cleanup` retires the resources owned by its diagnostic submission.
   Local managed gateways build sandbox images through the Docker CLI, which
   honors the active Docker context (including Docker Desktop on macOS).
   OpenShell build contexts use SDK source staging to preserve local package
