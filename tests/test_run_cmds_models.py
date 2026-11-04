@@ -67,7 +67,7 @@ def test_manifest_for_model_validation_excludes_all_live_models_for_fake_llm():
         "runtime": {
             "models": {
                 "primary": {"model": "default"},
-                "secondary": {"provider": "docker_model_runner", "model": "gemma4:e2b"},
+                "secondary": {"provider": "docker_model_runner", "model": "nemotron-3.5-bolt-e4b:q4_k_m"},
                 "external": {"provider": "nvidia_service", "model": "service-model"},
             }
         }
@@ -91,7 +91,7 @@ def test_deferred_model_resolver_accepts_the_first_use_fallback():
                 "status": "deferred_runtime_install",
                 "selection_policy": [
                     "nemotron-3.5-lightning:latest",
-                    "gemma4:e2b",
+                    "nemotron-3.5-bolt-e4b:q4_k_m",
                 ],
             }
         ]
@@ -100,8 +100,8 @@ def test_deferred_model_resolver_accepts_the_first_use_fallback():
     resolver = run_cmds._prepared_model_installed_resolver(summary)
 
     assert resolver(
-        "docker.io/ai/gemma4:E2B",
-        {"runtime_model": "docker.io/ai/gemma4:E2B"},
+        "nemotron-3.5-bolt-e4b:q4_k_m",
+        {"runtime_model": "nemotron-3.5-bolt-e4b:q4_k_m"},
     )
 
 
@@ -147,7 +147,7 @@ def _cctv_placement_manifest():
         "runtime": {
             "placement": {"mode": "single_node"},
             "models": {
-                "primary": {"provider": "docker_model_runner", "model": "gemma4:e2b"}
+                "primary": {"provider": "docker_model_runner", "model": "nemotron-3.5-bolt-e4b:q4_k_m"}
             },
             "memory": {"enabled": True},
         },
@@ -382,8 +382,8 @@ def test_selected_workflow_node_controls_model_placement_and_gateway_sync(mocker
         {"MN_SELECTED_RUNTIME_NODE": "mirror_neuron@spark"}
     ):
         placement = run_cmds._resolve_runtime_cluster_model(
-            requirement={"model": "gemma4:e2b"},
-            entry={"id": "gemma4:e2b", "requirements": {"min_vram_gb": 8}},
+            requirement={"model": "nemotron-3.5-bolt-e4b:q4_k_m"},
+            entry={"id": "nemotron-3.5-bolt-e4b:q4_k_m", "requirements": {"min_vram_gb": 8}},
         )
     assert placement["node"] == "mirror_neuron@spark"
     assert placement["source"] == "workflow_placement"
@@ -394,11 +394,11 @@ def test_selected_workflow_node_controls_model_placement_and_gateway_sync(mocker
     endpoints = run_cmds._sync_litellm_gateway_for_runtime_models(
         {
             "endpoints": {
-                "gemma4:e2b": {
+                "nemotron-3.5-bolt-e4b:q4_k_m": {
                     "provider": "docker_model_runner",
-                    "model": "docker.io/ai/gemma4:E2B",
-                    "runtime_model": "docker.io/ai/gemma4:E2B",
-                    "api_model": "docker.io/ai/gemma4:E2B",
+                    "model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                    "runtime_model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                    "api_model": "nemotron-3.5-bolt-e4b:q4_k_m",
                     "api_base": "http://spark:4000/v1",
                     "node": "mirror_neuron@spark",
                     "source": "remote_litellm_gateway",
@@ -408,7 +408,7 @@ def test_selected_workflow_node_controls_model_placement_and_gateway_sync(mocker
         env_overrides={"MN_SELECTED_RUNTIME_NODE": "mirror_neuron@spark"},
     )
     sync.assert_called_once()
-    assert endpoints["gemma4:e2b"]["api_base"] == "http://mn-litellm-proxy:4000/v1"
+    assert endpoints["nemotron-3.5-bolt-e4b:q4_k_m"]["api_base"] == "http://mn-litellm-proxy:4000/v1"
     remotes = load_model_remotes()["remotes"]
     assert len(remotes) == 1
     assert next(iter(remotes.values()))["base_url"] == "http://spark:4000/v1"
@@ -429,16 +429,16 @@ def test_prepare_runtime_models_installs_missing_model_for_run(
             "models": {
                 "primary": {
                     "provider": "docker_model_runner",
-                    "runtime_model": "gemma4:e2b",
+                    "runtime_model": "nemotron-3.5-bolt-e4b:q4_k_m",
                     "backend": "llama.cpp",
                 }
             }
         },
     }
     catalog = {
-        "gemma4:e2b": {
-            "id": "gemma4:e2b",
-            "model": "docker.io/ai/gemma4:E2B",
+        "nemotron-3.5-bolt-e4b:q4_k_m": {
+            "id": "nemotron-3.5-bolt-e4b:q4_k_m",
+            "model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "provider": "docker_model_runner",
             "backend": "llama.cpp",
         }
@@ -448,8 +448,8 @@ def test_prepare_runtime_models_installs_missing_model_for_run(
     install_model = mocker.patch(
         "mn_cli.libs.run_cmds.models.install_model_entry",
         return_value={
-            "entry": catalog["gemma4:e2b"],
-            "docker_model": "docker.io/ai/gemma4:E2B",
+            "entry": catalog["nemotron-3.5-bolt-e4b:q4_k_m"],
+            "docker_model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "compatibility": {"backend": "llama.cpp"},
         },
     )
@@ -459,20 +459,20 @@ def test_prepare_runtime_models_installs_missing_model_for_run(
     assert summary["ok"] is True
     assert summary["models"][0]["status"] == "installed"
     install_model.assert_called_once_with(
-        catalog["gemma4:e2b"],
+        catalog["nemotron-3.5-bolt-e4b:q4_k_m"],
         backend="llama.cpp",
         context_size=None,
         force=False,
     )
-    record = load_model_ownership()["models"]["docker.io/ai/gemma4:E2B"]
+    record = load_model_ownership()["models"]["nemotron-3.5-bolt-e4b:q4_k_m"]
     assert record["owners"]["vc_assistant"]["blueprint_revision"] == "rev-1"
     output = capsys.readouterr().out
     assert (
-        "Runtime model gemma4:e2b (docker.io/ai/gemma4:E2B) is not installed." in output
+        "Runtime model nemotron-3.5-bolt-e4b:q4_k_m is not installed." in output
     )
-    assert "Installing runtime model gemma4:e2b (docker.io/ai/gemma4:E2B)" in output
+    assert "Installing runtime model nemotron-3.5-bolt-e4b:q4_k_m" in output
     assert re.search(r"Docker\s+Model\s+Runner", output)
-    assert "Runtime models ready: gemma4:e2b" in output
+    assert "Runtime models ready: nemotron-3.5-bolt-e4b:q4_k_m" in output
 
 
 def test_prepare_runtime_models_uses_cluster_model_endpoint(
@@ -660,13 +660,13 @@ def test_runtime_model_ready_label_includes_remote_install_node():
 def test_runtime_model_ready_label_includes_remote_already_installed_node():
     label = run_cmds._runtime_model_ready_label(
         {
-            "id": "gemma4:e2b",
+            "id": "nemotron-3.5-bolt-e4b:q4_k_m",
             "status": "runtime_node_already_installed",
             "endpoint": {"node": "mirror_neuron@192.168.5.10"},
         }
     )
 
-    assert label == "gemma4:e2b already installed on mirror_neuron@192.168.5.10"
+    assert label == "nemotron-3.5-bolt-e4b:q4_k_m already installed on mirror_neuron@192.168.5.10"
 
 
 def test_model_remove_remote_records_matches_aliases(tmp_path, monkeypatch):
@@ -842,13 +842,13 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
     )
 
 
-def _preferred_large_model_config(default_model: str = "gemma4:e2b") -> dict:
+def _preferred_large_model_config(default_model: str = "nemotron-3.5-bolt-e4b:q4_k_m") -> dict:
     return {
         "llm": {
             "enabled": True,
             "model": default_model,
             "runtime_model": default_model,
-            "fallback_model": "gemma4:e2b",
+            "fallback_model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "preferred_model": "nemotron-3.5-lightning:latest",
             "default_config": "primary",
             "configs": {
@@ -856,7 +856,7 @@ def _preferred_large_model_config(default_model: str = "gemma4:e2b") -> dict:
                     "provider": "docker_model_runner",
                     "model": default_model,
                     "runtime_model": default_model,
-                    "fallback_model": "gemma4:e2b",
+                    "fallback_model": "nemotron-3.5-bolt-e4b:q4_k_m",
                     "backend": "llama.cpp",
                     "max_tokens": 1800,
                     "num_retries": 2,
@@ -885,9 +885,9 @@ def _preferred_large_model_config(default_model: str = "gemma4:e2b") -> dict:
             },
             "small_model_profile": {
                 "provider": "docker_model_runner",
-                "model": "gemma4:e2b",
-                "runtime_model": "gemma4:e2b",
-                "fallback_model": "gemma4:e2b",
+                "model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                "runtime_model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                "fallback_model": "nemotron-3.5-bolt-e4b:q4_k_m",
                 "backend": "llama.cpp",
                 "max_tokens": 1800,
                 "num_retries": 2,
@@ -896,9 +896,9 @@ def _preferred_large_model_config(default_model: str = "gemma4:e2b") -> dict:
             },
             "live_model_profile": {
                 "provider": "docker_model_runner",
-                "model": "gemma4:e2b",
-                "runtime_model": "gemma4:e2b",
-                "fallback_model": "gemma4:e2b",
+                "model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                "runtime_model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                "fallback_model": "nemotron-3.5-bolt-e4b:q4_k_m",
                 "backend": "llama.cpp",
                 "max_tokens": 1800,
                 "num_retries": 2,
@@ -909,7 +909,7 @@ def _preferred_large_model_config(default_model: str = "gemma4:e2b") -> dict:
                 "provider": "docker_model_runner",
                 "model": "nemotron-3.5-lightning:latest",
                 "runtime_model": "nemotron-3.5-lightning:latest",
-                "fallback_model": "gemma4:e2b",
+                "fallback_model": "nemotron-3.5-bolt-e4b:q4_k_m",
                 "backend": "llama.cpp",
                 "context_size": 8192,
                 "max_tokens": 1800,
@@ -933,7 +933,7 @@ def test_default_llm_alias_detection_is_explicit():
         run_cmds._blueprint_requests_default_llm({"llm": {"model": "default"}}) is True
     )
     assert (
-        run_cmds._blueprint_requests_default_llm({"llm": {"model": "gemma4:e2b"}})
+        run_cmds._blueprint_requests_default_llm({"llm": {"model": "nemotron-3.5-bolt-e4b:q4_k_m"}})
         is False
     )
     assert (
@@ -958,8 +958,8 @@ def test_default_manifest_model_is_satisfied_by_prepared_fallback():
                 "model": "nemotron-3.5-lightning:latest",
                 "status": "fallback_model",
                 "fallback": {
-                    "id": "gemma4:e2b",
-                    "model": "docker.io/ai/gemma4:E2B",
+                    "id": "nemotron-3.5-bolt-e4b:q4_k_m",
+                    "model": "nemotron-3.5-bolt-e4b:q4_k_m",
                 },
             }
         ]
@@ -1022,13 +1022,13 @@ def _preferred_large_model_catalog() -> dict:
             "provider": "docker_model_runner",
             "backend": "llama.cpp",
             "context_size": 8192,
-            "fallback_model": "gemma4:e2b",
+            "fallback_model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "requirements": {"min_vram_gb": 48, "min_unified_memory_gb": 48},
         },
-        "gemma4:e2b": {
-            "id": "gemma4:e2b",
-            "model": "docker.io/ai/gemma4:E2B",
-            "api_model": "docker.io/ai/gemma4:E2B",
+        "nemotron-3.5-bolt-e4b:q4_k_m": {
+            "id": "nemotron-3.5-bolt-e4b:q4_k_m",
+            "model": "nemotron-3.5-bolt-e4b:q4_k_m",
+            "api_model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "provider": "docker_model_runner",
             "backend": "llama.cpp",
             "context_size": 4096,
@@ -1218,7 +1218,7 @@ def test_prepare_runtime_models_keeps_default_model_without_capable_cluster_node
     )
     mocker.patch(
         "mn_cli.libs.run_cmds.models.model_installed",
-        side_effect=lambda model: model == "docker.io/ai/gemma4:E2B",
+        side_effect=lambda model: model == "nemotron-3.5-bolt-e4b:q4_k_m",
     )
     cluster_install = mocker.patch(
         "mn_cli.libs.run_cmds.models._install_runtime_cluster_model"
@@ -1232,14 +1232,14 @@ def test_prepare_runtime_models_keeps_default_model_without_capable_cluster_node
 
     assert summary["ok"] is True
     assert len(summary["models"]) == 1
-    assert summary["models"][0]["id"] == "gemma4:e2b"
+    assert summary["models"][0]["id"] == "nemotron-3.5-bolt-e4b:q4_k_m"
     assert summary["models"][0]["status"] == "already_installed"
     cluster_install.assert_not_called()
     install_model.assert_not_called()
     effective_config = json.loads(env_overrides["MN_BLUEPRINT_CONFIG_JSON"])
     assert effective_config["llm"]["active_model_profile"] == "small_model_profile"
-    assert effective_config["llm"]["model"] == "docker.io/ai/gemma4:E2B"
-    assert effective_config["llm"]["runtime_model"] == "docker.io/ai/gemma4:E2B"
+    assert effective_config["llm"]["model"] == "nemotron-3.5-bolt-e4b:q4_k_m"
+    assert effective_config["llm"]["runtime_model"] == "nemotron-3.5-bolt-e4b:q4_k_m"
 
 
 def test_prepare_runtime_models_surfaces_large_profile_prepare_failure_without_fallback(
@@ -1417,9 +1417,9 @@ def test_runtime_cluster_model_install_uses_long_timeout_for_local_runtime_coord
             "status": "installed",
             "endpoint": {
                 "provider": "docker_model_runner",
-                "model": "docker.io/ai/gemma4:E2B",
-                "runtime_model": "docker.io/ai/gemma4:E2B",
-                "api_model": "docker.io/ai/gemma4:E2B",
+                "model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                "runtime_model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                "api_model": "nemotron-3.5-bolt-e4b:q4_k_m",
             },
         }
     )
@@ -1427,11 +1427,11 @@ def test_runtime_cluster_model_install_uses_long_timeout_for_local_runtime_coord
     result = run_cmds._install_runtime_cluster_model(
         requirement={"context_size": 4096},
         entry={
-            "id": "gemma4:e2b",
-            "model": "docker.io/ai/gemma4:E2B",
+            "id": "nemotron-3.5-bolt-e4b:q4_k_m",
+            "model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "provider": "docker_model_runner",
         },
-        model={"id": "gemma4:e2b", "model": "docker.io/ai/gemma4:E2B"},
+        model={"id": "nemotron-3.5-bolt-e4b:q4_k_m", "model": "nemotron-3.5-bolt-e4b:q4_k_m"},
         cluster={"node": "mirror_neuron@192.168.5.10"},
         backend="llama.cpp",
         context_size=4096,
@@ -1470,7 +1470,7 @@ def test_prepare_runtime_model_retries_once_on_deadline(mocker, monkeypatch, cap
     monkeypatch.setattr("mn_sdk.model_access.prepare.time.sleep", waits.append)
 
     response = run_cmds._prepare_runtime_model_with_retry(
-        runtime_client, {"model": "docker.io/ai/gemma4:E2B"}
+        runtime_client, {"model": "nemotron-3.5-bolt-e4b:q4_k_m"}
     )
 
     assert response["status"] == "installed"
@@ -1487,7 +1487,7 @@ def test_prepare_runtime_model_does_not_retry_non_transient_errors(mocker):
 
     with pytest.raises(ModelPrepareRemoteError) as exc_info:
         run_cmds._prepare_runtime_model_with_retry(
-            runtime_client, {"model": "docker.io/ai/gemma4:E2B"}
+            runtime_client, {"model": "nemotron-3.5-bolt-e4b:q4_k_m"}
         )
 
     assert exc_info.value.code == "model.prepare_request_invalid"
@@ -1610,7 +1610,6 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
     assert set(plan["catalog"]) == {
         "nemotron-3.5-bolt-e4b:q4_k_m",
         "bonsai2:ptq1_0",
-        "gemma4:e2b",
         "nemotron-3.5-lightning:latest",
         "nemotron3:q4_K_M",
     }
@@ -1817,7 +1816,7 @@ def test_runtime_model_preflight_selects_small_fallback_for_default_on_small_nod
             "entry": {
                 "id": "nemotron-3.5-lightning:latest",
                 "model": "nemotron-3.5-lightning:latest",
-                "fallback_model": "gemma4:e2b",
+                "fallback_model": "nemotron-3.5-bolt-e4b:q4_k_m",
                 "requirements": {"min_unified_memory_gb": 48},
             },
             "source": "llm.configs.primary",
@@ -1864,7 +1863,7 @@ def test_runtime_model_preflight_selects_small_fallback_for_default_on_small_nod
 
     assert placement["selected_node"] == "mirror_neuron@mac"
     assert placement["requirements"]["model_requirements"][0]["min_memory_mb"] == 16384
-    assert placement["model_fallbacks"][0]["fallback"]["id"] == "gemma4:e2b"
+    assert placement["model_fallbacks"][0]["fallback"]["id"] == "nemotron-3.5-bolt-e4b:q4_k_m"
     with run_cmds._runtime_model_placement_scope(
         {
             "MN_SELECTED_RUNTIME_NODE": "mirror_neuron@mac",
@@ -1878,7 +1877,7 @@ def test_runtime_model_preflight_selects_small_fallback_for_default_on_small_nod
         )
     assert resolved["node"] == "mirror_neuron@mac"
     assert resolved["status"] == "fallback_model"
-    assert resolved["fallback_entry"]["id"] == "gemma4:e2b"
+    assert resolved["fallback_entry"]["id"] == "nemotron-3.5-bolt-e4b:q4_k_m"
 
 
 def test_distributed_runtime_model_preflight_rejects_before_prepare(mocker):
@@ -2057,8 +2056,8 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
                     },
                     "small_model_profile": {
                         "provider": "docker_model_runner",
-                        "model": "gemma4:e2b",
-                        "runtime_model": "gemma4:e2b",
+                        "model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                        "runtime_model": "nemotron-3.5-bolt-e4b:q4_k_m",
                         "backend": "llama.cpp",
                         "max_tokens": 1800,
                         "num_retries": 2,
@@ -2099,13 +2098,13 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
             "model": "nemotron-3.5-lightning:latest",
             "provider": "docker_model_runner",
             "backend": "llama.cpp",
-            "fallback_model": "gemma4:e2b",
+            "fallback_model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "requirements": {"min_vram_gb": 48, "min_unified_memory_gb": 48},
         },
-        "gemma4:e2b": {
-            "id": "gemma4:e2b",
-            "model": "docker.io/ai/gemma4:E2B",
-            "api_model": "docker.io/ai/gemma4:E2B",
+        "nemotron-3.5-bolt-e4b:q4_k_m": {
+            "id": "nemotron-3.5-bolt-e4b:q4_k_m",
+            "model": "nemotron-3.5-bolt-e4b:q4_k_m",
+            "api_model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "provider": "docker_model_runner",
             "backend": "llama.cpp",
             "context_size": 4096,
@@ -2135,7 +2134,7 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
     )
     mocker.patch(
         "mn_cli.libs.run_cmds.models.model_installed",
-        side_effect=lambda model: model == "docker.io/ai/gemma4:E2B",
+        side_effect=lambda model: model == "nemotron-3.5-bolt-e4b:q4_k_m",
     )
     install_model = mocker.patch(
         "mn_cli.libs.run_cmds.models.install_model_entry",
@@ -2148,19 +2147,19 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
 
     assert summary["ok"] is True
     assert summary["models"][0]["status"] == "fallback_model"
-    assert summary["models"][0]["fallback"]["id"] == "gemma4:e2b"
-    assert summary["models"][0]["fallback"]["model"] == "docker.io/ai/gemma4:E2B"
-    assert env_overrides["MN_LLM_MODEL"] == "docker.io/ai/gemma4:E2B"
-    assert env_overrides["MN_LLM_RUNTIME_MODEL"] == "docker.io/ai/gemma4:E2B"
+    assert summary["models"][0]["fallback"]["id"] == "nemotron-3.5-bolt-e4b:q4_k_m"
+    assert summary["models"][0]["fallback"]["model"] == "nemotron-3.5-bolt-e4b:q4_k_m"
+    assert env_overrides["MN_LLM_MODEL"] == "nemotron-3.5-bolt-e4b:q4_k_m"
+    assert env_overrides["MN_LLM_RUNTIME_MODEL"] == "nemotron-3.5-bolt-e4b:q4_k_m"
     effective_config = json.loads(env_overrides["MN_BLUEPRINT_CONFIG_JSON"])
-    assert effective_config["llm"]["model"] == "gemma4:e2b"
+    assert effective_config["llm"]["model"] == "nemotron-3.5-bolt-e4b:q4_k_m"
     assert effective_config["llm"]["active_model_profile"] == "small_model_profile"
     assert effective_config["llm"]["strict_json"] is False
     assert effective_config["llm"]["require_live"] is False
     assert effective_config["llm"]["max_tokens"] == 1800
     assert effective_config["llm"]["num_retries"] == 2
     assert (
-        effective_config["llm"]["configs"]["primary"]["runtime_model"] == "gemma4:e2b"
+        effective_config["llm"]["configs"]["primary"]["runtime_model"] == "nemotron-3.5-bolt-e4b:q4_k_m"
     )
     assert effective_config["llm"]["configs"]["primary"]["max_tokens"] == 1800
     assert effective_config["llm"]["configs"]["primary"]["num_retries"] == 2
@@ -2188,8 +2187,8 @@ def test_runtime_model_profile_applies_large_model_strict_contract():
             },
             "small_model_profile": {
                 "provider": "docker_model_runner",
-                "model": "gemma4:e2b",
-                "runtime_model": "gemma4:e2b",
+                "model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                "runtime_model": "nemotron-3.5-bolt-e4b:q4_k_m",
                 "strict_json": False,
                 "require_live": False,
             },

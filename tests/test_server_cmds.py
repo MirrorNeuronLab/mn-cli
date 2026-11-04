@@ -1184,24 +1184,24 @@ def test_runtime_base_env_advertises_installed_runtime_models(mocker):
     )
     mocker.patch(
         "mn_cli.server_cmds._installed_catalog_runtime_models",
-        return_value=["gemma4:e2b"],
+        return_value=["nemotron-3.5-bolt-e4b:q4_k_m"],
     )
 
     env = server_cmds._runtime_base_env(True)
 
-    assert env["MN_NODE_RUNTIME_MODELS"] == "gemma4:e2b"
+    assert env["MN_NODE_RUNTIME_MODELS"] == "nemotron-3.5-bolt-e4b:q4_k_m"
 
 def test_runtime_base_env_merges_explicit_and_installed_runtime_models(mocker):
     mocker.patch(
         "mn_cli.server_cmds._installed_catalog_runtime_models",
-        return_value=["gemma4:e2b"],
+        return_value=["nemotron-3.5-bolt-e4b:q4_k_m"],
     )
 
     env = server_cmds._ensure_installed_runtime_model_env(
         {"MN_NODE_RUNTIME_MODELS": "custom:model"}
     )
 
-    assert env["MN_NODE_RUNTIME_MODELS"] == "custom:model,gemma4:e2b"
+    assert env["MN_NODE_RUNTIME_MODELS"] == "custom:model,nemotron-3.5-bolt-e4b:q4_k_m"
 
 def test_record_vision_model_install_advertises_model_without_changing_default():
     server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
@@ -1212,14 +1212,14 @@ def test_record_vision_model_install_advertises_model_without_changing_default()
     )
     path = server_cmds.record_runtime_model_install(
         {
-            "id": "gemma4:e2b",
-            "model": "docker.io/ai/gemma4:E2B",
-            "aliases": ["vision", "gemma4"],
+            "id": "nemotron3:q4_K_M",
+            "model": "nemotron3:q4_K_M",
+            "aliases": ["nemotron3"],
         }
     )
 
     env = server_cmds._read_env_file(server_cmds.RUNTIME_COMPOSE_ENV)
-    assert env["MN_NODE_RUNTIME_MODELS"] == "gemma4:e2b"
+    assert env["MN_NODE_RUNTIME_MODELS"] == "nemotron3:q4_K_M"
     assert env["MN_LLM_MODEL_RUNNER_MODEL"] == "nemotron-3.5-lightning:latest"
     assert path is None
 

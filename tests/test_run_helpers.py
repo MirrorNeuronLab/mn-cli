@@ -1328,8 +1328,8 @@ def test_prepare_manifest_injects_docker_model_runner_llm_env_by_node_runtime(tm
                         "primary": {
                             "provider": "docker_model_runner",
                             "mode": "openai_compatible",
-                            "runtime_model": "gemma4:e2b",
-                            "model": "gemma4:e2b",
+                            "runtime_model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                            "model": "nemotron-3.5-bolt-e4b:q4_k_m",
                             "api_base": "auto",
                             "backend": "llama.cpp",
                             "context_size": 4096,
@@ -1365,8 +1365,8 @@ def test_prepare_manifest_injects_docker_model_runner_llm_env_by_node_runtime(tm
     assert sandbox_env["MN_RUNTIME_MODEL_MANAGED"] == "1"
     assert host_env["MN_LLM_PROVIDER"] == "docker_model_runner"
     assert sandbox_env["MN_LLM_PROVIDER"] == "docker_model_runner"
-    assert host_env["MN_LLM_MODEL"] == "docker.io/ai/gemma4:E2B"
-    assert host_env["MN_LLM_RUNTIME_MODEL"] == "docker.io/ai/gemma4:E2B"
+    assert host_env["MN_LLM_MODEL"] == "nemotron-3.5-bolt-e4b:q4_k_m"
+    assert host_env["MN_LLM_RUNTIME_MODEL"] == "nemotron-3.5-bolt-e4b:q4_k_m"
     assert host_env["MN_LLM_API_BASE"] == "auto"
     assert sandbox_env["MN_LLM_API_BASE"] == "auto"
     assert host_env["MN_LLM_CONTEXT_SIZE"] == "4096"
@@ -1388,8 +1388,8 @@ def test_prepare_manifest_retains_managed_model_requirements_for_deferred_owner_
                         "primary": {
                             "provider": "docker_model_runner",
                             "mode": "openai_compatible",
-                            "runtime_model": "gemma4:e2b",
-                            "model": "gemma4:e2b",
+                            "runtime_model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                            "model": "nemotron-3.5-bolt-e4b:q4_k_m",
                             "api_base": "http://host.docker.internal:12434/engines/v1",
                             "backend": "llama.cpp",
                         }
@@ -1400,7 +1400,7 @@ def test_prepare_manifest_retains_managed_model_requirements_for_deferred_owner_
     )
     manifest = {
         "required_services": [
-            {"name": "docker-model-runner", "model": "gemma4:e2b"},
+            {"name": "docker-model-runner", "model": "nemotron-3.5-bolt-e4b:q4_k_m"},
             {"name": "vector-db"},
         ],
         "runtime": {
@@ -1422,7 +1422,7 @@ def test_prepare_manifest_retains_managed_model_requirements_for_deferred_owner_
                 "requires_services": [
                     {
                         "name": "docker-model-runner",
-                        "model": "gemma4:e2b",
+                        "model": "nemotron-3.5-bolt-e4b:q4_k_m",
                         "resources": {"gpu": {"min_vram_mb": 8192}},
                     },
                     {"name": "redis"},
@@ -1430,7 +1430,7 @@ def test_prepare_manifest_retains_managed_model_requirements_for_deferred_owner_
                 "placement_requirements": {
                     "models": [
                         {
-                            "id": "gemma4:e2b",
+                            "id": "nemotron-3.5-bolt-e4b:q4_k_m",
                             "provider": "docker_model_runner",
                             "service": {"name": "docker-model-runner"},
                         },
@@ -1475,8 +1475,8 @@ def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_f
                     "configs": {
                         "primary": {
                             "provider": "docker_model_runner",
-                            "runtime_model": "gemma4:e2b",
-                            "model": "gemma4:e2b",
+                            "runtime_model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                            "model": "nemotron-3.5-bolt-e4b:q4_k_m",
                         }
                     },
                 }
@@ -1485,21 +1485,21 @@ def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_f
     )
     manifest = {
         "required_services": [
-            {"name": "docker-model-runner", "model": "gemma4:e2b"},
+            {"name": "docker-model-runner", "model": "nemotron-3.5-bolt-e4b:q4_k_m"},
             {"name": "redis"},
         ],
         "runtime": {
-            "models": {"primary": {"provider": "docker_model_runner", "model": "gemma4:e2b"}},
-            "bindings": {"worker": {"workers": [{"id": "worker", "model": "gemma4:e2b"}]}},
+            "models": {"primary": {"provider": "docker_model_runner", "model": "nemotron-3.5-bolt-e4b:q4_k_m"}},
+            "bindings": {"worker": {"workers": [{"id": "worker", "model": "nemotron-3.5-bolt-e4b:q4_k_m"}]}},
         },
         "nodes": [
             {
                 "node_id": "worker",
-                "requires_services": [{"name": "docker-model-runner", "model": "gemma4:e2b"}],
+                "requires_services": [{"name": "docker-model-runner", "model": "nemotron-3.5-bolt-e4b:q4_k_m"}],
                 "placement_requirements": {
                     "models": [
                         {
-                            "id": "gemma4:e2b",
+                            "id": "nemotron-3.5-bolt-e4b:q4_k_m",
                             "provider": "docker_model_runner",
                             "service": {"name": "docker-model-runner"},
                         }
@@ -1563,7 +1563,7 @@ def test_prepare_manifest_for_submission_injects_flow_nodes_and_scheduler_bindin
         json.dumps(
             {
                 "identity": {"blueprint_id": "safety_video_analyser"},
-                "llm": {"provider": "docker_model_runner", "model": "gemma4:e2b"},
+                "llm": {"provider": "docker_model_runner", "model": "nemotron-3.5-bolt-e4b:q4_k_m"},
                 "node_allocation": {
                     "report_generator_preferred_node": "mirror_neuron@192.168.4.173"
                 },
@@ -1611,7 +1611,7 @@ def test_prepare_manifest_for_submission_injects_flow_nodes_and_scheduler_bindin
 
     assert video_env["MN_RUN_ID"] == "safety-run"
     assert video_env["MN_LLM_MODEL"].startswith("hf.co/nvidia/")
-    assert report_env["MN_LLM_MODEL"] == "docker.io/ai/gemma4:E2B"
+    assert report_env["MN_LLM_MODEL"] == "nemotron-3.5-bolt-e4b:q4_k_m"
     assert (
         nodes["report_generator"]["policies"]["scheduler"]["preferred_node"]
         == "mirror_neuron@192.168.4.173"

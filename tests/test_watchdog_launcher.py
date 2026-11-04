@@ -138,7 +138,7 @@ import json
 from pathlib import Path
 from mn_sdk.native_runtime_service import _resolve_runtime_model_prepare
 models = [_resolve_runtime_model_prepare({"model": name, "node": "selected"}).entry["id"]
-          for name in ("nemotron-3.5-lightning:latest", "gemma4:e2b")]
+          for name in ("nemotron-3.5-lightning:latest", "nemotron-3.5-bolt-e4b:q4_k_m")]
 print(json.dumps({"cwd": str(Path.cwd()), "models": models}))
 """
     result = subprocess.run(
@@ -155,7 +155,7 @@ print(json.dumps({"cwd": str(Path.cwd()), "models": models}))
     )
     assert json.loads(result.stdout) == {
         "cwd": str(runtime_home.resolve()),
-        "models": ["nemotron-3.5-lightning:latest", "gemma4:e2b"],
+        "models": ["nemotron-3.5-lightning:latest", "nemotron-3.5-bolt-e4b:q4_k_m"],
     }
 
 

@@ -96,14 +96,14 @@ def test_runtime_model_events_report_model_and_node_immediately():
     event = {
         "type": "runtime_model_install_started",
         "payload": {
-            "model": "gemma4:e2b",
+            "model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "node": "mirror_neuron@local",
-            "message": "Installing gemma4:e2b on mirror_neuron@local.",
+            "message": "Installing nemotron-3.5-bolt-e4b:q4_k_m on mirror_neuron@local.",
         },
     }
 
     assert run_cmds._runtime_model_event_message(event) == (
-        "Installing gemma4:e2b on mirror_neuron@local."
+        "Installing nemotron-3.5-bolt-e4b:q4_k_m on mirror_neuron@local."
     )
 
 

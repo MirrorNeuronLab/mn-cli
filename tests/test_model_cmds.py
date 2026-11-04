@@ -43,7 +43,7 @@ def _capability_report(
 ):
     required = tuple(capabilities)
     return ModelCapabilityReport(
-        model_id="gemma4:e2b",
+        model_id="nemotron-3.5-bolt-e4b:q4_k_m",
         required=required,
         capabilities=dict(capabilities),
         unsupported=tuple(
@@ -157,11 +157,11 @@ def test_model_list_defaults_to_added_and_available_includes_catalog(mocker):
     available = runner.invoke(app, ["model", "list", "--available", "--json"])
     assert available.exit_code == 0
     payload = cli_data(available)
-    gemma = next(model for model in payload["models"] if model["id"] == "gemma4:e2b")
-    assert gemma["model"] == "docker.io/ai/gemma4:E2B"
-    assert gemma["kind"] == "dmr"
-    assert gemma["state"] == "available"
-    assert gemma["registered"] is False
+    bolt = next(model for model in payload["models"] if model["id"] == "nemotron-3.5-bolt-e4b:q4_k_m")
+    assert bolt["model"] == "nemotron-3.5-bolt-e4b:q4_k_m"
+    assert bolt["kind"] == "dmr"
+    assert bolt["state"] == "available"
+    assert bolt["registered"] is False
     assert {
         "kind",
         "state",
@@ -171,7 +171,7 @@ def test_model_list_defaults_to_added_and_available_includes_catalog(mocker):
         "node",
         "cataloged",
         "verification",
-    } <= set(gemma)
+    } <= set(bolt)
 
 
 def test_model_list_marks_cluster_remote_installed_and_local_route_wins(mocker):
@@ -334,11 +334,11 @@ def test_model_list_reads_unregistered_artifact_from_live_peer_inventory(mocker)
 
 def test_model_list_hides_private_owner_route_names(mocker):
     owner_route = model_cmds.runtime_model_owner_route_name(
-        "spark", "docker.io/ai/gemma4:E2B"
+        "spark", "nemotron-3.5-bolt-e4b:q4_k_m"
     )
     upsert_model_remote(
-        "spark-gemma",
-        "docker.io/ai/gemma4:E2B",
+        "spark-bolt",
+        "nemotron-3.5-bolt-e4b:q4_k_m",
         "http://192.168.4.173:4000/v1",
         api_model=owner_route,
         node="spark",
@@ -359,7 +359,7 @@ def test_model_list_hides_private_owner_route_names(mocker):
     mocker.patch("mn_cli.libs.model_cmds._installed_model_names", return_value=set())
     mocker.patch(
         "mn_cli.libs.model_cmds.litellm_gateway_health",
-        return_value={"ok": True, "models": ["small", "gemma4:e2b"]},
+        return_value={"ok": True, "models": ["small", "nemotron-3.5-bolt-e4b:q4_k_m"]},
     )
 
     result = runner.invoke(app, ["model", "list", "--json"])
@@ -367,9 +367,9 @@ def test_model_list_hides_private_owner_route_names(mocker):
     assert result.exit_code == 0, result.stdout
     assert "__mn_owner__/" not in result.stdout
     model = next(
-        item for item in cli_data(result)["models"] if item["id"] == "gemma4:e2b"
+        item for item in cli_data(result)["models"] if item["id"] == "nemotron-3.5-bolt-e4b:q4_k_m"
     )
-    assert model["installations"][0]["api_model"] == "gemma4:e2b"
+    assert model["installations"][0]["api_model"] == "nemotron-3.5-bolt-e4b:q4_k_m"
 
 
 def test_cluster_model_reconcile_reads_redis_snapshots_and_syncs_only_local_gateway(
@@ -417,7 +417,7 @@ def test_cluster_model_reconcile_reads_redis_snapshots_and_syncs_only_local_gate
     )
     mocker.patch(
         "mn_cli.libs.model_cmds._installed_model_names",
-        return_value={"docker.io/ai/gemma4:E2B"},
+        return_value={"nemotron-3.5-bolt-e4b:q4_k_m"},
     )
     mocker.patch(
         "mn_cli.libs.model_cmds.client.publish_runtime_status",
@@ -464,7 +464,7 @@ def test_cluster_model_reconcile_reads_redis_snapshots_and_syncs_only_local_gate
     assert remote_endpoint["api_model"] == model_cmds.runtime_model_owner_route_name(
         "mirror_neuron@spark", "nemotron-3.5-lightning:latest"
     )
-    assert "gemma4:e2b" not in synced[0]["runtime_endpoints"]
+    assert "nemotron-3.5-bolt-e4b:q4_k_m" not in synced[0]["runtime_endpoints"]
     assert persisted[0][1]["replace"] is True
     assert persisted[0][1]["local_node"] == "mirror_neuron@local"
     peer_client.assert_not_called()
@@ -545,7 +545,7 @@ def test_cluster_model_reconcile_prunes_departed_runtime_status_snapshots(mocker
 
 
 def test_cluster_model_reconcile_rehomes_local_dmr_registration_after_address_change():
-    entry = resolve_model_entry("gemma4:e2b")
+    entry = resolve_model_entry("nemotron-3.5-bolt-e4b:q4_k_m")
     add_registered_models(
         [dmr_registration(entry, selected_node="mirror_neuron@10.0.4.38")]
     )
@@ -553,24 +553,24 @@ def test_cluster_model_reconcile_rehomes_local_dmr_registration_after_address_ch
     reconciled = model_cmds._reconcile_stale_local_model_registrations(
         local_node="mirror_neuron@172.20.10.8",
         live_nodes={"mirror_neuron@172.20.10.8"},
-        installed_models={"docker.io/ai/gemma4:E2B"},
+        installed_models={"nemotron-3.5-bolt-e4b:q4_k_m"},
     )
 
     assert reconciled == [
         {
-            "id": "gemma4:e2b",
+            "id": "nemotron-3.5-bolt-e4b:q4_k_m",
             "previous_node": "mirror_neuron@10.0.4.38",
             "node": "mirror_neuron@172.20.10.8",
         }
     ]
     assert (
-        get_registered_model("gemma4:e2b")["selected_node"]
+        get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m")["selected_node"]
         == "mirror_neuron@172.20.10.8"
     )
 
 
 def test_cluster_model_reconcile_does_not_rehome_a_live_remote_owner():
-    entry = resolve_model_entry("gemma4:e2b")
+    entry = resolve_model_entry("nemotron-3.5-bolt-e4b:q4_k_m")
     add_registered_models(
         [dmr_registration(entry, selected_node="mirror_neuron@worker")]
     )
@@ -578,11 +578,11 @@ def test_cluster_model_reconcile_does_not_rehome_a_live_remote_owner():
     reconciled = model_cmds._reconcile_stale_local_model_registrations(
         local_node="mirror_neuron@local",
         live_nodes={"mirror_neuron@local", "mirror_neuron@worker"},
-        installed_models={"docker.io/ai/gemma4:E2B"},
+        installed_models={"nemotron-3.5-bolt-e4b:q4_k_m"},
     )
 
     assert reconciled == []
-    assert get_registered_model("gemma4:e2b")["selected_node"] == "mirror_neuron@worker"
+    assert get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m")["selected_node"] == "mirror_neuron@worker"
 
 
 def test_cluster_model_reconcile_requires_matching_publish_ack(mocker):
@@ -600,7 +600,7 @@ def test_cluster_model_reconcile_requires_matching_publish_ack(mocker):
     )
     mocker.patch(
         "mn_cli.libs.model_cmds._installed_model_names",
-        return_value={"docker.io/ai/gemma4:E2B"},
+        return_value={"nemotron-3.5-bolt-e4b:q4_k_m"},
     )
     mocker.patch(
         "mn_cli.libs.model_cmds.client.publish_runtime_status",
@@ -831,15 +831,15 @@ def test_cluster_litellm_api_base_supports_ipv6_owner():
     )
 
 
-def test_model_show_resolves_gemme_alias(mocker):
+def test_model_show_resolves_bolt_alias(mocker):
     mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=False)
 
-    result = runner.invoke(app, ["model", "show", "gemme4:e2b", "--json"])
+    result = runner.invoke(app, ["model", "show", "nemotron-bolt", "--json"])
 
     assert result.exit_code == 0
     payload = cli_data(result)
-    assert payload["id"] == "gemma4:e2b"
-    assert payload["model"] == "docker.io/ai/gemma4:E2B"
+    assert payload["id"] == "nemotron-3.5-bolt-e4b:q4_k_m"
+    assert payload["model"] == "nemotron-3.5-bolt-e4b:q4_k_m"
     assert payload["kind"] == "dmr"
     assert payload["state"] == "available"
 
@@ -886,7 +886,7 @@ def test_model_show_does_not_require_docker_binary(mocker):
     mocker.patch("subprocess.run", side_effect=FileNotFoundError("docker"))
     mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=False)
 
-    result = runner.invoke(app, ["model", "show", "gemma4:e2b", "--json"])
+    result = runner.invoke(app, ["model", "show", "nemotron-3.5-bolt-e4b:q4_k_m", "--json"])
 
     assert result.exit_code == 0
     payload = cli_data(result)
@@ -974,11 +974,11 @@ def test_model_probe_checks_local_dmr_and_litellm_then_persists_proxy_matrix(
         return_value={
             "ok": True,
             "url": "http://127.0.0.1:4000/v1/models",
-            "models": ["gemma4:e2b"],
+            "models": ["nemotron-3.5-bolt-e4b:q4_k_m"],
         },
     )
 
-    result = runner.invoke(app, ["model", "probe", "gemma4:e2b", "--json"])
+    result = runner.invoke(app, ["model", "probe", "nemotron-3.5-bolt-e4b:q4_k_m", "--json"])
 
     assert result.exit_code == 0, result.stdout
     payload = cli_data(result)
@@ -1006,7 +1006,7 @@ def test_model_probe_without_model_probes_every_runtime_inventory_model(mocker):
         "mn_cli.libs.model_cmds._runtime_model_list_payload",
         return_value={
             "models": [
-                {"id": "gemma4:e2b"},
+                {"id": "nemotron-3.5-bolt-e4b:q4_k_m"},
                 {"id": "nemotron3:q4_K_M"},
             ],
             "registry": "/tmp/registry.json",
@@ -1044,12 +1044,12 @@ def test_model_probe_without_model_probes_every_runtime_inventory_model(mocker):
     assert payload["verified"] == 2
     assert payload["failed"] == 0
     assert [item["model"] for item in payload["results"]] == [
-        "gemma4:e2b",
+        "nemotron-3.5-bolt-e4b:q4_k_m",
         "nemotron3:q4_K_M",
     ]
     assert all(item["ok"] is True for item in payload["results"])
     assert [call.args[:2] for call in run_probe.call_args_list] == [
-        ("gemma4:e2b", "streaming"),
+        ("nemotron-3.5-bolt-e4b:q4_k_m", "streaming"),
         ("nemotron3:q4_K_M", "streaming"),
     ]
     assert all(
@@ -1120,10 +1120,10 @@ def test_model_probe_can_probe_remote_route_through_litellm_only(mocker):
     mocker.patch(
         "mn_cli.libs.model_probe.get_registered_model",
         return_value={
-            "id": "gemma4:e2b",
+            "id": "nemotron-3.5-bolt-e4b:q4_k_m",
             "kind": "dmr",
-            "model": "docker.io/ai/gemma4:E2B",
-            "api_model": "gemma4:e2b",
+            "model": "nemotron-3.5-bolt-e4b:q4_k_m",
+            "api_model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "selected_node": "mirror_neuron@spark",
         },
     )
@@ -1132,7 +1132,7 @@ def test_model_probe_can_probe_remote_route_through_litellm_only(mocker):
         return_value={
             "ok": True,
             "url": "http://127.0.0.1:4000/v1/models",
-            "models": ["gemma4:e2b"],
+            "models": ["nemotron-3.5-bolt-e4b:q4_k_m"],
         },
     )
 
@@ -1141,7 +1141,7 @@ def test_model_probe_can_probe_remote_route_through_litellm_only(mocker):
         [
             "model",
             "probe",
-            "gemma4:e2b",
+            "nemotron-3.5-bolt-e4b:q4_k_m",
             "--capabilities",
             "json-schema,stream",
             "--json",
@@ -1166,10 +1166,10 @@ def test_model_probe_plain_output_is_readable(mocker):
     mocker.patch(
         "mn_cli.libs.model_probe.get_registered_model",
         return_value={
-            "id": "gemma4:e2b",
+            "id": "nemotron-3.5-bolt-e4b:q4_k_m",
             "kind": "dmr",
-            "model": "docker.io/ai/gemma4:E2B",
-            "api_model": "gemma4:e2b",
+            "model": "nemotron-3.5-bolt-e4b:q4_k_m",
+            "api_model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "selected_node": "mirror_neuron@spark",
         },
     )
@@ -1178,7 +1178,7 @@ def test_model_probe_plain_output_is_readable(mocker):
         return_value={
             "ok": True,
             "url": "http://127.0.0.1:4000/v1/models",
-            "models": ["gemma4:e2b"],
+            "models": ["nemotron-3.5-bolt-e4b:q4_k_m"],
         },
     )
 
@@ -1187,7 +1187,7 @@ def test_model_probe_plain_output_is_readable(mocker):
         [
             "model",
             "probe",
-            "gemma4:e2b",
+            "nemotron-3.5-bolt-e4b:q4_k_m",
             "--capabilities",
             "json-schema",
         ],
@@ -1220,7 +1220,7 @@ def test_model_probe_fails_when_litellm_changes_local_capabilities(mocker):
         return_value={
             "ok": True,
             "url": "http://127.0.0.1:4000/v1/models",
-            "models": ["gemma4:e2b"],
+            "models": ["nemotron-3.5-bolt-e4b:q4_k_m"],
         },
     )
 
@@ -1229,7 +1229,7 @@ def test_model_probe_fails_when_litellm_changes_local_capabilities(mocker):
         [
             "model",
             "probe",
-            "gemma4:e2b",
+            "nemotron-3.5-bolt-e4b:q4_k_m",
             "--capabilities",
             "structured-output",
             "--json",
@@ -1245,7 +1245,7 @@ def test_model_probe_fails_when_litellm_changes_local_capabilities(mocker):
 
 def test_model_probe_fails_when_a_live_result_is_unknown(mocker):
     report = ModelCapabilityReport(
-        model_id="gemma4:e2b",
+        model_id="nemotron-3.5-bolt-e4b:q4_k_m",
         required=("streaming",),
         capabilities={},
         unknown=("streaming",),
@@ -1259,10 +1259,10 @@ def test_model_probe_fails_when_a_live_result_is_unknown(mocker):
     mocker.patch(
         "mn_cli.libs.model_probe.get_registered_model",
         return_value={
-            "id": "gemma4:e2b",
+            "id": "nemotron-3.5-bolt-e4b:q4_k_m",
             "kind": "dmr",
-            "model": "docker.io/ai/gemma4:E2B",
-            "api_model": "gemma4:e2b",
+            "model": "nemotron-3.5-bolt-e4b:q4_k_m",
+            "api_model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "selected_node": "mirror_neuron@spark",
         },
     )
@@ -1271,7 +1271,7 @@ def test_model_probe_fails_when_a_live_result_is_unknown(mocker):
         return_value={
             "ok": True,
             "url": "http://127.0.0.1:4000/v1/models",
-            "models": ["gemma4:e2b"],
+            "models": ["nemotron-3.5-bolt-e4b:q4_k_m"],
         },
     )
 
@@ -1280,7 +1280,7 @@ def test_model_probe_fails_when_a_live_result_is_unknown(mocker):
         [
             "model",
             "probe",
-            "gemma4:e2b",
+            "nemotron-3.5-bolt-e4b:q4_k_m",
             "--capabilities",
             "streaming",
             "--json",
@@ -1492,8 +1492,8 @@ def test_cluster_node_is_not_local_for_remote_host(monkeypatch):
 
 def test_install_model_on_cluster_node_uses_local_runtime_client_for_local_host(mocker):
     model = {
-        "id": "gemma4:e2b",
-        "model": "docker.io/ai/gemma4:E2B",
+        "id": "nemotron-3.5-bolt-e4b:q4_k_m",
+        "model": "nemotron-3.5-bolt-e4b:q4_k_m",
         "provider": "docker_model_runner",
     }
     node = "mirror_neuron@192.168.6.28"
@@ -1537,14 +1537,14 @@ def test_install_model_on_cluster_node_uses_local_runtime_client_for_local_host(
         "mn_cli.libs.model_cmds._cluster_gateway_endpoint",
         return_value={
             "provider": "docker_model_runner",
-            "model": "docker.io/ai/gemma4:E2B",
-            "runtime_model": "docker.io/ai/gemma4:E2B",
-            "api_model": "docker.io/ai/gemma4:E2B",
+            "model": "nemotron-3.5-bolt-e4b:q4_k_m",
+            "runtime_model": "nemotron-3.5-bolt-e4b:q4_k_m",
+            "api_model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "api_base": "http://192.168.6.28:4000/v1",
             "node": node,
             "source": "remote_litellm_gateway",
-            "cluster_model_id": "gemma4:e2b",
-            "route_aliases": ["gemma4:e2b"],
+            "cluster_model_id": "nemotron-3.5-bolt-e4b:q4_k_m",
+            "route_aliases": ["nemotron-3.5-bolt-e4b:q4_k_m"],
         },
     )
 
@@ -1901,7 +1901,7 @@ def test_model_add_default_rolls_back_registry_when_cluster_fanout_fails(mocker)
 
 
 def test_model_add_adopts_cluster_artifact_before_new_placement(mocker):
-    entry = resolve_model_entry("gemma4:e2b")
+    entry = resolve_model_entry("nemotron-3.5-bolt-e4b:q4_k_m")
     mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=False)
     mocker.patch(
         "mn_cli.libs.model_cmds._installed_cluster_model_node",
@@ -1912,7 +1912,7 @@ def test_model_add_adopts_cluster_artifact_before_new_placement(mocker):
         "mn_cli.libs.model_cmds._install_model_on_cluster_node",
         return_value={
             "entry": entry,
-            "docker_model": "docker.io/ai/gemma4:E2B",
+            "docker_model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "compatibility": {"backend": "llama.cpp", "warnings": []},
             "transport": "runtime_node_grpc",
             "status": "already_installed",
@@ -1920,13 +1920,13 @@ def test_model_add_adopts_cluster_artifact_before_new_placement(mocker):
         },
     )
 
-    result = runner.invoke(app, ["model", "add", "gemma4:e2b", "--json"])
+    result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--json"])
 
     assert result.exit_code == 0, result.stdout
     assert cli_data(result)["reused"] is True
     automatic.assert_not_called()
     assert install.call_args.kwargs["node"] == "worker-1"
-    registration = get_registered_model("gemma4:e2b")
+    registration = get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m")
     assert registration is not None
     assert registration["kind"] == "dmr"
     assert registration["selected_node"] == "worker-1"
@@ -1944,19 +1944,19 @@ def test_model_add_uses_automatic_best_node_by_default(mocker):
     install = mocker.patch(
         "mn_cli.libs.model_cmds._install_model_on_cluster_node",
         return_value={
-            "entry": resolve_model_entry("gemma4:e2b"),
-            "docker_model": "docker.io/ai/gemma4:E2B",
+            "entry": resolve_model_entry("nemotron-3.5-bolt-e4b:q4_k_m"),
+            "docker_model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "compatibility": {"backend": "llama.cpp", "warnings": []},
             "transport": "runtime_node_grpc",
         },
     )
 
-    result = runner.invoke(app, ["model", "add", "gemma4:e2b", "--json"])
+    result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--json"])
 
     assert result.exit_code == 0, result.stdout
     selected.assert_called_once()
     assert install.call_args.kwargs["node"] == "spark"
-    assert get_registered_model("gemma4:e2b")["selected_node"] == "spark"
+    assert get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m")["selected_node"] == "spark"
 
 
 def test_automatic_model_install_node_ranks_compatible_cluster_capacity(mocker):
@@ -2004,19 +2004,19 @@ def test_automatic_model_install_node_ranks_compatible_cluster_capacity(mocker):
     )
 
     selected = model_cmds._automatic_model_install_node(
-        resolve_model_entry("gemma4:e2b")
+        resolve_model_entry("nemotron-3.5-bolt-e4b:q4_k_m")
     )
 
     assert selected == "worker"
 
 
 def test_model_add_same_node_is_idempotent(mocker):
-    entry = resolve_model_entry("gemma4:e2b")
+    entry = resolve_model_entry("nemotron-3.5-bolt-e4b:q4_k_m")
     add_registered_models([dmr_registration(entry, selected_node="local")])
     mocker.patch("mn_cli.libs.model_cmds._local_runtime_node_name", return_value="mini")
     install = mocker.patch("mn_cli.libs.model_cmds.install_model_entry")
 
-    result = runner.invoke(app, ["model", "add", "gemma4:e2b", "--local", "--json"])
+    result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--local", "--json"])
 
     assert result.exit_code == 0
     payload = cli_data(result)
@@ -2025,7 +2025,7 @@ def test_model_add_same_node_is_idempotent(mocker):
 
 
 def test_model_add_supports_local_and_repeated_node_replicas(mocker):
-    entry = resolve_model_entry("gemma4:e2b")
+    entry = resolve_model_entry("nemotron-3.5-bolt-e4b:q4_k_m")
     mocker.patch("mn_cli.libs.model_cmds._local_runtime_node_name", return_value="mini")
     mocker.patch(
         "mn_cli.libs.model_cmds.assess_model_compatibility",
@@ -2050,7 +2050,7 @@ def test_model_add_supports_local_and_repeated_node_replicas(mocker):
         "mn_cli.libs.model_cmds._install_model_on_cluster_node",
         return_value={
             "entry": entry,
-            "docker_model": "docker.io/ai/gemma4:E2B",
+            "docker_model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "compatibility": {"backend": "llama.cpp"},
         },
     )
@@ -2060,7 +2060,7 @@ def test_model_add_supports_local_and_repeated_node_replicas(mocker):
         [
             "model",
             "add",
-            "gemma4:e2b",
+            "nemotron-3.5-bolt-e4b:q4_k_m",
             "--local",
             "--node",
             "spark",
@@ -2073,7 +2073,7 @@ def test_model_add_supports_local_and_repeated_node_replicas(mocker):
     assert result.exit_code == 0, result.stdout
     assert [item["node"] for item in cli_data(result)["results"]] == ["mini", "spark"]
     assert [
-        item["node"] for item in get_registered_model("gemma4:e2b")["installations"]
+        item["node"] for item in get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m")["installations"]
     ] == [
         "mini",
         "spark",
@@ -2100,7 +2100,7 @@ def test_model_add_multi_node_preflights_every_target_before_install(mocker):
         [
             "model",
             "add",
-            "gemma4:e2b",
+            "nemotron-3.5-bolt-e4b:q4_k_m",
             "--node",
             "spark",
             "--node",
@@ -2115,7 +2115,7 @@ def test_model_add_multi_node_preflights_every_target_before_install(mocker):
 
 
 def test_model_add_multi_node_retains_successful_partial_install(mocker):
-    entry = resolve_model_entry("gemma4:e2b")
+    entry = resolve_model_entry("nemotron-3.5-bolt-e4b:q4_k_m")
     mocker.patch(
         "mn_cli.libs.model_cmds._cluster_node_endpoint",
         side_effect=lambda node: {"node_name": node, "node": {}},
@@ -2129,7 +2129,7 @@ def test_model_add_multi_node_retains_successful_partial_install(mocker):
         side_effect=[
             {
                 "entry": entry,
-                "docker_model": "docker.io/ai/gemma4:E2B",
+                "docker_model": "nemotron-3.5-bolt-e4b:q4_k_m",
                 "compatibility": {"backend": "llama.cpp"},
             },
             RuntimeError("node unavailable"),
@@ -2141,7 +2141,7 @@ def test_model_add_multi_node_retains_successful_partial_install(mocker):
         [
             "model",
             "add",
-            "gemma4:e2b",
+            "nemotron-3.5-bolt-e4b:q4_k_m",
             "--node",
             "spark",
             "--node",
@@ -2155,7 +2155,7 @@ def test_model_add_multi_node_retains_successful_partial_install(mocker):
     assert payload["status"] == "partial"
     assert [item["status"] for item in payload["results"]] == ["ready", "error"]
     assert [
-        item["node"] for item in get_registered_model("gemma4:e2b")["installations"]
+        item["node"] for item in get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m")["installations"]
     ] == ["spark"]
 
 
@@ -2235,13 +2235,13 @@ def test_model_add_retains_artifact_as_unmanaged_when_route_finalization_fails(m
         side_effect=RuntimeError("gateway unavailable"),
     )
 
-    result = runner.invoke(app, ["model", "add", "gemma4:e2b", "--local", "--json"])
+    result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--local", "--json"])
 
     assert result.exit_code == 1
     output = " ".join(result.stdout.split())
     assert "remains unmanaged" in output
-    assert "mn model doctor gemma4:e2b" in output
-    assert get_registered_model("gemma4:e2b") is None
+    assert "mn model doctor nemotron-3.5-bolt-e4b:q4_k_m" in output
+    assert get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m") is None
 
 
 def test_model_update_reloads_provider_source(tmp_path, mocker, monkeypatch):
@@ -2344,10 +2344,9 @@ def test_model_add_syncs_provider_definition_to_all_cluster_nodes(
     assert node_syncs[0][1]["restart"] is True
 
 
-def _assert_cold_configuration_unloaded(calls):
+def _assert_cold_configuration_unloaded(calls, target="nemotron-3.5-bolt-e4b:q4_k_m"):
     # Configure starts an asynchronous DMR preload. Synchronize with readiness
     # before unloading, so a successful add/update cannot leave cold weights resident.
-    target = "docker.io/ai/gemma4:E2B"
     configure = next(i for i, command in enumerate(calls)
                      if command[:4] == ["docker", "model", "configure", "--context-size"])
     ready = calls.index(["docker", "model", "run", "--detach", target])
@@ -2386,13 +2385,13 @@ def test_model_install_pulls_configures_and_leaves_cold_model_unloaded(mocker):
     )
 
     result = runner.invoke(
-        app, ["model", "add", "gemma4:e2b", "--context-size", "8192"]
+        app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--context-size", "8192"]
     )
 
     assert result.exit_code == 0
     assert "Model add successful." in result.stdout
-    assert "gemma4:e2b" in result.stdout
-    assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] in calls
+    assert "nemotron-3.5-bolt-e4b:q4_k_m" in result.stdout
+    assert ["docker", "model", "pull", "hf.co/MirrorNeuronLab/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF:Q4_K_M"] in calls
     assert [
         "docker",
         "model",
@@ -2401,7 +2400,7 @@ def test_model_install_pulls_configures_and_leaves_cold_model_unloaded(mocker):
         "8192",
         "--mode",
         "completion",
-        "docker.io/ai/gemma4:E2B",
+        "nemotron-3.5-bolt-e4b:q4_k_m",
     ] in calls
 
     _assert_cold_configuration_unloaded(calls)
@@ -2428,7 +2427,7 @@ def test_model_install_syncs_local_dmr_gateway_route(mocker, monkeypatch):
         return {
             "status": "running",
             "config_path": "config.yaml",
-            "models": ["gemma4:e2b"],
+            "models": ["nemotron-3.5-bolt-e4b:q4_k_m"],
         }
 
     mocker.patch("subprocess.run", side_effect=fake_run)
@@ -2454,16 +2453,16 @@ def test_model_install_syncs_local_dmr_gateway_route(mocker, monkeypatch):
         ),
     )
 
-    result = runner.invoke(app, ["model", "add", "gemma4:e2b"])
+    result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m"])
 
     assert result.exit_code == 0
     assert synced
     endpoints = synced[0]["runtime_endpoints"]
     assert (
-        endpoints["gemma4:e2b"]["api_base"]
+        endpoints["nemotron-3.5-bolt-e4b:q4_k_m"]["api_base"]
         == "http://model-runner.docker.internal/engines/v1"
     )
-    assert "docker.io/ai/gemma4:E2B" in load_model_ownership()["models"]
+    assert "nemotron-3.5-bolt-e4b:q4_k_m" in load_model_ownership()["models"]
 
 
 def test_model_install_local_dmr_publishes_status_without_peer_gateway_fanout(mocker, monkeypatch):
@@ -2534,11 +2533,11 @@ def test_model_install_local_dmr_publishes_status_without_peer_gateway_fanout(mo
         ),
     )
 
-    result = runner.invoke(app, ["model", "add", "gemma4:e2b", "--local"])
+    result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--local"])
 
     assert result.exit_code == 0
     assert (
-        local_syncs[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"]
+        local_syncs[0]["runtime_endpoints"]["nemotron-3.5-bolt-e4b:q4_k_m"]["api_base"]
         == "http://model-runner.docker.internal/engines/v1"
     )
     peer_client.assert_called_once_with(target="10.0.0.2:55051", timeout=5.0)
@@ -2558,16 +2557,16 @@ def test_model_install_node_uses_prepare_runtime_model_not_ssh(mocker):
             return json.dumps(
                 {
                     "status": "installed",
-                    "docker_model": "docker.io/ai/gemma4:E2B",
+                    "docker_model": "nemotron-3.5-bolt-e4b:q4_k_m",
                     "install": {
                         "compatibility": {"backend": "llama.cpp", "warnings": []}
                     },
                     "gateway": {"host_api_base": "http://127.0.0.1:4000/v1"},
                     "endpoint": {
                         "provider": "docker_model_runner",
-                        "model": "gemma4:E2B",
-                        "runtime_model": "docker.io/ai/gemma4:E2B",
-                        "api_model": "gemma4:E2B",
+                        "model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                        "runtime_model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                        "api_model": "nemotron-3.5-bolt-e4b:q4_k_m",
                         "api_base": "http://mn-litellm-proxy:4000/v1",
                         "node": "spark",
                     },
@@ -2604,18 +2603,18 @@ def test_model_install_node_uses_prepare_runtime_model_not_ssh(mocker):
         side_effect=AssertionError("remote install must not shell out"),
     )
 
-    result = runner.invoke(app, ["model", "add", "gemma4:e2b", "--node", "spark"])
+    result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--node", "spark"])
 
     assert result.exit_code == 0
     prepare_payload = [payload for kind, payload in calls if kind == "prepare"][0]
-    assert prepare_payload["model"] == "docker.io/ai/gemma4:E2B"
+    assert prepare_payload["model"] == "nemotron-3.5-bolt-e4b:q4_k_m"
     assert prepare_payload["source"] == "mn-cli"
     assert (
-        synced[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"]
+        synced[0]["runtime_endpoints"]["nemotron-3.5-bolt-e4b:q4_k_m"]["api_base"]
         == "http://192.168.4.173:4000/v1"
     )
     assert (
-        synced[0]["runtime_endpoints"]["gemma4:e2b"]["source"]
+        synced[0]["runtime_endpoints"]["nemotron-3.5-bolt-e4b:q4_k_m"]["source"]
         == "remote_litellm_gateway"
     )
     assert load_model_ownership()["models"] == {}
@@ -2667,31 +2666,31 @@ def test_model_update_refreshes_local_dmr_gateway_route(mocker, monkeypatch):
             has_apple_silicon=True,
         ),
     )
-    entry = resolve_model_entry("gemma4:e2b")
+    entry = resolve_model_entry("nemotron-3.5-bolt-e4b:q4_k_m")
     add_registered_models([dmr_registration(entry, selected_node="local")])
 
-    result = runner.invoke(app, ["model", "update", "gemma4:e2b"])
+    result = runner.invoke(app, ["model", "update", "nemotron-3.5-bolt-e4b:q4_k_m"])
 
     assert result.exit_code == 0
-    assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] in calls
+    assert ["docker", "model", "pull", "hf.co/MirrorNeuronLab/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF:Q4_K_M"] in calls
     _assert_cold_configuration_unloaded(calls)
     assert (
-        synced[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"]
+        synced[0]["runtime_endpoints"]["nemotron-3.5-bolt-e4b:q4_k_m"]["api_base"]
         == "http://model-runner.docker.internal/engines/v1"
     )
-    assert "docker.io/ai/gemma4:E2B" in load_model_ownership()["models"]
+    assert "nemotron-3.5-bolt-e4b:q4_k_m" in load_model_ownership()["models"]
 
 
 def test_model_update_refreshes_remote_dmr_instead_of_adopting_it(mocker):
     record = dmr_registration(
-        resolve_model_entry("gemma4:e2b"),
+        resolve_model_entry("nemotron-3.5-bolt-e4b:q4_k_m"),
         selected_node="worker-1",
     )
     install = mocker.patch(
         "mn_cli.libs.model_cmds._install_model_on_cluster_node",
         return_value={
             "compatibility": {"backend": "llama.cpp"},
-            "docker_model": "docker.io/ai/gemma4:E2B",
+            "docker_model": "nemotron-3.5-bolt-e4b:q4_k_m",
         },
     )
     mocker.patch(
@@ -2719,12 +2718,12 @@ def test_model_install_node_syncs_only_the_calling_nodes_gateway(mocker):
             return json.dumps(
                 {
                     "status": "installed",
-                    "docker_model": "docker.io/ai/gemma4:E2B",
+                    "docker_model": "nemotron-3.5-bolt-e4b:q4_k_m",
                     "install": {
                         "compatibility": {"backend": "llama.cpp", "warnings": []}
                     },
                     "gateway": {"host_api_base": "http://127.0.0.1:4000/v1"},
-                    "endpoint": {"api_model": "gemma4:E2B"},
+                    "endpoint": {"api_model": "nemotron-3.5-bolt-e4b:q4_k_m"},
                 }
             )
 
@@ -2750,16 +2749,16 @@ def test_model_install_node_syncs_only_the_calling_nodes_gateway(mocker):
         side_effect=AssertionError("remote install must not shell out"),
     )
 
-    result = runner.invoke(app, ["model", "add", "gemma4:e2b", "--node", "spark"])
+    result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--node", "spark"])
 
     assert result.exit_code == 0
     assert calls[0][1] == "192.168.4.173:55052"
     assert (
-        local_syncs[0]["runtime_endpoints"]["gemma4:e2b"]["api_base"]
+        local_syncs[0]["runtime_endpoints"]["nemotron-3.5-bolt-e4b:q4_k_m"]["api_base"]
         == "http://192.168.4.173:4000/v1"
     )
     assert (
-        local_syncs[0]["runtime_endpoints"]["gemma4:e2b"]["source"]
+        local_syncs[0]["runtime_endpoints"]["nemotron-3.5-bolt-e4b:q4_k_m"]["source"]
         == "remote_litellm_gateway"
     )
     assert node_syncs == []
@@ -2796,7 +2795,7 @@ def test_cluster_runtime_endpoint_sync_excludes_each_route_owner(mocker):
             },
             "small": {
                 "provider": "docker_model_runner",
-                "model": "docker.io/ai/gemma4:E2B",
+                "model": "nemotron-3.5-bolt-e4b:q4_k_m",
                 "api_base": "http://192.168.4.174:4000/v1",
                 "node": "moon",
                 "source": "remote_litellm_gateway",
@@ -2843,13 +2842,13 @@ def test_model_install_streams_pull_progress(mocker):
         ),
     )
 
-    result = runner.invoke(app, ["model", "add", "gemma4:e2b"])
+    result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m"])
 
     assert result.exit_code == 0
     pull_kwargs = [
         kwargs
         for command, kwargs in calls
-        if command == ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"]
+        if command == ["docker", "model", "pull", "hf.co/MirrorNeuronLab/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF:Q4_K_M"]
     ][0]
     assert pull_kwargs["capture_output"] is False
 
@@ -2870,13 +2869,13 @@ def test_model_install_retries_transient_pull_failure(mocker):
             )
         if command[:4] == ["docker", "model", "run", "--help"]:
             return _completed(command, stdout="Options:\n")
-        if command == ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"]:
+        if command == ["docker", "model", "pull", "hf.co/MirrorNeuronLab/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF:Q4_K_M"]:
             pull_attempts += 1
             if pull_attempts == 1:
                 return _completed(
                     command, returncode=1, stderr="writing blob: blob digest mismatch"
                 )
-        if command == ["docker", "model", "inspect", "docker.io/ai/gemma4:E2B"] and pull_attempts < 2:
+        if command == ["docker", "model", "inspect", "nemotron-3.5-bolt-e4b:q4_k_m"] and pull_attempts < 2:
             return _completed(command, returncode=1)
         return _completed(command)
 
@@ -2893,10 +2892,10 @@ def test_model_install_retries_transient_pull_failure(mocker):
         ),
     )
 
-    result = runner.invoke(app, ["model", "add", "gemma4:e2b"])
+    result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m"])
 
     assert result.exit_code == 0
-    assert calls.count(["docker", "model", "pull", "docker.io/ai/gemma4:E2B"]) == 2
+    assert calls.count(["docker", "model", "pull", "hf.co/MirrorNeuronLab/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF:Q4_K_M"]) == 2
     _assert_cold_configuration_unloaded(calls)
 
 
@@ -2926,12 +2925,12 @@ def test_model_install_persists_manual_ownership_record(mocker):
         ),
     )
 
-    result = runner.invoke(app, ["model", "add", "gemma4:e2b"])
+    result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m"])
 
     assert result.exit_code == 0
-    record = load_model_ownership()["models"]["docker.io/ai/gemma4:E2B"]
-    assert record["model_id"] == "gemma4:e2b"
-    assert record["docker_model"] == "docker.io/ai/gemma4:E2B"
+    record = load_model_ownership()["models"]["nemotron-3.5-bolt-e4b:q4_k_m"]
+    assert record["model_id"] == "nemotron-3.5-bolt-e4b:q4_k_m"
+    assert record["docker_model"] == "nemotron-3.5-bolt-e4b:q4_k_m"
     assert record["backend"] == "llama.cpp"
     assert record["manual"] is True
     assert record["owners"] == {}
@@ -2950,7 +2949,7 @@ def test_model_install_state_can_be_listed_after_install(mocker):
             return _completed(command, stdout="Options:\n      --context-size int\n")
         if command[:4] == ["docker", "model", "list", "--format"]:
             return _completed(
-                command, stdout=json.dumps([{"name": "docker.io/ai/gemma4:E2B"}])
+                command, stdout=json.dumps([{"name": "nemotron-3.5-bolt-e4b:q4_k_m"}])
             )
         return _completed(command)
 
@@ -2967,14 +2966,14 @@ def test_model_install_state_can_be_listed_after_install(mocker):
         ),
     )
 
-    install_result = runner.invoke(app, ["model", "add", "gemma4:e2b"])
+    install_result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m"])
     list_result = runner.invoke(app, ["model", "list", "--json"])
 
     assert install_result.exit_code == 0
     assert list_result.exit_code == 0
     model = cli_data(list_result)["models"][0]
-    assert model["id"] == "gemma4:e2b"
-    assert model["docker_model"] == "docker.io/ai/gemma4:E2B"
+    assert model["id"] == "nemotron-3.5-bolt-e4b:q4_k_m"
+    assert model["docker_model"] == "nemotron-3.5-bolt-e4b:q4_k_m"
     assert model["installed"] is True
     assert model["registered"] is True
     assert model["kind"] == "dmr"
@@ -3011,13 +3010,13 @@ def test_model_install_verifies_context_with_configure_when_run_help_omits_it(mo
     )
 
     result = runner.invoke(
-        app, ["model", "add", "gemma4:e2b", "--context-size", "8192"]
+        app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--context-size", "8192"]
     )
 
     assert result.exit_code == 0
     _assert_cold_configuration_unloaded(calls)
-    assert ["docker", "model", "configure", "--context-size", "8192", "--mode", "completion", "docker.io/ai/gemma4:E2B"] in calls
-    assert calls.count(["docker", "model", "configure", "show", "docker.io/ai/gemma4:E2B"]) >= 2
+    assert ["docker", "model", "configure", "--context-size", "8192", "--mode", "completion", "nemotron-3.5-bolt-e4b:q4_k_m"] in calls
+    assert calls.count(["docker", "model", "configure", "show", "nemotron-3.5-bolt-e4b:q4_k_m"]) >= 2
     assert [
         "docker",
         "model",
@@ -3025,7 +3024,7 @@ def test_model_install_verifies_context_with_configure_when_run_help_omits_it(mo
         "--detach",
         "--context-size",
         "8192",
-        "docker.io/ai/gemma4:E2B",
+        "nemotron-3.5-bolt-e4b:q4_k_m",
     ] not in calls
 
 
@@ -3053,16 +3052,16 @@ def test_model_install_falls_back_to_dmr_rest_when_cli_plugin_missing(mocker):
         return_value=HostHardwareProfile(
             "darwin",
             "arm64",
-            total_memory_gb=16,
-            unified_memory_gb=16,
+            total_memory_gb=64,
+            unified_memory_gb=64,
             has_apple_silicon=True,
         ),
     )
 
-    result = runner.invoke(app, ["model", "add", "gemma4:e2b"])
+    result = runner.invoke(app, ["model", "add", "nemotron3:q4_K_M"])
 
     assert result.exit_code == 0
-    assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] not in calls
+    assert ["docker", "model", "pull", "nemotron3:q4_K_M"] not in calls
     assert any(
         url.endswith("/models/create") and method == "POST"
         for url, method, _data in requests
@@ -3070,7 +3069,7 @@ def test_model_install_falls_back_to_dmr_rest_when_cli_plugin_missing(mocker):
     payloads = [
         json.loads(data.decode("utf-8")) for _url, _method, data in requests if data
     ]
-    assert {"from": "docker.io/ai/gemma4:E2B"} in payloads
+    assert {"from": "nemotron3:q4_K_M"} in payloads
 
 
 def test_model_install_prefers_dmr_rest_pull_when_runner_api_reachable(
@@ -3107,17 +3106,17 @@ def test_model_install_prefers_dmr_rest_pull_when_runner_api_reachable(
         return_value=HostHardwareProfile(
             "darwin",
             "arm64",
-            total_memory_gb=16,
-            unified_memory_gb=16,
+            total_memory_gb=64,
+            unified_memory_gb=64,
             has_apple_silicon=True,
         ),
     )
 
-    result = runner.invoke(app, ["model", "add", "gemma4:e2b"])
+    result = runner.invoke(app, ["model", "add", "nemotron3:q4_K_M"])
 
     assert result.exit_code == 0
-    assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] not in calls
-    _assert_cold_configuration_unloaded(calls)
+    assert ["docker", "model", "pull", "nemotron3:q4_K_M"] not in calls
+    _assert_cold_configuration_unloaded(calls, target="nemotron3:q4_K_M")
     assert any(
         url.endswith("/models/create") and method == "POST"
         for url, method, _data, _timeout in requests
@@ -3127,7 +3126,7 @@ def test_model_install_prefers_dmr_rest_pull_when_runner_api_reachable(
         for _url, _method, data, _timeout in requests
         if data
     ]
-    assert {"from": "docker.io/ai/gemma4:E2B"} in payloads
+    assert {"from": "nemotron3:q4_K_M"} in payloads
 
 
 def test_model_list_reads_dmr_rest_tags_when_cli_plugin_missing(mocker):
@@ -3142,7 +3141,7 @@ def test_model_list_reads_dmr_rest_tags_when_cli_plugin_missing(mocker):
 
     def fake_urlopen(request, timeout=0):
         return FakeResponse(
-            json.dumps([{"id": "sha256:one", "tags": ["docker.io/ai/gemma4:E2B"]}])
+            json.dumps([{"id": "sha256:one", "tags": ["nemotron-3.5-bolt-e4b:q4_k_m"]}])
         )
 
     mocker.patch("subprocess.run", side_effect=fake_run)
@@ -3152,7 +3151,7 @@ def test_model_list_reads_dmr_rest_tags_when_cli_plugin_missing(mocker):
 
     assert result.exit_code == 0
     payload = cli_data(result)
-    assert payload["models"][0]["id"] == "gemma4:e2b"
+    assert payload["models"][0]["id"] == "nemotron-3.5-bolt-e4b:q4_k_m"
     assert payload["models"][0]["installed"] is True
 
 
@@ -3180,7 +3179,7 @@ def test_model_doctor_reports_corrupted_gateway_config(tmp_path, monkeypatch, mo
         return_value={
             "ok": True,
             "url": "http://127.0.0.1:4000/v1/models",
-            "models": ["gemma4:e2b"],
+            "models": ["nemotron-3.5-bolt-e4b:q4_k_m"],
         },
     )
     mocker.patch(
@@ -3194,7 +3193,7 @@ def test_model_doctor_reports_corrupted_gateway_config(tmp_path, monkeypatch, mo
         ),
     )
 
-    result = runner.invoke(app, ["model", "doctor", "gemma4:e2b", "--json"])
+    result = runner.invoke(app, ["model", "doctor", "nemotron-3.5-bolt-e4b:q4_k_m", "--json"])
 
     assert result.exit_code == 0
     payload = cli_data(result)
@@ -3245,10 +3244,10 @@ def test_model_install_blocks_incompatible_hardware_before_pull(mocker):
         ),
     )
 
-    result = runner.invoke(app, ["model", "add", "gemma4:e2b"])
+    result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m"])
 
     assert result.exit_code == 1
-    assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] not in calls
+    assert ["docker", "model", "pull", "hf.co/MirrorNeuronLab/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF:Q4_K_M"] not in calls
 
 
 def test_model_install_failure_does_not_record_manual_ownership(
@@ -3288,10 +3287,10 @@ def test_model_install_failure_does_not_record_manual_ownership(
         ),
     )
 
-    result = runner.invoke(app, ["model", "add", "gemma4:e2b"])
+    result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m"])
 
     assert result.exit_code == 1
-    assert ["docker", "model", "pull", "docker.io/ai/gemma4:E2B"] in calls
+    assert ["docker", "model", "pull", "hf.co/MirrorNeuronLab/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF:Q4_K_M"] in calls
     assert load_model_ownership()["models"] == {}
 
 
@@ -3318,13 +3317,13 @@ def test_model_install_rest_failure_does_not_record_manual_ownership(
         return_value=HostHardwareProfile(
             "darwin",
             "arm64",
-            total_memory_gb=16,
-            unified_memory_gb=16,
+            total_memory_gb=64,
+            unified_memory_gb=64,
             has_apple_silicon=True,
         ),
     )
 
-    result = runner.invoke(app, ["model", "add", "gemma4:e2b"])
+    result = runner.invoke(app, ["model", "add", "nemotron3:q4_K_M"])
 
     assert result.exit_code == 1
     assert any(
@@ -3345,22 +3344,22 @@ def test_model_remove_uses_resolved_docker_model_with_force(mocker):
     mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway")
     mocker.patch("mn_cli.libs.model_cmds.reconcile_cluster_model_routes")
 
-    result = runner.invoke(app, ["model", "remove", "gemma4:e2b", "--force", "--yes"])
+    result = runner.invoke(app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--force", "--yes"])
 
     assert result.exit_code == 0
     assert "Model remove successful." in result.stdout
-    assert ["docker", "model", "rm", "--force", "docker.io/ai/gemma4:E2B"] in calls
+    assert ["docker", "model", "rm", "--force", "nemotron-3.5-bolt-e4b:q4_k_m"] in calls
 
 
 def test_model_remove_requires_yes_when_noninteractive():
-    result = runner.invoke(app, ["model", "remove", "gemma4:e2b", "--json"])
+    result = runner.invoke(app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--json"])
 
     assert result.exit_code == 2
     assert "requires --yes" in result.stdout
 
 
 def test_model_remove_confirms_interactively(mocker):
-    entry = resolve_model_entry("gemma4:e2b")
+    entry = resolve_model_entry("nemotron-3.5-bolt-e4b:q4_k_m")
     add_registered_models([dmr_registration(entry, selected_node="local")])
     mocker.patch("mn_cli.terminal.is_interactive", return_value=True)
     mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway")
@@ -3368,31 +3367,31 @@ def test_model_remove_confirms_interactively(mocker):
 
     result = runner.invoke(
         app,
-        ["model", "remove", "gemma4:e2b", "--keep-artifact"],
+        ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--keep-artifact"],
         input="y\n",
     )
 
     assert result.exit_code == 0, result.stdout
-    assert "Remove model 'gemma4:e2b'?" in result.stdout
-    assert get_registered_model("gemma4:e2b") is None
+    assert "Remove model 'nemotron-3.5-bolt-e4b:q4_k_m'?" in result.stdout
+    assert get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m") is None
 
 
 def test_model_remove_blocks_blueprint_owned_dmr(mocker):
-    entry = resolve_model_entry("gemma4:e2b")
+    entry = resolve_model_entry("nemotron-3.5-bolt-e4b:q4_k_m")
     add_registered_models([dmr_registration(entry, selected_node="local")])
     record_model_owner(entry, blueprint_id="assistant-blueprint")
     remove_artifact = mocker.patch("mn_cli.libs.model_cmds.remove_model_ref")
 
-    result = runner.invoke(app, ["model", "remove", "gemma4:e2b", "--yes", "--json"])
+    result = runner.invoke(app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--yes", "--json"])
 
     assert result.exit_code == 2
     assert "assistant-blueprint" in result.stdout
-    assert get_registered_model("gemma4:e2b") is not None
+    assert get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m") is not None
     remove_artifact.assert_not_called()
 
 
 def test_model_remove_force_overrides_blueprint_owner_guard(mocker):
-    entry = resolve_model_entry("gemma4:e2b")
+    entry = resolve_model_entry("nemotron-3.5-bolt-e4b:q4_k_m")
     add_registered_models([dmr_registration(entry, selected_node="local")])
     record_model_owner(entry, blueprint_id="assistant-blueprint")
     mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=False)
@@ -3400,19 +3399,19 @@ def test_model_remove_force_overrides_blueprint_owner_guard(mocker):
     mocker.patch("mn_cli.libs.model_cmds.reconcile_cluster_model_routes")
 
     result = runner.invoke(
-        app, ["model", "remove", "gemma4:e2b", "--force", "--yes", "--json"]
+        app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--force", "--yes", "--json"]
     )
 
     assert result.exit_code == 0, result.stdout
-    assert get_registered_model("gemma4:e2b") is None
+    assert get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m") is None
 
 
 def test_model_remove_keep_artifact_reports_installed_dmr(mocker):
-    entry = resolve_model_entry("gemma4:e2b")
+    entry = resolve_model_entry("nemotron-3.5-bolt-e4b:q4_k_m")
     add_registered_models([dmr_registration(entry, selected_node="local")])
     mocker.patch(
         "mn_cli.libs.model_cmds._installed_model_names",
-        return_value={"docker.io/ai/gemma4:E2B"},
+        return_value={"nemotron-3.5-bolt-e4b:q4_k_m"},
     )
     remove_artifact = mocker.patch("mn_cli.libs.model_cmds.remove_model_ref")
     mocker.patch("mn_cli.libs.model_cmds.remove_litellm_gateway_route")
@@ -3421,23 +3420,23 @@ def test_model_remove_keep_artifact_reports_installed_dmr(mocker):
 
     result = runner.invoke(
         app,
-        ["model", "remove", "gemma4:e2b", "--keep-artifact", "--yes", "--json"],
+        ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--keep-artifact", "--yes", "--json"],
     )
 
     assert result.exit_code == 0, result.stdout
     assert cli_data(result)["artifact_removed"] is False
-    assert get_registered_model("gemma4:e2b") is None
+    assert get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m") is None
     remove_artifact.assert_not_called()
     listed = runner.invoke(app, ["model", "list", "--json"])
     model = next(
-        item for item in cli_data(listed)["models"] if item["id"] == "gemma4:e2b"
+        item for item in cli_data(listed)["models"] if item["id"] == "nemotron-3.5-bolt-e4b:q4_k_m"
     )
     assert model["state"] == "installed"
     assert model["registered"] is False
 
 
 def test_model_remove_retains_degraded_registration_when_route_cleanup_fails(mocker):
-    entry = resolve_model_entry("gemma4:e2b")
+    entry = resolve_model_entry("nemotron-3.5-bolt-e4b:q4_k_m")
     add_registered_models([dmr_registration(entry, selected_node="local")])
     mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=True)
     remove_artifact = mocker.patch("mn_cli.libs.model_cmds.remove_model_ref")
@@ -3447,16 +3446,16 @@ def test_model_remove_retains_degraded_registration_when_route_cleanup_fails(moc
         side_effect=RuntimeError("gateway unavailable"),
     )
 
-    result = runner.invoke(app, ["model", "remove", "gemma4:e2b", "--yes", "--json"])
+    result = runner.invoke(app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--yes", "--json"])
 
     assert result.exit_code == 1
     assert "registration is degraded and retained" in " ".join(result.stdout.split())
-    assert get_registered_model("gemma4:e2b") is not None
-    remove_artifact.assert_called_once_with("docker.io/ai/gemma4:E2B", force=False)
+    assert get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m") is not None
+    remove_artifact.assert_called_once_with("nemotron-3.5-bolt-e4b:q4_k_m", force=False)
 
 
 def test_model_remove_artifact_failure_retains_registration_and_routes(mocker):
-    entry = resolve_model_entry("gemma4:e2b")
+    entry = resolve_model_entry("nemotron-3.5-bolt-e4b:q4_k_m")
     add_registered_models([dmr_registration(entry, selected_node="local")])
     mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=True)
     mocker.patch(
@@ -3466,10 +3465,10 @@ def test_model_remove_artifact_failure_retains_registration_and_routes(mocker):
     remove_route = mocker.patch("mn_cli.libs.model_cmds.remove_litellm_gateway_route")
     sync = mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway")
 
-    result = runner.invoke(app, ["model", "remove", "gemma4:e2b", "--yes", "--json"])
+    result = runner.invoke(app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--yes", "--json"])
 
     assert result.exit_code == 1
-    assert get_registered_model("gemma4:e2b") is not None
+    assert get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m") is not None
     remove_route.assert_not_called()
     sync.assert_not_called()
 
@@ -3591,16 +3590,16 @@ def test_model_remove_local_dmr_uses_status_reconcile_without_peer_route_calls(m
     mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway")
     mocker.patch("mn_cli.libs.model_cmds.reconcile_cluster_model_routes")
 
-    result = runner.invoke(app, ["model", "remove", "gemma4:e2b", "--force", "--yes"])
+    result = runner.invoke(app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--force", "--yes"])
 
     assert result.exit_code == 0
-    assert ["docker", "model", "rm", "--force", "docker.io/ai/gemma4:E2B"] in calls
-    assert local_removed == ["docker.io/ai/gemma4:E2B", "gemma4:e2b"]
+    assert ["docker", "model", "rm", "--force", "nemotron-3.5-bolt-e4b:q4_k_m"] in calls
+    assert local_removed == ["nemotron-3.5-bolt-e4b:q4_k_m", "nemotron-3.5-bolt-e4b:q4_k_m"]
     assert node_removed == []
 
 
 def test_model_remove_registered_remote_dmr_calls_node_runtime(mocker):
-    entry = resolve_model_entry("gemma4:e2b")
+    entry = resolve_model_entry("nemotron-3.5-bolt-e4b:q4_k_m")
     add_registered_models([dmr_registration(entry, selected_node="spark")])
     removed = []
 
@@ -3628,18 +3627,18 @@ def test_model_remove_registered_remote_dmr_calls_node_runtime(mocker):
         side_effect=AssertionError("remote route removal must not shell out"),
     )
 
-    result = runner.invoke(app, ["model", "remove", "gemma4:e2b", "--force", "--yes"])
+    result = runner.invoke(app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--force", "--yes"])
 
     assert result.exit_code == 0
     assert [
         (target, payload["model"], payload["action"]) for target, payload in removed
     ] == [
-        ("192.168.4.173:55052", "docker.io/ai/gemma4:E2B", "remove"),
+        ("192.168.4.173:55052", "nemotron-3.5-bolt-e4b:q4_k_m", "remove"),
     ]
 
 
 def test_model_remove_requires_target_for_replicated_model(mocker):
-    entry = resolve_model_entry("gemma4:e2b")
+    entry = resolve_model_entry("nemotron-3.5-bolt-e4b:q4_k_m")
     add_registered_models(
         [
             dmr_registration(
@@ -3651,7 +3650,7 @@ def test_model_remove_requires_target_for_replicated_model(mocker):
     )
 
     result = runner.invoke(
-        app, ["model", "remove", "gemma4:e2b", "--force", "--yes", "--json"]
+        app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--force", "--yes", "--json"]
     )
 
     assert result.exit_code == 2
@@ -3659,7 +3658,7 @@ def test_model_remove_requires_target_for_replicated_model(mocker):
 
 
 def test_model_remove_target_keeps_other_replica_registered(mocker):
-    entry = resolve_model_entry("gemma4:e2b")
+    entry = resolve_model_entry("nemotron-3.5-bolt-e4b:q4_k_m")
     add_registered_models(
         [
             dmr_registration(
@@ -3681,7 +3680,7 @@ def test_model_remove_target_keeps_other_replica_registered(mocker):
         [
             "model",
             "remove",
-            "gemma4:e2b",
+            "nemotron-3.5-bolt-e4b:q4_k_m",
             "--node",
             "spark",
             "--force",
@@ -3692,13 +3691,13 @@ def test_model_remove_target_keeps_other_replica_registered(mocker):
 
     assert result.exit_code == 0, result.stdout
     assert [
-        item["node"] for item in get_registered_model("gemma4:e2b")["installations"]
+        item["node"] for item in get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m")["installations"]
     ] == ["mini"]
-    removed.assert_called_once_with("docker.io/ai/gemma4:E2B", node="spark", force=True)
+    removed.assert_called_once_with("nemotron-3.5-bolt-e4b:q4_k_m", node="spark", force=True)
 
 
 def test_model_update_defaults_to_all_recorded_replicas(mocker):
-    entry = resolve_model_entry("gemma4:e2b")
+    entry = resolve_model_entry("nemotron-3.5-bolt-e4b:q4_k_m")
     record = dmr_registration(
         entry,
         selected_node="mini",
@@ -3707,7 +3706,7 @@ def test_model_update_defaults_to_all_recorded_replicas(mocker):
     install = mocker.patch(
         "mn_cli.libs.model_cmds._install_model_on_cluster_node",
         return_value={
-            "docker_model": "docker.io/ai/gemma4:E2B",
+            "docker_model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "compatibility": {"backend": "llama.cpp"},
         },
     )
@@ -3716,7 +3715,7 @@ def test_model_update_defaults_to_all_recorded_replicas(mocker):
     )
     add_registered_models([record])
 
-    result = runner.invoke(app, ["model", "update", "gemma4:e2b", "--json"])
+    result = runner.invoke(app, ["model", "update", "nemotron-3.5-bolt-e4b:q4_k_m", "--json"])
 
     assert result.exit_code == 0, result.stdout
     assert [call.kwargs["node"] for call in install.call_args_list] == ["mini", "spark"]
@@ -3724,12 +3723,12 @@ def test_model_update_defaults_to_all_recorded_replicas(mocker):
 
 @pytest.mark.parametrize("local_installed", [False, True])
 def test_model_list_keeps_all_unregistered_remote_owners(mocker, local_installed):
-    model = "docker.io/ai/gemma4:E2B"
+    model = "nemotron-3.5-bolt-e4b:q4_k_m"
     mocker.patch("mn_cli.libs.model_cmds._installed_model_names", return_value={model} if local_installed else set())
     mocker.patch("mn_cli.libs.model_cmds._local_runtime_node_name", return_value="local-owner")
     mocker.patch("mn_cli.libs.model_cmds.load_model_registry", return_value={})
     mocker.patch("mn_cli.libs.model_cmds.load_model_catalog", return_value={})
-    remotes = [{"name": "gemma4:e2b", "model": model, "api_model": "gemma4:e2b",
+    remotes = [{"name": "nemotron-3.5-bolt-e4b:q4_k_m", "model": model, "api_model": "nemotron-3.5-bolt-e4b:q4_k_m",
                 "node": owner, "base_url": f"http://{owner}:8080/v1"}
                for owner in ("peer-a", "peer-b")]
     mocker.patch("mn_cli.libs.model_cmds._cluster_model_records_for_list", return_value=remotes)

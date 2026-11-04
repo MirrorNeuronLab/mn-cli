@@ -259,14 +259,14 @@ def test_runtime_doctor_detects_stale_litellm_gateway_config(mocker):
         return_value=_status_report(overall="passing"),
     )
     mocker.patch("mn_cli.libs.runtime_health.docker_status", return_value={"running": True})
-    mocker.patch("mn_cli.libs.runtime_health.dmr_api_list_models", return_value={"gemma4:e2b"})
+    mocker.patch("mn_cli.libs.runtime_health.dmr_api_list_models", return_value={"nemotron-3.5-bolt-e4b:q4_k_m"})
     mocker.patch(
         "mn_cli.libs.runtime_health.validate_litellm_gateway_config_file",
         return_value={
             "ok": True,
             "path": "/tmp/.mn/models/litellm-gateway/config.yaml",
             "model_count": 2,
-            "models": ["gemma4:e2b", "nemotron-3.5-lightning:latest"],
+            "models": ["nemotron-3.5-bolt-e4b:q4_k_m", "nemotron-3.5-lightning:latest"],
         },
     )
     mocker.patch(
@@ -279,7 +279,7 @@ def test_runtime_doctor_detects_stale_litellm_gateway_config(mocker):
     gateway = report["foundation"]["litellm_gateway"]
     assert report["overall"] == "critical"
     assert gateway["status"] == "critical"
-    assert gateway["missing_models"] == ["gemma4:e2b", "nemotron-3.5-lightning:latest"]
+    assert gateway["missing_models"] == ["nemotron-3.5-bolt-e4b:q4_k_m", "nemotron-3.5-lightning:latest"]
     assert "stale config" in gateway["detail"]
 
 

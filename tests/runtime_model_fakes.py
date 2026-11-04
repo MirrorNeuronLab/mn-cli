@@ -18,20 +18,6 @@ def fake_model_catalog() -> dict[str, dict[str, Any]]:
     entries = [
         load_builtin_model_catalog_document().entry("nano"),
         {
-            "id": "gemma4:e2b",
-            "provider": "docker_model_runner",
-            "model": "docker.io/ai/gemma4:E2B",
-            "api_model": "docker.io/ai/gemma4:E2B",
-            "aliases": ["gemma4"],
-            "backend": "llama.cpp",
-            "context_size": 4096,
-            "requirements": {
-                "min_vram_gb": 8,
-                "min_unified_memory_gb": 16,
-                "min_cpu_ram_gb": 32,
-            },
-        },
-        {
             "id": "bonsai2:ptq1_0",
             "provider": "docker_model_runner",
             "model": "bonsai2:ptq1_0",

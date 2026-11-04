@@ -224,9 +224,9 @@ matrix in the SDK model-catalog overlay:
 
 ```bash
 mn model probe
-mn model probe gemma4:e2b
+mn model probe nano
 mn model probe nemotron-3.5-lightning:latest --json
-mn model probe gemma4:e2b --capabilities image,json-schema,stream,thinking
+mn model probe nano --capabilities json-schema,stream,thinking
 ```
 
 With no model argument, `probe` evaluates every model in the same

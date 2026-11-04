@@ -958,7 +958,7 @@ def test_doctor_llm_and_embedding_smoke_uses_host_reachable_urls(mocker):
         "primary",
         {
             "provider": "docker_model_runner",
-            "model": "gemma4:e2b",
+            "model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "api_base": "http://mn-litellm-proxy:4000/v1",
         },
         {},
