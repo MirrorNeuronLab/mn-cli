@@ -1,4 +1,5 @@
 from io import StringIO
+import logging
 
 import grpc
 import pytest
@@ -30,19 +31,26 @@ def _console_stream():
     return Console(file=stream, force_terminal=False, no_color=True, width=140), stream
 
 
-def test_cli_error_output_is_user_safe_and_preserves_code(mocker):
+@pytest.mark.parametrize("arguments", [["node", "join", "192.168.4.34", "--token", "secret-token"],
+                                        ["node", "join", "--token", "secret-token"],
+                                        ["node", "--token", "secret-token", "join"]])
+def test_cli_error_output_is_user_safe_and_preserves_code(arguments):
     console, stream = _console_stream()
-    log = mocker.patch("mn_cli.error_handler.logger.exception")
-
-    with pytest.raises(typer.Exit) as raised:
-        handle_cli_error(
-            TimeoutRpcError(),
-            console,
-            "node add",
-            command_context={
-                "argv": ["node", "join", "192.168.4.34", "--token", "secret-token"]
-            },
-        )
+    from mn_cli.error_handler import logger
+    rendered = StringIO()
+    handler = logging.StreamHandler(rendered)
+    logger.addHandler(handler)
+    try:
+        try:
+            raise RuntimeError("private-trace-secret")
+        except RuntimeError:
+            with pytest.raises(typer.Exit) as raised:
+                handle_cli_error(
+                    TimeoutRpcError(), console, "node add",
+                    command_context={"argv": arguments},
+                )
+    finally:
+        logger.removeHandler(handler)
 
     output = stream.getvalue()
     assert raised.value.exit_code == 1
@@ -52,13 +60,14 @@ def test_cli_error_output_is_user_safe_and_preserves_code(mocker):
     assert "Deadline Exceeded" not in output
     assert "secret-token" not in output
     assert "/Users/homer" not in output
-    log.assert_called_once()
-    assert log.call_args.args[1] == "MN_RUNTIME_TIMEOUT"
+    line = rendered.getvalue()
+    assert "MN_RUNTIME_TIMEOUT" in line and "operation=node add" in line
+    assert not any(value in line for value in ("Traceback", "private-trace-secret", "secret-token", "--token", "/Users/homer"))
 
 
 def test_cli_debug_output_is_sanitized(mocker):
     console, stream = _console_stream()
-    mocker.patch("mn_cli.error_handler.logger.exception")
+    mocker.patch("mn_cli.error_handler.logger.error")
     set_debug(True)
     try:
         with pytest.raises(typer.Exit):
@@ -88,7 +97,7 @@ def test_execution_failure_hint_places_global_debug_option_before_command():
 
 def test_job_delete_names_a_missing_job_and_points_to_job_list(mocker):
     console, stream = _console_stream()
-    mocker.patch("mn_cli.error_handler.logger.exception")
+    mocker.patch("mn_cli.error_handler.logger.error")
 
     with pytest.raises(typer.Exit) as raised:
         handle_cli_error(
@@ -108,7 +117,7 @@ def test_job_delete_names_a_missing_job_and_points_to_job_list(mocker):
 
 def test_job_delete_timeout_warns_that_remote_mutation_outcome_is_uncertain(mocker):
     console, stream = _console_stream()
-    mocker.patch("mn_cli.error_handler.logger.exception")
+    mocker.patch("mn_cli.error_handler.logger.error")
 
     with pytest.raises(typer.Exit):
         handle_cli_error(
@@ -170,7 +179,7 @@ def test_cli_wrapper_catches_unhandled_command_errors(monkeypatch, capsys, mocke
     monkeypatch.setattr(
         "sys.argv", ["mn", "node", "join", "host", "--token", "secret-token"]
     )
-    mocker.patch("mn_cli.error_handler.logger.exception")
+    mocker.patch("mn_cli.error_handler.logger.error")
 
     with pytest.raises(SystemExit) as raised:
         main_module.cli()
@@ -197,7 +206,7 @@ def test_memory_failure_explains_requirements_without_debug(mocker, monkeypatch,
         monkeypatch.setenv("MN_CLI_OUTPUT", "plain")
     console, stream = _console_stream()
     console.width = width
-    mocker.patch("mn_cli.error_handler.logger.exception")
+    mocker.patch("mn_cli.error_handler.logger.error")
     error = placement_error({"node": ["host_memory_total_mb=24576 < required=49152"]}, "private")
     with pytest.raises(typer.Exit):
         handle_cli_error(error, console, "blueprint run", debug=False)
@@ -235,7 +244,7 @@ def test_cli_explains_core_gpu_memory_shortage_with_shared_problem_code(mocker, 
         monkeypatch.setenv("MN_CLI_OUTPUT", "plain")
     console, stream = _console_stream()
     console.width = 120
-    mocker.patch("mn_cli.error_handler.logger.exception")
+    mocker.patch("mn_cli.error_handler.logger.error")
     with pytest.raises(typer.Exit):
         handle_cli_error(MemoryRpcError(), console, "blueprint run", debug=False)
     output = " ".join(stream.getvalue().split())

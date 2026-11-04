@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
 import typer
-from mn_sdk.errors import AppError, normalize_exception, sanitize_context
+from mn_sdk.errors import AppError, normalize_exception
 from rich.console import Console
 from rich.markup import escape
 
@@ -192,7 +193,7 @@ def handle_cli_error(
     debug: bool | None = None,
     command_context: Mapping[str, Any] | None = None,
 ) -> None:
-    """Log full diagnostics and print a stable user-safe CLI error."""
+    """Correlate the failure with its command and print the public error."""
     error_context = {
         "command": _canonical_context(context),
         **dict(command_context or {}),
@@ -202,17 +203,12 @@ def handle_cli_error(
         app_error, context, command_context=error_context
     )
     record_error(app_error, command_context=error_context)
-    sanitized = sanitize_context(
-        {
-            "context": context,
-            **(dict(command_context or {})),
-        }
-    )
-    logger.exception(
-        "CLI command failed error_code=%s context=%s sanitized_context=%s",
-        app_error.code,
-        context,
-        sanitized,
+    run_id = error_context.get("run_id")
+    logger.error(
+        "CLI command failed error_code=%s category=%s operation=%s run_id=%s",
+        app_error.code if re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", app_error.code) else "unknown",
+        app_error.category, error_context["command"][:80],
+        run_id if isinstance(run_id, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", run_id) else "",
     )
     print_cli_error(
         app_error, console, debug=debug_enabled() if debug is None else debug
@@ -348,18 +344,16 @@ def _resource_identifier(
     argv = values.get("argv")
     if not isinstance(argv, (list, tuple)):
         return None
-    positional = [
-        str(value)
-        for value in argv
-        if value is not None and not str(value).startswith("-")
-    ]
+    # Infer only the immediate positional value. Filtering out option names
+    # first would turn their values (including credentials) into identifiers.
+    args = [str(value) for value in argv if value is not None]
     try:
-        family_index = positional.index(family)
+        family_index = args.index(family)
     except ValueError:
         return None
-    candidate_index = (
-        family_index + 2
-        if action and family_index + 1 < len(positional)
-        else family_index + 1
-    )
-    return positional[candidate_index] if candidate_index < len(positional) else None
+    if action and (family_index + 1 >= len(args) or args[family_index + 1].startswith("-")):
+        return None
+    candidate_index = family_index + (2 if action else 1)
+    if candidate_index < len(args) and not args[candidate_index].startswith("-"):
+        return args[candidate_index]
+    return None
