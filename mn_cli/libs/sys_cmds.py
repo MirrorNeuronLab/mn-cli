@@ -20,7 +20,7 @@ from mn_cli.libs.ui import (
 from mn_cli.output import record_result
 from mn_cli.terminal import use_progress
 from mn_cli import update_cmds
-from mn_cli.server_cmds import (
+from mn_cli.runtime.server import (
     _start_server,
     _start_network_seed,
     _join_network,
@@ -337,7 +337,6 @@ def cleanup(
             dry_run=True,
             include_cache=include_cache,
             observation_threshold=1,
-            discover_legacy_resources=True,
         )
         if dry_run:
             result = _native_cleanup_result(preview, dry_run=True)
@@ -365,7 +364,6 @@ def cleanup(
                 dry_run=False,
                 include_cache=include_cache,
                 observation_threshold=1,
-                discover_legacy_resources=True,
             )
             result = _native_cleanup_result(applied, dry_run=False)
 

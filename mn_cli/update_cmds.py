@@ -32,7 +32,7 @@ from mn_cli.output import json_enabled, record_result
 from mn_cli.shared import console
 from mn_cli.terminal import is_ci, is_interactive
 from mn_cli.runtime_state import read_json_object
-from mn_cli.server_cmds import (
+from mn_cli.runtime.server import (
     DIR,
     RUNTIME_COMPOSE_ENV,
     RUNTIME_COMPOSE_FILE,
@@ -356,7 +356,6 @@ def _reconcile_native_resources_before_upgrade() -> None:
         reconcile_native_resources(
             reference_checker=_native_resource_reference_checker(),
             observation_threshold=1,
-            discover_legacy_resources=True,
         )
     except Exception:
         print_warning(

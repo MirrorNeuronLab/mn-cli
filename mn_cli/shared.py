@@ -21,24 +21,11 @@ setattr(error_console, "_mn_shared_error_console", True)
 
 def _client_kwargs(cli_config: CliConfig | None = None) -> dict:
     cli_config = cli_config or config
-    return runtime_client_kwargs(cli_config, client_cls=Client, warn=logger.warning)
+    return runtime_client_kwargs(cli_config)
 
 
 def build_client(cli_config: CliConfig | None = None) -> Client:
-    instance = Client(**_client_kwargs(cli_config))
-    _ensure_client_compat(instance)
-    return instance
-
-
-def _ensure_client_compat(instance: Client) -> None:
-    if not hasattr(instance, "remove_node"):
-        setattr(
-            instance,
-            "remove_node",
-            lambda node_name: (_ for _ in ()).throw(
-                AttributeError("remove_node is unavailable in this SDK")
-            ),
-        )
+    return Client(**_client_kwargs(cli_config))
 
 
 class LazyClient:

@@ -735,13 +735,6 @@ def _staged_input_wait_status(progress: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _generate_workflow_progress_layout(
-    job_id: str, progress: dict[str, Any], state: Optional[JobMonitorState] = None
-) -> Panel:
-    # Backward-compatible wrapper for existing callsites.
-    return generate_workflow_progress_layout(job_id, progress, state=state)
-
-
 def _runtime_model_preparation_status(
     preparations: list[dict[str, Any]],
 ) -> Text:

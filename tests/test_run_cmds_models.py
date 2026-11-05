@@ -23,7 +23,7 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from mn_cli.libs import model_cmds, run_cmds
-from mn_cli.libs.run_manifest import prepare_manifest_for_submission
+from mn_sdk.submission_preparation import prepare_manifest_for_submission
 from mn_cli.libs.ui import JobMonitorState, generate_live_layout
 from mn_cli.libs.workflow_progress import (
     BlueprintWorkflowProgress,
@@ -76,7 +76,7 @@ def test_manifest_for_model_validation_excludes_all_live_models_for_fake_llm():
         }
     }
 
-    filtered = run_cmds._manifest_for_model_validation(
+    filtered = run_cmds.manifest_for_model_validation(
         manifest, {"llm": {"mode": "fake"}}
     )
 
@@ -450,6 +450,7 @@ def test_prepare_runtime_models_installs_missing_model_for_run(
     }
     catalog = {
         "nemotron-3.5-bolt-e4b:q4_k_m": {
+            "source": "dmr",
             "id": "nemotron-3.5-bolt-e4b:q4_k_m",
             "model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "provider": "docker_model_runner",
@@ -508,6 +509,7 @@ def test_prepare_runtime_models_uses_cluster_model_endpoint(
     }
     catalog = {
         "qwen3-coder": {
+            "source": "dmr",
             "id": "qwen3-coder",
             "model": "ai/qwen3-coder",
             "api_model": "ai/qwen3-coder",
@@ -568,6 +570,7 @@ def test_prepare_runtime_models_preserves_node_owned_remote_while_rechecking_tar
     }
     catalog = {
         "nemotron-3.5-lightning:latest": {
+            "source": "dmr",
             "id": "nemotron-3.5-lightning:latest",
             "model": "nemotron-3.5-lightning:latest",
             "api_model": "nemotron-3.5-lightning:latest",
@@ -641,7 +644,7 @@ def test_prepare_runtime_models_preserves_node_owned_remote_while_rechecking_tar
         is True
     )
     validation_manifest, _validation_config = (
-        run_cmds._model_validation_inputs_with_prepared_models(
+        run_cmds.model_validation_inputs_with_prepared_models(
             manifest,
             {},
             summary,
@@ -748,6 +751,7 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
     }
     catalog = {
         "nemotron-3.5-lightning:latest": {
+            "source": "dmr",
             "id": "nemotron-3.5-lightning:latest",
             "model": "nemotron-3.5-lightning:latest",
             "api_model": "nemotron-3.5-lightning:latest",
@@ -831,7 +835,7 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
         is True
     )
     validation_manifest, validation_config = (
-        run_cmds._model_validation_inputs_with_prepared_models(
+        run_cmds.model_validation_inputs_with_prepared_models(
             manifest,
             {
                 "llm": {
@@ -983,7 +987,7 @@ def test_default_manifest_model_is_satisfied_by_prepared_fallback():
         ]
     }
 
-    manifest, _ = run_cmds._model_validation_inputs_with_prepared_models(
+    manifest, _ = run_cmds.model_validation_inputs_with_prepared_models(
         {
             "runtime": {
                 "models": {
@@ -1011,7 +1015,7 @@ def test_prepared_default_model_marks_inheriting_llm_profile_cluster_provided():
         ]
     }
 
-    _, config = run_cmds._model_validation_inputs_with_prepared_models(
+    _, config = run_cmds.model_validation_inputs_with_prepared_models(
         {},
         {
             "llm": {
@@ -1034,6 +1038,7 @@ def test_prepared_default_model_marks_inheriting_llm_profile_cluster_provided():
 def _preferred_large_model_catalog() -> dict:
     return {
         "nemotron-3.5-lightning:latest": {
+            "source": "dmr",
             "id": "nemotron-3.5-lightning:latest",
             "model": "nemotron-3.5-lightning:latest",
             "api_model": "nemotron-3.5-lightning:latest",
@@ -1044,6 +1049,7 @@ def _preferred_large_model_catalog() -> dict:
             "requirements": {"min_vram_gb": 48, "min_unified_memory_gb": 48},
         },
         "nemotron-3.5-bolt-e4b:q4_k_m": {
+            "source": "dmr",
             "id": "nemotron-3.5-bolt-e4b:q4_k_m",
             "model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "api_model": "nemotron-3.5-bolt-e4b:q4_k_m",
@@ -1164,7 +1170,7 @@ def test_prepare_runtime_models_promotes_preferred_large_profile_on_capable_clus
         is True
     )
     validation_manifest, validation_config = (
-        run_cmds._model_validation_inputs_with_prepared_models(
+        run_cmds.model_validation_inputs_with_prepared_models(
             {
                 "runtime": {
                     "models": {
@@ -1370,6 +1376,7 @@ def test_runtime_cluster_model_install_uses_local_core_for_selected_owner(
     result = run_cmds._install_runtime_cluster_model(
         requirement={"context_size": 8192},
         entry={
+            "source": "dmr",
             "id": "nemotron-3.5-lightning:latest",
             "model": "nemotron-3.5-lightning:latest",
             "provider": "docker_model_runner",
@@ -1441,6 +1448,7 @@ def test_runtime_cluster_model_install_reuses_local_runtime_client(
     result = run_cmds._install_runtime_cluster_model(
         requirement={"context_size": 4096},
         entry={
+            "source": "dmr",
             "id": "nemotron-3.5-bolt-e4b:q4_k_m",
             "model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "provider": "docker_model_runner",
@@ -2042,6 +2050,7 @@ def test_runtime_cluster_model_install_leaves_native_endpoint_resolution_to_core
     run_cmds._install_runtime_cluster_model(
         requirement={"context_size": 8192},
         entry={
+            "source": "dmr",
             "id": "nemotron-3.5-lightning:latest",
             "model": "nemotron-3.5-lightning:latest",
             "provider": "docker_model_runner",
@@ -2128,6 +2137,7 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
     }
     catalog = {
         "nemotron-3.5-lightning:latest": {
+            "source": "dmr",
             "id": "nemotron-3.5-lightning:latest",
             "model": "nemotron-3.5-lightning:latest",
             "provider": "docker_model_runner",
@@ -2136,6 +2146,7 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
             "requirements": {"min_vram_gb": 48, "min_unified_memory_gb": 48},
         },
         "nemotron-3.5-bolt-e4b:q4_k_m": {
+            "source": "dmr",
             "id": "nemotron-3.5-bolt-e4b:q4_k_m",
             "model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "api_model": "nemotron-3.5-bolt-e4b:q4_k_m",
@@ -2241,7 +2252,7 @@ def test_runtime_model_profile_applies_large_model_strict_contract():
         }
     }
 
-    materialized = run_cmds._config_with_runtime_model_profile(config)
+    materialized = run_cmds.config_with_runtime_model_profile(config)
 
     assert materialized["llm"]["active_model_profile"] == "large_model_profile"
     assert materialized["llm"]["strict_json"] is True
@@ -2337,6 +2348,7 @@ def test_custom_runtime_model_prepare_payload_carries_risk_contract(mocker):
     run_cmds._install_runtime_cluster_model(
         requirement={"model": "hf.co/acme/custom:Q4_K_M", "context_size": 4096},
         entry={
+            "source": "dmr",
             "id": "huggingface.co/acme/custom:Q4_K_M",
             "model": "huggingface.co/acme/custom:Q4_K_M",
             "api_model": "huggingface.co/acme/custom:Q4_K_M",

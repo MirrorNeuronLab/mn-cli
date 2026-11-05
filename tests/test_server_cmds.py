@@ -7,8 +7,8 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import call
 from rich.console import Console
-import mn_cli.server_cmds as server_cmds
-from mn_cli.server_cmds import (
+import mn_cli.runtime.server as server_cmds
+from mn_cli.runtime.server import (
     check_status,
     kill_tree,
     _resolve_grpc_admin_token,
@@ -45,11 +45,11 @@ ORIGINAL_WEB_UI_DIRS = server_cmds.WEB_UI_DIRS
 @pytest.fixture(autouse=True)
 def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     mocker.patch(
-        "mn_cli.server_cmds.wait_for_context_engine",
+        "mn_cli.runtime.server.wait_for_context_engine",
         return_value={"status": "ready", "protocol": "mirrorneuron.context.v2"},
     )
-    mocker.patch("mn_cli.server_cmds.probe_core_identity", return_value=True)
-    mocker.patch("mn_cli.server_cmds.observe_core_identity", return_value=None)
+    mocker.patch("mn_cli.runtime.server.probe_core_identity", return_value=True)
+    mocker.patch("mn_cli.runtime.server.observe_core_identity", return_value=None)
     monkeypatch.delenv("MN_COOKIE", raising=False)
     monkeypatch.delenv("MN_GRPC_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN", raising=False)
@@ -92,63 +92,69 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
     state_dir = tmp_path / ".mn"
     log_dir = state_dir / ".logs"
     pid_dir = state_dir / ".pids"
-    mocker.patch("mn_cli.server_cmds.DIR", state_dir)
-    mocker.patch("mn_cli.server_cmds.PID_DIR", pid_dir)
-    mocker.patch("mn_cli.server_cmds.LOG_DIR", log_dir)
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", pid_dir / "api.pid")
+    mocker.patch("mn_cli.runtime.server.DIR", state_dir)
+    mocker.patch("mn_cli.runtime.server.PID_DIR", pid_dir)
+    mocker.patch("mn_cli.runtime.server.LOG_DIR", log_dir)
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", pid_dir / "api.pid")
     mocker.patch(
-        "mn_cli.server_cmds.API_WATCHDOG_PID_FILE", pid_dir / "api-watchdog.pid"
+        "mn_cli.runtime.server.API_WATCHDOG_PID_FILE", pid_dir / "api-watchdog.pid"
     )
     mocker.patch(
-        "mn_cli.server_cmds.NATIVE_SDK_GRPC_PID_FILE", pid_dir / "native-sdk-grpc.pid"
+        "mn_cli.runtime.server.NATIVE_SDK_GRPC_PID_FILE",
+        pid_dir / "native-sdk-grpc.pid",
     )
     mocker.patch(
-        "mn_cli.server_cmds.NATIVE_SDK_GRPC_WATCHDOG_PID_FILE",
+        "mn_cli.runtime.server.NATIVE_SDK_GRPC_WATCHDOG_PID_FILE",
         pid_dir / "native-sdk-grpc-watchdog.pid",
     )
-    mocker.patch("mn_cli.server_cmds.API_TOKEN_FILE", state_dir / "api.token")
-    mocker.patch("mn_cli.server_cmds.REDIS_PASSWORD_FILE", state_dir / "redis.password")
-    mocker.patch("mn_cli.server_cmds.WEB_UI_PID_FILE", pid_dir / "web-ui.pid")
+    mocker.patch("mn_cli.runtime.server.API_TOKEN_FILE", state_dir / "api.token")
     mocker.patch(
-        "mn_cli.server_cmds.WEB_UI_WATCHDOG_PID_FILE", pid_dir / "web-ui-watchdog.pid"
+        "mn_cli.runtime.server.REDIS_PASSWORD_FILE", state_dir / "redis.password"
     )
-    mocker.patch("mn_cli.server_cmds.API_LOG", log_dir / "api.log")
-    mocker.patch("mn_cli.server_cmds.API_WATCHDOG_LOG", log_dir / "api-watchdog.log")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_PID_FILE", pid_dir / "web-ui.pid")
     mocker.patch(
-        "mn_cli.server_cmds.NATIVE_SDK_GRPC_LOG", log_dir / "native-sdk-grpc.log"
+        "mn_cli.runtime.server.WEB_UI_WATCHDOG_PID_FILE",
+        pid_dir / "web-ui-watchdog.pid",
+    )
+    mocker.patch("mn_cli.runtime.server.API_LOG", log_dir / "api.log")
+    mocker.patch("mn_cli.runtime.server.API_WATCHDOG_LOG", log_dir / "api-watchdog.log")
+    mocker.patch(
+        "mn_cli.runtime.server.NATIVE_SDK_GRPC_LOG", log_dir / "native-sdk-grpc.log"
     )
     mocker.patch(
-        "mn_cli.server_cmds.NATIVE_SDK_GRPC_WATCHDOG_LOG",
+        "mn_cli.runtime.server.NATIVE_SDK_GRPC_WATCHDOG_LOG",
         log_dir / "native-sdk-grpc-watchdog.log",
     )
-    mocker.patch("mn_cli.server_cmds.WEB_UI_LOG", log_dir / "web-ui.log")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_LOG", log_dir / "web-ui.log")
     mocker.patch(
-        "mn_cli.server_cmds.WEB_UI_WATCHDOG_LOG", log_dir / "web-ui-watchdog.log"
+        "mn_cli.runtime.server.WEB_UI_WATCHDOG_LOG", log_dir / "web-ui-watchdog.log"
     )
-    mocker.patch("mn_cli.server_cmds.VENV_DIR", tmp_path / "mn_venv")
+    mocker.patch("mn_cli.runtime.server.VENV_DIR", tmp_path / "mn_venv")
     mocker.patch(
-        "mn_cli.server_cmds.RUNTIME_COMPOSE_FILE", state_dir / "docker-compose.yml"
+        "mn_cli.runtime.server.RUNTIME_COMPOSE_FILE", state_dir / "docker-compose.yml"
     )
     mocker.patch(
-        "mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", state_dir / "docker-compose.env"
+        "mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", state_dir / "docker-compose.env"
     )
-    mocker.patch("mn_cli.server_cmds._docker_host_socket", return_value=None)
-    mocker.patch("mn_cli.server_cmds._host_port_available", return_value=True)
+    mocker.patch("mn_cli.runtime.server._docker_host_socket", return_value=None)
+    mocker.patch("mn_cli.runtime.server._host_port_available", return_value=True)
     mocker.patch(
-        "mn_cli.server_cmds.RUNTIME_ENDPOINTS_FILE",
+        "mn_cli.runtime.server.RUNTIME_ENDPOINTS_FILE",
         state_dir / "runtime-endpoints.json",
     )
-    mocker.patch("mn_cli.server_cmds.NETWORK_TOKEN_FILE", state_dir / "network.token")
     mocker.patch(
-        "mn_cli.server_cmds.NETWORK_REDIS_ENV_FILE", state_dir / "network-redis.env"
+        "mn_cli.runtime.server.NETWORK_TOKEN_FILE", state_dir / "network.token"
     )
     mocker.patch(
-        "mn_cli.server_cmds.SYNCTHING_API_KEY_FILE", state_dir / "syncthing.api-key"
+        "mn_cli.runtime.server.NETWORK_REDIS_ENV_FILE", state_dir / "network-redis.env"
     )
-    mocker.patch("mn_cli.server_cmds.SYNCTHING_CONFIG_DIR", state_dir / "syncthing")
-    mocker.patch("mn_cli.server_cmds._published_container_port", return_value=None)
     mocker.patch(
-        "mn_cli.server_cmds.WEB_UI_DIRS",
+        "mn_cli.runtime.server.SYNCTHING_API_KEY_FILE", state_dir / "syncthing.api-key"
+    )
+    mocker.patch("mn_cli.runtime.server.SYNCTHING_CONFIG_DIR", state_dir / "syncthing")
+    mocker.patch("mn_cli.runtime.server._published_container_port", return_value=None)
+    mocker.patch(
+        "mn_cli.runtime.server.WEB_UI_DIRS",
         (state_dir / "webui", state_dir / "web-ui-source"),
     )
 
@@ -156,14 +162,14 @@ def isolated_mn_cookie_home(mocker, tmp_path, monkeypatch):
 def test_check_status_running(mocker, tmp_path):
     pid_file = tmp_path / "test.pid"
     pid_file.write_text("1234")
-    mocker.patch("mn_cli.server_cmds.os.kill")
+    mocker.patch("mn_cli.runtime.server.os.kill")
     assert check_status(pid_file) == 0
 
 
 def test_check_status_stale(mocker, tmp_path):
     pid_file = tmp_path / "test.pid"
     pid_file.write_text("1234")
-    mocker.patch("mn_cli.server_cmds.os.kill", side_effect=OSError)
+    mocker.patch("mn_cli.runtime.server.os.kill", side_effect=OSError)
     assert check_status(pid_file) == 1
 
 
@@ -180,7 +186,7 @@ def test_check_status_missing(tmp_path):
 
 def test_remove_non_mirror_neuron_container_removes_legacy_core(mocker):
     run = mocker.patch(
-        "mn_cli.server_cmds.subprocess.run",
+        "mn_cli.runtime.server.subprocess.run",
         side_effect=[
             subprocess.CompletedProcess([], 0, "mirror-neuron\tlegacy-core\n", ""),
             subprocess.CompletedProcess([], 0, "", ""),
@@ -210,7 +216,7 @@ def test_remove_non_mirror_neuron_container_removes_legacy_core(mocker):
 
 def test_remove_non_mirror_neuron_container_keeps_current_compose_core(mocker):
     run = mocker.patch(
-        "mn_cli.server_cmds.subprocess.run",
+        "mn_cli.runtime.server.subprocess.run",
         return_value=subprocess.CompletedProcess(
             [], 0, "mirror-neuron\tmirror-neuron-core\n", ""
         ),
@@ -226,7 +232,7 @@ def test_remove_non_mirror_neuron_container_keeps_current_compose_core(mocker):
 
 def test_detect_lan_ip_uses_first_interface_lan_ip(mocker):
     mocker.patch(
-        "mn_cli.server_cmds._interface_lan_ips",
+        "mn_cli.runtime.server._interface_lan_ips",
         return_value=["192.168.4.35", "10.0.0.12"],
     )
 
@@ -244,10 +250,12 @@ def test_detect_lan_ip_falls_back_to_route_selected_non_loopback(mocker):
         def close(self):
             pass
 
-    mocker.patch("mn_cli.server_cmds._interface_lan_ips", return_value=[])
-    mocker.patch("mn_cli.server_cmds.socket.socket", return_value=ProbeSocket())
-    mocker.patch("mn_cli.server_cmds.socket.gethostname", return_value="loopback-host")
-    mocker.patch("mn_cli.server_cmds.socket.gethostbyname", return_value="127.0.0.1")
+    mocker.patch("mn_cli.runtime.server._interface_lan_ips", return_value=[])
+    mocker.patch("mn_cli.runtime.server.socket.socket", return_value=ProbeSocket())
+    mocker.patch(
+        "mn_cli.runtime.server.socket.gethostname", return_value="loopback-host"
+    )
+    mocker.patch("mn_cli.runtime.server.socket.gethostbyname", return_value="127.0.0.1")
 
     assert server_cmds._detect_lan_ip() == "192.168.4.35"
 
@@ -264,12 +272,12 @@ def test_detected_lan_ips_filters_loopback_and_deduplicates(mocker):
             pass
 
     mocker.patch(
-        "mn_cli.server_cmds._interface_lan_ips",
+        "mn_cli.runtime.server._interface_lan_ips",
         return_value=["127.0.0.1", "192.168.4.35"],
     )
-    mocker.patch("mn_cli.server_cmds.socket.socket", return_value=ProbeSocket())
-    mocker.patch("mn_cli.server_cmds.socket.gethostname", return_value="host")
-    mocker.patch("mn_cli.server_cmds.socket.gethostbyname", return_value="10.0.0.12")
+    mocker.patch("mn_cli.runtime.server.socket.socket", return_value=ProbeSocket())
+    mocker.patch("mn_cli.runtime.server.socket.gethostname", return_value="host")
+    mocker.patch("mn_cli.runtime.server.socket.gethostbyname", return_value="10.0.0.12")
 
     assert server_cmds._detected_lan_ips() == ["192.168.4.35", "10.0.0.12"]
 
@@ -278,7 +286,7 @@ def test_detect_host_gpu_count_uses_macos_system_profiler(mocker):
     class UnameMock:
         sysname = "Darwin"
 
-    mocker.patch("mn_cli.server_cmds.os.uname", return_value=UnameMock())
+    mocker.patch("mn_cli.runtime.server.os.uname", return_value=UnameMock())
 
     def mock_run(cmd, **kwargs):
         assert cmd == ["system_profiler", "SPDisplaysDataType"]
@@ -287,7 +295,7 @@ def test_detect_host_gpu_count_uses_macos_system_profiler(mocker):
         m.stdout = "Graphics/Displays:\n  Chipset Model: Apple M5\n"
         return m
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
 
     assert server_cmds._detect_host_gpu_count() == 1
 
@@ -296,7 +304,7 @@ def test_detect_host_gpu_count_uses_linux_nvidia_smi(mocker):
     class UnameMock:
         sysname = "Linux"
 
-    mocker.patch("mn_cli.server_cmds.os.uname", return_value=UnameMock())
+    mocker.patch("mn_cli.runtime.server.os.uname", return_value=UnameMock())
 
     def mock_run(cmd, **kwargs):
         assert cmd == ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"]
@@ -305,7 +313,7 @@ def test_detect_host_gpu_count_uses_linux_nvidia_smi(mocker):
         m.stdout = "NVIDIA GB10\n"
         return m
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
 
     assert server_cmds._detect_host_gpu_count() == 1
 
@@ -356,11 +364,11 @@ def test_docker_network_command_args_omit_default_bridge_network():
 
 def test_kill_tree(mocker):
     # Mock os.kill to succeed for existence check
-    mock_kill = mocker.patch("mn_cli.server_cmds.os.kill")
+    mock_kill = mocker.patch("mn_cli.runtime.server.os.kill")
 
     # Mock pgrep to return children
     mocker.patch(
-        "mn_cli.server_cmds.subprocess.check_output",
+        "mn_cli.runtime.server.subprocess.check_output",
         side_effect=[
             b" 1235 \n 1236 \n",  # First call for parent 1234
             subprocess.CalledProcessError(1, "pgrep"),  # Second call for child 1235
@@ -375,17 +383,19 @@ def test_kill_tree(mocker):
 
 
 def test_kill_tree_not_exist(mocker):
-    mocker.patch("mn_cli.server_cmds.os.kill", side_effect=OSError)
-    mock_check_output = mocker.patch("mn_cli.server_cmds.subprocess.check_output")
+    mocker.patch("mn_cli.runtime.server.os.kill", side_effect=OSError)
+    mock_check_output = mocker.patch("mn_cli.runtime.server.subprocess.check_output")
     kill_tree(1234)
     mock_check_output.assert_not_called()
 
 
 def test_kill_tree_term_fails(mocker):
     # Succeed first check, fail SIGTERM
-    mock_kill = mocker.patch("mn_cli.server_cmds.os.kill", side_effect=[None, OSError])
+    mock_kill = mocker.patch(
+        "mn_cli.runtime.server.os.kill", side_effect=[None, OSError]
+    )
     mocker.patch(
-        "mn_cli.server_cmds.subprocess.check_output",
+        "mn_cli.runtime.server.subprocess.check_output",
         side_effect=subprocess.CalledProcessError(1, "pgrep"),
     )
     kill_tree(1234)
@@ -394,7 +404,7 @@ def test_kill_tree_term_fails(mocker):
 
 def test_resolve_mn_cookie_generates_persistent_non_default_cookie(tmp_path, mocker):
     cookie_dir = tmp_path / "state"
-    mocker.patch("mn_cli.server_cmds.DIR", cookie_dir)
+    mocker.patch("mn_cli.runtime.server.DIR", cookie_dir)
 
     cookie = _resolve_mn_cookie()
 
@@ -413,7 +423,7 @@ def test_resolve_mn_cookie_prefers_non_default_env(monkeypatch):
 
 def test_resolve_grpc_auth_token_generates_persistent_token(tmp_path, mocker):
     token_dir = tmp_path / "state"
-    mocker.patch("mn_cli.server_cmds.DIR", token_dir)
+    mocker.patch("mn_cli.runtime.server.DIR", token_dir)
 
     token = _resolve_grpc_auth_token()
 
@@ -594,16 +604,16 @@ def test_ensure_syncthing_for_runtime_starts_sidecar_without_sudo(
 ):
     host_shared = tmp_path / "shared"
     monkeypatch.setenv("MN_SYNCTHING_ENABLED", "auto")
-    mocker.patch("mn_cli.server_cmds.runtime_compose_available", return_value=True)
-    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
-    mocker.patch("mn_cli.server_cmds._port_available_or_owned", return_value=True)
-    mocker.patch("mn_cli.server_cmds._wait_for_syncthing_api")
+    mocker.patch("mn_cli.runtime.server.runtime_compose_available", return_value=True)
+    mocker.patch("mn_cli.runtime.server._docker_container_running", return_value=False)
+    mocker.patch("mn_cli.runtime.server._port_available_or_owned", return_value=True)
+    mocker.patch("mn_cli.runtime.server._wait_for_syncthing_api")
     mocker.patch(
-        "mn_cli.server_cmds._syncthing_status", return_value={"myID": "LOCALDEVICE"}
+        "mn_cli.runtime.server._syncthing_status", return_value={"myID": "LOCALDEVICE"}
     )
-    mocker.patch("mn_cli.server_cmds._ensure_syncthing_folder")
+    mocker.patch("mn_cli.runtime.server._ensure_syncthing_folder")
     run = mocker.patch(
-        "mn_cli.server_cmds.subprocess.run", return_value=mocker.Mock(returncode=0)
+        "mn_cli.runtime.server.subprocess.run", return_value=mocker.Mock(returncode=0)
     )
 
     env = server_cmds._ensure_syncthing_for_runtime(
@@ -650,16 +660,16 @@ def test_ensure_syncthing_for_runtime_direct_container_is_lan_only(
 ):
     host_shared = tmp_path / "shared"
     monkeypatch.setenv("MN_SYNCTHING_ENABLED", "auto")
-    mocker.patch("mn_cli.server_cmds.runtime_compose_available", return_value=False)
-    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
-    mocker.patch("mn_cli.server_cmds._port_available_or_owned", return_value=True)
-    mocker.patch("mn_cli.server_cmds._wait_for_syncthing_api")
+    mocker.patch("mn_cli.runtime.server.runtime_compose_available", return_value=False)
+    mocker.patch("mn_cli.runtime.server._docker_container_running", return_value=False)
+    mocker.patch("mn_cli.runtime.server._port_available_or_owned", return_value=True)
+    mocker.patch("mn_cli.runtime.server._wait_for_syncthing_api")
     mocker.patch(
-        "mn_cli.server_cmds._syncthing_status", return_value={"myID": "LOCALDEVICE"}
+        "mn_cli.runtime.server._syncthing_status", return_value={"myID": "LOCALDEVICE"}
     )
-    mocker.patch("mn_cli.server_cmds._ensure_syncthing_folder")
+    mocker.patch("mn_cli.runtime.server._ensure_syncthing_folder")
     run = mocker.patch(
-        "mn_cli.server_cmds.subprocess.run", return_value=mocker.Mock(returncode=0)
+        "mn_cli.runtime.server.subprocess.run", return_value=mocker.Mock(returncode=0)
     )
 
     server_cmds._ensure_syncthing_for_runtime(
@@ -697,7 +707,7 @@ def test_syncthing_compose_override_refreshes_existing_runtime_template(
     )
     override_path = server_cmds._runtime_compose_syncthing_override_file()
     override_path.write_text("stale\n", encoding="utf-8")
-    mocker.patch("mn_cli.server_cmds.runtime_compose_available", return_value=True)
+    mocker.patch("mn_cli.runtime.server.runtime_compose_available", return_value=True)
 
     assert server_cmds._ensure_compose_syncthing_service_definition() is True
 
@@ -737,8 +747,8 @@ def test_connect_syncthing_peers_configures_both_nodes(mocker):
             return None
         raise AssertionError((host, port, api_key, method, path))
 
-    mocker.patch("mn_cli.server_cmds._syncthing_request", side_effect=fake_request)
-    mocker.patch("mn_cli.server_cmds._wait_for_syncthing_api")
+    mocker.patch("mn_cli.runtime.server._syncthing_request", side_effect=fake_request)
+    mocker.patch("mn_cli.runtime.server._wait_for_syncthing_api")
 
     connected = server_cmds._connect_syncthing_peers(
         {
@@ -787,7 +797,7 @@ def test_connect_syncthing_peers_configures_both_nodes(mocker):
 
 def test_reconcile_syncthing_federated_peers_rehydrates_registered_peer(mocker):
     mocker.patch(
-        "mn_cli.server_cmds._syncthing_status",
+        "mn_cli.runtime.server._syncthing_status",
         side_effect=[{"myID": "NEWMINI"}, {"myID": "NEWSPARK"}],
     )
 
@@ -820,7 +830,7 @@ def test_reconcile_syncthing_federated_peers_rehydrates_registered_peer(mocker):
             }
 
     connect = mocker.patch(
-        "mn_cli.server_cmds._connect_syncthing_peers", return_value=True
+        "mn_cli.runtime.server._connect_syncthing_peers", return_value=True
     )
 
     result = server_cmds._reconcile_syncthing_federated_peers(
@@ -905,8 +915,8 @@ def test_ensure_syncthing_folder_updates_existing_settings_and_preserves_peers_a
             return {"ignore": ["/operator-cache", "!/operator-keep"], "expanded": []}
         return None
 
-    mocker.patch("mn_cli.server_cmds._syncthing_request", side_effect=fake_request)
-    mocker.patch("mn_cli.server_cmds._wait_for_syncthing_api")
+    mocker.patch("mn_cli.runtime.server._syncthing_request", side_effect=fake_request)
+    mocker.patch("mn_cli.runtime.server._wait_for_syncthing_api")
 
     server_cmds._ensure_syncthing_folder(info)
 
@@ -973,7 +983,7 @@ def test_ensure_syncthing_folder_is_noop_when_configuration_is_current(mocker):
             }
         raise AssertionError((host, port, api_key, method, path))
 
-    mocker.patch("mn_cli.server_cmds._syncthing_request", side_effect=fake_request)
+    mocker.patch("mn_cli.runtime.server._syncthing_request", side_effect=fake_request)
 
     server_cmds._ensure_syncthing_folder(info)
 
@@ -1087,7 +1097,7 @@ def test_runtime_blueprint_env_updates_maps_explicit_legacy_shared_python_cache(
 
 def test_resolve_grpc_admin_token_generates_persistent_token(tmp_path, mocker):
     token_dir = tmp_path / "state"
-    mocker.patch("mn_cli.server_cmds.DIR", token_dir)
+    mocker.patch("mn_cli.runtime.server.DIR", token_dir)
 
     token = _resolve_grpc_admin_token()
 
@@ -1130,7 +1140,7 @@ def test_resolve_redis_password_derives_from_admin_token_in_prod():
 
 def test_runtime_api_token_is_generated_for_prod_and_persisted(mocker):
     mocker.patch(
-        "mn_cli.server_cmds.secrets.token_hex", return_value="generated-api-token"
+        "mn_cli.runtime.server.secrets.token_hex", return_value="generated-api-token"
     )
 
     env = server_cmds._ensure_runtime_api_token({"MN_ENV": "prod"})
@@ -1176,10 +1186,10 @@ def test_start_server_persists_env_grpc_tokens_for_later_cli_process(
         m.stdout = "false\n"
         return m
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
-    mocker.patch("mn_cli.server_cmds.time.sleep")
-    mocker.patch("mn_cli.server_cmds._detect_host_gpu_count", return_value=0)
-    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="127.0.0.1")
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.time.sleep")
+    mocker.patch("mn_cli.runtime.server._detect_host_gpu_count", return_value=0)
+    mocker.patch("mn_cli.runtime.server._detect_lan_ip", return_value="127.0.0.1")
 
     _start_server()
 
@@ -1216,17 +1226,17 @@ def test_start_server_refreshes_token_files_from_compose_runtime_env(mocker, tmp
     (server_cmds.DIR / "grpc_auth.token").write_text("stale-auth-token\n")
     (server_cmds.DIR / "grpc_admin.token").write_text("stale-admin-token\n")
 
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_FILE", compose_file)
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_FILE", compose_file)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
     mocker.patch(
-        "mn_cli.server_cmds.subprocess.run",
+        "mn_cli.runtime.server.subprocess.run",
         return_value=mocker.Mock(returncode=0, stdout="false\n"),
     )
-    mocker.patch("mn_cli.server_cmds.time.sleep")
-    mocker.patch("mn_cli.server_cmds._detect_host_gpu_count", return_value=0)
-    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.99")
+    mocker.patch("mn_cli.runtime.server.time.sleep")
+    mocker.patch("mn_cli.runtime.server._detect_host_gpu_count", return_value=0)
+    mocker.patch("mn_cli.runtime.server._detect_lan_ip", return_value="192.168.4.99")
     mocker.patch(
-        "mn_cli.server_cmds._find_available_published_port", return_value=56379
+        "mn_cli.runtime.server._find_available_published_port", return_value=56379
     )
 
     _start_server()
@@ -1253,7 +1263,7 @@ def test_runtime_grpc_tokens_from_running_container_reads_normal_and_admin_token
         ("mirror-neuron-core", "MN_GRPC_ADMIN_TOKEN"): "container-admin-token",
     }
     mocker.patch(
-        "mn_cli.server_cmds._docker_container_env_value",
+        "mn_cli.runtime.server._docker_container_env_value",
         side_effect=lambda container, key: values.get((container, key)),
     )
 
@@ -1330,7 +1340,7 @@ def test_runtime_base_env_advertises_installed_runtime_models(mocker):
         encoding="utf-8",
     )
     mocker.patch(
-        "mn_cli.server_cmds._installed_catalog_runtime_models",
+        "mn_cli.runtime.server._installed_catalog_runtime_models",
         return_value=["nemotron-3.5-bolt-e4b:q4_k_m"],
     )
 
@@ -1341,7 +1351,7 @@ def test_runtime_base_env_advertises_installed_runtime_models(mocker):
 
 def test_runtime_base_env_merges_explicit_and_installed_runtime_models(mocker):
     mocker.patch(
-        "mn_cli.server_cmds._installed_catalog_runtime_models",
+        "mn_cli.runtime.server._installed_catalog_runtime_models",
         return_value=["nemotron-3.5-bolt-e4b:q4_k_m"],
     )
 
@@ -1401,15 +1411,15 @@ def test_ensure_context_engine_runtime_persists_profile_and_starts_compose(
         encoding="utf-8",
     )
     server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
-    mocker.patch("mn_cli.server_cmds._ensure_docker_model_runner")
+    mocker.patch("mn_cli.runtime.server._ensure_docker_model_runner")
     inspect_model = mocker.patch(
-        "mn_cli.server_cmds._docker_model_inspect_ok", return_value=False
+        "mn_cli.runtime.server._docker_model_inspect_ok", return_value=False
     )
-    mocker.patch("mn_cli.server_cmds._docker_image_inspect_ok", return_value=True)
-    mocker.patch("mn_cli.server_cmds._remove_non_mirror_neuron_container")
-    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
+    mocker.patch("mn_cli.runtime.server._docker_image_inspect_ok", return_value=True)
+    mocker.patch("mn_cli.runtime.server._remove_non_mirror_neuron_container")
+    mocker.patch("mn_cli.runtime.server._docker_container_running", return_value=False)
     run = mocker.patch(
-        "mn_cli.server_cmds.subprocess.run",
+        "mn_cli.runtime.server.subprocess.run",
         return_value=subprocess.CompletedProcess([], 0, "", ""),
     )
 
@@ -1447,17 +1457,17 @@ def test_ensure_context_engine_runtime_uses_release_image_without_source_clone(
         encoding="utf-8",
     )
     server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
-    ensure_source = mocker.patch("mn_cli.server_cmds._ensure_context_engine_source")
-    mocker.patch("mn_cli.server_cmds._ensure_docker_model_runner")
+    ensure_source = mocker.patch("mn_cli.runtime.server._ensure_context_engine_source")
+    mocker.patch("mn_cli.runtime.server._ensure_docker_model_runner")
     inspect_model = mocker.patch(
-        "mn_cli.server_cmds._docker_model_inspect_ok", return_value=True
+        "mn_cli.runtime.server._docker_model_inspect_ok", return_value=True
     )
-    mocker.patch("mn_cli.server_cmds._remove_non_mirror_neuron_container")
-    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
+    mocker.patch("mn_cli.runtime.server._remove_non_mirror_neuron_container")
+    mocker.patch("mn_cli.runtime.server._docker_container_running", return_value=False)
     image_inspect = mocker.patch(
-        "mn_cli.server_cmds._docker_image_inspect_ok", side_effect=[False, True]
+        "mn_cli.runtime.server._docker_image_inspect_ok", side_effect=[False, True]
     )
-    run = mocker.patch("mn_cli.server_cmds.subprocess.run")
+    run = mocker.patch("mn_cli.runtime.server.subprocess.run")
 
     result = server_cmds.ensure_context_engine_runtime(prepare_image=True)
 
@@ -1496,12 +1506,12 @@ def test_ensure_context_engine_runtime_requires_a_prepared_package(mocker):
         encoding="utf-8",
     )
     server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
-    mocker.patch("mn_cli.server_cmds._ensure_docker_model_runner")
-    mocker.patch("mn_cli.server_cmds._docker_model_inspect_ok", return_value=True)
-    mocker.patch("mn_cli.server_cmds._docker_image_inspect_ok", return_value=False)
-    mocker.patch("mn_cli.server_cmds._remove_non_mirror_neuron_container")
-    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
-    run = mocker.patch("mn_cli.server_cmds.subprocess.run")
+    mocker.patch("mn_cli.runtime.server._ensure_docker_model_runner")
+    mocker.patch("mn_cli.runtime.server._docker_model_inspect_ok", return_value=True)
+    mocker.patch("mn_cli.runtime.server._docker_image_inspect_ok", return_value=False)
+    mocker.patch("mn_cli.runtime.server._remove_non_mirror_neuron_container")
+    mocker.patch("mn_cli.runtime.server._docker_container_running", return_value=False)
+    run = mocker.patch("mn_cli.runtime.server.subprocess.run")
 
     with pytest.raises(RuntimeError, match="is not prepared locally"):
         server_cmds.ensure_context_engine_runtime()
@@ -1580,15 +1590,15 @@ def test_ensure_context_engine_runtime_skips_compose_when_already_running(
     )
     server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
     mocker.patch(
-        "mn_cli.server_cmds._ensure_context_engine_source", return_value=membrane_dir
+        "mn_cli.runtime.server._ensure_context_engine_source", return_value=membrane_dir
     )
-    mocker.patch("mn_cli.server_cmds._ensure_docker_model_runner")
+    mocker.patch("mn_cli.runtime.server._ensure_docker_model_runner")
     inspect_model = mocker.patch(
-        "mn_cli.server_cmds._docker_model_inspect_ok", return_value=True
+        "mn_cli.runtime.server._docker_model_inspect_ok", return_value=True
     )
-    mocker.patch("mn_cli.server_cmds._remove_non_mirror_neuron_container")
-    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=True)
-    run = mocker.patch("mn_cli.server_cmds.subprocess.run")
+    mocker.patch("mn_cli.runtime.server._remove_non_mirror_neuron_container")
+    mocker.patch("mn_cli.runtime.server._docker_container_running", return_value=True)
+    run = mocker.patch("mn_cli.runtime.server.subprocess.run")
 
     result = server_cmds.ensure_context_engine_runtime()
 
@@ -1612,11 +1622,11 @@ def test_running_context_engine_must_pass_protocol_readiness(mocker):
         encoding="utf-8",
     )
     server_cmds.RUNTIME_COMPOSE_FILE.write_text("services: {}\n", encoding="utf-8")
-    mocker.patch("mn_cli.server_cmds._remove_non_mirror_neuron_container")
-    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=True)
-    run = mocker.patch("mn_cli.server_cmds.subprocess.run")
+    mocker.patch("mn_cli.runtime.server._remove_non_mirror_neuron_container")
+    mocker.patch("mn_cli.runtime.server._docker_container_running", return_value=True)
+    run = mocker.patch("mn_cli.runtime.server.subprocess.run")
     probe = mocker.patch(
-        "mn_cli.server_cmds.wait_for_context_engine",
+        "mn_cli.runtime.server.wait_for_context_engine",
         side_effect=RuntimeError(
             "Context Engine does not implement mirrorneuron.context.v2"
         ),
@@ -1645,9 +1655,13 @@ def test_context_auth_token_is_persistent_private_and_explicit_token_wins(tmp_pa
 
 def test_resolve_network_token_generates_and_reuses_persistent_token(tmp_path, mocker):
     token_dir = tmp_path / "state"
-    mocker.patch("mn_cli.server_cmds.DIR", token_dir)
-    mocker.patch("mn_cli.server_cmds.NETWORK_TOKEN_FILE", token_dir / "network.token")
-    mocker.patch("mn_cli.server_cmds.secrets.token_urlsafe", return_value="fixed-token")
+    mocker.patch("mn_cli.runtime.server.DIR", token_dir)
+    mocker.patch(
+        "mn_cli.runtime.server.NETWORK_TOKEN_FILE", token_dir / "network.token"
+    )
+    mocker.patch(
+        "mn_cli.runtime.server.secrets.token_urlsafe", return_value="fixed-token"
+    )
 
     token = _resolve_network_token()
 
@@ -1707,7 +1721,7 @@ def test_already_running_runtime_prints_the_active_container_join_token(
 ):
     monkeypatch.setenv("MN_CLI_OUTPUT", "plain")
     mocker.patch(
-        "mn_cli.server_cmds._running_network_token", return_value="active-token"
+        "mn_cli.runtime.server._running_network_token", return_value="active-token"
     )
 
     _print_runtime_join_ready(
@@ -1738,7 +1752,9 @@ def test_resolve_network_token_does_not_override_persisted_token_from_env(monkey
 def test_resolve_network_token_seeds_missing_file_from_compose_env(mocker):
     server_cmds.RUNTIME_COMPOSE_ENV.parent.mkdir(parents=True, exist_ok=True)
     server_cmds.RUNTIME_COMPOSE_ENV.write_text("MN_NETWORK_JOIN_TOKEN=compose-token\n")
-    mocker.patch("mn_cli.server_cmds.secrets.token_urlsafe", return_value="new-token")
+    mocker.patch(
+        "mn_cli.runtime.server.secrets.token_urlsafe", return_value="new-token"
+    )
 
     assert _resolve_network_token() == "compose-token"
     assert server_cmds.NETWORK_TOKEN_FILE.read_text().strip() == "compose-token"
@@ -1755,7 +1771,9 @@ def test_refresh_network_token_rotates_only_when_requested(mocker):
         "MN_GRPC_AUTH_TOKEN=stable-auth-token\n"
         "MN_GRPC_ADMIN_TOKEN=stable-admin-token\n"
     )
-    mocker.patch("mn_cli.server_cmds.secrets.token_urlsafe", return_value="new-token")
+    mocker.patch(
+        "mn_cli.runtime.server.secrets.token_urlsafe", return_value="new-token"
+    )
 
     assert _refresh_network_token() == "new-token"
     assert server_cmds.NETWORK_TOKEN_FILE.read_text().strip() == "new-token"
@@ -1772,7 +1790,7 @@ def test_refresh_network_token_rotates_only_when_requested(mocker):
 
 
 def test_resolve_node_alias_generates_and_reuses_stable_alias(mocker):
-    mocker.patch("mn_cli.server_cmds.secrets.token_hex", return_value="a1b2c3d4")
+    mocker.patch("mn_cli.runtime.server.secrets.token_hex", return_value="a1b2c3d4")
 
     alias = _resolve_node_alias()
 
@@ -1798,7 +1816,7 @@ def test_ensure_docker_network_creates_missing_bridge(mocker):
         m.stdout = ""
         return m
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
 
     _ensure_docker_network("bridge", "mirror-neuron-runtime")
 
@@ -1815,7 +1833,7 @@ def test_ensure_docker_network_creates_missing_bridge(mocker):
 def test_ensure_docker_network_validates_overlay_attachable(mocker):
     output = json.dumps([{"Driver": "overlay", "Attachable": True}])
     mocker.patch(
-        "mn_cli.server_cmds.subprocess.run",
+        "mn_cli.runtime.server.subprocess.run",
         return_value=mocker.Mock(returncode=0, stdout=output),
     )
 
@@ -1824,7 +1842,7 @@ def test_ensure_docker_network_validates_overlay_attachable(mocker):
 
 def test_ensure_docker_network_rejects_missing_overlay(mocker):
     mocker.patch(
-        "mn_cli.server_cmds.subprocess.run",
+        "mn_cli.runtime.server.subprocess.run",
         return_value=mocker.Mock(returncode=1, stdout=""),
     )
 
@@ -1837,7 +1855,7 @@ def test_ensure_docker_network_rejects_missing_overlay(mocker):
 def test_ensure_docker_network_rejects_non_attachable_overlay(mocker):
     output = json.dumps([{"Driver": "overlay", "Attachable": False}])
     mocker.patch(
-        "mn_cli.server_cmds.subprocess.run",
+        "mn_cli.runtime.server.subprocess.run",
         return_value=mocker.Mock(returncode=0, stdout=output),
     )
 
@@ -1851,22 +1869,24 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
     monkeypatch.delenv("MN_REDIS_URL", raising=False)
     monkeypatch.setenv("MN_NODE_ALIAS", "mn-seed")
     token_file = tmp_path / "network.token"
-    mocker.patch("mn_cli.server_cmds.DIR", tmp_path)
-    mocker.patch("mn_cli.server_cmds.NETWORK_TOKEN_FILE", token_file)
+    mocker.patch("mn_cli.runtime.server.DIR", tmp_path)
+    mocker.patch("mn_cli.runtime.server.NETWORK_TOKEN_FILE", token_file)
     monkeypatch.setattr(
         server_cmds.os, "uname", lambda: type("Uname", (), {"sysname": "Linux"})()
     )
-    mocker.patch("mn_cli.server_cmds.secrets.token_urlsafe", return_value="seed-token")
-    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
     mocker.patch(
-        "mn_cli.server_cmds._installed_catalog_runtime_models",
+        "mn_cli.runtime.server.secrets.token_urlsafe", return_value="seed-token"
+    )
+    mocker.patch("mn_cli.runtime.server._docker_container_running", return_value=False)
+    mocker.patch(
+        "mn_cli.runtime.server._installed_catalog_runtime_models",
         return_value=["nemotron-3.5-lightning:latest"],
     )
     port_available = mocker.patch(
-        "mn_cli.server_cmds._port_available_or_owned", return_value=True
+        "mn_cli.runtime.server._port_available_or_owned", return_value=True
     )
-    start_api = mocker.patch("mn_cli.server_cmds._start_api_if_installed")
-    start_web_ui = mocker.patch("mn_cli.server_cmds._start_web_ui_if_installed")
+    start_api = mocker.patch("mn_cli.runtime.server._start_api_if_installed")
+    start_web_ui = mocker.patch("mn_cli.runtime.server._start_web_ui_if_installed")
     start_native_sdk = mocker.patch(
         "mn_cli.runtime.server._start_native_sdk_grpc_if_installed", return_value=True
     )
@@ -1884,7 +1904,7 @@ def test_start_network_seed_starts_only_core_and_redis(mocker, tmp_path, monkeyp
         )
         return m
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
 
     assert (
         _start_network_seed(
@@ -1985,17 +2005,17 @@ def test_start_network_seed_default_disabled_ignores_stale_named_network(
     monkeypatch.delenv("MN_REDIS_URL", raising=False)
     monkeypatch.setenv("MN_NODE_ALIAS", "mn-worker")
     token_file = tmp_path / "network.token"
-    mocker.patch("mn_cli.server_cmds.DIR", tmp_path)
-    mocker.patch("mn_cli.server_cmds.NETWORK_TOKEN_FILE", token_file)
+    mocker.patch("mn_cli.runtime.server.DIR", tmp_path)
+    mocker.patch("mn_cli.runtime.server.NETWORK_TOKEN_FILE", token_file)
     mocker.patch(
-        "mn_cli.server_cmds.NETWORK_REDIS_ENV_FILE", tmp_path / "network-redis.env"
+        "mn_cli.runtime.server.NETWORK_REDIS_ENV_FILE", tmp_path / "network-redis.env"
     )
     mocker.patch(
-        "mn_cli.server_cmds.secrets.token_urlsafe", return_value="worker-token"
+        "mn_cli.runtime.server.secrets.token_urlsafe", return_value="worker-token"
     )
-    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
-    mocker.patch("mn_cli.server_cmds._port_available_or_owned", return_value=True)
-    mocker.patch("mn_cli.server_cmds._docker_host_socket", return_value=None)
+    mocker.patch("mn_cli.runtime.server._docker_container_running", return_value=False)
+    mocker.patch("mn_cli.runtime.server._port_available_or_owned", return_value=True)
+    mocker.patch("mn_cli.runtime.server._docker_host_socket", return_value=None)
 
     commands = []
 
@@ -2010,7 +2030,7 @@ def test_start_network_seed_default_disabled_ignores_stale_named_network(
         )
         return m
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
 
     assert (
         _start_network_seed(
@@ -2079,11 +2099,11 @@ def test_start_worker_node_prefers_env_join_token_over_stale_file(
     token_file.parent.mkdir(parents=True, exist_ok=True)
     token_file.write_text("stale-worker-token\n", encoding="utf-8")
     start_seed = mocker.patch(
-        "mn_cli.server_cmds._start_network_seed", return_value="primary-token"
+        "mn_cli.runtime.server._start_network_seed", return_value="primary-token"
     )
-    stop_runtime = mocker.patch("mn_cli.server_cmds._stop_local_runtime_for_worker")
-    clear_redis = mocker.patch("mn_cli.server_cmds._clear_worker_redis_state")
-    clear_owner = mocker.patch("mn_cli.server_cmds._clear_join_owner_metadata")
+    stop_runtime = mocker.patch("mn_cli.runtime.server._stop_local_runtime_for_worker")
+    clear_redis = mocker.patch("mn_cli.runtime.server._clear_worker_redis_state")
+    clear_owner = mocker.patch("mn_cli.runtime.server._clear_join_owner_metadata")
 
     assert _start_worker_node(host="192.168.4.173") == "primary-token"
 
@@ -2098,17 +2118,17 @@ def test_start_network_seed_uses_configured_redis_image(mocker, tmp_path, monkey
     monkeypatch.delenv("MN_REDIS_URL", raising=False)
     monkeypatch.setenv("MN_REDIS_IMAGE", "redis:8.8")
     token_file = tmp_path / "network.token"
-    mocker.patch("mn_cli.server_cmds.DIR", tmp_path)
-    mocker.patch("mn_cli.server_cmds.NETWORK_TOKEN_FILE", token_file)
+    mocker.patch("mn_cli.runtime.server.DIR", tmp_path)
+    mocker.patch("mn_cli.runtime.server.NETWORK_TOKEN_FILE", token_file)
     mocker.patch(
-        "mn_cli.server_cmds.NETWORK_REDIS_ENV_FILE", tmp_path / "network-redis.env"
+        "mn_cli.runtime.server.NETWORK_REDIS_ENV_FILE", tmp_path / "network-redis.env"
     )
     mocker.patch(
-        "mn_cli.server_cmds.secrets.token_urlsafe", return_value="worker-token"
+        "mn_cli.runtime.server.secrets.token_urlsafe", return_value="worker-token"
     )
-    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
-    mocker.patch("mn_cli.server_cmds._port_available_or_owned", return_value=True)
-    mocker.patch("mn_cli.server_cmds._docker_host_socket", return_value=None)
+    mocker.patch("mn_cli.runtime.server._docker_container_running", return_value=False)
+    mocker.patch("mn_cli.runtime.server._port_available_or_owned", return_value=True)
+    mocker.patch("mn_cli.runtime.server._docker_host_socket", return_value=None)
 
     commands = []
 
@@ -2119,7 +2139,7 @@ def test_start_network_seed_uses_configured_redis_image(mocker, tmp_path, monkey
         m.stdout = "false\n"
         return m
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
 
     _start_network_seed(host="192.168.4.173", grpc_port=50055, dist_port=4500)
 
@@ -2136,22 +2156,22 @@ def test_start_network_seed_uses_configured_redis_image(mocker, tmp_path, monkey
 def test_start_network_seed_already_exposed_prints_existing_token(mocker):
     output = StringIO()
     mocker.patch(
-        "mn_cli.server_cmds.console",
+        "mn_cli.runtime.server.console",
         Console(file=output, force_terminal=False, width=120),
     )
     mocker.patch(
-        "mn_cli.server_cmds._docker_container_running",
+        "mn_cli.runtime.server._docker_container_running",
         side_effect=lambda name: name == server_cmds.NETWORK_CORE_CONTAINER,
     )
     mocker.patch(
-        "mn_cli.server_cmds._docker_container_env_value",
+        "mn_cli.runtime.server._docker_container_env_value",
         side_effect=lambda _name, key: {
             "MN_NETWORK_JOIN_TOKEN": "seed-token",
             "MN_NETWORK_ADVERTISE_HOST": "192.168.4.10",
         }.get(key),
     )
-    mock_start_redis = mocker.patch("mn_cli.server_cmds._start_network_redis")
-    mock_start_core = mocker.patch("mn_cli.server_cmds._start_network_core")
+    mock_start_redis = mocker.patch("mn_cli.runtime.server._start_network_redis")
+    mock_start_core = mocker.patch("mn_cli.runtime.server._start_network_core")
 
     token = _start_network_seed(grpc_port=50055)
 
@@ -2168,17 +2188,17 @@ def test_start_network_seed_already_exposed_prints_existing_token(mocker):
 def test_start_network_seed_running_local_runtime_prints_existing_token(mocker):
     output = StringIO()
     mocker.patch(
-        "mn_cli.server_cmds.console",
+        "mn_cli.runtime.server.console",
         Console(file=output, force_terminal=False, width=120),
     )
     server_cmds.API_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
     server_cmds.API_PID_FILE.write_text("1234")
     server_cmds.NETWORK_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
     server_cmds.NETWORK_TOKEN_FILE.write_text("runtime-token\n")
-    mocker.patch("mn_cli.server_cmds.os.kill")
-    mocker.patch("mn_cli.server_cmds._docker_container_env_value", return_value=None)
-    mock_start_redis = mocker.patch("mn_cli.server_cmds._start_network_redis")
-    mock_start_core = mocker.patch("mn_cli.server_cmds._start_network_core")
+    mocker.patch("mn_cli.runtime.server.os.kill")
+    mocker.patch("mn_cli.runtime.server._docker_container_env_value", return_value=None)
+    mock_start_redis = mocker.patch("mn_cli.runtime.server._start_network_redis")
+    mock_start_core = mocker.patch("mn_cli.runtime.server._start_network_core")
 
     token = _start_network_seed(host="192.168.4.20")
 
@@ -2219,18 +2239,18 @@ def test_start_worker_node_clears_state_and_starts_worker(mocker, tmp_path):
         )
     )
 
-    stop_runtime = mocker.patch("mn_cli.server_cmds._stop_local_runtime_for_worker")
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
-    mocker.patch("mn_cli.server_cmds.JOIN_CLAIM_FILE", claim_file)
+    stop_runtime = mocker.patch("mn_cli.runtime.server._stop_local_runtime_for_worker")
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.JOIN_CLAIM_FILE", claim_file)
     refresh_token = mocker.patch(
-        "mn_cli.server_cmds._refresh_network_token", return_value="rotated-token"
+        "mn_cli.runtime.server._refresh_network_token", return_value="rotated-token"
     )
     start_seed = mocker.patch(
-        "mn_cli.server_cmds._start_network_seed", return_value="worker-token"
+        "mn_cli.runtime.server._start_network_seed", return_value="worker-token"
     )
-    start_api = mocker.patch("mn_cli.server_cmds._start_api_if_installed")
-    start_web_ui = mocker.patch("mn_cli.server_cmds._start_web_ui_if_installed")
-    mocker.patch("mn_cli.server_cmds.subprocess.run")
+    start_api = mocker.patch("mn_cli.runtime.server._start_api_if_installed")
+    start_web_ui = mocker.patch("mn_cli.runtime.server._start_web_ui_if_installed")
+    mocker.patch("mn_cli.runtime.server.subprocess.run")
 
     assert _start_worker_node(host="192.168.4.20", grpc_port=50055) == "worker-token"
 
@@ -2274,10 +2294,10 @@ def test_stop_local_runtime_for_worker_stops_compose_and_sidecars(mocker):
     server_cmds.API_WATCHDOG_PID_FILE.write_text("1234")
     server_cmds.WEB_UI_PID_FILE.write_text("5678")
 
-    stop_network = mocker.patch("mn_cli.server_cmds._stop_network_runtime")
-    run = mocker.patch("mn_cli.server_cmds.subprocess.run")
-    mocker.patch("mn_cli.server_cmds.os.kill")
-    kill = mocker.patch("mn_cli.server_cmds.kill_tree")
+    stop_network = mocker.patch("mn_cli.runtime.server._stop_network_runtime")
+    run = mocker.patch("mn_cli.runtime.server.subprocess.run")
+    mocker.patch("mn_cli.runtime.server.os.kill")
+    kill = mocker.patch("mn_cli.runtime.server.kill_tree")
 
     _stop_local_runtime_for_worker()
 
@@ -2296,15 +2316,17 @@ def test_stop_local_runtime_for_worker_stops_compose_and_sidecars(mocker):
 
 @pytest.mark.parametrize("inventory_complete", [True, False])
 def test_join_network_uses_sdk_federation(mocker, monkeypatch, inventory_complete):
-    mocker.patch("mn_cli.server_cmds._running_core_node_name", return_value=None)
+    mocker.patch("mn_cli.runtime.server._running_core_node_name", return_value=None)
     import mn_sdk
     import mn_cli.shared
 
     monkeypatch.setattr(server_cmds, "_detect_lan_ip", lambda: "192.168.4.99")
-    mocker.patch("mn_cli.server_cmds._running_core_advertised_host", return_value=None)
-    mocker.patch("mn_cli.server_cmds._ensure_local_cluster_runtime_for_join")
     mocker.patch(
-        "mn_cli.server_cmds._ensure_syncthing_for_runtime",
+        "mn_cli.runtime.server._running_core_advertised_host", return_value=None
+    )
+    mocker.patch("mn_cli.runtime.server._ensure_local_cluster_runtime_for_join")
+    mocker.patch(
+        "mn_cli.runtime.server._ensure_syncthing_for_runtime",
         side_effect=lambda env, **_kwargs: {
             **env,
             "MN_SYNCTHING_ENABLED": "auto",
@@ -2314,17 +2336,17 @@ def test_join_network_uses_sdk_federation(mocker, monkeypatch, inventory_complet
         },
     )
     syncthing_ready = mocker.patch(
-        "mn_cli.server_cmds._require_syncthing_peer_connection"
+        "mn_cli.runtime.server._require_syncthing_peer_connection"
     )
     reconcile = mocker.patch(
-        "mn_cli.server_cmds._reconcile_cluster_models_after_membership_change",
+        "mn_cli.runtime.server._reconcile_cluster_models_after_membership_change",
         return_value={
             "status": "ok",
             "nodes": [],
             "inventory_complete": inventory_complete,
         },
     )
-    confirmation = mocker.patch("mn_cli.server_cmds.print_success_confirmation")
+    confirmation = mocker.patch("mn_cli.runtime.server.print_success_confirmation")
     join = mocker.patch.object(
         mn_sdk,
         "join_federated_node",
@@ -2366,14 +2388,14 @@ def test_join_network_uses_sdk_federation(mocker, monkeypatch, inventory_complet
 def test_join_network_does_not_register_federation_when_syncthing_is_unavailable(
     mocker, monkeypatch
 ):
-    mocker.patch("mn_cli.server_cmds._running_core_node_name", return_value=None)
+    mocker.patch("mn_cli.runtime.server._running_core_node_name", return_value=None)
     import mn_sdk
     from mn_sdk.errors import AppError
 
     monkeypatch.setattr(server_cmds, "_detect_lan_ip", lambda: "192.168.4.99")
-    mocker.patch("mn_cli.server_cmds._ensure_local_cluster_runtime_for_join")
+    mocker.patch("mn_cli.runtime.server._ensure_local_cluster_runtime_for_join")
     mocker.patch(
-        "mn_cli.server_cmds._ensure_syncthing_for_runtime",
+        "mn_cli.runtime.server._ensure_syncthing_for_runtime",
         side_effect=lambda env, **_kwargs: {
             **env,
             "MN_SYNCTHING_ENABLED": "auto",
@@ -2383,7 +2405,7 @@ def test_join_network_does_not_register_federation_when_syncthing_is_unavailable
         },
     )
     mocker.patch(
-        "mn_cli.server_cmds._require_syncthing_peer_connection",
+        "mn_cli.runtime.server._require_syncthing_peer_connection",
         side_effect=AppError(
             "MN_SHARED_STORAGE_UNAVAILABLE",
             "Syncthing shared storage could not be connected for this node join.",
@@ -2408,12 +2430,12 @@ def test_join_network_does_not_register_federation_when_syncthing_is_unavailable
 
 
 def test_join_network_propagates_sdk_readiness_failure(mocker):
-    mocker.patch("mn_cli.server_cmds._running_core_node_name", return_value=None)
+    mocker.patch("mn_cli.runtime.server._running_core_node_name", return_value=None)
     import mn_sdk
     from mn_sdk.errors import AppError
 
-    mocker.patch("mn_cli.server_cmds._ensure_local_cluster_runtime_for_join")
-    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.99")
+    mocker.patch("mn_cli.runtime.server._ensure_local_cluster_runtime_for_join")
+    mocker.patch("mn_cli.runtime.server._detect_lan_ip", return_value="192.168.4.99")
     mocker.patch.object(
         mn_sdk,
         "join_federated_node",
@@ -2444,16 +2466,16 @@ def test_join_promotes_local_compose_runtime_to_federation_mode(mocker, tmp_path
         "MN_GRPC_BIND_HOST=127.0.0.1\n",
         encoding="utf-8",
     )
-    mocker.patch("mn_cli.server_cmds._port_available_or_owned", return_value=True)
-    mocker.patch("mn_cli.server_cmds._published_container_port", return_value=56379)
-    mocker.patch("mn_cli.server_cmds._detect_host_cpu_model", return_value="")
-    mocker.patch("mn_cli.server_cmds._detect_host_gpu_count", return_value=0)
-    mocker.patch("mn_cli.server_cmds._wait_for_local_cluster_grpc")
+    mocker.patch("mn_cli.runtime.server._port_available_or_owned", return_value=True)
+    mocker.patch("mn_cli.runtime.server._published_container_port", return_value=56379)
+    mocker.patch("mn_cli.runtime.server._detect_host_cpu_model", return_value="")
+    mocker.patch("mn_cli.runtime.server._detect_host_gpu_count", return_value=0)
+    mocker.patch("mn_cli.runtime.server._wait_for_local_cluster_grpc")
     ensure_syncthing = mocker.patch(
-        "mn_cli.server_cmds._ensure_syncthing_for_runtime",
+        "mn_cli.runtime.server._ensure_syncthing_for_runtime",
         side_effect=lambda env, **_kwargs: env,
     )
-    mock_run = mocker.patch("mn_cli.server_cmds.subprocess.run")
+    mock_run = mocker.patch("mn_cli.runtime.server.subprocess.run")
 
     _ensure_local_cluster_runtime_for_join(
         local_host="192.168.4.20",
@@ -2543,31 +2565,33 @@ class _FlakyCoreClient:
 
 
 def test_start_server_already_running(mocker, tmp_path):
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid")
     (tmp_path / "api.pid").write_text("1234")
-    mocker.patch("mn_cli.server_cmds.os.kill")  # check_status returns 0
-    mocker.patch("mn_cli.server_cmds._read_runtime_api_health", return_value=None)
+    mocker.patch("mn_cli.runtime.server.os.kill")  # check_status returns 0
+    mocker.patch("mn_cli.runtime.server._read_runtime_api_health", return_value=None)
 
     mock_container_tokens = mocker.patch(
-        "mn_cli.server_cmds._runtime_grpc_tokens_from_running_container",
+        "mn_cli.runtime.server._runtime_grpc_tokens_from_running_container",
         return_value={
             "MN_GRPC_AUTH_TOKEN": "running-auth-token",
             "MN_GRPC_ADMIN_TOKEN": "running-admin-token",
         },
     )
     mock_start_web = mocker.patch(
-        "mn_cli.server_cmds._start_web_ui_if_installed", return_value=True
+        "mn_cli.runtime.server._start_web_ui_if_installed", return_value=True
     )
     mock_start_native_sdk = mocker.patch(
         "mn_cli.runtime.server._start_native_sdk_grpc_if_installed", return_value=True
     )
     mock_reconcile_syncthing = mocker.patch(
-        "mn_cli.server_cmds._reconcile_syncthing_federated_peers"
+        "mn_cli.runtime.server._reconcile_syncthing_federated_peers"
     )
     mock_write_endpoints = mocker.patch(
-        "mn_cli.server_cmds._write_runtime_endpoints_file", return_value={"api": {}}
+        "mn_cli.runtime.server._write_runtime_endpoints_file", return_value={"api": {}}
     )
-    mock_print_endpoints = mocker.patch("mn_cli.server_cmds._print_service_endpoints")
+    mock_print_endpoints = mocker.patch(
+        "mn_cli.runtime.server._print_service_endpoints"
+    )
 
     _start_server()
 
@@ -2589,9 +2613,9 @@ def test_start_server_already_running(mocker, tmp_path):
 def test_start_server_restarts_existing_api_when_runtime_blueprint_env_changes(
     mocker, tmp_path, monkeypatch
 ):
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid")
     (tmp_path / "api.pid").write_text("1234")
-    mocker.patch("mn_cli.server_cmds.os.kill")  # check_status returns 0
+    mocker.patch("mn_cli.runtime.server.os.kill")  # check_status returns 0
 
     compose_file = server_cmds.RUNTIME_COMPOSE_FILE
     compose_env = server_cmds.RUNTIME_COMPOSE_ENV
@@ -2613,12 +2637,12 @@ def test_start_server_restarts_existing_api_when_runtime_blueprint_env_changes(
     )
     monkeypatch.setenv("MN_RUNS_ROOT", "/tmp/otterdesk-runs")
     mocker.patch(
-        "mn_cli.server_cmds._runtime_grpc_tokens_from_running_container",
+        "mn_cli.runtime.server._runtime_grpc_tokens_from_running_container",
         return_value={},
     )
-    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=True)
+    mocker.patch("mn_cli.runtime.server._docker_container_running", return_value=True)
     mocker.patch(
-        "mn_cli.server_cmds._read_runtime_api_health",
+        "mn_cli.runtime.server._read_runtime_api_health",
         return_value={
             "status": "ok",
             "env": "dev",
@@ -2628,17 +2652,19 @@ def test_start_server_restarts_existing_api_when_runtime_blueprint_env_changes(
             "runs_root": "/tmp/mn-runs",
         },
     )
-    _mock_run = mocker.patch("mn_cli.server_cmds.subprocess.run")
-    start_api = mocker.patch("mn_cli.server_cmds._start_api_if_installed")
+    _mock_run = mocker.patch("mn_cli.runtime.server.subprocess.run")
+    start_api = mocker.patch("mn_cli.runtime.server._start_api_if_installed")
     start_native_sdk = mocker.patch(
         "mn_cli.runtime.server._start_native_sdk_grpc_if_installed", return_value=True
     )
-    mocker.patch("mn_cli.server_cmds._start_web_ui_if_installed", return_value=False)
+    mocker.patch("mn_cli.runtime.server._start_web_ui_if_installed", return_value=False)
     mocker.patch(
-        "mn_cli.server_cmds._write_runtime_endpoints_file", return_value={"api": {}}
+        "mn_cli.runtime.server._write_runtime_endpoints_file", return_value={"api": {}}
     )
-    mocker.patch("mn_cli.server_cmds._print_service_endpoints")
-    mocker.patch("mn_cli.server_cmds._resolve_published_redis_port", return_value=56379)
+    mocker.patch("mn_cli.runtime.server._print_service_endpoints")
+    mocker.patch(
+        "mn_cli.runtime.server._resolve_published_redis_port", return_value=56379
+    )
     mocker.patch(
         "mn_cli.runtime.server._resolve_published_redis_port", return_value=56379
     )
@@ -2667,7 +2693,7 @@ def test_start_server_restarts_existing_api_when_runtime_blueprint_env_changes(
 
 
 def test_start_server_join_compose_imports_primary_grpc_tokens(mocker, tmp_path):
-    mocker.patch("mn_cli.server_cmds._configure_local_compose_redis_replica")
+    mocker.patch("mn_cli.runtime.server._configure_local_compose_redis_replica")
     compose_file = server_cmds.RUNTIME_COMPOSE_FILE
     compose_env = server_cmds.RUNTIME_COMPOSE_ENV
     compose_file.parent.mkdir(parents=True, exist_ok=True)
@@ -2676,7 +2702,7 @@ def test_start_server_join_compose_imports_primary_grpc_tokens(mocker, tmp_path)
     redis_password = "remote-redis-password"
 
     mocker.patch(
-        "mn_cli.server_cmds._handshake_with_main_node",
+        "mn_cli.runtime.server._handshake_with_main_node",
         return_value={
             "node_name": "mirror_neuron@192.168.4.20",
             "redis_host": "192.168.4.20",
@@ -2686,16 +2712,16 @@ def test_start_server_join_compose_imports_primary_grpc_tokens(mocker, tmp_path)
             "grpc_admin_token": "primary-admin-token",
         },
     )
-    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.99")
-    mocker.patch("mn_cli.server_cmds._detect_host_gpu_count", return_value=0)
-    mocker.patch("mn_cli.server_cmds._start_api_if_installed")
-    mocker.patch("mn_cli.server_cmds._start_web_ui_if_installed", return_value=False)
-    mocker.patch("mn_cli.server_cmds._print_service_endpoints")
+    mocker.patch("mn_cli.runtime.server._detect_lan_ip", return_value="192.168.4.99")
+    mocker.patch("mn_cli.runtime.server._detect_host_gpu_count", return_value=0)
+    mocker.patch("mn_cli.runtime.server._start_api_if_installed")
+    mocker.patch("mn_cli.runtime.server._start_web_ui_if_installed", return_value=False)
+    mocker.patch("mn_cli.runtime.server._print_service_endpoints")
     mocker.patch(
-        "mn_cli.server_cmds._write_runtime_endpoints_file", return_value={"api": {}}
+        "mn_cli.runtime.server._write_runtime_endpoints_file", return_value={"api": {}}
     )
     mock_run = mocker.patch(
-        "mn_cli.server_cmds.subprocess.run",
+        "mn_cli.runtime.server.subprocess.run",
         return_value=mocker.Mock(returncode=0, stdout="false\n"),
     )
 
@@ -2732,7 +2758,7 @@ def test_start_server_join_docker_imports_primary_grpc_tokens(mocker, tmp_path):
         return mocker.Mock(returncode=0, stdout="")
 
     mocker.patch(
-        "mn_cli.server_cmds._handshake_with_main_node",
+        "mn_cli.runtime.server._handshake_with_main_node",
         return_value={
             "node_name": "mirror_neuron@192.168.4.20",
             "redis_host": "192.168.4.20",
@@ -2742,15 +2768,15 @@ def test_start_server_join_docker_imports_primary_grpc_tokens(mocker, tmp_path):
             "grpc_admin_token": "primary-admin-token",
         },
     )
-    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.99")
-    mocker.patch("mn_cli.server_cmds._detect_host_gpu_count", return_value=0)
-    mocker.patch("mn_cli.server_cmds._start_api_if_installed")
-    mocker.patch("mn_cli.server_cmds._start_web_ui_if_installed", return_value=False)
-    mocker.patch("mn_cli.server_cmds._print_service_endpoints")
+    mocker.patch("mn_cli.runtime.server._detect_lan_ip", return_value="192.168.4.99")
+    mocker.patch("mn_cli.runtime.server._detect_host_gpu_count", return_value=0)
+    mocker.patch("mn_cli.runtime.server._start_api_if_installed")
+    mocker.patch("mn_cli.runtime.server._start_web_ui_if_installed", return_value=False)
+    mocker.patch("mn_cli.runtime.server._print_service_endpoints")
     mocker.patch(
-        "mn_cli.server_cmds._write_runtime_endpoints_file", return_value={"api": {}}
+        "mn_cli.runtime.server._write_runtime_endpoints_file", return_value={"api": {}}
     )
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
 
     _start_server(ip="192.168.4.20", token="join-token")
 
@@ -2768,16 +2794,16 @@ def test_start_server_join_docker_imports_primary_grpc_tokens(mocker, tmp_path):
 def test_start_network_seed_uses_primary_persisted_grpc_tokens(mocker, monkeypatch):
     monkeypatch.setenv("MN_GRPC_AUTH_TOKEN", "primary-auth-token")
     monkeypatch.setenv("MN_GRPC_ADMIN_TOKEN", "primary-admin-token")
-    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
-    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.20")
-    mocker.patch("mn_cli.server_cmds._ensure_network_docker_network")
+    mocker.patch("mn_cli.runtime.server._docker_container_running", return_value=False)
+    mocker.patch("mn_cli.runtime.server._detect_lan_ip", return_value="192.168.4.20")
+    mocker.patch("mn_cli.runtime.server._ensure_network_docker_network")
     mocker.patch(
-        "mn_cli.server_cmds._find_available_published_port", return_value=56379
+        "mn_cli.runtime.server._find_available_published_port", return_value=56379
     )
-    mocker.patch("mn_cli.server_cmds._start_network_redis")
-    mocker.patch("mn_cli.server_cmds._start_network_sentinel")
-    start_core = mocker.patch("mn_cli.server_cmds._start_network_core")
-    mocker.patch("mn_cli.server_cmds._print_network_seed_ready")
+    mocker.patch("mn_cli.runtime.server._start_network_redis")
+    mocker.patch("mn_cli.runtime.server._start_network_sentinel")
+    start_core = mocker.patch("mn_cli.runtime.server._start_network_core")
+    mocker.patch("mn_cli.runtime.server._print_network_seed_ready")
 
     token = _start_network_seed(host="192.168.4.20", grpc_port=50055)
 
@@ -2794,23 +2820,25 @@ def test_start_network_seed_uses_primary_persisted_grpc_tokens(mocker, monkeypat
 
 
 def test_start_server_existing_api_starts_missing_compose_core(mocker, tmp_path):
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid")
     (tmp_path / "api.pid").write_text("1234")
-    mocker.patch("mn_cli.server_cmds.os.kill")  # check_status returns 0
+    mocker.patch("mn_cli.runtime.server.os.kill")  # check_status returns 0
 
     compose_file = server_cmds.RUNTIME_COMPOSE_FILE
     compose_env = server_cmds.RUNTIME_COMPOSE_ENV
     compose_file.parent.mkdir(parents=True, exist_ok=True)
     compose_file.write_text("services: {}\n", encoding="utf-8")
     compose_env.write_text("MN_GRPC_PORT=55051\n", encoding="utf-8")
-    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
-    mocker.patch("mn_cli.server_cmds._start_api_if_installed")
-    mocker.patch("mn_cli.server_cmds._start_web_ui_if_installed", return_value=False)
+    mocker.patch("mn_cli.runtime.server._docker_container_running", return_value=False)
+    mocker.patch("mn_cli.runtime.server._start_api_if_installed")
+    mocker.patch("mn_cli.runtime.server._start_web_ui_if_installed", return_value=False)
     mocker.patch(
-        "mn_cli.server_cmds._write_runtime_endpoints_file", return_value={"api": {}}
+        "mn_cli.runtime.server._write_runtime_endpoints_file", return_value={"api": {}}
     )
-    mocker.patch("mn_cli.server_cmds._print_service_endpoints")
-    mocker.patch("mn_cli.server_cmds._resolve_published_redis_port", return_value=56379)
+    mocker.patch("mn_cli.runtime.server._print_service_endpoints")
+    mocker.patch(
+        "mn_cli.runtime.server._resolve_published_redis_port", return_value=56379
+    )
     mocker.patch(
         "mn_cli.runtime.server._resolve_published_redis_port", return_value=56379
     )
@@ -2823,7 +2851,7 @@ def test_start_server_existing_api_starts_missing_compose_core(mocker, tmp_path)
         result.stdout = ""
         return result
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
 
     _start_server(host="192.168.4.20")
 
@@ -2847,29 +2875,29 @@ def test_start_server_existing_api_starts_missing_compose_core(mocker, tmp_path)
 def test_start_server_existing_api_recreates_compose_core_with_stale_grpc_tokens(
     mocker, tmp_path
 ):
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid")
     (tmp_path / "api.pid").write_text("1234")
-    mocker.patch("mn_cli.server_cmds.os.kill")  # check_status returns 0
+    mocker.patch("mn_cli.runtime.server.os.kill")  # check_status returns 0
 
     compose_file = server_cmds.RUNTIME_COMPOSE_FILE
     compose_env = server_cmds.RUNTIME_COMPOSE_ENV
     compose_file.parent.mkdir(parents=True, exist_ok=True)
     compose_file.write_text("services: {}\n", encoding="utf-8")
     compose_env.write_text("MN_GRPC_PORT=55051\n", encoding="utf-8")
-    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=True)
+    mocker.patch("mn_cli.runtime.server._docker_container_running", return_value=True)
     mocker.patch(
-        "mn_cli.server_cmds._docker_container_env_value",
+        "mn_cli.runtime.server._docker_container_env_value",
         side_effect=lambda _name, key: {
             "MN_GRPC_AUTH_TOKEN": "stale-auth-token",
             "MN_GRPC_ADMIN_TOKEN": "stale-admin-token",
         }.get(key),
     )
-    start_api = mocker.patch("mn_cli.server_cmds._start_api_if_installed")
-    mocker.patch("mn_cli.server_cmds._start_web_ui_if_installed", return_value=False)
+    start_api = mocker.patch("mn_cli.runtime.server._start_api_if_installed")
+    mocker.patch("mn_cli.runtime.server._start_web_ui_if_installed", return_value=False)
     mocker.patch(
-        "mn_cli.server_cmds._write_runtime_endpoints_file", return_value={"api": {}}
+        "mn_cli.runtime.server._write_runtime_endpoints_file", return_value={"api": {}}
     )
-    mocker.patch("mn_cli.server_cmds._print_service_endpoints")
+    mocker.patch("mn_cli.runtime.server._print_service_endpoints")
 
     calls = []
 
@@ -2879,7 +2907,7 @@ def test_start_server_existing_api_recreates_compose_core_with_stale_grpc_tokens
         result.stdout = ""
         return result
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
 
     _start_server()
 
@@ -2908,31 +2936,31 @@ def test_start_server_existing_api_recreates_only_for_invalid_identity(
     mocker, tmp_path, identity_valid
 ):
     mocker.patch(
-        "mn_cli.server_cmds.probe_core_identity", side_effect=[identity_valid, True]
+        "mn_cli.runtime.server.probe_core_identity", side_effect=[identity_valid, True]
     )
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid")
     (tmp_path / "api.pid").write_text("1234")
-    mocker.patch("mn_cli.server_cmds.os.kill")  # check_status returns 0
+    mocker.patch("mn_cli.runtime.server.os.kill")  # check_status returns 0
 
     compose_file = server_cmds.RUNTIME_COMPOSE_FILE
     compose_env = server_cmds.RUNTIME_COMPOSE_ENV
     compose_file.parent.mkdir(parents=True, exist_ok=True)
     compose_file.write_text("services: {}\n", encoding="utf-8")
     compose_env.write_text("MN_GRPC_PORT=55051\n", encoding="utf-8")
-    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=True)
+    mocker.patch("mn_cli.runtime.server._docker_container_running", return_value=True)
     mocker.patch(
-        "mn_cli.server_cmds._docker_container_env_value",
+        "mn_cli.runtime.server._docker_container_env_value",
         side_effect=lambda _name, key: {
             "MN_GRPC_AUTH_TOKEN": _resolve_grpc_auth_token(),
             "MN_GRPC_ADMIN_TOKEN": _resolve_grpc_admin_token(),
         }.get(key),
     )
-    mocker.patch("mn_cli.server_cmds._start_api_if_installed")
-    mocker.patch("mn_cli.server_cmds._start_web_ui_if_installed", return_value=False)
+    mocker.patch("mn_cli.runtime.server._start_api_if_installed")
+    mocker.patch("mn_cli.runtime.server._start_web_ui_if_installed", return_value=False)
     mocker.patch(
-        "mn_cli.server_cmds._write_runtime_endpoints_file", return_value={"api": {}}
+        "mn_cli.runtime.server._write_runtime_endpoints_file", return_value={"api": {}}
     )
-    mocker.patch("mn_cli.server_cmds._print_service_endpoints")
+    mocker.patch("mn_cli.runtime.server._print_service_endpoints")
 
     calls = []
 
@@ -2942,7 +2970,7 @@ def test_start_server_existing_api_recreates_only_for_invalid_identity(
         result.stdout = ""
         return result
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
 
     _start_server()
 
@@ -2960,9 +2988,9 @@ def test_start_server_existing_api_recreates_only_for_invalid_identity(
 
 
 def test_join_still_errors_when_local_api_already_running(mocker, tmp_path):
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid")
     (tmp_path / "api.pid").write_text("1234")
-    mocker.patch("mn_cli.server_cmds.os.kill")  # check_status returns 0
+    mocker.patch("mn_cli.runtime.server.os.kill")  # check_status returns 0
 
     with pytest.raises(typer.Exit) as exc:
         _start_server(ip="192.168.4.10", token="join-token")
@@ -2971,10 +2999,10 @@ def test_join_still_errors_when_local_api_already_running(mocker, tmp_path):
 
 def test_start_server_docker_running(mocker, tmp_path):
     mocker.patch(
-        "mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid"
+        "mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid"
     )  # Missing, check_status -> 2
 
-    mock_run = mocker.patch("mn_cli.server_cmds.subprocess.run")
+    mock_run = mocker.patch("mn_cli.runtime.server.subprocess.run")
     mock_run.return_value.stdout = "true\n"
 
     with pytest.raises(typer.Exit) as exc:
@@ -2983,8 +3011,8 @@ def test_start_server_docker_running(mocker, tmp_path):
 
 
 def test_start_server_no_docker(mocker, tmp_path):
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid")
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=FileNotFoundError)
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=FileNotFoundError)
 
     with pytest.raises(typer.Exit) as exc:
         _start_server()
@@ -2992,8 +3020,8 @@ def test_start_server_no_docker(mocker, tmp_path):
 
 
 def test_start_server_docker_start_fails(mocker, tmp_path):
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid")
-    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.99")
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch("mn_cli.runtime.server._detect_lan_ip", return_value="192.168.4.99")
 
     def mock_run(cmd, **kwargs):
         if cmd[1] == "inspect":
@@ -3004,9 +3032,9 @@ def test_start_server_docker_start_fails(mocker, tmp_path):
             raise subprocess.CalledProcessError(1, "docker run")
         return mocker.Mock()
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
-    mocker.patch("mn_cli.server_cmds.PID_DIR", tmp_path / ".pids")
-    mocker.patch("mn_cli.server_cmds.LOG_DIR", tmp_path / ".logs")
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.PID_DIR", tmp_path / ".pids")
+    mocker.patch("mn_cli.runtime.server.LOG_DIR", tmp_path / ".logs")
 
     with pytest.raises(typer.Exit) as exc:
         _start_server()
@@ -3016,8 +3044,8 @@ def test_start_server_docker_start_fails(mocker, tmp_path):
 def test_runtime_compose_cmd_uses_installed_runtime_files(mocker, tmp_path):
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_FILE", compose_file)
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_FILE", compose_file)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
 
     assert runtime_compose_cmd("up", "-d") == [
         "docker",
@@ -3034,8 +3062,8 @@ def test_runtime_compose_cmd_uses_installed_runtime_files(mocker, tmp_path):
 def test_compose_internal_redis_settings_persists_docker_alias(mocker, tmp_path):
     compose_env = tmp_path / "docker-compose.env"
     compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
-    port_available = mocker.patch("mn_cli.server_cmds._port_available_or_owned")
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
+    port_available = mocker.patch("mn_cli.runtime.server._port_available_or_owned")
 
     env = server_cmds._ensure_compose_internal_redis_settings(
         {},
@@ -3061,7 +3089,7 @@ def test_compose_internal_redis_settings_persists_docker_alias(mocker, tmp_path)
 def test_compose_internal_redis_settings_defaults_to_service_name(mocker, tmp_path):
     compose_env = tmp_path / "docker-compose.env"
     compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
 
     env = server_cmds._ensure_compose_internal_redis_settings(
         {},
@@ -3077,7 +3105,7 @@ def test_compose_internal_redis_settings_prefers_explicit_alias_over_process_env
 ):
     compose_env = tmp_path / "docker-compose.env"
     compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
     monkeypatch.setenv("MN_NETWORK_REDIS_HOST", "192.168.4.99")
 
     env = server_cmds._ensure_compose_internal_redis_settings(
@@ -3096,9 +3124,9 @@ def test_compose_cluster_port_settings_treats_persisted_redis_port_as_preference
 ):
     compose_env = tmp_path / "docker-compose.env"
     compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\nMN_REDIS_PORT=56379\n")
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
     find_port = mocker.patch(
-        "mn_cli.server_cmds._find_available_published_port", return_value=56380
+        "mn_cli.runtime.server._find_available_published_port", return_value=56380
     )
 
     env = server_cmds._ensure_compose_cluster_port_settings(
@@ -3117,7 +3145,7 @@ def test_compose_cluster_port_settings_treats_persisted_redis_port_as_preference
 def test_compose_native_settings_persists_runtime_blueprint_env(mocker, tmp_path):
     compose_env = tmp_path / "docker-compose.env"
     compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
 
     env = server_cmds._ensure_compose_native_port_settings(
         {
@@ -3179,7 +3207,7 @@ def test_compose_native_settings_migrates_openshell_loopback_endpoint_to_bind_ho
         "OPENSHELL_GATEWAY_PORT=58080\n"
         "OPENSHELL_GATEWAY_ENDPOINT=http://127.0.0.1:58080\n"
     )
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
 
     env = server_cmds._ensure_compose_native_port_settings(
         {
@@ -3201,7 +3229,7 @@ def test_compose_native_settings_preserves_explicit_openshell_endpoint(
     monkeypatch.setenv("OPENSHELL_GATEWAY_ENDPOINT", "https://gateway.example:8443")
     compose_env = tmp_path / "docker-compose.env"
     compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
 
     env = server_cmds._ensure_compose_native_port_settings(
         {
@@ -3216,7 +3244,7 @@ def test_compose_native_settings_preserves_explicit_openshell_endpoint(
 def test_compose_cluster_override_publishes_blueprint_web_ui_range(mocker, tmp_path):
     override = tmp_path / "docker-compose.cluster.yml"
     mocker.patch(
-        "mn_cli.server_cmds._runtime_compose_cluster_override_file",
+        "mn_cli.runtime.server._runtime_compose_cluster_override_file",
         return_value=override,
     )
 
@@ -3234,7 +3262,7 @@ def test_compose_cluster_override_publishes_blueprint_web_ui_range(mocker, tmp_p
 def test_compose_native_settings_defaults_runtime_blueprint_repo(mocker, tmp_path):
     compose_env = tmp_path / "docker-compose.env"
     compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\nMN_BLUEPRINT_REPO=\n")
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
 
     env = server_cmds._ensure_compose_native_port_settings({})
 
@@ -3275,7 +3303,7 @@ def test_compose_native_settings_defaults_runtime_blueprint_repo(mocker, tmp_pat
 def test_compose_native_settings_normalizes_markdown_blueprint_repo(mocker, tmp_path):
     compose_env = tmp_path / "docker-compose.env"
     compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
 
     env = server_cmds._ensure_compose_native_port_settings(
         {
@@ -3312,7 +3340,7 @@ def test_compose_cluster_bind_settings_exposes_lan_advertised_host(
         "MN_DIST_BIND_HOST=127.0.0.1\n"
         "ERL_EPMD_ADDRESS=127.0.0.1\n"
     )
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
 
     env = server_cmds._ensure_compose_cluster_bind_settings(
         {
@@ -3348,7 +3376,7 @@ def test_compose_cluster_bind_settings_preserves_explicit_env(
         "MN_EPMD_BIND_HOST=127.0.0.1\n"
         "MN_DIST_BIND_HOST=127.0.0.1\n"
     )
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
 
     env = server_cmds._ensure_compose_cluster_bind_settings(
         {
@@ -3376,21 +3404,23 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
         "MN_CLUSTER_NODES=nonode@nohost\n"
     )
 
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_FILE", compose_file)
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_FILE", compose_file)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid")
     mocker.patch(
-        "mn_cli.server_cmds.API_WATCHDOG_PID_FILE", tmp_path / "api-watchdog.pid"
+        "mn_cli.runtime.server.API_WATCHDOG_PID_FILE", tmp_path / "api-watchdog.pid"
     )
-    mocker.patch("mn_cli.server_cmds.WEB_UI_DIRS", ())
-    mocker.patch("mn_cli.server_cmds.time.sleep")
-    mocker.patch("mn_cli.server_cmds.PID_DIR", tmp_path / ".pids")
-    mocker.patch("mn_cli.server_cmds.LOG_DIR", tmp_path / ".logs")
-    mocker.patch("mn_cli.server_cmds.API_LOG", tmp_path / "api.log")
-    mocker.patch("mn_cli.server_cmds.API_WATCHDOG_LOG", tmp_path / "api-watchdog.log")
-    mocker.patch("mn_cli.server_cmds._wait_for_api", return_value=True)
+    mocker.patch("mn_cli.runtime.server.WEB_UI_DIRS", ())
+    mocker.patch("mn_cli.runtime.server.time.sleep")
+    mocker.patch("mn_cli.runtime.server.PID_DIR", tmp_path / ".pids")
+    mocker.patch("mn_cli.runtime.server.LOG_DIR", tmp_path / ".logs")
+    mocker.patch("mn_cli.runtime.server.API_LOG", tmp_path / "api.log")
     mocker.patch(
-        "mn_cli.server_cmds._handshake_with_main_node",
+        "mn_cli.runtime.server.API_WATCHDOG_LOG", tmp_path / "api-watchdog.log"
+    )
+    mocker.patch("mn_cli.runtime.server._wait_for_api", return_value=True)
+    mocker.patch(
+        "mn_cli.runtime.server._handshake_with_main_node",
         return_value={
             "node_name": "mirror_neuron@127.0.0.1",
             "redis_host": "127.0.0.1",
@@ -3398,16 +3428,16 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
             "redis_url": "redis://127.0.0.1:6379/0",
         },
     )
-    mocker.patch("mn_cli.server_cmds.VENV_DIR", tmp_path)
-    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.99")
-    mocker.patch("mn_cli.server_cmds.secrets.token_hex", return_value="abc12345")
+    mocker.patch("mn_cli.runtime.server.VENV_DIR", tmp_path)
+    mocker.patch("mn_cli.runtime.server._detect_lan_ip", return_value="192.168.4.99")
+    mocker.patch("mn_cli.runtime.server.secrets.token_hex", return_value="abc12345")
 
     calls = []
     lifecycle = []
     reconciled_containers = []
 
     mocker.patch(
-        "mn_cli.server_cmds._remove_non_mirror_neuron_container",
+        "mn_cli.runtime.server._remove_non_mirror_neuron_container",
         side_effect=lambda name, **kwargs: reconciled_containers.append((name, kwargs)),
     )
 
@@ -3429,18 +3459,18 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
             m.stdout = "false\n"
         return m
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
     mocker.patch(
-        "mn_cli.server_cmds._find_available_published_port", return_value=56379
+        "mn_cli.runtime.server._find_available_published_port", return_value=56379
     )
 
     _start_server()
 
     commands = [call[0] for call in calls]
     assert runtime_compose_cmd("up", "-d") in commands
-    assert reconciled_containers[0] == (
-        server_cmds.LOCAL_CORE_CONTAINER,
-        {"expected_compose_service": server_cmds.LOCAL_CORE_CONTAINER},
+    assert all(
+        name != server_cmds.LOCAL_CORE_CONTAINER
+        for name, _kwargs in reconciled_containers
     )
     assert lifecycle.index("native-ready") < lifecycle.index("compose-up")
     assert all(cmd[:3] != ["docker", "network", "inspect"] for cmd in commands)
@@ -3498,25 +3528,25 @@ def test_start_server_uses_compose_runtime_when_available(mocker, tmp_path):
 
 
 def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
-    mocker.patch("mn_cli.server_cmds._configure_local_compose_redis_replica")
+    mocker.patch("mn_cli.runtime.server._configure_local_compose_redis_replica")
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
     compose_file.write_text("services: {}\n")
     compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
 
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_FILE", compose_file)
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid")
-    mocker.patch("mn_cli.server_cmds.WEB_UI_DIRS", ())
-    mocker.patch("mn_cli.server_cmds.time.sleep")
-    mocker.patch("mn_cli.server_cmds.PID_DIR", tmp_path / ".pids")
-    mocker.patch("mn_cli.server_cmds.LOG_DIR", tmp_path / ".logs")
-    mocker.patch("mn_cli.server_cmds.API_LOG", tmp_path / "api.log")
-    mocker.patch("mn_cli.server_cmds.VENV_DIR", tmp_path)
-    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.99")
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_FILE", compose_file)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_DIRS", ())
+    mocker.patch("mn_cli.runtime.server.time.sleep")
+    mocker.patch("mn_cli.runtime.server.PID_DIR", tmp_path / ".pids")
+    mocker.patch("mn_cli.runtime.server.LOG_DIR", tmp_path / ".logs")
+    mocker.patch("mn_cli.runtime.server.API_LOG", tmp_path / "api.log")
+    mocker.patch("mn_cli.runtime.server.VENV_DIR", tmp_path)
+    mocker.patch("mn_cli.runtime.server._detect_lan_ip", return_value="192.168.4.99")
     redis_password = "remote-redis-password"
     mocker.patch(
-        "mn_cli.server_cmds._handshake_with_main_node",
+        "mn_cli.runtime.server._handshake_with_main_node",
         return_value={
             "node_name": "mirror_neuron@192.168.4.173",
             "redis_host": "192.168.4.173",
@@ -3533,9 +3563,9 @@ def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
         m.stdout = "false\n"
         return m
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
     mocker.patch(
-        "mn_cli.server_cmds._find_available_published_port", return_value=56379
+        "mn_cli.runtime.server._find_available_published_port", return_value=56379
     )
 
     _start_server(ip="192.168.4.173", token="join-token")
@@ -3568,7 +3598,7 @@ def test_start_server_passes_cluster_env_to_compose_runtime(mocker, tmp_path):
 def test_start_server_join_connects_syncthing_before_compose_up(
     mocker, tmp_path, monkeypatch
 ):
-    mocker.patch("mn_cli.server_cmds._configure_local_compose_redis_replica")
+    mocker.patch("mn_cli.runtime.server._configure_local_compose_redis_replica")
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
     local_shared = tmp_path / "local-shared"
@@ -3580,18 +3610,18 @@ def test_start_server_join_connects_syncthing_before_compose_up(
     )
     monkeypatch.setenv("MN_SYNCTHING_ENABLED", "auto")
 
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_FILE", compose_file)
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid")
-    mocker.patch("mn_cli.server_cmds.WEB_UI_DIRS", ())
-    mocker.patch("mn_cli.server_cmds.time.sleep")
-    mocker.patch("mn_cli.server_cmds.PID_DIR", tmp_path / ".pids")
-    mocker.patch("mn_cli.server_cmds.LOG_DIR", tmp_path / ".logs")
-    mocker.patch("mn_cli.server_cmds.API_LOG", tmp_path / "api.log")
-    mocker.patch("mn_cli.server_cmds.VENV_DIR", tmp_path)
-    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.99")
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_FILE", compose_file)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_DIRS", ())
+    mocker.patch("mn_cli.runtime.server.time.sleep")
+    mocker.patch("mn_cli.runtime.server.PID_DIR", tmp_path / ".pids")
+    mocker.patch("mn_cli.runtime.server.LOG_DIR", tmp_path / ".logs")
+    mocker.patch("mn_cli.runtime.server.API_LOG", tmp_path / "api.log")
+    mocker.patch("mn_cli.runtime.server.VENV_DIR", tmp_path)
+    mocker.patch("mn_cli.runtime.server._detect_lan_ip", return_value="192.168.4.99")
     mocker.patch(
-        "mn_cli.server_cmds._handshake_with_main_node",
+        "mn_cli.runtime.server._handshake_with_main_node",
         return_value={
             "node_name": "mirror_neuron@192.168.6.28",
             "redis_host": "192.168.6.28",
@@ -3633,7 +3663,8 @@ def test_start_server_join_connects_syncthing_before_compose_up(
         return env
 
     mocker.patch(
-        "mn_cli.server_cmds._ensure_syncthing_for_runtime", side_effect=ensure_syncthing
+        "mn_cli.runtime.server._ensure_syncthing_for_runtime",
+        side_effect=ensure_syncthing,
     )
 
     def connect_syncthing(*_args, **_kwargs):
@@ -3641,7 +3672,7 @@ def test_start_server_join_connects_syncthing_before_compose_up(
         return True
 
     mocker.patch(
-        "mn_cli.server_cmds._connect_syncthing_peers", side_effect=connect_syncthing
+        "mn_cli.runtime.server._connect_syncthing_peers", side_effect=connect_syncthing
     )
 
     def mock_run(cmd, **kwargs):
@@ -3651,9 +3682,9 @@ def test_start_server_join_connects_syncthing_before_compose_up(
         m.stdout = "false\n"
         return m
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
     mocker.patch(
-        "mn_cli.server_cmds._find_available_published_port", return_value=56379
+        "mn_cli.runtime.server._find_available_published_port", return_value=56379
     )
 
     _start_server(ip="192.168.6.28", token="join-token", host="192.168.4.173")
@@ -3677,7 +3708,7 @@ def test_start_server_join_connects_syncthing_before_compose_up(
 
 
 def test_start_server_preserves_persisted_join_profile_on_restart(mocker, tmp_path):
-    mocker.patch("mn_cli.server_cmds._configure_local_compose_redis_replica")
+    mocker.patch("mn_cli.runtime.server._configure_local_compose_redis_replica")
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
     redis_password = "persisted-redis-password"
@@ -3695,16 +3726,16 @@ def test_start_server_preserves_persisted_join_profile_on_restart(mocker, tmp_pa
         f"MN_CONTEXT_REDIS_URL=redis://:{redis_password}@192.168.4.35:56381/1\n"
     )
 
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_FILE", compose_file)
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid")
-    mocker.patch("mn_cli.server_cmds.WEB_UI_DIRS", ())
-    mocker.patch("mn_cli.server_cmds.time.sleep")
-    mocker.patch("mn_cli.server_cmds.PID_DIR", tmp_path / ".pids")
-    mocker.patch("mn_cli.server_cmds.LOG_DIR", tmp_path / ".logs")
-    mocker.patch("mn_cli.server_cmds.API_LOG", tmp_path / "api.log")
-    mocker.patch("mn_cli.server_cmds.VENV_DIR", tmp_path)
-    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.173")
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_FILE", compose_file)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_DIRS", ())
+    mocker.patch("mn_cli.runtime.server.time.sleep")
+    mocker.patch("mn_cli.runtime.server.PID_DIR", tmp_path / ".pids")
+    mocker.patch("mn_cli.runtime.server.LOG_DIR", tmp_path / ".logs")
+    mocker.patch("mn_cli.runtime.server.API_LOG", tmp_path / "api.log")
+    mocker.patch("mn_cli.runtime.server.VENV_DIR", tmp_path)
+    mocker.patch("mn_cli.runtime.server._detect_lan_ip", return_value="192.168.4.173")
 
     calls = []
 
@@ -3714,9 +3745,9 @@ def test_start_server_preserves_persisted_join_profile_on_restart(mocker, tmp_pa
         m.stdout = "false\n"
         return m
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
     ensure_redis = mocker.patch(
-        "mn_cli.server_cmds._ensure_compose_internal_redis_settings"
+        "mn_cli.runtime.server._ensure_compose_internal_redis_settings"
     )
 
     _start_server()
@@ -3743,7 +3774,7 @@ def test_start_server_preserves_persisted_join_profile_on_restart(mocker, tmp_pa
 
 
 def test_start_server_preserves_multi_node_join_profile_on_restart(mocker, tmp_path):
-    mocker.patch("mn_cli.server_cmds._configure_local_compose_redis_replica")
+    mocker.patch("mn_cli.runtime.server._configure_local_compose_redis_replica")
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
     redis_password = "persisted-redis-password"
@@ -3760,16 +3791,16 @@ def test_start_server_preserves_multi_node_join_profile_on_restart(mocker, tmp_p
         f"MN_CONTEXT_REDIS_URL=redis://:{redis_password}@192.168.4.35:56381/1\n"
     )
 
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_FILE", compose_file)
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid")
-    mocker.patch("mn_cli.server_cmds.WEB_UI_DIRS", ())
-    mocker.patch("mn_cli.server_cmds.time.sleep")
-    mocker.patch("mn_cli.server_cmds.PID_DIR", tmp_path / ".pids")
-    mocker.patch("mn_cli.server_cmds.LOG_DIR", tmp_path / ".logs")
-    mocker.patch("mn_cli.server_cmds.API_LOG", tmp_path / "api.log")
-    mocker.patch("mn_cli.server_cmds.VENV_DIR", tmp_path)
-    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.173")
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_FILE", compose_file)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_DIRS", ())
+    mocker.patch("mn_cli.runtime.server.time.sleep")
+    mocker.patch("mn_cli.runtime.server.PID_DIR", tmp_path / ".pids")
+    mocker.patch("mn_cli.runtime.server.LOG_DIR", tmp_path / ".logs")
+    mocker.patch("mn_cli.runtime.server.API_LOG", tmp_path / "api.log")
+    mocker.patch("mn_cli.runtime.server.VENV_DIR", tmp_path)
+    mocker.patch("mn_cli.runtime.server._detect_lan_ip", return_value="192.168.4.173")
 
     calls = []
 
@@ -3779,9 +3810,9 @@ def test_start_server_preserves_multi_node_join_profile_on_restart(mocker, tmp_p
         m.stdout = "false\n"
         return m
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
     ensure_redis = mocker.patch(
-        "mn_cli.server_cmds._ensure_compose_internal_redis_settings"
+        "mn_cli.runtime.server._ensure_compose_internal_redis_settings"
     )
 
     _start_server()
@@ -3804,7 +3835,7 @@ def test_start_server_preserves_multi_node_join_profile_on_restart(mocker, tmp_p
 def test_start_server_refreshes_generated_node_name_for_joined_runtime_ip_change(
     mocker, tmp_path
 ):
-    mocker.patch("mn_cli.server_cmds._configure_local_compose_redis_replica")
+    mocker.patch("mn_cli.runtime.server._configure_local_compose_redis_replica")
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
     redis_password = "persisted-redis-password"
@@ -3821,17 +3852,17 @@ def test_start_server_refreshes_generated_node_name_for_joined_runtime_ip_change
         f"MN_CONTEXT_REDIS_URL=redis://:{redis_password}@192.168.4.35:56381/1\n"
     )
 
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_FILE", compose_file)
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid")
-    mocker.patch("mn_cli.server_cmds.WEB_UI_DIRS", ())
-    mocker.patch("mn_cli.server_cmds.time.sleep")
-    mocker.patch("mn_cli.server_cmds.PID_DIR", tmp_path / ".pids")
-    mocker.patch("mn_cli.server_cmds.LOG_DIR", tmp_path / ".logs")
-    mocker.patch("mn_cli.server_cmds.API_LOG", tmp_path / "api.log")
-    mocker.patch("mn_cli.server_cmds.VENV_DIR", tmp_path)
-    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.44")
-    handshake = mocker.patch("mn_cli.server_cmds._handshake_with_main_node")
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_FILE", compose_file)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_DIRS", ())
+    mocker.patch("mn_cli.runtime.server.time.sleep")
+    mocker.patch("mn_cli.runtime.server.PID_DIR", tmp_path / ".pids")
+    mocker.patch("mn_cli.runtime.server.LOG_DIR", tmp_path / ".logs")
+    mocker.patch("mn_cli.runtime.server.API_LOG", tmp_path / "api.log")
+    mocker.patch("mn_cli.runtime.server.VENV_DIR", tmp_path)
+    mocker.patch("mn_cli.runtime.server._detect_lan_ip", return_value="192.168.4.44")
+    handshake = mocker.patch("mn_cli.runtime.server._handshake_with_main_node")
 
     calls = []
 
@@ -3841,9 +3872,9 @@ def test_start_server_refreshes_generated_node_name_for_joined_runtime_ip_change
         m.stdout = "false\n"
         return m
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
     ensure_redis = mocker.patch(
-        "mn_cli.server_cmds._ensure_compose_internal_redis_settings"
+        "mn_cli.runtime.server._ensure_compose_internal_redis_settings"
     )
 
     _start_server()
@@ -3875,7 +3906,7 @@ def test_start_server_refreshes_generated_node_name_for_joined_runtime_ip_change
 def test_start_server_refreshes_generated_node_name_for_joined_runtime_explicit_host_change(
     mocker, tmp_path
 ):
-    mocker.patch("mn_cli.server_cmds._configure_local_compose_redis_replica")
+    mocker.patch("mn_cli.runtime.server._configure_local_compose_redis_replica")
     compose_file = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
     redis_password = "persisted-redis-password"
@@ -3892,17 +3923,17 @@ def test_start_server_refreshes_generated_node_name_for_joined_runtime_explicit_
         f"MN_CONTEXT_REDIS_URL=redis://:{redis_password}@192.168.4.35:56381/1\n"
     )
 
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_FILE", compose_file)
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid")
-    mocker.patch("mn_cli.server_cmds.WEB_UI_DIRS", ())
-    mocker.patch("mn_cli.server_cmds.time.sleep")
-    mocker.patch("mn_cli.server_cmds.PID_DIR", tmp_path / ".pids")
-    mocker.patch("mn_cli.server_cmds.LOG_DIR", tmp_path / ".logs")
-    mocker.patch("mn_cli.server_cmds.API_LOG", tmp_path / "api.log")
-    mocker.patch("mn_cli.server_cmds.VENV_DIR", tmp_path)
-    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.44")
-    handshake = mocker.patch("mn_cli.server_cmds._handshake_with_main_node")
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_FILE", compose_file)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_DIRS", ())
+    mocker.patch("mn_cli.runtime.server.time.sleep")
+    mocker.patch("mn_cli.runtime.server.PID_DIR", tmp_path / ".pids")
+    mocker.patch("mn_cli.runtime.server.LOG_DIR", tmp_path / ".logs")
+    mocker.patch("mn_cli.runtime.server.API_LOG", tmp_path / "api.log")
+    mocker.patch("mn_cli.runtime.server.VENV_DIR", tmp_path)
+    mocker.patch("mn_cli.runtime.server._detect_lan_ip", return_value="192.168.4.44")
+    handshake = mocker.patch("mn_cli.runtime.server._handshake_with_main_node")
 
     calls = []
 
@@ -3912,9 +3943,9 @@ def test_start_server_refreshes_generated_node_name_for_joined_runtime_explicit_
         m.stdout = "false\n"
         return m
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
     ensure_redis = mocker.patch(
-        "mn_cli.server_cmds._ensure_compose_internal_redis_settings"
+        "mn_cli.runtime.server._ensure_compose_internal_redis_settings"
     )
 
     _start_server(host="gb10-worker.local")
@@ -3973,7 +4004,7 @@ def test_compose_runtime_env_upgrades_stale_erl_aflags(monkeypatch):
 
 
 def test_compose_runtime_env_replaces_blank_or_stale_cluster_names(mocker):
-    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.99")
+    mocker.patch("mn_cli.runtime.server._detect_lan_ip", return_value="192.168.4.99")
     env = {
         "MN_NODE_NAME": "",
         "MN_NODE_ROLE": "",
@@ -3990,7 +4021,7 @@ def test_compose_runtime_env_replaces_blank_or_stale_cluster_names(mocker):
 
 
 def test_compose_runtime_env_replaces_stale_generated_names_after_ip_change(mocker):
-    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.35")
+    mocker.patch("mn_cli.runtime.server._detect_lan_ip", return_value="192.168.4.35")
     env = {
         "MN_NETWORK_ADVERTISE_HOST": "192.168.4.35",
         "MN_NODE_NAME": "mirror_neuron@192.168.4.20",
@@ -4008,7 +4039,7 @@ def test_compose_runtime_env_replaces_stale_generated_names_after_ip_change(mock
 
 
 def test_compose_runtime_env_preserves_docker_alias_identity(mocker):
-    mocker.patch("mn_cli.server_cmds._detect_lan_ip", return_value="192.168.4.35")
+    mocker.patch("mn_cli.runtime.server._detect_lan_ip", return_value="192.168.4.35")
     env = {
         "MN_DOCKER_NETWORK_MODE": "overlay",
         "MN_NODE_ALIAS": "mn-local",
@@ -4030,12 +4061,14 @@ def test_compose_runtime_env_preserves_docker_alias_identity(mocker):
 def test_compose_port_conflict_resolution_moves_generated_blueprint_web_ui_range(
     mocker,
 ):
-    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
+    mocker.patch("mn_cli.runtime.server._docker_container_running", return_value=False)
 
     def port_available(_host, port):
         return port != 61041
 
-    mocker.patch("mn_cli.server_cmds._host_port_available", side_effect=port_available)
+    mocker.patch(
+        "mn_cli.runtime.server._host_port_available", side_effect=port_available
+    )
     env = {
         "MN_BLUEPRINT_WEB_UI_BIND_HOST": "0.0.0.0",
         "MN_BLUEPRINT_WEB_UI_PORT_START": "61000",
@@ -4052,8 +4085,8 @@ def test_compose_port_conflict_resolution_moves_generated_blueprint_web_ui_range
 def test_compose_port_conflict_resolution_keeps_explicit_blueprint_web_ui_range(
     mocker, monkeypatch
 ):
-    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
-    mocker.patch("mn_cli.server_cmds._host_port_available", return_value=False)
+    mocker.patch("mn_cli.runtime.server._docker_container_running", return_value=False)
+    mocker.patch("mn_cli.runtime.server._host_port_available", return_value=False)
     monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_PORT_START", "61000")
     monkeypatch.setenv("MN_BLUEPRINT_WEB_UI_PORT_END", "61049")
 
@@ -4074,10 +4107,10 @@ def test_compose_native_settings_persists_relocated_generated_blueprint_web_ui_r
 ):
     compose_env = tmp_path / "docker-compose.env"
     compose_env.write_text("COMPOSE_PROJECT_NAME=mirror-neuron\n")
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
-    mocker.patch("mn_cli.server_cmds._docker_container_running", return_value=False)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server._docker_container_running", return_value=False)
     mocker.patch(
-        "mn_cli.server_cmds._host_port_available",
+        "mn_cli.runtime.server._host_port_available",
         side_effect=lambda _host, port: port != 61041,
     )
 
@@ -4124,11 +4157,11 @@ def test_runtime_endpoint_snapshot_uses_advertised_grpc_host_for_cluster_binds()
 
 
 def test_start_server_success(mocker, tmp_path, monkeypatch):
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid")
     mocker.patch(
-        "mn_cli.server_cmds.API_WATCHDOG_PID_FILE", tmp_path / "api-watchdog.pid"
+        "mn_cli.runtime.server.API_WATCHDOG_PID_FILE", tmp_path / "api-watchdog.pid"
     )
-    mocker.patch("mn_cli.server_cmds.WEB_UI_DIRS", ())
+    mocker.patch("mn_cli.runtime.server.WEB_UI_DIRS", ())
     redis_password = "remote-redis-password"
     monkeypatch.setenv("MN_API_PORT", "54111")
     monkeypatch.setenv("MN_BLUEPRINT_SOURCE", "local")
@@ -4143,15 +4176,17 @@ def test_start_server_success(mocker, tmp_path, monkeypatch):
         m.stdout = "false\n"
         return m
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
-    mocker.patch("mn_cli.server_cmds.time.sleep")
-    mocker.patch("mn_cli.server_cmds.PID_DIR", tmp_path / ".pids")
-    mocker.patch("mn_cli.server_cmds.LOG_DIR", tmp_path / ".logs")
-    mocker.patch("mn_cli.server_cmds.API_LOG", tmp_path / "api.log")
-    mocker.patch("mn_cli.server_cmds.API_WATCHDOG_LOG", tmp_path / "api-watchdog.log")
-    mocker.patch("mn_cli.server_cmds._wait_for_api", return_value=True)
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.time.sleep")
+    mocker.patch("mn_cli.runtime.server.PID_DIR", tmp_path / ".pids")
+    mocker.patch("mn_cli.runtime.server.LOG_DIR", tmp_path / ".logs")
+    mocker.patch("mn_cli.runtime.server.API_LOG", tmp_path / "api.log")
     mocker.patch(
-        "mn_cli.server_cmds._handshake_with_main_node",
+        "mn_cli.runtime.server.API_WATCHDOG_LOG", tmp_path / "api-watchdog.log"
+    )
+    mocker.patch("mn_cli.runtime.server._wait_for_api", return_value=True)
+    mocker.patch(
+        "mn_cli.runtime.server._handshake_with_main_node",
         return_value={
             "node_name": "mirror_neuron@127.0.0.1",
             "redis_host": "127.0.0.1",
@@ -4164,15 +4199,15 @@ def test_start_server_success(mocker, tmp_path, monkeypatch):
     bin_dir.mkdir()
     api_bin = bin_dir / "mn-api"
     api_bin.touch()
-    mocker.patch("mn_cli.server_cmds.VENV_DIR", tmp_path)
+    mocker.patch("mn_cli.runtime.server.VENV_DIR", tmp_path)
 
-    mock_popen = mocker.patch("mn_cli.server_cmds.subprocess.Popen")
+    mock_popen = mocker.patch("mn_cli.runtime.server.subprocess.Popen")
     mock_popen.return_value.pid = 9999
 
     class UnameMock:
         sysname = "Linux"
 
-    mocker.patch("mn_cli.server_cmds.os.uname", return_value=UnameMock())
+    mocker.patch("mn_cli.runtime.server.os.uname", return_value=UnameMock())
 
     _start_server(ip="127.0.0.1", token="join-token")
 
@@ -4200,32 +4235,32 @@ def test_start_server_success(mocker, tmp_path, monkeypatch):
 
 
 def test_start_server_darwin(mocker, tmp_path):
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid")
-    mocker.patch("mn_cli.server_cmds.WEB_UI_DIRS", ())
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_DIRS", ())
 
     def mock_run(cmd, **kwargs):
         m = mocker.Mock()
         m.stdout = "false\n"
         return m
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
-    mocker.patch("mn_cli.server_cmds.time.sleep")
-    mocker.patch("mn_cli.server_cmds.PID_DIR", tmp_path / ".pids")
-    mocker.patch("mn_cli.server_cmds.LOG_DIR", tmp_path / ".logs")
-    mocker.patch("mn_cli.server_cmds.API_LOG", tmp_path / "api.log")
-    mocker.patch("mn_cli.server_cmds.VENV_DIR", tmp_path)  # no mn-api to skip api
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.time.sleep")
+    mocker.patch("mn_cli.runtime.server.PID_DIR", tmp_path / ".pids")
+    mocker.patch("mn_cli.runtime.server.LOG_DIR", tmp_path / ".logs")
+    mocker.patch("mn_cli.runtime.server.API_LOG", tmp_path / "api.log")
+    mocker.patch("mn_cli.runtime.server.VENV_DIR", tmp_path)  # no mn-api to skip api
 
     class UnameMock:
         sysname = "Darwin"
 
-    mocker.patch("mn_cli.server_cmds.os.uname", return_value=UnameMock())
+    mocker.patch("mn_cli.runtime.server.os.uname", return_value=UnameMock())
 
     _start_server()
 
 
 def test_start_server_passes_slack_env_to_docker(mocker, tmp_path, monkeypatch):
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid")
-    mocker.patch("mn_cli.server_cmds.WEB_UI_DIRS", ())
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_DIRS", ())
     host_shared = tmp_path / "host-shared"
     monkeypatch.setenv("MN_HOST_SHARED_STORAGE_ROOT", str(host_shared))
     monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", "/root/.mn/shared")
@@ -4240,17 +4275,17 @@ def test_start_server_passes_slack_env_to_docker(mocker, tmp_path, monkeypatch):
         m.stdout = "false\n"
         return m
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
-    mocker.patch("mn_cli.server_cmds.time.sleep")
-    mocker.patch("mn_cli.server_cmds.PID_DIR", tmp_path / ".pids")
-    mocker.patch("mn_cli.server_cmds.LOG_DIR", tmp_path / ".logs")
-    mocker.patch("mn_cli.server_cmds.API_LOG", tmp_path / "api.log")
-    mocker.patch("mn_cli.server_cmds.VENV_DIR", tmp_path)
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.time.sleep")
+    mocker.patch("mn_cli.runtime.server.PID_DIR", tmp_path / ".pids")
+    mocker.patch("mn_cli.runtime.server.LOG_DIR", tmp_path / ".logs")
+    mocker.patch("mn_cli.runtime.server.API_LOG", tmp_path / "api.log")
+    mocker.patch("mn_cli.runtime.server.VENV_DIR", tmp_path)
 
     class UnameMock:
         sysname = "Darwin"
 
-    mocker.patch("mn_cli.server_cmds.os.uname", return_value=UnameMock())
+    mocker.patch("mn_cli.runtime.server.os.uname", return_value=UnameMock())
 
     _start_server()
 
@@ -4334,14 +4369,16 @@ def test_start_server_passes_slack_env_to_docker(mocker, tmp_path, monkeypatch):
 def test_start_server_mounts_docker_worker_socket_and_linux_cli(
     mocker, tmp_path, monkeypatch
 ):
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid")
-    mocker.patch("mn_cli.server_cmds.WEB_UI_DIRS", ())
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_DIRS", ())
     docker_socket = tmp_path / "docker.sock"
     docker_socket.touch()
     host_docker = tmp_path / "docker"
     host_docker.write_text("#!/bin/sh\n", encoding="utf-8")
-    mocker.patch("mn_cli.server_cmds._docker_host_socket", return_value=docker_socket)
-    mocker.patch("mn_cli.server_cmds.shutil.which", return_value=str(host_docker))
+    mocker.patch(
+        "mn_cli.runtime.server._docker_host_socket", return_value=docker_socket
+    )
+    mocker.patch("mn_cli.runtime.server.shutil.which", return_value=str(host_docker))
     monkeypatch.setattr(sys, "platform", "linux")
 
     commands = []
@@ -4352,17 +4389,17 @@ def test_start_server_mounts_docker_worker_socket_and_linux_cli(
         m.stdout = "false\n"
         return m
 
-    mocker.patch("mn_cli.server_cmds.subprocess.run", side_effect=mock_run)
-    mocker.patch("mn_cli.server_cmds.time.sleep")
-    mocker.patch("mn_cli.server_cmds.PID_DIR", tmp_path / ".pids")
-    mocker.patch("mn_cli.server_cmds.LOG_DIR", tmp_path / ".logs")
-    mocker.patch("mn_cli.server_cmds.API_LOG", tmp_path / "api.log")
-    mocker.patch("mn_cli.server_cmds.VENV_DIR", tmp_path)
+    mocker.patch("mn_cli.runtime.server.subprocess.run", side_effect=mock_run)
+    mocker.patch("mn_cli.runtime.server.time.sleep")
+    mocker.patch("mn_cli.runtime.server.PID_DIR", tmp_path / ".pids")
+    mocker.patch("mn_cli.runtime.server.LOG_DIR", tmp_path / ".logs")
+    mocker.patch("mn_cli.runtime.server.API_LOG", tmp_path / "api.log")
+    mocker.patch("mn_cli.runtime.server.VENV_DIR", tmp_path)
 
     class UnameMock:
         sysname = "Linux"
 
-    mocker.patch("mn_cli.server_cmds.os.uname", return_value=UnameMock())
+    mocker.patch("mn_cli.runtime.server.os.uname", return_value=UnameMock())
 
     _start_server()
 
@@ -4387,8 +4424,8 @@ def test_compose_web_ui_enabled_requires_service_and_profile(mocker, tmp_path):
     compose_env = tmp_path / "docker-compose.env"
     compose_file.write_text("services:\n  web-ui:\n    image: node:22-alpine\n")
     compose_env.write_text("COMPOSE_PROFILES=web-ui,openshell\n")
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_FILE", compose_file)
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_FILE", compose_file)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
 
     assert server_cmds.compose_web_ui_enabled() is True
 
@@ -4401,8 +4438,8 @@ def test_web_ui_dirs_use_runtime_home_only_when_runtime_home_is_custom(
 ):
     custom_home = tmp_path / "custom-home"
 
-    mocker.patch("mn_cli.server_cmds.DIR", custom_home)
-    mocker.patch("mn_cli.server_cmds._source_checkout_web_ui_dir", return_value=None)
+    mocker.patch("mn_cli.runtime.server.DIR", custom_home)
+    mocker.patch("mn_cli.runtime.server._source_checkout_web_ui_dir", return_value=None)
 
     assert server_cmds._web_ui_dirs() == (
         custom_home / "webui",
@@ -4418,7 +4455,7 @@ def test_find_web_ui_dir_uses_default_install_when_runtime_home_has_no_webui(
     (default_web_ui / "dist").mkdir(parents=True)
     (default_web_ui / "dist" / "index.html").write_text('<div id="root"></div>')
 
-    mocker.patch("mn_cli.server_cmds.WEB_UI_DIRS", (runtime_web_ui, default_web_ui))
+    mocker.patch("mn_cli.runtime.server.WEB_UI_DIRS", (runtime_web_ui, default_web_ui))
 
     assert find_web_ui_dir() == default_web_ui
 
@@ -4428,7 +4465,7 @@ def test_find_web_ui_dir_installed(tmp_path, mocker):
     installed = tmp_path / "web-ui"
     (installed / "dist").mkdir(parents=True)
     (installed / "dist" / "index.html").write_text('<div id="root"></div>')
-    mocker.patch("mn_cli.server_cmds.WEB_UI_DIRS", (missing, installed))
+    mocker.patch("mn_cli.runtime.server.WEB_UI_DIRS", (missing, installed))
 
     assert find_web_ui_dir() == installed
 
@@ -4437,7 +4474,7 @@ def test_find_web_ui_dir_accepts_packaged_static_root(tmp_path, mocker):
     installed = tmp_path / "web-ui"
     installed.mkdir()
     (installed / "index.html").write_text('<div id="root"></div>')
-    mocker.patch("mn_cli.server_cmds.WEB_UI_DIRS", (installed,))
+    mocker.patch("mn_cli.runtime.server.WEB_UI_DIRS", (installed,))
 
     assert find_web_ui_dir() == installed
 
@@ -4455,22 +4492,26 @@ def test_start_api_if_installed(mocker, tmp_path):
     source_api = tmp_path / "mn-api"
     (source_api / "mn_api").mkdir(parents=True)
 
-    mocker.patch("mn_cli.server_cmds.VENV_DIR", tmp_path / "mn_venv")
-    mocker.patch("mn_cli.server_cmds._source_checkout_api_dir", return_value=source_api)
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch("mn_cli.runtime.server.VENV_DIR", tmp_path / "mn_venv")
     mocker.patch(
-        "mn_cli.server_cmds.API_WATCHDOG_PID_FILE", tmp_path / "api-watchdog.pid"
+        "mn_cli.runtime.server._source_checkout_api_dir", return_value=source_api
     )
-    mocker.patch("mn_cli.server_cmds.API_LOG", tmp_path / "api.log")
-    mocker.patch("mn_cli.server_cmds.API_WATCHDOG_LOG", tmp_path / "api-watchdog.log")
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch(
+        "mn_cli.runtime.server.API_WATCHDOG_PID_FILE", tmp_path / "api-watchdog.pid"
+    )
+    mocker.patch("mn_cli.runtime.server.API_LOG", tmp_path / "api.log")
+    mocker.patch(
+        "mn_cli.runtime.server.API_WATCHDOG_LOG", tmp_path / "api-watchdog.log"
+    )
     mock_wait = mocker.patch(
-        "mn_cli.server_cmds._wait_for_api", side_effect=[False, True]
+        "mn_cli.runtime.server._wait_for_api", side_effect=[False, True]
     )
     stop_matching = mocker.patch(
-        "mn_cli.server_cmds.stop_matching_sidecar_processes", return_value=False
+        "mn_cli.runtime.server.stop_matching_sidecar_processes", return_value=False
     )
 
-    mock_popen = mocker.patch("mn_cli.server_cmds.subprocess.Popen")
+    mock_popen = mocker.patch("mn_cli.runtime.server.subprocess.Popen")
     mock_popen.return_value.pid = 54001
 
     assert (
@@ -4503,20 +4544,22 @@ def test_start_api_restarts_untracked_healthy_instance_under_watchdog(mocker, tm
     api_bin.parent.mkdir(parents=True)
     api_bin.write_text("#!/bin/sh\n")
 
-    mocker.patch("mn_cli.server_cmds.VENV_DIR", tmp_path / "mn_venv")
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", tmp_path / "api.pid")
+    mocker.patch("mn_cli.runtime.server.VENV_DIR", tmp_path / "mn_venv")
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", tmp_path / "api.pid")
     mocker.patch(
-        "mn_cli.server_cmds.API_WATCHDOG_PID_FILE", tmp_path / "api-watchdog.pid"
+        "mn_cli.runtime.server.API_WATCHDOG_PID_FILE", tmp_path / "api-watchdog.pid"
     )
-    mocker.patch("mn_cli.server_cmds.API_LOG", tmp_path / "api.log")
-    mocker.patch("mn_cli.server_cmds.API_WATCHDOG_LOG", tmp_path / "api-watchdog.log")
+    mocker.patch("mn_cli.runtime.server.API_LOG", tmp_path / "api.log")
+    mocker.patch(
+        "mn_cli.runtime.server.API_WATCHDOG_LOG", tmp_path / "api-watchdog.log"
+    )
     mock_wait = mocker.patch(
-        "mn_cli.server_cmds._wait_for_api", side_effect=[True, True]
+        "mn_cli.runtime.server._wait_for_api", side_effect=[True, True]
     )
     stop_matching = mocker.patch(
-        "mn_cli.server_cmds.stop_matching_sidecar_processes", return_value=True
+        "mn_cli.runtime.server.stop_matching_sidecar_processes", return_value=True
     )
-    mock_popen = mocker.patch("mn_cli.server_cmds.subprocess.Popen")
+    mock_popen = mocker.patch("mn_cli.runtime.server.subprocess.Popen")
     mock_popen.return_value.pid = 54001
 
     assert (
@@ -4541,21 +4584,23 @@ def test_start_api_restarts_running_watchdog_when_requested(mocker, tmp_path):
     api_pid.write_text("1234")
     watchdog_pid.write_text("5678")
 
-    mocker.patch("mn_cli.server_cmds.VENV_DIR", tmp_path / "mn_venv")
-    mocker.patch("mn_cli.server_cmds.API_PID_FILE", api_pid)
-    mocker.patch("mn_cli.server_cmds.API_WATCHDOG_PID_FILE", watchdog_pid)
-    mocker.patch("mn_cli.server_cmds.API_LOG", tmp_path / "api.log")
-    mocker.patch("mn_cli.server_cmds.API_WATCHDOG_LOG", tmp_path / "api-watchdog.log")
-    mocker.patch("mn_cli.server_cmds.os.kill")  # check_status returns running
-    mocker.patch("mn_cli.server_cmds.time.sleep")
-    kill = mocker.patch("mn_cli.server_cmds.kill_tree")
+    mocker.patch("mn_cli.runtime.server.VENV_DIR", tmp_path / "mn_venv")
+    mocker.patch("mn_cli.runtime.server.API_PID_FILE", api_pid)
+    mocker.patch("mn_cli.runtime.server.API_WATCHDOG_PID_FILE", watchdog_pid)
+    mocker.patch("mn_cli.runtime.server.API_LOG", tmp_path / "api.log")
+    mocker.patch(
+        "mn_cli.runtime.server.API_WATCHDOG_LOG", tmp_path / "api-watchdog.log"
+    )
+    mocker.patch("mn_cli.runtime.server.os.kill")  # check_status returns running
+    mocker.patch("mn_cli.runtime.server.time.sleep")
+    kill = mocker.patch("mn_cli.runtime.server.kill_tree")
     mock_wait = mocker.patch(
-        "mn_cli.server_cmds._wait_for_api", side_effect=[True, True, True]
+        "mn_cli.runtime.server._wait_for_api", side_effect=[True, True, True]
     )
     stop_matching = mocker.patch(
-        "mn_cli.server_cmds.stop_matching_sidecar_processes", return_value=False
+        "mn_cli.runtime.server.stop_matching_sidecar_processes", return_value=False
     )
-    mock_popen = mocker.patch("mn_cli.server_cmds.subprocess.Popen")
+    mock_popen = mocker.patch("mn_cli.runtime.server.subprocess.Popen")
     mock_popen.return_value.pid = 54001
 
     assert (
@@ -4584,32 +4629,33 @@ def test_start_native_sdk_watchdog_uses_stable_workdir_when_cwd_is_missing(
     native_sdk.parent.mkdir(parents=True)
     native_sdk.write_text("#!/bin/sh\n")
 
-    mocker.patch("mn_cli.server_cmds.VENV_DIR", tmp_path / "mn_venv")
+    mocker.patch("mn_cli.runtime.server.VENV_DIR", tmp_path / "mn_venv")
     mocker.patch(
-        "mn_cli.server_cmds.NATIVE_SDK_GRPC_PID_FILE", tmp_path / "native-sdk-grpc.pid"
+        "mn_cli.runtime.server.NATIVE_SDK_GRPC_PID_FILE",
+        tmp_path / "native-sdk-grpc.pid",
     )
     mocker.patch(
-        "mn_cli.server_cmds.NATIVE_SDK_GRPC_WATCHDOG_PID_FILE",
+        "mn_cli.runtime.server.NATIVE_SDK_GRPC_WATCHDOG_PID_FILE",
         tmp_path / "native-sdk-grpc-watchdog.pid",
     )
     mocker.patch(
-        "mn_cli.server_cmds.NATIVE_SDK_GRPC_LOG", tmp_path / "native-sdk-grpc.log"
+        "mn_cli.runtime.server.NATIVE_SDK_GRPC_LOG", tmp_path / "native-sdk-grpc.log"
     )
     mocker.patch(
-        "mn_cli.server_cmds.NATIVE_SDK_GRPC_WATCHDOG_LOG",
+        "mn_cli.runtime.server.NATIVE_SDK_GRPC_WATCHDOG_LOG",
         tmp_path / "native-sdk-grpc-watchdog.log",
     )
     mocker.patch(
-        "mn_cli.server_cmds.os.getcwd",
+        "mn_cli.runtime.server.os.getcwd",
         side_effect=FileNotFoundError(2, "No such file or directory"),
     )
     mock_wait = mocker.patch(
-        "mn_cli.server_cmds._wait_for_tcp", side_effect=[False, True]
+        "mn_cli.runtime.server._wait_for_tcp", side_effect=[False, True]
     )
     mocker.patch(
-        "mn_cli.server_cmds.stop_matching_sidecar_processes", return_value=False
+        "mn_cli.runtime.server.stop_matching_sidecar_processes", return_value=False
     )
-    mock_popen = mocker.patch("mn_cli.server_cmds.subprocess.Popen")
+    mock_popen = mocker.patch("mn_cli.runtime.server.subprocess.Popen")
     mock_popen.return_value.pid = 55052
 
     from mn_cli.runtime.server import _start_native_sdk_grpc_if_installed
@@ -4635,23 +4681,24 @@ def test_start_web_ui_if_installed(mocker, tmp_path):
     (web_ui_dir / "dist").mkdir(parents=True)
     (web_ui_dir / "dist" / "index.html").write_text('<div id="root"></div>')
 
-    mocker.patch("mn_cli.server_cmds.WEB_UI_DIRS", (web_ui_dir,))
-    mocker.patch("mn_cli.server_cmds.WEB_UI_PID_FILE", tmp_path / "web-ui.pid")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_DIRS", (web_ui_dir,))
+    mocker.patch("mn_cli.runtime.server.WEB_UI_PID_FILE", tmp_path / "web-ui.pid")
     mocker.patch(
-        "mn_cli.server_cmds.WEB_UI_WATCHDOG_PID_FILE", tmp_path / "web-ui-watchdog.pid"
+        "mn_cli.runtime.server.WEB_UI_WATCHDOG_PID_FILE",
+        tmp_path / "web-ui-watchdog.pid",
     )
-    mocker.patch("mn_cli.server_cmds.WEB_UI_LOG", tmp_path / "web-ui.log")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_LOG", tmp_path / "web-ui.log")
     mocker.patch(
-        "mn_cli.server_cmds.WEB_UI_WATCHDOG_LOG", tmp_path / "web-ui-watchdog.log"
+        "mn_cli.runtime.server.WEB_UI_WATCHDOG_LOG", tmp_path / "web-ui-watchdog.log"
     )
     mock_wait = mocker.patch(
-        "mn_cli.server_cmds._wait_for_web_ui", side_effect=[False, True]
+        "mn_cli.runtime.server._wait_for_web_ui", side_effect=[False, True]
     )
     stop_matching = mocker.patch(
-        "mn_cli.server_cmds.stop_matching_sidecar_processes", return_value=False
+        "mn_cli.runtime.server.stop_matching_sidecar_processes", return_value=False
     )
 
-    mock_popen = mocker.patch("mn_cli.server_cmds.subprocess.Popen")
+    mock_popen = mocker.patch("mn_cli.runtime.server.subprocess.Popen")
     mock_popen.return_value.pid = 5173
 
     _start_web_ui_if_installed()
@@ -4682,11 +4729,11 @@ def test_start_web_ui_uses_compose_service(mocker, tmp_path):
     compose_env.write_text(
         "COMPOSE_PROFILES=web-ui\nMN_WEB_UI_HOST=localhost\nMN_WEB_UI_PORT=55173\n"
     )
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_FILE", compose_file)
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
-    mock_run = mocker.patch("mn_cli.server_cmds.subprocess.run")
-    mocker.patch("mn_cli.server_cmds._wait_for_web_ui", return_value=True)
-    mock_popen = mocker.patch("mn_cli.server_cmds.subprocess.Popen")
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_FILE", compose_file)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
+    mock_run = mocker.patch("mn_cli.runtime.server.subprocess.run")
+    mocker.patch("mn_cli.runtime.server._wait_for_web_ui", return_value=True)
+    mock_popen = mocker.patch("mn_cli.runtime.server.subprocess.Popen")
 
     assert _start_web_ui_if_installed() is True
 
@@ -4701,21 +4748,22 @@ def test_start_web_ui_reports_available_when_watchdog_starts_before_health(
     (web_ui_dir / "dist").mkdir(parents=True)
     (web_ui_dir / "dist" / "index.html").write_text('<div id="root"></div>')
 
-    mocker.patch("mn_cli.server_cmds.WEB_UI_DIRS", (web_ui_dir,))
-    mocker.patch("mn_cli.server_cmds.WEB_UI_PID_FILE", tmp_path / "web-ui.pid")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_DIRS", (web_ui_dir,))
+    mocker.patch("mn_cli.runtime.server.WEB_UI_PID_FILE", tmp_path / "web-ui.pid")
     mocker.patch(
-        "mn_cli.server_cmds.WEB_UI_WATCHDOG_PID_FILE", tmp_path / "web-ui-watchdog.pid"
+        "mn_cli.runtime.server.WEB_UI_WATCHDOG_PID_FILE",
+        tmp_path / "web-ui-watchdog.pid",
     )
-    mocker.patch("mn_cli.server_cmds.WEB_UI_LOG", tmp_path / "web-ui.log")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_LOG", tmp_path / "web-ui.log")
     mocker.patch(
-        "mn_cli.server_cmds.WEB_UI_WATCHDOG_LOG", tmp_path / "web-ui-watchdog.log"
+        "mn_cli.runtime.server.WEB_UI_WATCHDOG_LOG", tmp_path / "web-ui-watchdog.log"
     )
-    mocker.patch("mn_cli.server_cmds._wait_for_web_ui", return_value=False)
+    mocker.patch("mn_cli.runtime.server._wait_for_web_ui", return_value=False)
     mocker.patch(
-        "mn_cli.server_cmds.stop_matching_sidecar_processes", return_value=False
+        "mn_cli.runtime.server.stop_matching_sidecar_processes", return_value=False
     )
 
-    mock_popen = mocker.patch("mn_cli.server_cmds.subprocess.Popen")
+    mock_popen = mocker.patch("mn_cli.runtime.server.subprocess.Popen")
     mock_popen.return_value.pid = 5173
 
     assert _start_web_ui_if_installed() is True
@@ -4729,23 +4777,24 @@ def test_start_web_ui_restarts_untracked_healthy_instance_under_watchdog(
     (web_ui_dir / "dist").mkdir(parents=True)
     (web_ui_dir / "dist" / "index.html").write_text('<div id="root"></div>')
 
-    mocker.patch("mn_cli.server_cmds.WEB_UI_DIRS", (web_ui_dir,))
-    mocker.patch("mn_cli.server_cmds.WEB_UI_PID_FILE", tmp_path / "web-ui.pid")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_DIRS", (web_ui_dir,))
+    mocker.patch("mn_cli.runtime.server.WEB_UI_PID_FILE", tmp_path / "web-ui.pid")
     mocker.patch(
-        "mn_cli.server_cmds.WEB_UI_WATCHDOG_PID_FILE", tmp_path / "web-ui-watchdog.pid"
+        "mn_cli.runtime.server.WEB_UI_WATCHDOG_PID_FILE",
+        tmp_path / "web-ui-watchdog.pid",
     )
-    mocker.patch("mn_cli.server_cmds.WEB_UI_LOG", tmp_path / "web-ui.log")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_LOG", tmp_path / "web-ui.log")
     mocker.patch(
-        "mn_cli.server_cmds.WEB_UI_WATCHDOG_LOG", tmp_path / "web-ui-watchdog.log"
+        "mn_cli.runtime.server.WEB_UI_WATCHDOG_LOG", tmp_path / "web-ui-watchdog.log"
     )
     mock_wait = mocker.patch(
-        "mn_cli.server_cmds._wait_for_web_ui", side_effect=[True, True]
+        "mn_cli.runtime.server._wait_for_web_ui", side_effect=[True, True]
     )
     stop_matching = mocker.patch(
-        "mn_cli.server_cmds.stop_matching_sidecar_processes", return_value=True
+        "mn_cli.runtime.server.stop_matching_sidecar_processes", return_value=True
     )
 
-    mock_popen = mocker.patch("mn_cli.server_cmds.subprocess.Popen")
+    mock_popen = mocker.patch("mn_cli.runtime.server.subprocess.Popen")
     mock_popen.return_value.pid = 5173
 
     assert _start_web_ui_if_installed() is True
@@ -4766,22 +4815,22 @@ def test_start_web_ui_restarts_unresponsive_watchdog(mocker, tmp_path):
     watchdog_pid_file.write_text("9001")
     child_pid_file.write_text("9002")
 
-    mocker.patch("mn_cli.server_cmds.WEB_UI_DIRS", (web_ui_dir,))
-    mocker.patch("mn_cli.server_cmds.WEB_UI_PID_FILE", child_pid_file)
-    mocker.patch("mn_cli.server_cmds.WEB_UI_WATCHDOG_PID_FILE", watchdog_pid_file)
-    mocker.patch("mn_cli.server_cmds.WEB_UI_LOG", tmp_path / "web-ui.log")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_DIRS", (web_ui_dir,))
+    mocker.patch("mn_cli.runtime.server.WEB_UI_PID_FILE", child_pid_file)
+    mocker.patch("mn_cli.runtime.server.WEB_UI_WATCHDOG_PID_FILE", watchdog_pid_file)
+    mocker.patch("mn_cli.runtime.server.WEB_UI_LOG", tmp_path / "web-ui.log")
     mocker.patch(
-        "mn_cli.server_cmds.WEB_UI_WATCHDOG_LOG", tmp_path / "web-ui-watchdog.log"
+        "mn_cli.runtime.server.WEB_UI_WATCHDOG_LOG", tmp_path / "web-ui-watchdog.log"
     )
-    mocker.patch("mn_cli.server_cmds.os.kill")
-    mock_kill_tree = mocker.patch("mn_cli.server_cmds.kill_tree")
+    mocker.patch("mn_cli.runtime.server.os.kill")
+    mock_kill_tree = mocker.patch("mn_cli.runtime.server.kill_tree")
     mocker.patch(
-        "mn_cli.server_cmds.stop_matching_sidecar_processes", return_value=False
+        "mn_cli.runtime.server.stop_matching_sidecar_processes", return_value=False
     )
     mock_wait = mocker.patch(
-        "mn_cli.server_cmds._wait_for_web_ui", side_effect=[False, True]
+        "mn_cli.runtime.server._wait_for_web_ui", side_effect=[False, True]
     )
-    mock_popen = mocker.patch("mn_cli.server_cmds.subprocess.Popen")
+    mock_popen = mocker.patch("mn_cli.runtime.server.subprocess.Popen")
     mock_popen.return_value.pid = 5173
 
     assert _start_web_ui_if_installed() is True
@@ -4801,19 +4850,19 @@ def test_start_web_ui_cleans_stale_watchdog_pid(mocker, tmp_path):
     watchdog_pid_file = tmp_path / "web-ui-watchdog.pid"
     watchdog_pid_file.write_text("9001")
 
-    mocker.patch("mn_cli.server_cmds.WEB_UI_DIRS", (web_ui_dir,))
-    mocker.patch("mn_cli.server_cmds.WEB_UI_PID_FILE", tmp_path / "web-ui.pid")
-    mocker.patch("mn_cli.server_cmds.WEB_UI_WATCHDOG_PID_FILE", watchdog_pid_file)
-    mocker.patch("mn_cli.server_cmds.WEB_UI_LOG", tmp_path / "web-ui.log")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_DIRS", (web_ui_dir,))
+    mocker.patch("mn_cli.runtime.server.WEB_UI_PID_FILE", tmp_path / "web-ui.pid")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_WATCHDOG_PID_FILE", watchdog_pid_file)
+    mocker.patch("mn_cli.runtime.server.WEB_UI_LOG", tmp_path / "web-ui.log")
     mocker.patch(
-        "mn_cli.server_cmds.WEB_UI_WATCHDOG_LOG", tmp_path / "web-ui-watchdog.log"
+        "mn_cli.runtime.server.WEB_UI_WATCHDOG_LOG", tmp_path / "web-ui-watchdog.log"
     )
-    mocker.patch("mn_cli.server_cmds.os.kill", side_effect=OSError("stale pid"))
-    mocker.patch("mn_cli.server_cmds._wait_for_web_ui", return_value=True)
+    mocker.patch("mn_cli.runtime.server.os.kill", side_effect=OSError("stale pid"))
+    mocker.patch("mn_cli.runtime.server._wait_for_web_ui", return_value=True)
     mocker.patch(
-        "mn_cli.server_cmds.stop_matching_sidecar_processes", return_value=False
+        "mn_cli.runtime.server.stop_matching_sidecar_processes", return_value=False
     )
-    mock_popen = mocker.patch("mn_cli.server_cmds.subprocess.Popen")
+    mock_popen = mocker.patch("mn_cli.runtime.server.subprocess.Popen")
     mock_popen.return_value.pid = 5173
 
     assert _start_web_ui_if_installed() is True
@@ -4822,8 +4871,8 @@ def test_start_web_ui_cleans_stale_watchdog_pid(mocker, tmp_path):
 
 
 def test_start_web_ui_missing_noop(mocker, tmp_path):
-    mocker.patch("mn_cli.server_cmds.WEB_UI_DIRS", (tmp_path / "web-ui",))
-    mock_popen = mocker.patch("mn_cli.server_cmds.subprocess.Popen")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_DIRS", (tmp_path / "web-ui",))
+    mock_popen = mocker.patch("mn_cli.runtime.server.subprocess.Popen")
 
     _start_web_ui_if_installed()
 
@@ -4834,10 +4883,10 @@ def test_start_web_ui_missing_build_skips(mocker, tmp_path):
     web_ui_dir = tmp_path / "web-ui"
     web_ui_dir.mkdir()
 
-    mocker.patch("mn_cli.server_cmds.WEB_UI_DIRS", (web_ui_dir,))
-    mocker.patch("mn_cli.server_cmds.WEB_UI_PID_FILE", tmp_path / "web-ui.pid")
-    mocker.patch("mn_cli.server_cmds.WEB_UI_LOG", tmp_path / "web-ui.log")
-    mock_popen = mocker.patch("mn_cli.server_cmds.subprocess.Popen")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_DIRS", (web_ui_dir,))
+    mocker.patch("mn_cli.runtime.server.WEB_UI_PID_FILE", tmp_path / "web-ui.pid")
+    mocker.patch("mn_cli.runtime.server.WEB_UI_LOG", tmp_path / "web-ui.log")
+    mock_popen = mocker.patch("mn_cli.runtime.server.subprocess.Popen")
 
     assert _start_web_ui_if_installed() is False
     assert not (tmp_path / "web-ui.pid").exists()
@@ -4847,7 +4896,7 @@ def test_start_web_ui_missing_build_skips(mocker, tmp_path):
 def test_print_service_endpoints(mocker, monkeypatch):
     output = StringIO()
     mocker.patch(
-        "mn_cli.server_cmds.console",
+        "mn_cli.runtime.server.console",
         Console(file=output, force_terminal=False, width=120),
     )
     monkeypatch.setenv("MN_GRPC_TARGET", "core.local:55555")
@@ -4878,7 +4927,7 @@ def test_print_service_endpoints(mocker, monkeypatch):
 def test_print_service_endpoints_defaults_to_localhost(mocker, monkeypatch):
     output = StringIO()
     mocker.patch(
-        "mn_cli.server_cmds.console",
+        "mn_cli.runtime.server.console",
         Console(file=output, force_terminal=False, width=120),
     )
     for name in (
@@ -4911,7 +4960,7 @@ def test_print_service_endpoints_shows_compose_native_ports(
 ):
     output = StringIO()
     mocker.patch(
-        "mn_cli.server_cmds.console",
+        "mn_cli.runtime.server.console",
         Console(file=output, force_terminal=False, width=120),
     )
     monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
@@ -4924,8 +4973,8 @@ def test_print_service_endpoints_shows_compose_native_ports(
         "MN_NETWORK_REDIS_HOST=192.168.4.10\n"
         "MN_NETWORK_REDIS_PORT=56379\n"
     )
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_FILE", compose_file)
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_FILE", compose_file)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
 
     _print_service_endpoints(ip=None, web_ui_available=False)
 
@@ -4952,7 +5001,7 @@ def test_print_service_endpoints_shows_advertised_cluster_host(
 ):
     output = StringIO()
     mocker.patch(
-        "mn_cli.server_cmds.console",
+        "mn_cli.runtime.server.console",
         Console(file=output, force_terminal=False, width=120),
     )
     monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
@@ -4969,8 +5018,8 @@ def test_print_service_endpoints_shows_advertised_cluster_host(
         "MN_NETWORK_REDIS_HOST=192.168.4.173\n"
         "MN_NETWORK_REDIS_PORT=56379\n"
     )
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_FILE", compose_file)
-    mocker.patch("mn_cli.server_cmds.RUNTIME_COMPOSE_ENV", compose_env)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_FILE", compose_file)
+    mocker.patch("mn_cli.runtime.server.RUNTIME_COMPOSE_ENV", compose_env)
 
     _print_service_endpoints(ip=None, web_ui_available=False)
 

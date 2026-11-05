@@ -5,7 +5,7 @@ import uuid
 
 import pytest
 
-from mn_cli.server_cmds import _docker_network_run_args, _ensure_docker_network
+from mn_cli.runtime.server import _docker_network_run_args, _ensure_docker_network
 
 
 pytestmark = pytest.mark.skipif(

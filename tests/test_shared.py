@@ -66,15 +66,8 @@ def test_shared_client_omits_admin_token_for_older_sdk(monkeypatch, tmp_path):
     shared = _fresh_shared(monkeypatch, tmp_path, OldClient)
 
     assert calls == []
-    shared.client._get()
-
-    assert calls == [
-        {
-            "target": "localhost:55051",
-            "timeout": 10.0,
-            "auth_token": DEFAULT_GRPC_AUTH_TOKEN,
-        }
-    ]
+    with pytest.raises(TypeError, match="admin_token"):
+        shared.client._get()
 
 
 def test_shared_client_passes_admin_token_for_current_sdk(monkeypatch, tmp_path):

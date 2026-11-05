@@ -1,4 +1,4 @@
-"""The established run-command facade remains usable across internal splits."""
+"""The current run-command surface excludes retired compatibility aliases."""
 
 import json
 from pathlib import Path
@@ -6,7 +6,7 @@ from pathlib import Path
 from mn_cli.libs import run_cmds
 
 
-def test_established_run_command_exports_remain_available():
+def test_current_run_command_exports_match_the_supported_surface():
     expected = json.loads(
         (Path(__file__).parent / "fixtures" / "run_cmds_exports.json").read_text()
     )

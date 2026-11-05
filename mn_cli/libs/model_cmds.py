@@ -2064,8 +2064,10 @@ def _discovered_dmr_payload(model: str, *, routed_names: set[str]) -> dict[str, 
     return {
         "id": model_id,
         "name": str((entry or {}).get("name") or model_id),
-        "kind": model_source(entry or {}),
-        "source": "docker" if is_docker_model(entry or {}) else "docker_model_runner",
+        "kind": model_source(entry) if entry is not None else "dmr",
+        "source": "docker"
+        if entry is not None and is_docker_model(entry)
+        else "docker_model_runner",
         "state": "ready" if routed else "installed",
         "registered": False,
         "installed": True,
@@ -2128,8 +2130,10 @@ def _discovered_remote_dmr_payload(
     return {
         "id": model_id,
         "name": str((entry or {}).get("name") or model_id),
-        "kind": model_source(entry or {}),
-        "source": "docker" if is_docker_model(entry or {}) else "docker_model_runner",
+        "kind": model_source(entry) if entry is not None else "dmr",
+        "source": "docker"
+        if entry is not None and is_docker_model(entry)
+        else "docker_model_runner",
         "state": "ready" if routed else "installed",
         "registered": False,
         "installed": True,
@@ -2203,6 +2207,7 @@ def _uncataloged_dmr_entry(
     return {
         "id": requested,
         "name": requested,
+        "source": "dmr",
         "provider": "docker_model_runner",
         "model": target,
         "api_model": target,
@@ -3979,7 +3984,7 @@ def model_installed(model: str) -> bool:
 
 def _record_runtime_model_install(entry: dict[str, Any]) -> None:
     try:
-        from mn_cli.server_cmds import record_runtime_model_install
+        from mn_cli.runtime.server import record_runtime_model_install
 
         record_runtime_model_install(entry)
     except Exception as exc:

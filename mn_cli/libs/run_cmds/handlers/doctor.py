@@ -58,10 +58,12 @@ from ..context import (
 from ..model_cluster import (
     _resolve_and_apply_workflow_placement,
 )
+from mn_sdk.model_preparation import (
+    manifest_for_model_validation,
+    model_validation_inputs_with_prepared_models,
+)
 from ..model_config import (
-    _manifest_for_model_validation,
     _merge_runtime_model_config_overrides,
-    _model_validation_inputs_with_prepared_models,
     _prepared_model_installed_resolver,
 )
 from ..models import (
@@ -527,11 +529,11 @@ def _doctor_validate_models(
             decoded_config = None
         if isinstance(decoded_config, dict):
             config = decoded_config
-    validation_manifest = _manifest_for_model_validation(manifest, config)
+    validation_manifest = manifest_for_model_validation(manifest, config)
     validation_config = config
     if model_install_summary:
         validation_manifest, validation_config = (
-            _model_validation_inputs_with_prepared_models(
+            model_validation_inputs_with_prepared_models(
                 validation_manifest,
                 config,
                 model_install_summary,

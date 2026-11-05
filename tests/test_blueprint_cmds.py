@@ -622,6 +622,22 @@ def test_blueprint_observability_commands_read_shared_run_store(tmp_path):
         + "\n"
     )
 
+    (run_dir / "model_usage.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "llm_usage",
+                "event_id": "usage-one",
+                "timestamp": "2026-05-22T12:00:03Z",
+                "payload": {
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "total_tokens": 15,
+                    "estimated": False,
+                },
+            }
+        )
+        + "\n"
+    )
     logs = runner.invoke(
         app,
         [
@@ -729,7 +745,9 @@ def test_blueprint_list_blueprint_repo_reads_custom_index(mocker, tmp_path):
             )
         return completed
 
-    mocker.patch("mn_cli.libs.blueprint_cmds.subprocess.run", side_effect=fake_run)
+    mocker.patch(
+        "mn_cli.libs.blueprint_repository.subprocess.run", side_effect=fake_run
+    )
 
     result = runner.invoke(app, ["blueprint", "--blueprint-repo", repo_url, "list"])
 
@@ -760,7 +778,7 @@ def test_blueprint_run_init_success(mocker, tmp_path):
     )
 
     # Mock subprocess clone
-    mock_run = mocker.patch("mn_cli.libs.blueprint_cmds.subprocess.run")
+    mock_run = mocker.patch("mn_cli.libs.blueprint_repository.subprocess.run")
     mock_run.return_value.returncode = 0
 
     # Needs to write index.json and manifest.json so we don't exit early
@@ -797,7 +815,7 @@ def test_blueprint_run_detached_catalog_name_passes_through(mocker, tmp_path):
     mocker.patch(
         "mn_cli.libs.blueprint_cmds.os.path.expanduser", return_value=str(storage_dir)
     )
-    mock_run = mocker.patch("mn_cli.libs.blueprint_cmds.subprocess.run")
+    mock_run = mocker.patch("mn_cli.libs.blueprint_repository.subprocess.run")
     mock_run.return_value.returncode = 0
     mocker.patch("mn_cli.libs.blueprint_cmds._git_revision", return_value="abc123")
     _write_catalog(storage_dir / "index.json", [{"id": "bp-1", "path": "bp-1-dir"}])
@@ -822,7 +840,7 @@ def test_blueprint_run_update_success(mocker, tmp_path):
     )
 
     # Mock subprocess; default run should not pull mutable remote state.
-    mock_run = mocker.patch("mn_cli.libs.blueprint_cmds.subprocess.run")
+    mock_run = mocker.patch("mn_cli.libs.blueprint_repository.subprocess.run")
     mock_run.return_value.returncode = 0
 
     index_file = storage_dir / "index.json"
@@ -850,7 +868,7 @@ def test_blueprint_run_update_flag_pulls_cache(mocker, tmp_path):
     mocker.patch(
         "mn_cli.libs.blueprint_cmds.os.path.expanduser", return_value=str(storage_dir)
     )
-    mock_run = mocker.patch("mn_cli.libs.blueprint_cmds.subprocess.run")
+    mock_run = mocker.patch("mn_cli.libs.blueprint_repository.subprocess.run")
     mock_run.return_value.returncode = 0
     mocker.patch("mn_cli.libs.blueprint_cmds._git_revision", return_value="abc123")
     index_file = storage_dir / "index.json"
@@ -1093,7 +1111,7 @@ def test_blueprint_run_blueprint_repo_uses_repo_specific_cache(mocker, tmp_path)
         return completed
 
     mock_run = mocker.patch(
-        "mn_cli.libs.blueprint_cmds.subprocess.run", side_effect=fake_run
+        "mn_cli.libs.blueprint_repository.subprocess.run", side_effect=fake_run
     )
     mocker.patch("mn_cli.libs.blueprint_cmds._git_revision", return_value="abc123")
     mock_run_bundle = mocker.patch("mn_cli.libs.blueprint_cmds._run_bundle")
@@ -1493,7 +1511,7 @@ def test_blueprint_doctor_blueprint_repo_flag_uses_custom_cache(mocker, tmp_path
         return completed
 
     mock_run = mocker.patch(
-        "mn_cli.libs.blueprint_cmds.subprocess.run", side_effect=fake_run
+        "mn_cli.libs.blueprint_repository.subprocess.run", side_effect=fake_run
     )
     mocker.patch("mn_cli.libs.blueprint_cmds._git_revision", return_value="abc123")
     mock_doctor = mocker.patch("mn_cli.libs.blueprint_cmds._doctor_bundle")
@@ -1579,7 +1597,9 @@ def test_blueprint_run_blueprint_repo_missing_index_errors(mocker, tmp_path):
             Path(args[-1]).mkdir(parents=True, exist_ok=True)
         return completed
 
-    mocker.patch("mn_cli.libs.blueprint_cmds.subprocess.run", side_effect=fake_run)
+    mocker.patch(
+        "mn_cli.libs.blueprint_repository.subprocess.run", side_effect=fake_run
+    )
     mock_run_bundle = mocker.patch("mn_cli.libs.blueprint_cmds._run_bundle")
 
     result = runner.invoke(
@@ -1613,7 +1633,9 @@ def test_blueprint_run_blueprint_repo_malformed_index_errors(mocker, tmp_path):
             (storage_dir / "index.json").write_text(json.dumps({"blueprints": {}}))
         return completed
 
-    mocker.patch("mn_cli.libs.blueprint_cmds.subprocess.run", side_effect=fake_run)
+    mocker.patch(
+        "mn_cli.libs.blueprint_repository.subprocess.run", side_effect=fake_run
+    )
     mock_run_bundle = mocker.patch("mn_cli.libs.blueprint_cmds._run_bundle")
 
     result = runner.invoke(
@@ -1854,7 +1876,7 @@ def test_blueprint_run_init_fail(mocker, tmp_path):
     )
 
     # Mock subprocess clone
-    mock_run = mocker.patch("mn_cli.libs.blueprint_cmds.subprocess.run")
+    mock_run = mocker.patch("mn_cli.libs.blueprint_repository.subprocess.run")
     mock_run.return_value.returncode = 1
     mock_run.return_value.stderr = "git clone failed"
 
@@ -1870,7 +1892,7 @@ def test_blueprint_run_no_index(mocker, tmp_path):
         "mn_cli.libs.blueprint_cmds.os.path.expanduser", return_value=str(storage_dir)
     )
 
-    mock_run = mocker.patch("mn_cli.libs.blueprint_cmds.subprocess.run")
+    mock_run = mocker.patch("mn_cli.libs.blueprint_repository.subprocess.run")
     mock_run.return_value.returncode = 0
 
     result = runner.invoke(app, ["blueprint", "run", "bp-1"])
@@ -1885,7 +1907,7 @@ def test_blueprint_run_invalid_index(mocker, tmp_path):
         "mn_cli.libs.blueprint_cmds.os.path.expanduser", return_value=str(storage_dir)
     )
 
-    mock_run = mocker.patch("mn_cli.libs.blueprint_cmds.subprocess.run")
+    mock_run = mocker.patch("mn_cli.libs.blueprint_repository.subprocess.run")
     mock_run.return_value.returncode = 0
 
     index_file = storage_dir / "index.json"
@@ -1903,7 +1925,7 @@ def test_blueprint_run_not_found(mocker, tmp_path):
         "mn_cli.libs.blueprint_cmds.os.path.expanduser", return_value=str(storage_dir)
     )
 
-    mock_run = mocker.patch("mn_cli.libs.blueprint_cmds.subprocess.run")
+    mock_run = mocker.patch("mn_cli.libs.blueprint_repository.subprocess.run")
     mock_run.return_value.returncode = 0
 
     index_file = storage_dir / "index.json"
@@ -1921,7 +1943,7 @@ def test_blueprint_run_no_manifest(mocker, tmp_path):
         "mn_cli.libs.blueprint_cmds.os.path.expanduser", return_value=str(storage_dir)
     )
 
-    mock_run = mocker.patch("mn_cli.libs.blueprint_cmds.subprocess.run")
+    mock_run = mocker.patch("mn_cli.libs.blueprint_repository.subprocess.run")
     mock_run.return_value.returncode = 0
 
     index_file = storage_dir / "index.json"
@@ -1946,7 +1968,7 @@ def test_blueprint_run_update_fail(mocker, tmp_path):
     )
 
     # Mock subprocess pull to fail
-    mock_run = mocker.patch("mn_cli.libs.blueprint_cmds.subprocess.run")
+    mock_run = mocker.patch("mn_cli.libs.blueprint_repository.subprocess.run")
     mock_run.return_value.returncode = 1
     mock_run.return_value.stderr = "git pull error"
 

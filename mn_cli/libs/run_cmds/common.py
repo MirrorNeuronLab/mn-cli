@@ -180,7 +180,7 @@ from mn_cli.libs.workflow_validation import (
     _validate_workflow_manifest_issues,
     _validate_workflow_schema_issues,
 )
-from mn_cli.server_cmds import ensure_context_engine_runtime
+from mn_cli.runtime.server import ensure_context_engine_runtime
 from mn_cli.shared import client, config, console, logger
 from mn_cli.terminal import use_progress
 
@@ -196,12 +196,6 @@ CONTEXT_ENGINE_EXPECTATION = (
     "Membrane CPU service with one DuckDB index per job."
 )
 FALSE_VALUES = {"0", "false", "no", "off"}
-_HELPER_COMPAT = (
-    _blueprint_runtime_environment,
-    _extract_web_ui_url,
-    _inject_node_environment,
-    _materialize_sent_email_copy,
-)
 
 
 def _print_launch_progress(label: str, detail: str | None = None) -> None:

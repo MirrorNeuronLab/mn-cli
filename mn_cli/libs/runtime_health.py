@@ -29,7 +29,7 @@ from mn_cli.runtime.identity import identity_health, read_identity
 from mn_cli.libs.ui import print_doctor_checks, print_info
 from mn_cli.output import record_result
 from mn_cli.shared import client, console
-from mn_cli.server_cmds import (
+from mn_cli.runtime.server import (
     RUNTIME_ENDPOINTS_FILE,
     DEFAULT_API_PORT,
     DEFAULT_GRPC_PORT,

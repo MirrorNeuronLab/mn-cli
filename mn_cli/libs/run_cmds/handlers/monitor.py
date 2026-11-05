@@ -577,42 +577,14 @@ def _public_workflow_manifest_from_job(
 def _public_progress_from_api_snapshot(
     job_id: str, snapshot: dict[str, Any]
 ) -> dict[str, Any]:
-    """Use the API's public progress projection for attached monitoring.
-
-    Only older runtime-node snapshots need reconstruction from the saved
-    source contract. Replaying a separate event stream for a public snapshot
-    can lag its durable workflow state and reset the visible step to the first.
-    """
-
-    snapshot_ids = [
-        str(step.get("id"))
-        for step in snapshot.get("steps", [])
-        if isinstance(step, dict) and step.get("id")
-    ]
-    if snapshot_ids and snapshot.get("schema_version"):
-        return snapshot
-
-    local_data = {"job_id": job_id}
-    local_manifest = _local_run_store_manifest(local_data, local_data, {})
-    public_ids = _workflow_step_ids(local_manifest)
-    if snapshot_ids and snapshot_ids == public_ids:
-        return snapshot
-
-    local_progress = _local_progress_from_run_store(job_id, snapshot)
-    if local_progress:
-        return local_progress
-
-    try:
-        data = json.loads(_get_run_for_monitor(job_id))
-    except Exception:
-        return snapshot
-    if not isinstance(data, dict):
-        return snapshot
-    progress = _workflow_progress_for_monitor(job_id, data)
-    if not progress:
-        return snapshot
-
-    return _merge_api_progress_metadata(progress, snapshot)
+    """Require the current public API progress projection."""
+    if snapshot.get("schema_version") != 1 or not isinstance(
+        snapshot.get("steps"), list
+    ):
+        raise ValidationError(
+            f"Run {job_id} returned an unsupported workflow progress snapshot"
+        )
+    return snapshot
 
 
 def _local_progress_from_run_store(

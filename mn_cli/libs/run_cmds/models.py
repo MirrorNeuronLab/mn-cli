@@ -50,14 +50,14 @@ from .model_cluster import (
     _workflow_model_match_keys,
     _workflow_placement_model_fallback_records,
 )
-from .model_config import (
-    _config_with_auto_runtime_model_profile,
-    _config_with_runtime_model_endpoints,
-    _config_with_runtime_model_fallbacks,
-    _config_with_runtime_model_profile,
-    _manifest_for_model_validation,
-    _prepared_runtime_models_json,
-    _runtime_model_fallback_llm_env,
+from mn_sdk.model_preparation import (
+    config_with_auto_runtime_model_profile,
+    config_with_runtime_model_endpoints,
+    config_with_runtime_model_fallbacks,
+    config_with_runtime_model_profile,
+    manifest_for_model_validation,
+    prepared_runtime_models_json,
+    runtime_model_llm_environment,
 )
 from .runtime_dependencies import (
     Any,
@@ -107,13 +107,13 @@ def _build_runtime_model_prepare_plan(
     config = (
         base_config
         if lazy
-        else _config_with_auto_runtime_model_profile(
+        else config_with_auto_runtime_model_profile(
             base_config,
             catalog=catalog,
             resolve_cluster_model=profile_cluster_resolver,
         )
     )
-    validation_manifest = _manifest_for_model_validation(manifest, config)
+    validation_manifest = manifest_for_model_validation(manifest, config)
     requirements = required_blueprint_models(
         validation_manifest, config, catalog=catalog
     )
@@ -271,15 +271,15 @@ def _prepare_runtime_models_for_run_or_exit(
     )
     if endpoints and env_overrides is not None:
         env_overrides.update(ModelEndpointMap(endpoints).to_env_overrides())
-    prepared_json = _prepared_runtime_models_json(summary)
+    prepared_json = prepared_runtime_models_json(summary)
     if prepared_json and env_overrides is not None:
         env_overrides["MN_PREPARED_RUNTIME_MODELS_JSON"] = prepared_json
-    materialized_config = _config_with_runtime_model_endpoints(config, summary)
-    materialized_config = _config_with_runtime_model_fallbacks(
+    materialized_config = config_with_runtime_model_endpoints(config, summary)
+    materialized_config = config_with_runtime_model_fallbacks(
         materialized_config, summary
     )
-    materialized_config = _config_with_runtime_model_profile(materialized_config)
-    materialized_config = _config_with_runtime_model_endpoints(
+    materialized_config = config_with_runtime_model_profile(materialized_config)
+    materialized_config = config_with_runtime_model_endpoints(
         materialized_config, summary
     )
     if (
@@ -289,7 +289,7 @@ def _prepare_runtime_models_for_run_or_exit(
         env_overrides["MN_BLUEPRINT_CONFIG_JSON"] = json.dumps(
             materialized_config, sort_keys=True
         )
-        env_overrides.update(_runtime_model_fallback_llm_env(materialized_config))
+        env_overrides.update(runtime_model_llm_environment(materialized_config))
     if env_overrides is not None and _blueprint_requests_default_llm(base_config):
         env_overrides["MN_LLM_MODEL"] = "default"
     if not quiet:

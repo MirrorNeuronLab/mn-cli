@@ -26,7 +26,7 @@ def list_resources():
 
 def list_native_ports():
     """Show native OS ports used by the local runtime"""
-    from mn_cli.server_cmds import _print_service_endpoints
+    from mn_cli.runtime.server import _print_service_endpoints
 
     _print_service_endpoints(ip=None, web_ui_available=True)
 
@@ -87,6 +87,6 @@ def set_resources(
 
 
 def native_ports_payload() -> list[dict[str, str]]:
-    from mn_cli.server_cmds import native_service_ports
+    from mn_cli.runtime.server import native_service_ports
 
     return native_service_ports()

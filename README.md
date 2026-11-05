@@ -1,5 +1,11 @@
 # MirrorNeuron CLI
 
+## Current contracts
+
+The CLI requires the current SDK, including its admin-token constructor argument. Import runtime helpers from `mn_cli.runtime.server` and shared submission/model policies from the SDK. Retired forwarding modules and private helper aliases are removed; native cleanup only reconciles registered ownership records. API monitoring requires the current versioned public progress snapshot; retired runtime-node projections are no longer reconstructed.
+
+Backward compatibility and automatic migration of obsolete state are unsupported.
+
 ## Starting after a full reset
 
 Close OtterDesk, run `install.sh --reset` and confirm `YES`, then launch OtterDesk

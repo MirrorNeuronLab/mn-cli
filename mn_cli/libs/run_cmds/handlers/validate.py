@@ -5,9 +5,11 @@ from mn_cli.libs.run_cmds.common import (
     _is_safe_payload_relative_path,
     _runtime_resource_report,
 )
+from mn_sdk.model_preparation import (
+    manifest_for_model_validation,
+    model_validation_inputs_with_prepared_models,
+)
 from mn_cli.libs.run_cmds.model_config import (
-    _manifest_for_model_validation,
-    _model_validation_inputs_with_prepared_models,
     _prepared_model_installed_resolver,
 )
 from mn_cli.libs.workflow_validation import (
@@ -397,11 +399,11 @@ def _validate_manifest_models_or_exit(
             decoded_config = None
         if isinstance(decoded_config, dict):
             config = decoded_config
-    validation_manifest = _manifest_for_model_validation(manifest, config)
+    validation_manifest = manifest_for_model_validation(manifest, config)
     validation_config = config
     if model_install_summary:
         validation_manifest, validation_config = (
-            _model_validation_inputs_with_prepared_models(
+            model_validation_inputs_with_prepared_models(
                 validation_manifest,
                 config,
                 model_install_summary,

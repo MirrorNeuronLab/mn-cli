@@ -7,7 +7,7 @@ import pytest
 
 from mn_cli.libs.artifacts import promote_large_payloads_to_blob_refs
 from mn_cli.libs.run_logs import JobLogWriter, materialize_sent_email_copy
-from mn_cli.libs.run_manifest import (
+from mn_sdk.submission_preparation import (
     apply_manifest_config_bindings,
     ensure_sdk_build_context_uploads,
     load_blueprint_config,
@@ -18,7 +18,7 @@ from mn_cli.libs.run_manifest import (
     stage_upload_path_payloads_for_manifest,
     workspace_root,
 )
-from mn_cli.libs.run_manifest import (
+from mn_sdk.submission_preparation import (
     prepare_manifest_for_submission as _prepare_manifest_for_submission,
 )
 

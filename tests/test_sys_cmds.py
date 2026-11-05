@@ -5,7 +5,7 @@ from unittest.mock import call
 import pytest
 
 import mn_cli.libs.sys_cmds as sys_cmds
-import mn_cli.server_cmds as server_cmds
+import mn_cli.runtime.server as server_cmds
 
 
 @pytest.fixture(autouse=True)
@@ -56,7 +56,6 @@ def test_runtime_cleanup_dry_run_reports_confirmed_candidates(monkeypatch):
 
     assert calls[0]["dry_run"] is True
     assert calls[0]["observation_threshold"] == 1
-    assert calls[0]["discover_legacy_resources"] is True
     assert recorded[0]["removed_count"] == 1
     assert recorded[0]["cache_removed_count"] == 1
     assert recorded[0]["reclaimed_bytes"] == 1024

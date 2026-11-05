@@ -4716,17 +4716,6 @@ def _remove_non_mirror_neuron_container(
     )
 
 
-def _reconcile_compose_core_container() -> None:
-    try:
-        _remove_non_mirror_neuron_container(
-            LOCAL_CORE_CONTAINER,
-            expected_compose_service=LOCAL_CORE_CONTAINER,
-        )
-    except RuntimeError as exc:
-        print_error(console, str(exc))
-        raise typer.Exit(1) from exc
-
-
 def _docker_command_ok(command: list[str]) -> bool:
     try:
         result = subprocess.run(
@@ -6896,8 +6885,6 @@ def _start_server_unlocked(
             console, "MirrorNeuron API is already running; checking runtime sidecars."
         )
         compose_runtime = runtime_compose_available()
-        if compose_runtime:
-            _reconcile_compose_core_container()
         env = dict(initial_env)
         env["MN_COOKIE"] = os.getenv("MN_COOKIE") or _derive_network_secret(
             _resolve_network_token(), "cookie"
@@ -7013,11 +7000,6 @@ def _start_server_unlocked(
         return
 
     compose_runtime = runtime_compose_available()
-    if compose_runtime:
-        # A prior standalone/legacy Core used the same fixed container name
-        # without belonging to this Compose service. Remove it before starting
-        # Syncthing or native sidecars so Compose can claim the Core name.
-        _reconcile_compose_core_container()
     if not compose_runtime:
         try:
             docker_status = subprocess.run(

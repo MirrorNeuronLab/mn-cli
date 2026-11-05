@@ -2,7 +2,6 @@ import copy
 import json
 import os
 import shutil
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -118,12 +117,6 @@ from mn_cli.libs.blueprint_repository import (
     ensure_blueprint_source as _ensure_blueprint_source,
 )
 from mn_cli.libs.blueprint_repository import (
-    git_checkout as _git_checkout,
-)
-from mn_cli.libs.blueprint_repository import (
-    git_fetch as _git_fetch,
-)
-from mn_cli.libs.blueprint_repository import (
     git_pull as _git_pull,
 )
 from mn_cli.libs.blueprint_repository import (
@@ -173,8 +166,6 @@ from mn_cli.libs.ui import (
 from mn_cli.output import emit_stream_record, json_enabled, record_result
 from mn_cli.shared import console, logger
 from mn_cli.terminal import use_progress
-
-_PATCH_COMPAT = (subprocess, _git_checkout, _git_fetch)
 
 
 def blueprint_callback(

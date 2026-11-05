@@ -22,7 +22,7 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from mn_cli.libs import model_cmds, run_cmds
-from mn_cli.libs.run_manifest import prepare_manifest_for_submission
+from mn_sdk.submission_preparation import prepare_manifest_for_submission
 from mn_cli.libs.ui import JobMonitorState, generate_live_layout
 from mn_cli.libs.workflow_progress import (
     BlueprintWorkflowProgress,

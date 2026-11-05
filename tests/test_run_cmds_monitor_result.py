@@ -24,13 +24,14 @@ from mn_cli.libs import model_cmds, run_cmds
 from mn_cli.libs.run_cmds.handlers.monitor import (
     _get_run_for_monitor,
     _live_monitor_api_stream,
+    _local_progress_from_run_store,
     _manifest_from_job_data,
     _monitor_api_stream_timeout_seconds,
     _public_progress_from_api_snapshot,
     _workflow_progress_for_monitor,
 )
 from mn_cli.libs.run_cmds.live import _read_monitor_key
-from mn_cli.libs.run_manifest import prepare_manifest_for_submission
+from mn_sdk.submission_preparation import prepare_manifest_for_submission
 from mn_cli.libs.ui import (
     JobMonitorState,
     _agent_table,
@@ -670,7 +671,7 @@ def test_monitor_projects_existing_run_from_blueprint_mapping_without_get_job(
         side_effect=AssertionError("large GetJob response should not be fetched"),
     )
 
-    progress = _public_progress_from_api_snapshot(
+    progress = _local_progress_from_run_store(
         "job-large", {"job_id": "job-large", "status": "running"}
     )
 
@@ -754,18 +755,7 @@ def test_monitor_prefers_blueprint_path_over_lowered_runtime_workflow(mocker, tm
             )
         ],
     )
-    progress = _public_progress_from_api_snapshot(
-        "vc-run",
-        {
-            "job_id": "job-vc",
-            "status": "running",
-            "steps": [
-                {"id": "collect__start"},
-                {"id": "collect__worker"},
-                {"id": "collect__end"},
-            ],
-        },
-    )
+    progress = _workflow_progress_for_monitor("vc-run", data)
 
     assert [step["id"] for step in progress["steps"]] == ["collect"]
 
@@ -834,7 +824,7 @@ def test_monitor_reattaches_by_execution_run_id_when_stable_job_id_differs(
         side_effect=AssertionError("saved source contract should avoid GetJob"),
     )
 
-    progress = _public_progress_from_api_snapshot(
+    progress = _local_progress_from_run_store(
         "vc-run",
         {
             "job_id": "vc-run",
@@ -904,6 +894,15 @@ def test_monitor_keeps_api_step_state_when_local_event_replay_lags(mocker):
     get_run.assert_not_called()
 
 
+def test_monitor_rejects_unversioned_api_snapshots():
+    from mn_sdk.errors import ValidationError
+
+    with pytest.raises(ValidationError, match="unsupported workflow progress"):
+        _public_progress_from_api_snapshot(
+            "run-1", {"steps": [{"id": "worker__start"}]}
+        )
+
+
 async def _progress_snapshots(*items):
     for item in items:
         if isinstance(item, Exception):
@@ -958,7 +957,12 @@ def test_monitor_accepts_terminal_api_stream_snapshot(mocker, monkeypatch):
             return False
 
     monkeypatch.delenv("MN_JOB_MONITOR_DISABLE_API_STREAM", raising=False)
-    terminal_snapshot = {"job_id": "job-stream", "status": "completed"}
+    terminal_snapshot = {
+        "schema_version": 1,
+        "steps": [],
+        "job_id": "job-stream",
+        "status": "completed",
+    }
     mocker.patch(
         "mn_cli.libs.run_cmds.handlers.monitor.config",
         SimpleNamespace(api_base_url="http://api.example.test", api_token=""),
@@ -1081,7 +1085,7 @@ def test_terminal_monitor_remains_interactive_until_detach(
         def __exit__(self, *args):
             return False
 
-    snapshot = {"schema_version": "1", "status": status, "steps": [{"id": "review"}]}
+    snapshot = {"schema_version": 1, "status": status, "steps": [{"id": "review"}]}
     mocker.patch.object(
         module, "config", SimpleNamespace(api_base_url="http://unused", api_token="")
     )
