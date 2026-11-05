@@ -1,5 +1,12 @@
-from ..common import *
-from ..outputs import *
+from ..common import (
+    Path,
+    console,
+    handle_cli_error,
+    print_success_confirmation,
+)
+from ..outputs import (
+    fetch_and_save_results,
+)
 
 def result(job_id: str):
     """Fetch and save the final and progressive results for a job"""

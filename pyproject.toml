@@ -37,11 +37,8 @@ include = ["mn_cli", "mn_cli.*"]
 mn_cli = ["schemas/*.json"]
 
 [tool.ruff.lint.per-file-ignores]
-# The run command is intentionally split through a shared import facade while
-# preserving its established handler API.  Flag ordinary unused imports and
-# unresolved names everywhere else.
+# Shared dependencies also support the established run-command import facade.
 "mn_cli/libs/run_cmds/common.py" = ["F401"]
-"mn_cli/libs/run_cmds/**/*.py" = ["F403", "F405"]
 # The CLI bootstraps environment and the local SDK path before these imports.
 "mn_cli/main.py" = ["E402"]
 "mn_cli/shared.py" = ["E402"]

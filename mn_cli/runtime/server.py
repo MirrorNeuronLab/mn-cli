@@ -37,6 +37,27 @@ from mn_sdk.runtime_config import (
     DEFAULT_GRPC_PORT as SDK_DEFAULT_GRPC_PORT,
     DEFAULT_WEB_UI_PORT as SDK_DEFAULT_WEB_UI_PORT,
 )
+from mn_cli.runtime.launch_config import (
+    _erl_aflags as _erl_aflags,
+    _erl_aflags_needs_update as _erl_aflags_needs_update,
+    _distributed_core_command as _distributed_core_command,
+    _docker_publish_host as _docker_publish_host,
+    _network_publish_host as _network_publish_host,
+    _parse_configured_port as _parse_configured_port,
+    _redis_url_with_database as _redis_url_with_database,
+    _docker_network_env as _docker_network_env,
+    _docker_network_run_args as _docker_network_run_args,
+    _redis_url_with_public_endpoint as _redis_url_with_public_endpoint,
+    _docker_env_args as _docker_env_args,
+    _compose_profiles_with as _compose_profiles_with,
+    _split_env_list as _split_env_list,
+    _yaml_double_quote_value as _yaml_double_quote_value,
+    _valid_port_text as _valid_port_text,
+    _native_endpoint_host as _native_endpoint_host,
+    _cluster_endpoint_host as _cluster_endpoint_host,
+    _host_port_from_target as _host_port_from_target,
+)
+from mn_cli.runtime.watchdog import _web_ui_watchdog_script as _web_ui_watchdog_script
 from mn_cli.runtime.watchdog import launch_watchdog, watchdog_restart_settings
 from mn_cli.runtime import native_sdk_config
 from mn_cli.runtime.syncthing_bootstrap import SYNCTHING_LAN_ONLY_ENTRYPOINT_SCRIPT
@@ -64,59 +85,6 @@ GRPC_ADMIN_TOKEN_ENV = "MN_GRPC_ADMIN_TOKEN"
 GRPC_AUTH_TOKEN_FILE_ENV = "MN_GRPC_AUTH_TOKEN_FILE"
 GRPC_ADMIN_TOKEN_FILE_ENV = "MN_GRPC_ADMIN_TOKEN_FILE"
 DEV_REDIS_PASSWORD = "mirror_neuron_redis_dev"
-
-
-def _erl_aflags(dist_port: str | int) -> str:
-    return (
-        f"-connect_all false -kernel prevent_overlapping_partitions false "
-        f"inet_dist_listen_min {dist_port} inet_dist_listen_max {dist_port}"
-    )
-
-
-def _erl_aflags_needs_update(value: Optional[str], dist_port: str | int) -> bool:
-    text = str(value or "").strip()
-    if not text:
-        return True
-    return (
-        "-connect_all false" not in text
-        or "prevent_overlapping_partitions false" not in text
-        or f"inet_dist_listen_min {dist_port}" not in text
-        or f"inet_dist_listen_max {dist_port}" not in text
-    )
-
-
-def _distributed_core_command() -> list[str]:
-    command = (
-        'case "${MN_NODE_NAME:-}" in ""|nonode@nohost|*[!a-zA-Z0-9_.@-]*|@*|*@|*@*@*|[!a-zA-Z0-9_]* ) '
-        'echo "error: invalid MN_NODE_NAME; run mn runtime start to repair configuration" >&2; exit 1;; esac; '
-        'case "$MN_NODE_NAME" in *@*) ;; *) echo "error: MN_NODE_NAME requires name@host" >&2; exit 1;; esac; '
-        'case "${MN_NODE_NAME#*@}" in [!a-zA-Z0-9]*) echo "error: invalid node hostname" >&2; exit 1;; esac; '
-        'if [ -x "bin/mirror_neuron" ]; then '
-        'if [ -n "${MN_NODE_NAME:-}" ]; then '
-        'if [ -z "${MN_COOKIE:-}" ] || [ "${MN_COOKIE:-}" = "mirrorneuron" ]; then '
-        'echo "MN_COOKIE must be set to a non-default secret when MN_NODE_NAME enables distributed Erlang" >&2; exit 1; '
-        "fi; "
-        "unset ERL_EPMD_ADDRESS; "
-        "epmd_bin=\"$(find erts-* -path '*/bin/epmd' -type f | head -n 1)\"; "
-        'if [ -n "$epmd_bin" ]; then "$epmd_bin" -daemon; else epmd -daemon; fi; '
-        "export RELEASE_DISTRIBUTION=name; "
-        'export RELEASE_NODE="$MN_NODE_NAME"; '
-        'export RELEASE_COOKIE="$MN_COOKIE"; '
-        "fi; "
-        "exec bin/mirror_neuron start; "
-        "fi; "
-        'if [ -n "${MN_NODE_NAME:-}" ]; then '
-        'if [ -z "${MN_COOKIE:-}" ] || [ "${MN_COOKIE:-}" = "mirrorneuron" ]; then '
-        'echo "MN_COOKIE must be set to a non-default secret when MN_NODE_NAME enables distributed Erlang" >&2; exit 1; '
-        "fi; "
-        'dist_port="${MN_DIST_PORT:-4370}"; '
-        "unset ERL_EPMD_ADDRESS; "
-        "epmd -daemon; "
-        'exec elixir --name "$MN_NODE_NAME" --cookie "$MN_COOKIE" --erl '
-        '"-kernel inet_dist_listen_min ${dist_port} inet_dist_listen_max ${dist_port}" -S mix run --no-halt; '
-        "fi"
-    )
-    return ["sh", "-c", command]
 
 
 def _mn_home() -> Path:
@@ -409,17 +377,6 @@ def _dist_host() -> str:
 
 def _web_ui_host() -> str:
     return _env_host("MN_WEB_UI_HOST")
-
-
-def _docker_publish_host(host: str) -> str:
-    return "127.0.0.1" if host == "localhost" else host
-
-
-def _network_publish_host(host: str) -> str:
-    normalized = (host or "").strip().lower()
-    if normalized in {"", "localhost", "127.0.0.1", "::1"}:
-        return "127.0.0.1"
-    return "0.0.0.0"
 
 
 def _valid_lan_ip(value: object) -> bool:
@@ -898,18 +855,6 @@ def _find_available_published_port(
     return 0
 
 
-def _parse_configured_port(value: object) -> Optional[int]:
-    if value is None or str(value).strip() == "":
-        return None
-    try:
-        port = int(str(value).strip())
-    except ValueError:
-        return None
-    if 1 <= port <= 65535:
-        return port
-    return None
-
-
 def _resolve_published_redis_port(
     *,
     bind_host: str,
@@ -955,15 +900,6 @@ def _resolve_published_redis_port(
         )
         raise typer.Exit(1)
     return selected
-
-
-def _redis_url_with_database(redis_url: str, database: str) -> str:
-    parsed = urlparse(redis_url)
-    scheme = parsed.scheme or "redis"
-    netloc = parsed.netloc
-    if not netloc and parsed.hostname:
-        netloc = parsed.hostname
-    return f"{scheme}://{netloc}/{database}"
 
 
 def _avoid_local_compose_port_conflicts(env: dict[str, str]) -> dict[str, str]:
@@ -2300,24 +2236,6 @@ def _ensure_docker_network(mode: str, name: str) -> None:
         raise typer.Exit(1)
 
 
-def _docker_network_env(mode: str, name: str, alias: str) -> dict[str, str]:
-    driver = "overlay" if mode == "overlay" else "bridge"
-    return {
-        "MN_DOCKER_NETWORK_MODE": mode,
-        "MN_DOCKER_NETWORK_NAME": name,
-        "MN_DOCKER_NETWORK_DRIVER": driver,
-        "MN_DOCKER_NETWORK_ATTACHABLE": "true" if mode == "overlay" else "false",
-        "MN_DOCKER_NETWORK_EXTERNAL": "true",
-        "MN_NODE_ALIAS": alias,
-    }
-
-
-def _docker_network_run_args(mode: str, name: str, alias: str) -> list[str]:
-    if mode == "disabled":
-        return []
-    return ["--network", name, "--network-alias", alias]
-
-
 def _network_node_host(node_name: object) -> str:
     normalized = str(node_name or "").strip()
     if "@" not in normalized:
@@ -2405,16 +2323,6 @@ def _compose_supports_redis_password() -> bool:
         return "MN_REDIS_PASSWORD" in RUNTIME_COMPOSE_FILE.read_text(encoding="utf-8")
     except OSError:
         return False
-
-
-def _redis_url_with_public_endpoint(redis_url: str, host: str, port: int) -> str:
-    parsed = urlparse(redis_url)
-    scheme = parsed.scheme or "redis"
-    path = parsed.path or "/0"
-    userinfo = ""
-    if "@" in parsed.netloc:
-        userinfo = f"{parsed.netloc.rsplit('@', 1)[0]}@"
-    return f"{scheme}://{userinfo}{host}:{port}{path}"
 
 
 def _native_sdk_grpc_node_info(
@@ -2938,18 +2846,6 @@ def _network_shared_storage_roots(env: dict[str, str]) -> tuple[str, str, str]:
         env.get("MN_BUNDLE_CACHE_DIR") or f"{runtime_root.rstrip('/')}/bundle_cache"
     ).strip()
     return str(Path(host_root).expanduser()), runtime_root, bundle_cache_dir
-
-
-def _docker_env_args(env: dict[str, str]) -> list[str]:
-    args: list[str] = []
-    for key in sorted(env):
-        if key.startswith("MN_") or key in {
-            "ERL_AFLAGS",
-            "ERL_EPMD_ADDRESS",
-            "ERL_EPMD_PORT",
-        }:
-            args.extend(["-e", f"{key}={env[key]}"])
-    return args
 
 
 def _network_redis_image() -> str:
@@ -4652,23 +4548,6 @@ def _docker_registry_matches_public_gar(registry: str, registry_host: str) -> bo
     return normalized == registry_host or normalized.endswith(".pkg.dev")
 
 
-def _compose_profiles_with(value: object, required_profile: str) -> str:
-    profiles: list[str] = []
-    seen: set[str] = set()
-    for raw_part in str(value or "").split(","):
-        profile = raw_part.strip()
-        if not profile:
-            continue
-        key = profile.lower()
-        if key in seen:
-            continue
-        profiles.append(profile)
-        seen.add(key)
-    if required_profile.lower() not in seen:
-        profiles.append(required_profile)
-    return ",".join(profiles)
-
-
 def _normalized_release_image_tag(value: object) -> str:
     tag = str(value or "").strip()
     if not tag:
@@ -4936,14 +4815,6 @@ def _is_default_llm_model(entry: dict[str, Any]) -> bool:
     return is_default_model_entry(entry)
 
 
-def _split_env_list(value: object) -> list[str]:
-    return [part.strip() for part in str(value or "").split(",") if part.strip()]
-
-
-def _yaml_double_quote_value(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"')
-
-
 def _env_or_default(env: dict[str, str], key: str, default: str) -> str:
     value = str(env.get(key) or "").strip()
     if os.getenv(key, "").strip():
@@ -4951,29 +4822,6 @@ def _env_or_default(env: dict[str, str], key: str, default: str) -> str:
     if not value:
         return default
     return value
-
-
-def _valid_port_text(value: str, default: str) -> str:
-    parsed = _parse_configured_port(value)
-    if parsed is None:
-        return default
-    return str(parsed)
-
-
-def _native_endpoint_host(host: str) -> str:
-    normalized = (host or "").strip()
-    if normalized in {"", "0.0.0.0", "::"}:
-        return "127.0.0.1"
-    return normalized
-
-
-def _cluster_endpoint_host(env: dict[str, str], host: str) -> str:
-    normalized = (host or "").strip()
-    advertised = str(env.get("MN_NETWORK_ADVERTISE_HOST") or "").strip()
-    if advertised and _network_publish_host(advertised) == "0.0.0.0":
-        if normalized in {"", "0.0.0.0", "::", "127.0.0.1", "localhost", "::1"}:
-            return advertised
-    return _native_endpoint_host(normalized)
 
 
 def _runtime_container_cache_path(
@@ -6084,157 +5932,6 @@ def _web_ui_dist_dir(web_ui_dir: Path) -> Optional[Path]:
     return None
 
 
-def _web_ui_watchdog_script() -> str:
-    return r"""
-import json
-import os
-import signal
-import subprocess
-import sys
-import time
-from pathlib import Path
-
-config = json.loads(sys.argv[1])
-command = config["command"]
-cwd = config["cwd"]
-pid_file = Path(config["pid_file"])
-log_file = Path(config["log_file"])
-service_name = str(config.get("service_name") or "service")
-
-def nonnegative_float(value, default):
-    try:
-        return max(float(value), 0.0)
-    except (TypeError, ValueError):
-        return float(default)
-
-def positive_int(value, default):
-    try:
-        return max(int(value), 1)
-    except (TypeError, ValueError):
-        return int(default)
-
-restart_delay = nonnegative_float(config.get("restart_delay"), 2)
-max_restart_delay = max(
-    nonnegative_float(config.get("max_restart_delay"), 30),
-    restart_delay,
-)
-max_consecutive_failures = positive_int(
-    config.get("max_consecutive_failures"),
-    5,
-)
-min_uptime_seconds = nonnegative_float(
-    config.get("min_uptime_seconds"),
-    10,
-)
-stopping = False
-child = None
-consecutive_failures = 0
-
-def log(message):
-    timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    try:
-        with log_file.open("a", encoding="utf-8") as handle:
-            handle.write(f"[watchdog {timestamp}] {message}\n")
-    except OSError:
-        pass
-
-def signal_child(signum):
-    if child is None or child.poll() is not None:
-        return
-    try:
-        if hasattr(os, "killpg"):
-            os.killpg(child.pid, signum)
-        else:
-            child.send_signal(signum)
-    except OSError:
-        pass
-
-def remove_owned_pid_file():
-    if child is None:
-        return
-    try:
-        if pid_file.read_text(encoding="utf-8").strip() == str(child.pid):
-            pid_file.unlink()
-    except OSError:
-        pass
-
-def request_stop(_signum, _frame):
-    global stopping
-    stopping = True
-    signal_child(signal.SIGTERM)
-
-signal.signal(signal.SIGTERM, request_stop)
-signal.signal(signal.SIGINT, request_stop)
-
-pid_file.parent.mkdir(parents=True, exist_ok=True)
-log_file.parent.mkdir(parents=True, exist_ok=True)
-
-try:
-    while not stopping:
-        if not pid_file.parent.is_dir():
-            break
-        started_at = time.monotonic()
-        with log_file.open("a", encoding="utf-8", buffering=1) as output:
-            child = subprocess.Popen(
-                command,
-                cwd=cwd,
-                stdout=output,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
-                env=os.environ.copy(),
-                start_new_session=True,
-            )
-            pid_file.write_text(str(child.pid), encoding="utf-8")
-            log(f"started {service_name} child pid={child.pid}")
-            while not stopping:
-                exit_code = child.poll()
-                if exit_code is not None:
-                    break
-                if not pid_file.parent.is_dir():
-                    stopping = True
-                    signal_child(signal.SIGTERM)
-                    break
-                time.sleep(1)
-
-        if stopping:
-            break
-
-        uptime = time.monotonic() - started_at
-        if uptime >= min_uptime_seconds:
-            consecutive_failures = 0
-        else:
-            consecutive_failures += 1
-        if consecutive_failures >= max_consecutive_failures:
-            log(
-                f"{service_name} child exited code={exit_code} after "
-                f"{uptime:.2f}s {consecutive_failures} consecutive times; "
-                "watchdog circuit breaker is stopping"
-            )
-            break
-
-        delay = min(
-            max_restart_delay,
-            restart_delay * (2 ** max(consecutive_failures - 1, 0)),
-        )
-        log(
-            f"{service_name} child exited code={exit_code}; "
-            f"restarting in {delay:g}s"
-        )
-        time.sleep(delay)
-finally:
-    if child is not None and child.poll() is None:
-        signal_child(signal.SIGTERM)
-        try:
-            child.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            signal_child(signal.SIGKILL)
-        except OSError:
-            pass
-    remove_owned_pid_file()
-    log(f"{service_name} watchdog stopped")
-"""
-
-
 def _api_command() -> Optional[list[str]]:
     api_bin = VENV_DIR / "bin" / "mn-api"
     if api_bin.exists():
@@ -6658,24 +6355,6 @@ def _wait_for_web_ui(
                 logger.warning("Web UI did not respond at %s: %s", url, last_error)
             return False
         time.sleep(0.25)
-
-
-def _host_port_from_target(
-    target: str, default_host: str, default_port: str
-) -> tuple[str, str]:
-    if "://" in target:
-        parsed = urlparse(target)
-        return parsed.hostname or default_host, str(parsed.port or default_port)
-
-    if target.startswith("[") and "]:" in target:
-        host, port = target.rsplit("]:", 1)
-        return host.lstrip("["), port
-
-    if ":" in target:
-        host, port = target.rsplit(":", 1)
-        return host or default_host, port or default_port
-
-    return target or default_host, default_port
 
 
 def _redis_host_port(ip: Optional[str]) -> tuple[str, str]:
