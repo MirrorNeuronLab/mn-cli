@@ -2029,15 +2029,24 @@ def _write_run(
     return run_dir
 
 
-def test_run_list_reads_shared_run_store(tmp_path):
+@pytest.mark.parametrize("runtime_available", [True, False])
+def test_run_list_reads_shared_run_store(tmp_path, mocker, runtime_available):
     runs_root = tmp_path / "runs"
     _write_run(runs_root, "run-1", action="rebalance")
+    # Listing also asks Core for authoritative state. Keep this local-history
+    # witness independent of the developer's running Core and credentials.
+    list_jobs = mocker.patch(
+        "mn_cli.libs.run_public.client.list_jobs",
+        return_value=json.dumps({"items": []}),
+        side_effect=None if runtime_available else ConnectionError("Core unavailable"),
+    )
 
     result = runner.invoke(app, ["run", "list", "--runs-root", str(runs_root)])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     assert "run-1" in result.stdout
     assert "completed" in result.stdout
+    list_jobs.assert_called_once_with(include_archived=True, page_size=50)
 
 
 def test_run_logs_prints_event_stream(tmp_path):
