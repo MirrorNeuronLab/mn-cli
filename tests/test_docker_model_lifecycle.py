@@ -22,16 +22,28 @@ def isolated_owner(monkeypatch, tmp_path):
     )
 
     assert "test-video:1" not in load_builtin_model_catalog_document().models
-    update_model_catalog_entry("test-video:1", {
-        "id": "test-video:1", "model": "test-video:1", "api_model": "test/video",
-        "provider": "docker_model_runner", "source": "docker",
-        "backend": "nim", "backends": ["nim"], "context_size": 32768,
-        "input_modalities": ["text", "image", "video"],
-        "requirements": {"min_vram_gb": 48, "required_capabilities": ["cuda"]},
-        "docker": {"image": "example.test/nim/video:1", "port": 30082,
-                   "container_port": 8000, "gpus": "all",
-                   "environment": {"NIM_MAX_MODEL_LEN": "32768"}},
-    })
+    update_model_catalog_entry(
+        "test-video:1",
+        {
+            "id": "test-video:1",
+            "model": "test-video:1",
+            "api_model": "test/video",
+            "provider": "docker_model_runner",
+            "source": "docker",
+            "backend": "nim",
+            "backends": ["nim"],
+            "context_size": 32768,
+            "input_modalities": ["text", "image", "video"],
+            "requirements": {"min_vram_gb": 48, "required_capabilities": ["cuda"]},
+            "docker": {
+                "image": "example.test/nim/video:1",
+                "port": 30082,
+                "container_port": 8000,
+                "gpus": "all",
+                "environment": {"NIM_MAX_MODEL_LEN": "32768"},
+            },
+        },
+    )
 
 
 @pytest.mark.parametrize(
@@ -49,7 +61,9 @@ def test_local_lifecycle_commands(action, status, plain, width, monkeypatch):
         ),
     )
     env = {"COLUMNS": str(width), "MN_CLI_OUTPUT": "plain" if plain else "rich"}
-    result = CliRunner().invoke(app, ["model", action, "test-video:1", "--local"], env=env)
+    result = CliRunner().invoke(
+        app, ["model", action, "test-video:1", "--local"], env=env
+    )
     assert result.exit_code == 0, result.output
     assert calls == ["test-video:1"] and status in result.output
 
@@ -63,15 +77,15 @@ def test_remote_lifecycle_uses_selected_owner_without_local_commands(monkeypatch
         model_cmds, "_cluster_node_endpoint", lambda node: {"node_name": node}
     )
 
-    def native(endpoint):
-        assert endpoint["node_name"] == "spark"
-        return SimpleNamespace(
+    monkeypatch.setattr(
+        model_cmds,
+        "client",
+        SimpleNamespace(
             prepare_runtime_model=lambda request: (
                 calls.append(request) or json.dumps({"status": "unloaded"})
             )
-        )
-
-    monkeypatch.setattr(model_cmds, "_native_runtime_client_for_node", native)
+        ),
+    )
     monkeypatch.setattr(
         model_lifecycle,
         "unload_runtime_model",
@@ -141,18 +155,42 @@ def test_remote_docker_health_does_not_confuse_node_health_with_container_readin
     )
 
 
-@pytest.mark.parametrize("lifecycle,running,endpoint_ok,expected", [
-    ("idle", False, False, "idle"),
-    ("ready", True, True, "healthy"),
-    ("unavailable", True, False, "unavailable"),
-])
+@pytest.mark.parametrize(
+    "lifecycle,running,endpoint_ok,expected",
+    [
+        ("idle", False, False, "idle"),
+        ("ready", True, True, "healthy"),
+        ("unavailable", True, False, "unavailable"),
+    ],
+)
 def test_docker_health_distinguishes_cold_installation_from_failed_serving(
-    lifecycle, running, endpoint_ok, expected, monkeypatch,
+    lifecycle,
+    running,
+    endpoint_ok,
+    expected,
+    monkeypatch,
 ):
     entry = resolve_model_entry("test-video:1")
-    monkeypatch.setattr(model_cmds, "_cluster_runtime_status_endpoints", lambda **_kw: [{"node_name": "spark", "node": {"status": "healthy"}}])
-    monkeypatch.setattr(model_cmds, "_runtime_model_inventory_for_node", lambda _ep: [{**entry, "running": running, "endpoint_ok": endpoint_ok, "lifecycle_state": lifecycle}])
-    monkeypatch.setattr(model_cmds, "_remote_node_compatibility", lambda *_a, **_kw: {"ok": True})
+    monkeypatch.setattr(
+        model_cmds,
+        "_cluster_runtime_status_endpoints",
+        lambda **_kw: [{"node_name": "spark", "node": {"status": "healthy"}}],
+    )
+    monkeypatch.setattr(
+        model_cmds,
+        "_runtime_model_inventory_for_node",
+        lambda _ep: [
+            {
+                **entry,
+                "running": running,
+                "endpoint_ok": endpoint_ok,
+                "lifecycle_state": lifecycle,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        model_cmds, "_remote_node_compatibility", lambda *_a, **_kw: {"ok": True}
+    )
     health = model_cmds._dmr_installation_health(entry, "spark")
     assert health["installed"] and health["health"] == expected
 
@@ -186,12 +224,22 @@ def test_local_docker_probe_owns_readiness_and_always_releases(failure, monkeypa
     monkeypatch.setattr(model_probe, "model_request", lease)
     monkeypatch.setattr(model_probe, "ensure_model_capabilities", probe)
     monkeypatch.setattr(model_probe, "model_installed", lambda _model: True)
-    monkeypatch.setattr(model_probe, "litellm_gateway_health", lambda: {"ok": True, "url": "http://127.0.0.1:4000/v1/models", "models": [entry["id"]]})
+    monkeypatch.setattr(
+        model_probe,
+        "litellm_gateway_health",
+        lambda: {
+            "ok": True,
+            "url": "http://127.0.0.1:4000/v1/models",
+            "models": [entry["id"]],
+        },
+    )
     if failure:
         with pytest.raises(RuntimeError, match="inference failed"):
             model_probe.run_model_probe(entry["id"], ["streaming"], local_node="local")
     else:
-        assert model_probe.run_model_probe(entry["id"], ["streaming"], local_node="local")["parity"]
+        assert model_probe.run_model_probe(
+            entry["id"], ["streaming"], local_node="local"
+        )["parity"]
     assert calls == ["start", "release"]
 
 

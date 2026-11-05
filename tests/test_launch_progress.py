@@ -45,7 +45,10 @@ def test_launch_wait_stops_on_interruption_without_swallowing_it(monkeypatch):
     monkeypatch.setenv("MN_CLI_OUTPUT", "plain")
     stream = StringIO()
     console = Console(file=stream)
-    with pytest.raises(KeyboardInterrupt), ui.launch_activity(console, "Prepare runtime"):
+    with (
+        pytest.raises(KeyboardInterrupt),
+        ui.launch_activity(console, "Prepare runtime"),
+    ):
         raise KeyboardInterrupt
     assert "completed" not in stream.getvalue()
 

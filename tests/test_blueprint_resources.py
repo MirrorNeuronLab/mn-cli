@@ -1,21 +1,30 @@
 import json
 import subprocess
 
-from mn_cli.libs.blueprint_resources import cleanup_blueprint_host_hooks, cleanup_blueprint_resources
+from mn_cli.libs.blueprint_resources import (
+    cleanup_blueprint_host_hooks,
+    cleanup_blueprint_resources,
+)
 
 
 def _completed(command, stdout="", returncode=0, stderr=""):
-    return subprocess.CompletedProcess(command, returncode, stdout=stdout, stderr=stderr)
+    return subprocess.CompletedProcess(
+        command, returncode, stdout=stdout, stderr=stderr
+    )
 
 
 def _write_run_record(path, blueprint_id):
     path.mkdir(parents=True, exist_ok=True)
-    (path / "run.json").write_text(json.dumps({"run_id": path.name, "blueprint_id": blueprint_id}))
+    (path / "run.json").write_text(
+        json.dumps({"run_id": path.name, "blueprint_id": blueprint_id})
+    )
 
 
 def _write_generated_bundle(path, blueprint_id):
     path.mkdir(parents=True, exist_ok=True)
-    (path / "manifest.json").write_text(json.dumps({"metadata": {"blueprint_id": blueprint_id}}))
+    (path / "manifest.json").write_text(
+        json.dumps({"metadata": {"blueprint_id": blueprint_id}})
+    )
 
 
 def _write_bundle_cache(path, blueprint_id):
@@ -106,11 +115,16 @@ def test_cleanup_removes_legacy_run_records_by_blueprint_prefix(mocker, tmp_path
 def test_cleanup_stops_blueprint_web_ui_process_with_run_record(mocker, tmp_path):
     mocker.patch("mn_cli.libs.blueprint_resources.shutil.which", return_value=None)
     mocker.patch("mn_cli.libs.blueprint_resources.os.killpg")
-    mocker.patch("mn_cli.libs.blueprint_resources.process_is_running", side_effect=[True, False, False])
+    mocker.patch(
+        "mn_cli.libs.blueprint_resources.process_is_running",
+        side_effect=[True, False, False],
+    )
     runs_root = tmp_path / "runs"
     run_dir = runs_root / "bp-removed-run"
     _write_run_record(run_dir, "bp-removed")
-    (run_dir / "web_ui_process.json").write_text(json.dumps({"pid": 4242, "blueprint_id": "bp-removed"}))
+    (run_dir / "web_ui_process.json").write_text(
+        json.dumps({"pid": 4242, "blueprint_id": "bp-removed"})
+    )
 
     cleanup_blueprint_resources(
         blueprint_ids={"bp-removed"},
@@ -125,11 +139,16 @@ def test_cleanup_stops_blueprint_web_ui_process_with_run_record(mocker, tmp_path
 def test_cleanup_stops_blueprint_pre_launch_process_with_run_record(mocker, tmp_path):
     mocker.patch("mn_cli.libs.blueprint_resources.shutil.which", return_value=None)
     mocker.patch("mn_cli.libs.blueprint_resources.os.killpg")
-    mocker.patch("mn_cli.libs.blueprint_resources.process_is_running", side_effect=[True, False, False])
+    mocker.patch(
+        "mn_cli.libs.blueprint_resources.process_is_running",
+        side_effect=[True, False, False],
+    )
     runs_root = tmp_path / "runs"
     run_dir = runs_root / "bp-removed-run"
     _write_run_record(run_dir, "bp-removed")
-    (run_dir / "pre_launch_process.json").write_text(json.dumps({"pid": 5252, "blueprint_id": "bp-removed"}))
+    (run_dir / "pre_launch_process.json").write_text(
+        json.dumps({"pid": 5252, "blueprint_id": "bp-removed"})
+    )
 
     cleanup_blueprint_resources(
         blueprint_ids={"bp-removed"},
@@ -147,31 +166,41 @@ def test_cleanup_runs_blueprint_post_launch_hook_with_ready_env(mocker, tmp_path
     script = tmp_path / "bundle" / "scripts" / "post-launch.sh"
     script.parent.mkdir(parents=True)
     script.write_text("#!/usr/bin/env bash\n")
-    (run_dir / "pre_launch.ready").write_text(json.dumps({
-        "status": "ready",
-        "env": {
-            "RTSP_PORT": "8567",
-            "WEBRTC_PORT": "8891",
-        },
-    }))
-    (run_dir / "post_launch_hook.json").write_text(json.dumps({
-        "command": ["bash", str(script)],
-        "script": str(script),
-        "cwd": str(script.parent.parent),
-        "log": str(run_dir / "post_launch.log"),
-        "run_id": "video-run",
-        "bundle_dir": str(script.parent.parent),
-        "state_file": str(run_dir / "post_launch_state.json"),
-        "pre_launch_ready_file": str(run_dir / "pre_launch.ready"),
-        "pre_launch_process_file": str(run_dir / "pre_launch_process.json"),
-    }))
+    (run_dir / "pre_launch.ready").write_text(
+        json.dumps(
+            {
+                "status": "ready",
+                "env": {
+                    "RTSP_PORT": "8567",
+                    "WEBRTC_PORT": "8891",
+                },
+            }
+        )
+    )
+    (run_dir / "post_launch_hook.json").write_text(
+        json.dumps(
+            {
+                "command": ["bash", str(script)],
+                "script": str(script),
+                "cwd": str(script.parent.parent),
+                "log": str(run_dir / "post_launch.log"),
+                "run_id": "video-run",
+                "bundle_dir": str(script.parent.parent),
+                "state_file": str(run_dir / "post_launch_state.json"),
+                "pre_launch_ready_file": str(run_dir / "pre_launch.ready"),
+                "pre_launch_process_file": str(run_dir / "pre_launch_process.json"),
+            }
+        )
+    )
     mock_run = mocker.patch(
         "mn_cli.libs.blueprint_resources.subprocess.run",
         return_value=subprocess.CompletedProcess(["bash", str(script)], 0),
     )
 
     summary = {"process_removed": [], "process_skipped": [], "errors": []}
-    cleanup_blueprint_host_hooks(run_dir, dry_run=False, summary=summary, reason="job_cancelled")
+    cleanup_blueprint_host_hooks(
+        run_dir, dry_run=False, summary=summary, reason="job_cancelled"
+    )
 
     mock_run.assert_called_once()
     assert mock_run.call_args.args[0] == ["bash", str(script)]
@@ -182,17 +211,34 @@ def test_cleanup_runs_blueprint_post_launch_hook_with_ready_env(mocker, tmp_path
 
 
 def test_cleanup_removes_dead_labeled_and_named_docker_resources(mocker, tmp_path):
-    mocker.patch("mn_cli.libs.blueprint_resources.shutil.which", return_value="/usr/local/bin/docker")
+    mocker.patch(
+        "mn_cli.libs.blueprint_resources.shutil.which",
+        return_value="/usr/local/bin/docker",
+    )
     calls = []
 
     def fake_run(command, **kwargs):
         calls.append(command)
         command_text = " ".join(command)
-        if command[:2] == ["docker", "ps"] and "--filter" in command and "label=mirrorneuron.blueprint_id=" not in command_text and "label=mirrorneuron.blueprint_id" in command_text:
+        if (
+            command[:2] == ["docker", "ps"]
+            and "--filter" in command
+            and "label=mirrorneuron.blueprint_id=" not in command_text
+            and "label=mirrorneuron.blueprint_id" in command_text
+        ):
             return _completed(command, stdout="bp-old\nbp-active\n")
         if command[:2] == ["docker", "ps"] and "--filter" in command:
-            return _completed(command, stdout="container-by-label\n" if "label=mirrorneuron.blueprint_id=bp-old" in command_text else "")
-        if command[:2] == ["docker", "images"] and "--filter" in command and command[-1] == "{{.ID}}":
+            return _completed(
+                command,
+                stdout="container-by-label\n"
+                if "label=mirrorneuron.blueprint_id=bp-old" in command_text
+                else "",
+            )
+        if (
+            command[:2] == ["docker", "images"]
+            and "--filter" in command
+            and command[-1] == "{{.ID}}"
+        ):
             return _completed(command, stdout="image-by-label\n")
         if command[:2] == ["docker", "images"] and "--filter" in command:
             return _completed(command)
@@ -221,7 +267,12 @@ def test_cleanup_removes_dead_labeled_and_named_docker_resources(mocker, tmp_pat
     )
 
     removed_ids = {item["id"] for item in summary["docker_removed"]}
-    assert {"container-by-label", "container-by-name", "image-by-label", "image-by-name"} <= removed_ids
+    assert {
+        "container-by-label",
+        "container-by-name",
+        "image-by-label",
+        "image-by-name",
+    } <= removed_ids
     assert "container-active" not in removed_ids
     assert "image-active" not in removed_ids
     assert ["docker", "rm", "-f", "container-active"] not in calls
@@ -229,7 +280,10 @@ def test_cleanup_removes_dead_labeled_and_named_docker_resources(mocker, tmp_pat
 
 
 def test_cleanup_reports_docker_failures_without_crashing(mocker, tmp_path):
-    mocker.patch("mn_cli.libs.blueprint_resources.shutil.which", return_value="/usr/local/bin/docker")
+    mocker.patch(
+        "mn_cli.libs.blueprint_resources.shutil.which",
+        return_value="/usr/local/bin/docker",
+    )
 
     def fake_run(command, **kwargs):
         return _completed(command, returncode=1, stderr="docker unavailable")
@@ -244,4 +298,6 @@ def test_cleanup_reports_docker_failures_without_crashing(mocker, tmp_path):
 
     assert summary["docker_removed"] == []
     assert summary["docker_skipped"]
-    assert all(item["reason"] == "docker_command_failed" for item in summary["docker_skipped"])
+    assert all(
+        item["reason"] == "docker_command_failed" for item in summary["docker_skipped"]
+    )

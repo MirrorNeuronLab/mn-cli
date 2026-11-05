@@ -95,11 +95,17 @@ def test_compiled_child_template_bindings_are_admitted_but_unknown_bindings_fail
         "start": {"templates": {"review_packet": {"run": "review_packet"}}}
     }
     manifest["runtime"]["bindings"] = {"review_packet": {}, "unknown": {}}
-    paths = _issue_paths(workflow_validation._validate_workflow_manifest_issues(manifest))
+    paths = _issue_paths(
+        workflow_validation._validate_workflow_manifest_issues(manifest)
+    )
     assert "runtime.bindings.review_packet" not in paths
     assert "runtime.bindings.unknown" in paths
-    manifest["workflow"]["child_workflows"]["missing"] = manifest["workflow"]["child_workflows"].pop("start")
-    paths = _issue_paths(workflow_validation._validate_workflow_manifest_issues(manifest))
+    manifest["workflow"]["child_workflows"]["missing"] = manifest["workflow"][
+        "child_workflows"
+    ].pop("start")
+    paths = _issue_paths(
+        workflow_validation._validate_workflow_manifest_issues(manifest)
+    )
     assert "workflow.child_workflows.missing" in paths
     assert "runtime.bindings.review_packet" in paths
 

@@ -154,13 +154,15 @@ def create(
         handle_cli_error(exc, console, "job create")
 
 
-def definitions(
-    include_archived: bool = typer.Option(False, "--include-archived")
-):
+def definitions(include_archived: bool = typer.Option(False, "--include-archived")):
     """List durable job definitions."""
     try:
         payload = json.loads(client.list_jobs(include_archived=include_archived))
-        items = payload.get("data") or payload.get("jobs") or payload.get("items") or [] if isinstance(payload, dict) else []
+        items = (
+            payload.get("data") or payload.get("jobs") or payload.get("items") or []
+            if isinstance(payload, dict)
+            else []
+        )
         print_collection(
             console,
             "Jobs",
@@ -188,15 +190,23 @@ def inspect(job_id: str = typer.Argument(help="Durable job ID.")):
 def relocate(
     job_id: str = typer.Argument(help="Durable job ID."),
     node: str = typer.Option(..., "--node", help="Connected destination PC."),
-    abort: bool = typer.Option(False, "--abort", help="Cancel a move before ownership has committed."),
+    abort: bool = typer.Option(
+        False, "--abort", help="Cancel a move before ownership has committed."
+    ),
 ):
     """Move an idle job and its data to another PC. Pause its schedules first."""
     try:
         with activity(console, "Move job and verify its data"):
-            result = json.loads(client.relocate_job(job_id, node, action="abort" if abort is True else "move"))
+            result = json.loads(
+                client.relocate_job(
+                    job_id, node, action="abort" if abort is True else "move"
+                )
+            )
         print_detail(console, "Job relocation", result)
     except Exception as exc:
-        handle_cli_error(exc, console, "job relocate", command_context={"job_id": job_id})
+        handle_cli_error(
+            exc, console, "job relocate", command_context={"job_id": job_id}
+        )
 
 
 def archive(job_id: str = typer.Argument(help="Durable job ID.")):
@@ -217,39 +227,61 @@ def archive(job_id: str = typer.Argument(help="Durable job ID.")):
             )
         record_result(result)
     except Exception as exc:
-        handle_cli_error(exc, console, "job archive", command_context={"job_id": job_id})
+        handle_cli_error(
+            exc, console, "job archive", command_context={"job_id": job_id}
+        )
 
 
 def reset_data(
     job_id: str = typer.Argument(help="Durable job ID."),
     yes: bool = typer.Option(False, "--yes", "-y"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview the reset without changing data."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Preview the reset without changing data."
+    ),
 ):
     """Clear job data and advance its data generation."""
     yes = yes is True
     dry_run = dry_run is True
     if dry_run:
-        print_success_confirmation(console, "Job data reset dry run", status="planned", details={"Job ID": job_id})
+        print_success_confirmation(
+            console,
+            "Job data reset dry run",
+            status="planned",
+            details={"Job ID": job_id},
+        )
         return
-    _confirm_destructive(f"Reset all persistent data for {job_id}?", yes=yes, action="Job data reset")
+    _confirm_destructive(
+        f"Reset all persistent data for {job_id}?", yes=yes, action="Job data reset"
+    )
     try:
         result = json.loads(client.reset_job_data(job_id))
-        print_success_confirmation(console, "Job data reset", status=result.get("status"), details={"Job ID": job_id})
+        print_success_confirmation(
+            console,
+            "Job data reset",
+            status=result.get("status"),
+            details={"Job ID": job_id},
+        )
         record_result(result)
     except Exception as exc:
-        handle_cli_error(exc, console, "job reset-data", command_context={"job_id": job_id})
+        handle_cli_error(
+            exc, console, "job reset-data", command_context={"job_id": job_id}
+        )
 
 
 def delete(
     job_id: str = typer.Argument(help="Durable job ID."),
     yes: bool = typer.Option(False, "--yes", "-y"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview deletion without changing state."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Preview deletion without changing state."
+    ),
 ):
     """Permanently delete a durable job, its runs, resources, and data."""
     yes = yes is True
     dry_run = dry_run is True
     if dry_run:
-        print_success_confirmation(console, "Job delete dry run", status="planned", details={"Job ID": job_id})
+        print_success_confirmation(
+            console, "Job delete dry run", status="planned", details={"Job ID": job_id}
+        )
         return
     _confirm_destructive(
         f"Permanently delete {job_id}, all runs, runtime resources, and shared job data?",
@@ -272,14 +304,17 @@ def delete(
         ]
         for resource_id in [*run_ids, job_id]:
             try:
-                cleanup_job_resources(
-                    resource_id, runtime_client=client, log=logger
-                )
+                cleanup_job_resources(resource_id, runtime_client=client, log=logger)
             except JobResourceCleanupError as error:
                 cleanup_errors.append(str(error))
         if cleanup_errors:
             raise JobResourceCleanupError("; ".join(cleanup_errors))
-        print_success_confirmation(console, "Job delete", status=result.get("status"), details={"Job ID": job_id})
+        print_success_confirmation(
+            console,
+            "Job delete",
+            status=result.get("status"),
+            details={"Job ID": job_id},
+        )
         record_result(result)
     except Exception as exc:
         handle_cli_error(exc, console, "job delete", command_context={"job_id": job_id})
@@ -288,14 +323,18 @@ def delete(
 def start(
     job_id: str = typer.Argument(help="Durable job ID."),
     run_id: str | None = typer.Option(None, "--run-id"),
-    queue: bool = typer.Option(False, "--queue", help="Queue this run when resources are busy."),
+    queue: bool = typer.Option(
+        False, "--queue", help="Queue this run when resources are busy."
+    ),
     inputs: str | None = typer.Option(None, "--inputs", help="Run-input JSON file."),
     force: bool = typer.Option(
         False,
         "--force",
         help="Permanently replace the existing run of a service job.",
     ),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Confirm replacement without prompting."),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Confirm replacement without prompting."
+    ),
 ):
     """Start a new run of a durable job."""
     force = force is True
@@ -326,19 +365,33 @@ def start(
             ("Run ID", result.get("run_id")),
         ]
         if result.get("replaced_run_ids"):
-            details.append(
-                ("Replaced", ", ".join(result["replaced_run_ids"]))
-            )
+            details.append(("Replaced", ", ".join(result["replaced_run_ids"])))
         if result.get("cleanup_deferred"):
             pending = ", ".join(result.get("cleanup_pending_nodes") or [])
-            details.append(("Cleanup", f"deferred{f' on {pending}' if pending else ''}"))
+            details.append(
+                ("Cleanup", f"deferred{f' on {pending}' if pending else ''}")
+            )
         if result.get("status") == "queued":
             admission = result.get("admission") or {}
-            print_info(console, admission.get("message") or result.get("message") or "Queued. It will start automatically when resources are available.")
-            details.extend([("PC", admission.get("node_label") or admission.get("owner_node")), ("Queue position", admission.get("position"))])
+            print_info(
+                console,
+                admission.get("message")
+                or result.get("message")
+                or "Queued. It will start automatically when resources are available.",
+            )
+            details.extend(
+                [
+                    ("PC", admission.get("node_label") or admission.get("owner_node")),
+                    ("Queue position", admission.get("position")),
+                ]
+            )
         print_success_confirmation(
             console,
-            "Run queued" if result.get("status") == "queued" else "Run replace" if force else "Run start",
+            "Run queued"
+            if result.get("status") == "queued"
+            else "Run replace"
+            if force
+            else "Run start",
             details=details,
             next_steps=f"mn run show {result.get('run_id')}",
         )
@@ -363,13 +416,23 @@ def run_status(run_id: str):
         reason = history_reason(exc)
         record = mapped_run_record(run_id) if reason is not None else None
         if record is None:
-            handle_cli_error(exc, console, "run show", command_context={"run_id": run_id})
+            handle_cli_error(
+                exc, console, "run show", command_context={"run_id": run_id}
+            )
             return
         if record.get("status") not in {"completed", "failed", "cancelled"}:
             record = {**record, "status": "unknown"}
         missing = reason == "missing"
-        record = {**record, "record_source": "history", "retry": {"available": False,
-            "reason": "Core control record is missing. Start a new run." if missing else "Core is unavailable. Retry eligibility cannot be checked yet."}}
+        record = {
+            **record,
+            "record_source": "history",
+            "retry": {
+                "available": False,
+                "reason": "Core control record is missing. Start a new run."
+                if missing
+                else "Core is unavailable. Retry eligibility cannot be checked yet.",
+            },
+        }
     if record.get("record_source") == "history":
         record = {**record, "placement": None}
     print_detail(console, "Run", record if json_enabled() else run_info_display(record))
@@ -390,10 +453,18 @@ def run_resume(run_id: str):
     try:
         run = json.loads(client.get_run(run_id))
         if run.get("status") == "failed":
-            raise ValidationError(f"This run failed. Use 'mn run retry {run_id} --dry-run' to check checkpoint recovery.")
+            raise ValidationError(
+                f"This run failed. Use 'mn run retry {run_id} --dry-run' to check checkpoint recovery."
+            )
     except Exception as exc:
-        if isinstance(exc, grpc.RpcError) and exc.code() == grpc.StatusCode.NOT_FOUND and mapped_run_record(run_id) is not None:
-            exc = ValidationError("Stored history remains, but the Core control record is missing. Start a new run.")
+        if (
+            isinstance(exc, grpc.RpcError)
+            and exc.code() == grpc.StatusCode.NOT_FOUND
+            and mapped_run_record(run_id) is not None
+        ):
+            exc = ValidationError(
+                "Stored history remains, but the Core control record is missing. Start a new run."
+            )
         handle_cli_error(exc, console, "run resume", command_context={"run_id": run_id})
         return
     _print_run(
@@ -404,10 +475,17 @@ def run_resume(run_id: str):
     )
 
 
-def run_cancel(run_id: str, queued_only: bool = typer.Option(False, "--queued-only", help="Cancel only if execution has not started.")):
+def run_cancel(
+    run_id: str,
+    queued_only: bool = typer.Option(
+        False, "--queued-only", help="Cancel only if execution has not started."
+    ),
+):
     """Cancel one execution run without deleting job data."""
     _print_run(
-        (lambda value: client.cancel_run(value, queued_only=True)) if queued_only is True else client.cancel_run,
+        (lambda value: client.cancel_run(value, queued_only=True))
+        if queued_only is True
+        else client.cancel_run,
         run_id,
         "run cancel",
         activity_message=f"Cancelling run {run_id}…",
@@ -417,18 +495,27 @@ def run_cancel(run_id: str, queued_only: bool = typer.Option(False, "--queued-on
 def run_delete(
     run_id: str,
     yes: bool = typer.Option(False, "--yes", "-y"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview deletion without changing state."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Preview deletion without changing state."
+    ),
 ):
     """Delete one run, cancelling it first when active, without deleting job data."""
     yes = yes is True
     dry_run = dry_run is True
     if dry_run:
-        print_success_confirmation(console, "Run delete dry run", status="planned", details={"Run ID": run_id})
+        print_success_confirmation(
+            console, "Run delete dry run", status="planned", details={"Run ID": run_id}
+        )
         return
     _confirm_destructive(f"Delete run {run_id}?", yes=yes, action="Run deletion")
     try:
         result = json.loads(client.delete_run(run_id, confirmed=True))
-        print_success_confirmation(console, "Run delete", status=result.get("status"), details={"Run ID": run_id})
+        print_success_confirmation(
+            console,
+            "Run delete",
+            status=result.get("status"),
+            details={"Run ID": run_id},
+        )
         record_result(result)
     except Exception as exc:
         handle_cli_error(exc, console, "run delete", command_context={"run_id": run_id})
@@ -450,7 +537,12 @@ def _print_run(
         if label == "run show":
             print_detail(console, "Run", result)
         else:
-            print_success_confirmation(console, label.replace("run ", "Run "), status=result.get("status"), details={"Run ID": run_id})
+            print_success_confirmation(
+                console,
+                label.replace("run ", "Run "),
+                status=result.get("status"),
+                details={"Run ID": run_id},
+            )
             record_result(result)
     except Exception as exc:
         handle_cli_error(exc, console, label, command_context={"run_id": run_id})

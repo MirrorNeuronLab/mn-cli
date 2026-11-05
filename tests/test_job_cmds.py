@@ -39,17 +39,15 @@ def _operation_client(final_operation, events=(), **methods):
     }
     return SimpleNamespace(
         start_operation=lambda _kind, _options: json.dumps(
-            {"operation_id": "op-test", "target_count": final_operation.get("counters", {}).get("total", 0)}
+            {
+                "operation_id": "op-test",
+                "target_count": final_operation.get("counters", {}).get("total", 0),
+            }
         ),
         stream_operation_events=lambda _operation_id, **_kwargs: iter(events),
         get_operation=lambda _operation_id: json.dumps(final_operation),
         **client_methods,
     )
-
-
-
-
-
 
 
 def test_job_resource_cleanup_deletes_prepared_openshell_sandbox(monkeypatch):
@@ -194,8 +192,7 @@ def test_openshell_cleanup_name_matches_long_prepared_sandbox_name():
     sandbox_name = job_cleanup.openshell_sandbox_name(job_id)
 
     assert sandbox_name == (
-        "mirror-neuron-job-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        "-820154137a"
+        "mirror-neuron-job-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-820154137a"
     )
     assert len(sandbox_name) <= 63
 
@@ -238,14 +235,6 @@ def test_job_list_shows_type_and_owning_node(monkeypatch):
     assert "mirror_neuron@homer" in rendered
 
 
-
-
-
-
-
-
-
-
 def test_node_list_strips_restart_history_and_reasons(monkeypatch):
     output = _capture_console(monkeypatch)
     summary = {
@@ -254,7 +243,10 @@ def test_node_list_strips_restart_history_and_reasons(monkeypatch):
                 "name": "mirror_neuron@local",
                 "status": "healthy",
                 "restart_history": [
-                    {"at": "2026-07-03T00:00:00Z", "reason": "model emitted invalid JSON"}
+                    {
+                        "at": "2026-07-03T00:00:00Z",
+                        "reason": "model emitted invalid JSON",
+                    }
                 ],
                 "restartReason": "runtime config changed",
                 "restart_exhausted_reason": "attempts exhausted",
@@ -298,11 +290,25 @@ def test_node_list_rejects_healthy_unnamed_runtime_in_table_and_json(monkeypatch
     output = _capture_console(monkeypatch)
     results = []
     monkeypatch.setattr(cli_output, "record_result", results.append)
-    monkeypatch.setattr(job_cmds, "client", SimpleNamespace(
-        get_system_summary=lambda: json.dumps({"nodes": [{
-            "name": "nonode@nohost", "hostname": "mini.local",
-            "status": "healthy", "self?": True, "job_owner_eligible": True,
-        }]})))
+    monkeypatch.setattr(
+        job_cmds,
+        "client",
+        SimpleNamespace(
+            get_system_summary=lambda: json.dumps(
+                {
+                    "nodes": [
+                        {
+                            "name": "nonode@nohost",
+                            "hostname": "mini.local",
+                            "status": "healthy",
+                            "self?": True,
+                            "job_owner_eligible": True,
+                        }
+                    ]
+                }
+            )
+        ),
+    )
 
     job_cmds.nodes()
 

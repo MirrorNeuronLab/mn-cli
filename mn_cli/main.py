@@ -35,7 +35,10 @@ from mn_cli.runtime.reconnect import reconnect as reconnect_runtime
 
 PACKAGE_NAME = "mirrorneuron-cli"
 FALLBACK_VERSION = "0.0.0"
-CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"], "max_content_width": ui_width()}
+CONTEXT_SETTINGS = {
+    "help_option_names": ["-h", "--help"],
+    "max_content_width": ui_width(),
+}
 ROOT_HELP = """Run and operate MirrorNeuron workflows, blueprints, jobs, and local runtime services.
 
 Examples:
@@ -89,21 +92,55 @@ app = typer.Typer(
     pretty_exceptions_enable=False,
     cls=RemediatingTyperGroup,
 )
-schedule_app = typer.Typer(help="Inspect schedules and automatically queued starts.", context_settings=CONTEXT_SETTINGS, cls=RemediatingTyperGroup)
+schedule_app = typer.Typer(
+    help="Inspect schedules and automatically queued starts.",
+    context_settings=CONTEXT_SETTINGS,
+    cls=RemediatingTyperGroup,
+)
 schedule_app.command(name="list")(schedule_cmds.list_schedules)
 schedule_app.command(name="show")(schedule_cmds.show)
 schedule_app.command(name="set-time")(schedule_cmds.set_time)
 schedule_app.command(name="cancel")(schedule_cmds.cancel)
 
-job_app = typer.Typer(help=JOB_HELP, context_settings=CONTEXT_SETTINGS, cls=RemediatingTyperGroup)
-node_app = typer.Typer(help=NODE_HELP, context_settings=CONTEXT_SETTINGS, cls=RemediatingTyperGroup)
-operation_app = typer.Typer(help="Inspect or reattach to durable group operations.", context_settings=CONTEXT_SETTINGS, cls=RemediatingTyperGroup)
-runtime_app = typer.Typer(help=RUNTIME_HELP, context_settings=CONTEXT_SETTINGS, cls=RemediatingTyperGroup)
-blueprint_app = typer.Typer(help="List, add, inspect, run, and diagnose MirrorNeuron blueprints.", context_settings=CONTEXT_SETTINGS, cls=RemediatingTyperGroup)
-run_app = typer.Typer(help="Inspect and control individual execution runs.", context_settings=CONTEXT_SETTINGS, cls=RemediatingTyperGroup)
-human_app = typer.Typer(help="Inspect and respond to human collaboration events.", context_settings=CONTEXT_SETTINGS, cls=RemediatingTyperGroup)
-resource_app = typer.Typer(help="Inspect runtime capacity, usage, and limits.", context_settings=CONTEXT_SETTINGS, cls=RemediatingTyperGroup)
-service_app = typer.Typer(help="Inspect MirrorNeuron service discovery.", context_settings=CONTEXT_SETTINGS, cls=RemediatingTyperGroup)
+job_app = typer.Typer(
+    help=JOB_HELP, context_settings=CONTEXT_SETTINGS, cls=RemediatingTyperGroup
+)
+node_app = typer.Typer(
+    help=NODE_HELP, context_settings=CONTEXT_SETTINGS, cls=RemediatingTyperGroup
+)
+operation_app = typer.Typer(
+    help="Inspect or reattach to durable group operations.",
+    context_settings=CONTEXT_SETTINGS,
+    cls=RemediatingTyperGroup,
+)
+runtime_app = typer.Typer(
+    help=RUNTIME_HELP, context_settings=CONTEXT_SETTINGS, cls=RemediatingTyperGroup
+)
+blueprint_app = typer.Typer(
+    help="List, add, inspect, run, and diagnose MirrorNeuron blueprints.",
+    context_settings=CONTEXT_SETTINGS,
+    cls=RemediatingTyperGroup,
+)
+run_app = typer.Typer(
+    help="Inspect and control individual execution runs.",
+    context_settings=CONTEXT_SETTINGS,
+    cls=RemediatingTyperGroup,
+)
+human_app = typer.Typer(
+    help="Inspect and respond to human collaboration events.",
+    context_settings=CONTEXT_SETTINGS,
+    cls=RemediatingTyperGroup,
+)
+resource_app = typer.Typer(
+    help="Inspect runtime capacity, usage, and limits.",
+    context_settings=CONTEXT_SETTINGS,
+    cls=RemediatingTyperGroup,
+)
+service_app = typer.Typer(
+    help="Inspect MirrorNeuron service discovery.",
+    context_settings=CONTEXT_SETTINGS,
+    cls=RemediatingTyperGroup,
+)
 
 
 def get_version() -> str:
@@ -114,7 +151,10 @@ def get_version() -> str:
 
 
 def format_version() -> str:
-    lines = [format_banner("MirrorNeuron CLI", width=ui_width()), f"version {get_version()}"]
+    lines = [
+        format_banner("MirrorNeuron CLI", width=ui_width()),
+        f"version {get_version()}",
+    ]
     mode = _runtime_mode_line(capitalize=False)
     if mode:
         lines.append(mode)
@@ -165,6 +205,7 @@ def _runtime_mode_line(*, capitalize: bool = True) -> str | None:
         return None
     prefix = "Runtime mode" if capitalize else "runtime mode"
     return f"{prefix}: worker"
+
 
 # Blueprint commands
 blueprint_app.callback()(blueprint_cmds.blueprint_callback)
@@ -262,6 +303,7 @@ app.add_typer(resource_app, name="resource")
 app.add_typer(service_app, name="service")
 
 instrument_typer(app)
+
 
 def cli() -> None:
     try:

@@ -38,15 +38,19 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     original_which = run_cmds.shutil.which
     monkeypatch.setattr(
-        run_cmds.shutil, "which",
-        lambda command: "openshell" if command == "openshell" else original_which(command),
+        run_cmds.shutil,
+        "which",
+        lambda command: (
+            "openshell" if command == "openshell" else original_which(command)
+        ),
     )
     monkeypatch.setenv("MN_HOME", str(tmp_path / "mn-home"))
     monkeypatch.delenv("MN_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_RUNTIME_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_CONTAINER_SHARED_STORAGE_ROOT", raising=False)
-    monkeypatch.setattr('mn_cli.libs.run_cmds.openshell.sync_litellm_gateway',
+    monkeypatch.setattr(
+        "mn_cli.libs.run_cmds.openshell.sync_litellm_gateway",
         lambda **_kwargs: {
             "status": "running",
             "api_base": "http://mn-litellm-proxy:4000/v1",
@@ -153,13 +157,24 @@ def test_missing_openshell_fails_before_preparation(tmp_path, monkeypatch, mocke
     monkeypatch.setattr(run_cmds.shutil, "which", lambda _: None)
     register = mocker.patch("mn_cli.libs.run_cmds.openshell.register_native_resource")
     build = mocker.patch("mn_cli.libs.run_cmds.openshell._build_openshell_from_image")
-    manifest = {"flow": {"nodes": [{"node_id": "review", "config": {
-        "runner_module": "MirrorNeuron.Runner.OpenShell",
-        "reuse_shared_sandbox": True,
-    }}]}}
+    manifest = {
+        "flow": {
+            "nodes": [
+                {
+                    "node_id": "review",
+                    "config": {
+                        "runner_module": "MirrorNeuron.Runner.OpenShell",
+                        "reuse_shared_sandbox": True,
+                    },
+                }
+            ]
+        }
+    }
     with pytest.raises(AppError) as raised:
         run_cmds._prepare_openshell_custom_images(
-            tmp_path, manifest, shared_sandbox_job_id="review-job",
+            tmp_path,
+            manifest,
+            shared_sandbox_job_id="review-job",
         )
     error = contextualize_cli_error(raised.value, "run bundle")
     assert error.code == "MN_FAILED_PRECONDITION"
@@ -181,41 +196,80 @@ def local_openshell_owner(tmp_path, monkeypatch, mocker):
     mocker.patch("mn_cli.libs.run_cmds.client.get_resource", return_value=cluster)
     mocker.patch("mn_cli.libs.run_cmds.client.get_system_summary", return_value=cluster)
     which = openshell_native.shutil.which
-    monkeypatch.setattr(openshell_native.shutil, "which", lambda name, **kw:
-                        "/test/bin/openshell" if name == "openshell" else which(name, **kw))
+    monkeypatch.setattr(
+        openshell_native.shutil,
+        "which",
+        lambda name, **kw: (
+            "/test/bin/openshell" if name == "openshell" else which(name, **kw)
+        ),
+    )
     commands = []
 
     def execute(args, **kwargs):
         commands.append((args, kwargs))
-        return subprocess.CompletedProcess(args, int(args[1:3] == ["sandbox", "get"]), "", "")
+        return subprocess.CompletedProcess(
+            args, int(args[1:3] == ["sandbox", "get"]), "", ""
+        )
 
-    monkeypatch.setattr(openshell_preparation, "prepare_openshell", lambda request, **kw:
-                        openshell_native.prepare_openshell(request, command_runner=execute, **kw))
+    monkeypatch.setattr(
+        openshell_preparation,
+        "prepare_openshell",
+        lambda request, **kw: openshell_native.prepare_openshell(
+            request, command_runner=execute, **kw
+        ),
+    )
     return commands
 
 
-@pytest.mark.parametrize("module, field", [
-    ("MirrorNeuron.Runner.OpenShell", "custom_openshell_image"),
-    ("MirrorNeuron.Sandbox.OpenShell", "from"),
-])
+@pytest.mark.parametrize(
+    "module, field",
+    [
+        ("MirrorNeuron.Runner.OpenShell", "custom_openshell_image"),
+        ("MirrorNeuron.Sandbox.OpenShell", "from"),
+    ],
+)
 def test_run_builds_the_declared_openshell_image_on_its_owner(
     tmp_path, monkeypatch, mocker, local_openshell_owner, module, field
 ):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
-    submit = mocker.patch("mn_cli.libs.run_cmds.client.create_job", return_value='{"job_id":"job-123"}')
-    mocker.patch("mn_cli.libs.run_cmds.client.stream_events", return_value=[json.dumps({"type": "job_completed"})])
+    submit = mocker.patch(
+        "mn_cli.libs.run_cmds.client.create_job", return_value='{"job_id":"job-123"}'
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.stream_events",
+        return_value=[json.dumps({"type": "job_completed"})],
+    )
     bundle = tmp_path / "bundle"
     bundle.mkdir()
     config = {"runner_module": module, field: "detector/openshell_sandbox"}
-    write_package_manifest(bundle / "manifest.json", json.dumps(workflow_manifest({"nodes": [
-        {"node_id": "detector", "agent_type": "executor", "type": "generic", "config": config}]})))
+    write_package_manifest(
+        bundle / "manifest.json",
+        json.dumps(
+            workflow_manifest(
+                {
+                    "nodes": [
+                        {
+                            "node_id": "detector",
+                            "agent_type": "executor",
+                            "type": "generic",
+                            "config": config,
+                        }
+                    ]
+                }
+            )
+        ),
+    )
     context = bundle / "payloads" / "detector" / "openshell_sandbox"
     context.mkdir(parents=True)
     (context / "Dockerfile").write_text("FROM base\n")
 
     result = runner.invoke(app, ["blueprint", "run", str(bundle)])
     assert result.exit_code == 0, result.stdout
-    builds = [(args, kw) for args, kw in local_openshell_owner if args[:2] == ["docker", "build"]]
+    builds = [
+        (args, kw)
+        for args, kw in local_openshell_owner
+        if args[:2] == ["docker", "build"]
+    ]
     assert len(builds) == 1
     build, options = builds[0]
     assert options["env"]["OPENSHELL_GATEWAY_ENDPOINT"] == "http://127.0.0.1:58080"
@@ -411,7 +465,7 @@ def test_openshell_skill_dependency_context_injects_local_dev_sources(tmp_path):
             run_cmds.shutil.rmtree(context, ignore_errors=True)
 
     assert "/tmp/mn-skill-runtime/local/example_skill" in local_requirements
-    assert dockerfile[:dockerfile.index("RUN if [ -s")].rstrip().endswith("USER root")
+    assert dockerfile[: dockerfile.index("RUN if [ -s")].rstrip().endswith("USER root")
     assert dockerfile.rstrip().endswith("USER sandbox")
     assert "COPY __mn_skill_dependencies/local/example_skill" in dockerfile
     assert "-r /tmp/mn-skill-runtime/local-requirements.txt" in requirements
@@ -444,18 +498,30 @@ def test_openshell_context_preserves_scm_versions_extras_and_clean_sources(tmp_p
     records = []
     for folder, package, dependencies, extras in [
         ("common", "mn-python-sdk-common", [], ""),
-        ("sdk", "mirrorneuron-python-sdk", ["mn-python-sdk-common>=1.2,<2.0"], "[models]"),
+        (
+            "sdk",
+            "mirrorneuron-python-sdk",
+            ["mn-python-sdk-common>=1.2,<2.0"],
+            "[models]",
+        ),
     ]:
         source = tmp_path / folder
         source.mkdir()
         (source / "pyproject.toml").write_text(
             f'[project]\nname = "{package}"\ndynamic = ["version"]\n'
-            f'dependencies = {json.dumps(dependencies)}\n'
+            f"dependencies = {json.dumps(dependencies)}\n"
             '[tool.setuptools_scm]\nfallback_version = "0.0.0"\n'
         )
         (source / "stale.egg-info").mkdir()
         (source / "stale.egg-info" / "PKG-INFO").write_text("Version: 0.0.0\n")
-        records.append({"package": package, "source": str(source), "version": "1.3.58", "extras": extras})
+        records.append(
+            {
+                "package": package,
+                "source": str(source),
+                "version": "1.3.58",
+                "extras": extras,
+            }
+        )
     manifest = {"metadata": {"mn_local_skill_dependencies": {"sources": records}}}
     context = run_cmds._openshell_skill_dependency_context(image, manifest)
     try:
@@ -464,16 +530,26 @@ def test_openshell_context_preserves_scm_versions_extras_and_clean_sources(tmp_p
         sdk = tomllib.loads((staged / "sdk/pyproject.toml").read_text())
         common_version = common["tool"]["setuptools_scm"]["fallback_version"]
         assert common_version == "1.3.58"
-        assert Requirement(sdk["project"]["dependencies"][0]).specifier.contains(common_version)
+        assert Requirement(sdk["project"]["dependencies"][0]).specifier.contains(
+            common_version
+        )
         assert sdk["tool"]["setuptools_scm"]["fallback_version"] == "1.3.58"
-        assert "/tmp/mn-skill-runtime/local/sdk[models]" in (context / "local-requirements.txt").read_text()
+        assert (
+            "/tmp/mn-skill-runtime/local/sdk[models]"
+            in (context / "local-requirements.txt").read_text()
+        )
         assert not list(staged.rglob("*.egg-info"))
-        assert 'fallback_version = "0.0.0"' in (tmp_path / "common/pyproject.toml").read_text()
+        assert (
+            'fallback_version = "0.0.0"'
+            in (tmp_path / "common/pyproject.toml").read_text()
+        )
     finally:
         run_cmds.shutil.rmtree(context)
 
 
-def test_managed_gateway_builds_with_docker_without_named_metadata(tmp_path, monkeypatch, mocker):
+def test_managed_gateway_builds_with_docker_without_named_metadata(
+    tmp_path, monkeypatch, mocker
+):
     monkeypatch.delenv("OPENSHELL_GATEWAY", raising=False)
     monkeypatch.delenv("OPENSHELL_GATEWAY_ENDPOINT", raising=False)
     monkeypatch.setenv("OPENSHELL_CONFIG_DIR", str(tmp_path / "empty-config"))
@@ -514,7 +590,13 @@ def test_managed_gateway_builds_with_docker_without_named_metadata(tmp_path, mon
     ],
 )
 def test_local_docker_selection_matches_gateway_precedence(
-    tmp_path, monkeypatch, endpoint, gateway, managed, remote, expected,
+    tmp_path,
+    monkeypatch,
+    endpoint,
+    gateway,
+    managed,
+    remote,
+    expected,
 ):
     monkeypatch.setenv("OPENSHELL_GATEWAY_ENDPOINT", endpoint)
     monkeypatch.setenv("OPENSHELL_GATEWAY", gateway)
@@ -525,9 +607,14 @@ def test_local_docker_selection_matches_gateway_precedence(
     named = config / "gateways" / (gateway or "active")
     named.mkdir(parents=True)
     (config / "active_gateway").write_text("active\n")
-    (named / "metadata.json").write_text(json.dumps({
-        "gateway_endpoint": "http://127.0.0.1:58080", "is_remote": remote,
-    }))
+    (named / "metadata.json").write_text(
+        json.dumps(
+            {
+                "gateway_endpoint": "http://127.0.0.1:58080",
+                "is_remote": remote,
+            }
+        )
+    )
     monkeypatch.setenv("OPENSHELL_CONFIG_DIR", str(config))
     assert run_cmds._openshell_gateway_uses_local_docker() is expected
 
@@ -537,27 +624,64 @@ def test_launch_commits_openshell_ownership_and_survives_gc(
     tmp_path, monkeypatch, mocker, existing_job, local_openshell_owner
 ):
     from mn_sdk import client as client_module
-    from mn_sdk.native_resource_registry import list_native_resources, reconcile_native_resources
+    from mn_sdk.native_resource_registry import (
+        list_native_resources,
+        reconcile_native_resources,
+    )
     from mn_sdk.native_runtime_service import _native_resource_reference_checker
 
     durable_job = existing_job or "job-generated"
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
-    mocker.patch("mn_cli.libs.run_cmds.handlers.run.generate_stable_job_id", return_value=durable_job)
-    mocker.patch("mn_cli.libs.run_cmds.run_state._make_blueprint_run_id", return_value="blueprint-run-label")
-    mocker.patch("mn_cli.libs.run_cmds.client.create_job", return_value=json.dumps({"job_id": durable_job}))
-    mocker.patch("mn_cli.libs.run_cmds.client.update_job", return_value=json.dumps({"job_id": durable_job}))
-    mocker.patch("mn_cli.libs.run_cmds.client.stream_events", return_value=[json.dumps({"type": "job_completed"})])
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.run.generate_stable_job_id",
+        return_value=durable_job,
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id",
+        return_value="blueprint-run-label",
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.create_job",
+        return_value=json.dumps({"job_id": durable_job}),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.update_job",
+        return_value=json.dumps({"job_id": durable_job}),
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.stream_events",
+        return_value=[json.dumps({"type": "job_completed"})],
+    )
     bundle = tmp_path / "bundle"
     bundle.mkdir()
-    write_package_manifest(bundle / "manifest.json", json.dumps(workflow_manifest({
-        "apiVersion": "mn.workflow/v1", "kind": "Workflow", "id": "sandbox-ownership",
-        "flow": {"nodes": [{"node_id": "review", "config": {
-            "runner_module": "MirrorNeuron.Runner.OpenShell",
-            "from": "sandbox:prepared", "reuse_shared_sandbox": True,
-        }}]},
-    })))
+    write_package_manifest(
+        bundle / "manifest.json",
+        json.dumps(
+            workflow_manifest(
+                {
+                    "apiVersion": "mn.workflow/v1",
+                    "kind": "Workflow",
+                    "id": "sandbox-ownership",
+                    "flow": {
+                        "nodes": [
+                            {
+                                "node_id": "review",
+                                "config": {
+                                    "runner_module": "MirrorNeuron.Runner.OpenShell",
+                                    "from": "sandbox:prepared",
+                                    "reuse_shared_sandbox": True,
+                                },
+                            }
+                        ]
+                    },
+                }
+            )
+        ),
+    )
     run_cmds.run_bundle(
-        str(bundle), job_id=existing_job, detached=True,
+        str(bundle),
+        job_id=existing_job,
+        detached=True,
         submission_metadata={"blueprint_run_id": "blueprint-run-label"},
     )
     records = [r for r in list_native_resources() if r["kind"] == "openshell"]
@@ -574,20 +698,29 @@ def test_launch_commits_openshell_ownership_and_survives_gc(
 
         def get_job(self, job_id):
             assert job_id == durable_job
-            return json.dumps({"job_id": job_id, "status": "active", "native_resource_ownership": {
-                "submission_id": record["submission_id"], "resources": [{"external_id": record["external_id"]}],
-            }})
+            return json.dumps(
+                {
+                    "job_id": job_id,
+                    "status": "active",
+                    "native_resource_ownership": {
+                        "submission_id": record["submission_id"],
+                        "resources": [{"external_id": record["external_id"]}],
+                    },
+                }
+            )
 
     monkeypatch.setattr(client_module, "Client", Core)
     checker = _native_resource_reference_checker()
     commands = []
+
     def command_runner(command, timeout):
         commands.append(command)
         return subprocess.CompletedProcess(command, 0, "", "")
 
     for elapsed in (4000, 6000, 9000):
         result = reconcile_native_resources(
-            reference_checker=checker, now=record["created_at"] + elapsed,
+            reference_checker=checker,
+            now=record["created_at"] + elapsed,
             command_runner=command_runner,
         )
         assert not result["errors"]
@@ -599,13 +732,28 @@ def test_launch_commits_openshell_ownership_and_survives_gc(
 def test_openshell_definition_revisions_have_separate_sandboxes(tmp_path, mocker):
     from mn_sdk.native_resource_registry import list_native_resources
 
-    mocker.patch("mn_cli.libs.run_cmds.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", ""))
+    mocker.patch(
+        "mn_cli.libs.run_cmds.subprocess.run",
+        return_value=subprocess.CompletedProcess([], 0, "", ""),
+    )
     for revision in ("one", "two"):
-        manifest = {"flow": {"nodes": [{"node_id": "review", "config": {
-            "runner_module": "MirrorNeuron.Runner.OpenShell", "reuse_shared_sandbox": True,
-        }}]}}
+        manifest = {
+            "flow": {
+                "nodes": [
+                    {
+                        "node_id": "review",
+                        "config": {
+                            "runner_module": "MirrorNeuron.Runner.OpenShell",
+                            "reuse_shared_sandbox": True,
+                        },
+                    }
+                ]
+            }
+        }
         run_cmds._prepare_openshell_custom_images(
-            tmp_path, manifest, shared_sandbox_job_id="job-one",
+            tmp_path,
+            manifest,
+            shared_sandbox_job_id="job-one",
             shared_sandbox_submission_id=f"job-one-def-{revision}",
         )
     records = list_native_resources()
@@ -616,20 +764,39 @@ def test_openshell_definition_revisions_have_separate_sandboxes(tmp_path, mocker
 
 def test_configured_policy_is_rendered_before_sandbox_creation(mocker, tmp_path):
     from mn_cli.libs.run_cmds import openshell
-    mocker.patch.object(openshell, 'mn_home', return_value=tmp_path/'mn')
-    mocker.patch.object(openshell, '_openshell_executable', return_value='openshell')
-    mocker.patch.object(openshell, '_openshell_env', return_value={})
-    mocker.patch.object(openshell, 'register_native_resource')
-    policy=tmp_path/'bundle/payloads/policy.yaml'
+
+    mocker.patch.object(openshell, "mn_home", return_value=tmp_path / "mn")
+    mocker.patch.object(openshell, "_openshell_executable", return_value="openshell")
+    mocker.patch.object(openshell, "_openshell_env", return_value={})
+    mocker.patch.object(openshell, "register_native_resource")
+    policy = tmp_path / "bundle/payloads/policy.yaml"
     policy.parent.mkdir(parents=True)
-    policy.write_text('version: 1\nhost: ${config.gateway.host}\n')
-    config={'policy':'policy.yaml','policy_config_bindings':True,
-            'environment':{'MN_BLUEPRINT_CONFIG_JSON':json.dumps({'gateway':{'host':'test-gateway'}})}}
-    run=mocker.patch.object(openshell.subprocess,'run',side_effect=[
-        subprocess.CompletedProcess([],1,'','missing'), subprocess.CompletedProcess([],0,'created','')])
-    openshell._prepare_openshell_shared_sandbox(tmp_path/'bundle',config,job_id='job',
-        submission_id='definition',node_id='review')
-    command=run.call_args_list[1].args[0]
-    rendered=Path(command[command.index('--policy')+1])
-    assert rendered.read_text()=='version: 1\nhost: "test-gateway"\n'
-    assert policy.read_text()=='version: 1\nhost: ${config.gateway.host}\n'
+    policy.write_text("version: 1\nhost: ${config.gateway.host}\n")
+    config = {
+        "policy": "policy.yaml",
+        "policy_config_bindings": True,
+        "environment": {
+            "MN_BLUEPRINT_CONFIG_JSON": json.dumps(
+                {"gateway": {"host": "test-gateway"}}
+            )
+        },
+    }
+    run = mocker.patch.object(
+        openshell.subprocess,
+        "run",
+        side_effect=[
+            subprocess.CompletedProcess([], 1, "", "missing"),
+            subprocess.CompletedProcess([], 0, "created", ""),
+        ],
+    )
+    openshell._prepare_openshell_shared_sandbox(
+        tmp_path / "bundle",
+        config,
+        job_id="job",
+        submission_id="definition",
+        node_id="review",
+    )
+    command = run.call_args_list[1].args[0]
+    rendered = Path(command[command.index("--policy") + 1])
+    assert rendered.read_text() == 'version: 1\nhost: "test-gateway"\n'
+    assert policy.read_text() == "version: 1\nhost: ${config.gateway.host}\n"

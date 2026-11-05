@@ -1,4 +1,5 @@
 """Persistent identity for an independently federated desktop runtime."""
+
 from __future__ import annotations
 
 import fcntl
@@ -15,7 +16,11 @@ NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*@[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
 
 
 def valid_name(value: object) -> bool:
-    return isinstance(value, str) and value != "nonode@nohost" and bool(NAME.fullmatch(value))
+    return (
+        isinstance(value, str)
+        and value != "nonode@nohost"
+        and bool(NAME.fullmatch(value))
+    )
 
 
 def atomic_json(path: Path, data: dict) -> None:
@@ -57,28 +62,54 @@ def read_identity(home: Path) -> str:
     except FileNotFoundError:
         return ""
     except (OSError, ValueError) as exc:
-        raise RuntimeError("Cannot read node identity. Restore node-identity.json from backup; do not reset job data.") from exc
-    if not isinstance(record, dict) or record.get("version") != 1 or not valid_name(record.get("node_name")):
-        raise RuntimeError("Invalid node-identity.json. Restore the original identity before starting Core.")
+        raise RuntimeError(
+            "Cannot read node identity. Restore node-identity.json from backup; do not reset job data."
+        ) from exc
+    if (
+        not isinstance(record, dict)
+        or record.get("version") != 1
+        or not valid_name(record.get("node_name"))
+    ):
+        raise RuntimeError(
+            "Invalid node-identity.json. Restore the original identity before starting Core."
+        )
     return record["node_name"]
 
 
-def resolve_identity(home: Path, *, configured: str = "", explicit: str = "", observed: str = "", runtime_name: str = "") -> str:
+def resolve_identity(
+    home: Path,
+    *,
+    configured: str = "",
+    explicit: str = "",
+    observed: str = "",
+    runtime_name: str = "",
+) -> str:
     """Adopt consistent evidence; never reinterpret an existing name as an address."""
     with identity_lock(home):
         persisted = read_identity(home)
         evidence = []
-        for source, value in (("saved identity", persisted), ("configuration", configured),
-                              ("MN_NODE_NAME", explicit), ("container", observed), ("running Core", runtime_name)):
+        for source, value in (
+            ("saved identity", persisted),
+            ("configuration", configured),
+            ("MN_NODE_NAME", explicit),
+            ("container", observed),
+            ("running Core", runtime_name),
+        ):
             value = str(value or "").strip()
             if not value or (value == "nonode@nohost" and source != "MN_NODE_NAME"):
                 continue
             if not valid_name(value):
-                raise RuntimeError(f"Invalid node name in {source}. Restore the original configuration before starting Core.")
+                raise RuntimeError(
+                    f"Invalid node name in {source}. Restore the original configuration before starting Core."
+                )
             evidence.append(value)
         if len(set(evidence)) > 1:
-            raise RuntimeError("Conflicting node identities. Restore the original MN_NODE_NAME/configuration; job ownership must not be renamed automatically.")
-        name = evidence[0] if evidence else f"mirror_neuron_{uuid.uuid4().hex}@127.0.0.1"
+            raise RuntimeError(
+                "Conflicting node identities. Restore the original MN_NODE_NAME/configuration; job ownership must not be renamed automatically."
+            )
+        name = (
+            evidence[0] if evidence else f"mirror_neuron_{uuid.uuid4().hex}@127.0.0.1"
+        )
         if not persisted:
             atomic_json(home / "node-identity.json", {"version": 1, "node_name": name})
         return name
@@ -91,9 +122,12 @@ def identity_health(expected: str, actual: str) -> dict:
 
 def observe_core_identity(env: dict, *, client_factory=None) -> str | None:
     from mn_sdk.client import Client
+
     client = (client_factory or Client)(
-        target=env.get("MN_GRPC_TARGET") or f"localhost:{env.get('MN_GRPC_PORT') or 55051}",
-        timeout=2, auth_token=env.get("MN_GRPC_AUTH_TOKEN"),
+        target=env.get("MN_GRPC_TARGET")
+        or f"localhost:{env.get('MN_GRPC_PORT') or 55051}",
+        timeout=2,
+        auth_token=env.get("MN_GRPC_AUTH_TOKEN"),
         admin_token=env.get("MN_GRPC_ADMIN_TOKEN"),
     )
     try:
@@ -101,9 +135,17 @@ def observe_core_identity(env: dict, *, client_factory=None) -> str | None:
         summary = json.loads(raw) if isinstance(raw, str) else raw
         if not isinstance(summary, dict):
             return ""
-        local = [node for node in summary.get("nodes", []) if isinstance(node, dict)
-                 and (node.get("self") is True or node.get("self?") is True)]
-        actual = str(local[0].get("name") or local[0].get("node") or "") if len(local) == 1 else ""
+        local = [
+            node
+            for node in summary.get("nodes", [])
+            if isinstance(node, dict)
+            and (node.get("self") is True or node.get("self?") is True)
+        ]
+        actual = (
+            str(local[0].get("name") or local[0].get("node") or "")
+            if len(local) == 1
+            else ""
+        )
         return actual
     except Exception:
         return None

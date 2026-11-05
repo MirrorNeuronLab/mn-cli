@@ -6,7 +6,9 @@ from mn_cli.config import CliConfig, ConfigError, load_config
 
 
 def test_env_default_loading(tmp_path):
-    (tmp_path / ".env").write_text("MN_API_PORT=8000\nMN_LOG_LEVEL=debug\n", encoding="utf-8")
+    (tmp_path / ".env").write_text(
+        "MN_API_PORT=8000\nMN_LOG_LEVEL=debug\n", encoding="utf-8"
+    )
 
     config = load_config(env={}, root=tmp_path)
 
@@ -71,21 +73,27 @@ def test_prod_aliases_load_env_prod_when_present(tmp_path, value):
 
 
 def test_production_loads_without_dotenv_files(tmp_path):
-    config = load_config(env={"MN_ENV": "production", "MN_HOME": "/var/lib/mirrorneuron"}, root=tmp_path)
+    config = load_config(
+        env={"MN_ENV": "production", "MN_HOME": "/var/lib/mirrorneuron"}, root=tmp_path
+    )
 
     assert config.mn_env == "prod"
     assert str(config.get("MN_HOME")) == "/var/lib/mirrorneuron"
 
 
 def test_missing_required_variable_has_clear_error(tmp_path):
-    with pytest.raises(ConfigError, match="Missing required config variable: MN_LLM_API_KEY"):
+    with pytest.raises(
+        ConfigError, match="Missing required config variable: MN_LLM_API_KEY"
+    ):
         load_config(env={}, root=tmp_path, required_keys=("MN_LLM_API_KEY",))
 
 
 def test_invalid_type_has_clear_error(tmp_path):
     (tmp_path / ".env").write_text("MN_API_PORT=not-a-number\n", encoding="utf-8")
 
-    with pytest.raises(ConfigError, match="Invalid value for MN_API_PORT: expected int"):
+    with pytest.raises(
+        ConfigError, match="Invalid value for MN_API_PORT: expected int"
+    ):
         load_config(env={}, root=tmp_path)
 
 
@@ -102,7 +110,10 @@ def test_typed_parsing_supports_bool_list_url_and_path(tmp_path):
     )
 
     assert config.get("MN_DISABLE_UPDATE_CHECK") is True
-    assert config.get("MN_ALLOWED_ORIGINS") == ("http://localhost:5173", "https://example.test")
+    assert config.get("MN_ALLOWED_ORIGINS") == (
+        "http://localhost:5173",
+        "https://example.test",
+    )
     assert config.get("MN_API_BASE_URL") == "http://localhost:8000/api/v1"
     assert config.get("MN_RUNS_ROOT") == tmp_path / "home" / "runs"
 
@@ -116,7 +127,9 @@ def test_secret_values_are_redacted_from_config_diagnostics(tmp_path):
 
 
 def test_cli_config_uses_same_loader_for_dotenv_defaults(tmp_path):
-    (tmp_path / ".env.dev").write_text("MN_CLI_OUTPUT=plain\nMN_GRPC_TIMEOUT_SECONDS=3\n", encoding="utf-8")
+    (tmp_path / ".env.dev").write_text(
+        "MN_CLI_OUTPUT=plain\nMN_GRPC_TIMEOUT_SECONDS=3\n", encoding="utf-8"
+    )
 
     config = CliConfig.from_env(env={}, root=tmp_path)
 
@@ -146,8 +159,7 @@ def test_cli_config_reads_runtime_env_tokens_without_dotenv(monkeypatch, tmp_pat
     state_dir = tmp_path / ".mn"
     state_dir.mkdir()
     (state_dir / "docker-compose.env").write_text(
-        "MN_GRPC_AUTH_TOKEN=auth-from-state\n"
-        "MN_GRPC_ADMIN_TOKEN=admin-from-state\n",
+        "MN_GRPC_AUTH_TOKEN=auth-from-state\nMN_GRPC_ADMIN_TOKEN=admin-from-state\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -184,9 +196,7 @@ def test_cli_config_prefers_direct_env_admin_token(monkeypatch, tmp_path):
 def test_cli_config_preserves_explicit_blank_token_override(tmp_path):
     state_dir = tmp_path / ".mn"
     state_dir.mkdir()
-    (state_dir / "grpc_auth.token").write_text(
-        "auth-from-file\n", encoding="utf-8"
-    )
+    (state_dir / "grpc_auth.token").write_text("auth-from-file\n", encoding="utf-8")
 
     config = CliConfig.from_env(
         env={"HOME": str(tmp_path), "MN_GRPC_AUTH_TOKEN": ""},
@@ -197,7 +207,11 @@ def test_cli_config_preserves_explicit_blank_token_override(tmp_path):
 
 
 def test_config_loader_is_reusable_for_api_code(tmp_path):
-    config = load_config(env={"MN_ENV": "production", "MN_API_PORT": "8080"}, root=tmp_path, app_name="mn-api")
+    config = load_config(
+        env={"MN_ENV": "production", "MN_API_PORT": "8080"},
+        root=tmp_path,
+        app_name="mn-api",
+    )
 
     assert config.app_name == "mn-api"
     assert config.get("MN_API_PORT") == 8080

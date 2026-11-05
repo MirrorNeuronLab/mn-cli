@@ -11,7 +11,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Update or check mn-docs/cli.md from the registered Typer command tree."
     )
-    parser.add_argument("--check", action="store_true", help="Fail when the reference is stale.")
+    parser.add_argument(
+        "--check", action="store_true", help="Fail when the reference is stale."
+    )
     args = parser.parse_args()
 
     cli_repo = Path(__file__).resolve().parents[1]

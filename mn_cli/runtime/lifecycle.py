@@ -1,4 +1,5 @@
 """Serialize startup with destructive installer reset outside the deleted tree."""
+
 from contextlib import contextmanager
 import os
 from pathlib import Path
@@ -7,8 +8,12 @@ import subprocess
 
 def process_start(pid):
     try:
-        return subprocess.check_output(["ps", "-p", str(pid), "-o", "lstart="],
-                                       text=True, stderr=subprocess.DEVNULL, timeout=2).strip()
+        return subprocess.check_output(
+            ["ps", "-p", str(pid), "-o", "lstart="],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        ).strip()
     except subprocess.CalledProcessError as error:
         if error.returncode == 1:
             return ""
@@ -26,7 +31,9 @@ def runtime_start_guard(home: Path):
         if owner == os.environ.get("MN_RESET_OWNER_PID"):
             yield
             return
-        raise RuntimeError("Runtime reset is in progress. Wait for it to finish before starting.")
+        raise RuntimeError(
+            "Runtime reset is in progress. Wait for it to finish before starting."
+        )
     lock.parent.mkdir(parents=True, exist_ok=True)
     for attempt in range(2):
         try:
@@ -37,12 +44,16 @@ def runtime_start_guard(home: Path):
                 pid, birth = (lock / "owner").read_text().rstrip("\n").split("|", 1)
                 alive = process_start(int(pid))
             except (OSError, ValueError):
-                raise RuntimeError("Runtime lifecycle lock is incomplete. Inspect it before retrying.") from None
+                raise RuntimeError(
+                    "Runtime lifecycle lock is incomplete. Inspect it before retrying."
+                ) from None
             if alive and alive == birth:
                 if pid == os.environ.get("MN_INSTALL_OWNER_PID"):
                     yield
                     return
-                raise RuntimeError("Another runtime start or reset is in progress.") from None
+                raise RuntimeError(
+                    "Another runtime start or reset is in progress."
+                ) from None
             (lock / "owner").unlink()
             lock.rmdir()
     else:

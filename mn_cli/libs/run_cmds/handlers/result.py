@@ -8,6 +8,7 @@ from ..outputs import (
     fetch_and_save_results,
 )
 
+
 def result(job_id: str):
     """Fetch and save the final and progressive results for a job"""
     try:

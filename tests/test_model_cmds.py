@@ -59,11 +59,19 @@ def _capability_report(
 @pytest.fixture(autouse=True)
 def isolate_model_ownership(monkeypatch, tmp_path):
     _configured_windows.clear()
+    monkeypatch.setattr(
+        model_cmds.client, "get_system_summary", lambda: json.dumps({"nodes": []})
+    )
+    monkeypatch.setattr(
+        model_cmds.client, "get_runtime_statuses", lambda: json.dumps({"nodes": []})
+    )
     monkeypatch.setenv("MN_HOME", str(tmp_path / ".mn"))
     monkeypatch.setenv("MN_MODEL_OWNERSHIP_PATH", str(tmp_path / "ownership.json"))
     monkeypatch.setenv("MN_MODEL_REMOTES_PATH", str(tmp_path / "model-remotes.json"))
     monkeypatch.setenv("MN_MODEL_PROXIES_PATH", str(tmp_path / "model-proxies.json"))
-    monkeypatch.setattr("mn_sdk.native_resource_registry._run_command", lambda *_a: _completed([]))
+    monkeypatch.setattr(
+        "mn_sdk.native_resource_registry._run_command", lambda *_a: _completed([])
+    )
     monkeypatch.setattr("mn_cli.libs.model_cmds._endpoint_responds", lambda: False)
     monkeypatch.setattr("mn_sdk.model_service.endpoint_responds", lambda: False)
     monkeypatch.setattr(
@@ -82,7 +90,11 @@ _configured_windows = {}
 
 
 def _completed(command, returncode=0, stdout="", stderr=""):
-    if command[:3] in (["docker", "container", "inspect"], ["docker", "volume", "inspect"]) and not stdout:
+    if (
+        command[:3]
+        in (["docker", "container", "inspect"], ["docker", "volume", "inspect"])
+        and not stdout
+    ):
         returncode = 1
         stderr = f"No such {command[1]}"
     # Model installation now verifies DMR configuration, rather than trusting
@@ -91,11 +103,22 @@ def _completed(command, returncode=0, stdout="", stderr=""):
         if command[2] == "inspect":
             stdout = "{}"
         elif command[2:4] == ["configure", "show"]:
-            stdout = json.dumps([{"Model": command[-1], "Backend": "llama.cpp",
-                                  "Mode": "completion", "Config": {
-                                      "context-size": _configured_windows.get(command[-1])}}])
+            stdout = json.dumps(
+                [
+                    {
+                        "Model": command[-1],
+                        "Backend": "llama.cpp",
+                        "Mode": "completion",
+                        "Config": {
+                            "context-size": _configured_windows.get(command[-1])
+                        },
+                    }
+                ]
+            )
         elif command[2] == "configure" and "--context-size" in command:
-            _configured_windows[command[-1]] = int(command[command.index("--context-size") + 1])
+            _configured_windows[command[-1]] = int(
+                command[command.index("--context-size") + 1]
+            )
     return subprocess.CompletedProcess(command, returncode, stdout, stderr)
 
 
@@ -157,7 +180,11 @@ def test_model_list_defaults_to_added_and_available_includes_catalog(mocker):
     available = runner.invoke(app, ["model", "list", "--available", "--json"])
     assert available.exit_code == 0
     payload = cli_data(available)
-    bolt = next(model for model in payload["models"] if model["id"] == "nemotron-3.5-bolt-e4b:q4_k_m")
+    bolt = next(
+        model
+        for model in payload["models"]
+        if model["id"] == "nemotron-3.5-bolt-e4b:q4_k_m"
+    )
     assert bolt["model"] == "nemotron-3.5-bolt-e4b:q4_k_m"
     assert bolt["kind"] == "dmr"
     assert bolt["state"] == "available"
@@ -367,7 +394,9 @@ def test_model_list_hides_private_owner_route_names(mocker):
     assert result.exit_code == 0, result.stdout
     assert "__mn_owner__/" not in result.stdout
     model = next(
-        item for item in cli_data(result)["models"] if item["id"] == "nemotron-3.5-bolt-e4b:q4_k_m"
+        item
+        for item in cli_data(result)["models"]
+        if item["id"] == "nemotron-3.5-bolt-e4b:q4_k_m"
     )
     assert model["installations"][0]["api_model"] == "nemotron-3.5-bolt-e4b:q4_k_m"
 
@@ -449,7 +478,7 @@ def test_cluster_model_reconcile_reads_redis_snapshots_and_syncs_only_local_gate
         "mn_cli.libs.model_cmds.sync_litellm_gateway",
         side_effect=lambda **kwargs: synced.append(kwargs) or {"status": "running"},
     )
-    peer_client = mocker.patch("mn_cli.libs.model_cmds.Client")
+    peer_client = mocker.patch("mn_cli.libs.model_cmds.client.get_node_runtime_status")
 
     result = model_cmds.reconcile_cluster_model_routes(restart=False)
 
@@ -582,7 +611,10 @@ def test_cluster_model_reconcile_does_not_rehome_a_live_remote_owner():
     )
 
     assert reconciled == []
-    assert get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m")["selected_node"] == "mirror_neuron@worker"
+    assert (
+        get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m")["selected_node"]
+        == "mirror_neuron@worker"
+    )
 
 
 def test_cluster_model_reconcile_requires_matching_publish_ack(mocker):
@@ -846,7 +878,10 @@ def test_model_show_resolves_bolt_alias(mocker):
 
 def test_model_show_without_argument_returns_entire_static_catalog(mocker):
     mocker.patch("subprocess.run", side_effect=AssertionError("live command"))
-    mocker.patch("mn_cli.libs.model_cmds.litellm_gateway_health", side_effect=AssertionError("live gateway"))
+    mocker.patch(
+        "mn_cli.libs.model_cmds.litellm_gateway_health",
+        side_effect=AssertionError("live gateway"),
+    )
 
     result = runner.invoke(app, ["model", "show", "--json"])
 
@@ -854,7 +889,9 @@ def test_model_show_without_argument_returns_entire_static_catalog(mocker):
     models = cli_data(result)["models"]
     assert {model["id"] for model in models} == set(model_cmds.load_model_catalog())
     assert {model["id"] for model in models if model["default"]} == {
-        "nemotron-3.5-bolt-e4b:q4_k_m", "bonsai2:ptq1_0", "nemotron-3.5-lightning:latest"
+        "nemotron-3.5-bolt-e4b:q4_k_m",
+        "bonsai2:ptq1_0",
+        "nemotron-3.5-lightning:latest",
     }
 
 
@@ -863,7 +900,9 @@ def test_model_show_without_argument_returns_entire_static_catalog(mocker):
 def test_model_show_catalog_marks_defaults_in_human_output(monkeypatch, width, plain):
     from rich.console import Console
 
-    monkeypatch.setattr("mn_cli.libs.model_rendering.console", Console(width=width, color_system=None))
+    monkeypatch.setattr(
+        "mn_cli.libs.model_rendering.console", Console(width=width, color_system=None)
+    )
     if plain:
         monkeypatch.setenv("MN_CLI_OUTPUT", "plain")
         monkeypatch.setenv("NO_COLOR", "1")
@@ -875,18 +914,24 @@ def test_model_show_catalog_marks_defaults_in_human_output(monkeypatch, width, p
 
 def test_model_show_honors_catalog_default_override(tmp_path, monkeypatch):
     path = tmp_path / "catalog.json"
-    path.write_text(json.dumps({"defaults": {"llm": {"model": "nemotron3"}}, "models": []}))
+    path.write_text(
+        json.dumps({"defaults": {"llm": {"model": "nemotron3"}}, "models": []})
+    )
     monkeypatch.setenv("MN_MODEL_CATALOG_PATH", str(path))
     result = runner.invoke(app, ["model", "show", "--json"])
     assert result.exit_code == 0, result.stdout
-    assert [item["id"] for item in cli_data(result)["models"] if item["default"]] == ["nemotron3:q4_K_M"]
+    assert [item["id"] for item in cli_data(result)["models"] if item["default"]] == [
+        "nemotron3:q4_K_M"
+    ]
 
 
 def test_model_show_does_not_require_docker_binary(mocker):
     mocker.patch("subprocess.run", side_effect=FileNotFoundError("docker"))
     mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=False)
 
-    result = runner.invoke(app, ["model", "show", "nemotron-3.5-bolt-e4b:q4_k_m", "--json"])
+    result = runner.invoke(
+        app, ["model", "show", "nemotron-3.5-bolt-e4b:q4_k_m", "--json"]
+    )
 
     assert result.exit_code == 0
     payload = cli_data(result)
@@ -978,7 +1023,9 @@ def test_model_probe_checks_local_dmr_and_litellm_then_persists_proxy_matrix(
         },
     )
 
-    result = runner.invoke(app, ["model", "probe", "nemotron-3.5-bolt-e4b:q4_k_m", "--json"])
+    result = runner.invoke(
+        app, ["model", "probe", "nemotron-3.5-bolt-e4b:q4_k_m", "--json"]
+    )
 
     assert result.exit_code == 0, result.stdout
     payload = cli_data(result)
@@ -1074,6 +1121,7 @@ def test_model_probe_batch_continues_after_an_individual_failure(mocker):
         "mn_cli.libs.model_cmds._local_runtime_node_name",
         return_value="mirror_neuron@spark",
     )
+
     def successful(model):
         return {
             "status": "verified",
@@ -1400,7 +1448,9 @@ def test_cluster_runtime_status_endpoints_use_live_membership_and_ignore_departe
     ]
 
 
-def test_cluster_runtime_status_endpoints_fetch_missing_peer_snapshot_directly(mocker):
+def test_cluster_runtime_status_endpoints_fetch_missing_peer_snapshot_through_core(
+    mocker,
+):
     local = _cluster_node("mirror_neuron@local", "10.0.0.1", self_node=True)
     spark = _cluster_node("mirror_neuron@spark", "10.0.0.2")
     local_snapshot = {
@@ -1438,11 +1488,10 @@ def test_cluster_runtime_status_endpoints_fetch_missing_peer_snapshot_directly(m
         "mn_cli.libs.model_cmds.client.get_runtime_statuses",
         return_value=json.dumps({"nodes": [local_snapshot, spark], "events": []}),
     )
-    peer = mocker.Mock()
-    peer.get_runtime_statuses.return_value = json.dumps(
-        {"nodes": [local_snapshot, spark_snapshot], "events": []}
+    peer_client = mocker.patch(
+        "mn_cli.libs.model_cmds.client.get_node_runtime_status",
+        return_value=json.dumps(spark_snapshot),
     )
-    peer_client = mocker.patch("mn_cli.libs.model_cmds.Client", return_value=peer)
 
     endpoints = model_cmds._cluster_runtime_status_endpoints()
 
@@ -1455,7 +1504,7 @@ def test_cluster_runtime_status_endpoints_fetch_missing_peer_snapshot_directly(m
         "nemotron3:q4_K_M"
     )
     peer_client.assert_called_once_with(
-        target="10.0.0.2:55051",
+        "mirror_neuron@spark",
         timeout=model_cmds.RUNTIME_STATUS_PEER_TIMEOUT_SECONDS,
     )
 
@@ -1467,9 +1516,7 @@ def test_model_status_refreshes_stale_snapshot_without_penalizing_legacy_snapsho
             models["reported_at"] = reported_at
         return {"runtime_status": {"models": models}}
 
-    assert model_cmds._model_status_needs_peer_refresh(
-        snapshot("2000-01-01T00:00:00Z")
-    )
+    assert model_cmds._model_status_needs_peer_refresh(snapshot("2000-01-01T00:00:00Z"))
     assert not model_cmds._model_status_needs_peer_refresh(
         snapshot("2999-01-01T00:00:00Z")
     )
@@ -1515,7 +1562,7 @@ def test_install_model_on_cluster_node_uses_local_runtime_client_for_local_host(
         "mn_cli.libs.model_cmds._local_host_addresses", return_value={"192.168.6.28"}
     )
     mocker.patch(
-        "mn_cli.libs.model_cmds.Client",
+        "mn_sdk.client.grpc.insecure_channel",
         side_effect=AssertionError("should use local runtime client for local host"),
     )
     fake_runtime_client = mocker.Mock()
@@ -1807,32 +1854,62 @@ def test_model_add_bare_default_selects_feasible_cluster_model(mocker, remote):
         )
         resources.append(resource)
         systems.append(system)
-    mocker.patch.object(model_cmds.client, "get_resource", return_value=json.dumps({"nodes": resources}))
-    mocker.patch.object(model_cmds.client, "get_system_summary", return_value=json.dumps({"nodes": systems}))
+    mocker.patch.object(
+        model_cmds.client, "get_resource", return_value=json.dumps({"nodes": resources})
+    )
+    mocker.patch.object(
+        model_cmds.client,
+        "get_system_summary",
+        return_value=json.dumps({"nodes": systems}),
+    )
     mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=False)
-    mocker.patch("mn_cli.libs.model_cmds._installed_cluster_model_node", return_value="")
-    mocker.patch("mn_sdk.model_runtime.detect_host_hardware", return_value=HostHardwareProfile(
-        "darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True
-    ))
+    mocker.patch(
+        "mn_cli.libs.model_cmds._installed_cluster_model_node", return_value=""
+    )
+    mocker.patch(
+        "mn_sdk.model_runtime.detect_host_hardware",
+        return_value=HostHardwareProfile(
+            "darwin",
+            "arm64",
+            total_memory_gb=16,
+            unified_memory_gb=16,
+            has_apple_silicon=True,
+        ),
+    )
     installed = []
 
     def install(entry, **kwargs):
         installed.append((entry["id"], kwargs["node"]))
-        return {"entry": entry, "docker_model": entry["model"], "compatibility": {"backend": "llama.cpp", "warnings": []}}
+        return {
+            "entry": entry,
+            "docker_model": entry["model"],
+            "compatibility": {"backend": "llama.cpp", "warnings": []},
+        }
 
-    mocker.patch("mn_cli.libs.model_cmds._install_model_on_cluster_node", side_effect=install)
+    mocker.patch(
+        "mn_cli.libs.model_cmds._install_model_on_cluster_node", side_effect=install
+    )
     result = runner.invoke(app, ["model", "add", "--default", "--json"])
     assert result.exit_code == 0, result.stdout
-    expected = "nemotron-3.5-lightning:latest" if remote else "nemotron-3.5-bolt-e4b:q4_k_m"
+    expected = (
+        "nemotron-3.5-lightning:latest" if remote else "nemotron-3.5-bolt-e4b:q4_k_m"
+    )
     assert installed == [(expected, "spark" if remote else "local")]
     assert get_registered_model(expected) is not None
     assert not load_model_registry().get("default_model_id")
 
 
 def test_model_add_bare_default_local_uses_portable_fallback(mocker):
-    mocker.patch("mn_sdk.model_runtime.detect_host_hardware", return_value=HostHardwareProfile(
-        "darwin", "arm64", total_memory_gb=16, unified_memory_gb=16, has_apple_silicon=True
-    ))
+    mocker.patch(
+        "mn_sdk.model_runtime.detect_host_hardware",
+        return_value=HostHardwareProfile(
+            "darwin",
+            "arm64",
+            total_memory_gb=16,
+            unified_memory_gb=16,
+            has_apple_silicon=True,
+        ),
+    )
     mocker.patch("mn_cli.libs.model_cmds._model_installed", return_value=True)
     mocker.patch("mn_cli.libs.model_cmds._sync_installed_model_gateway_route")
     mocker.patch("mn_cli.libs.model_cmds.record_manual_model_install")
@@ -1851,11 +1928,27 @@ def test_model_add_still_requires_selection():
 def test_model_add_bare_default_reuses_operator_provider_default(mocker):
     from mn_sdk import provider_registration, set_registered_default_model
 
-    add_registered_models([provider_registration("custom-chat", source_model="custom-chat", api_base="https://example.test/v1")])
+    add_registered_models(
+        [
+            provider_registration(
+                "custom-chat",
+                source_model="custom-chat",
+                api_base="https://example.test/v1",
+            )
+        ]
+    )
     set_registered_default_model("custom-chat")
-    mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway", return_value={"status": "running"})
-    mocker.patch("mn_cli.libs.model_cmds._sync_default_model_across_cluster", return_value=[])
-    mocker.patch("mn_cli.libs.model_cmds.install_model_entry", side_effect=AssertionError("provider pull"))
+    mocker.patch(
+        "mn_cli.libs.model_cmds.sync_litellm_gateway",
+        return_value={"status": "running"},
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds._sync_default_model_across_cluster", return_value=[]
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds.install_model_entry",
+        side_effect=AssertionError("provider pull"),
+    )
     result = runner.invoke(app, ["model", "add", "--default", "--json"])
     assert result.exit_code == 0, result.stdout
     assert cli_data(result)["model"]["id"] == "custom-chat"
@@ -1920,7 +2013,9 @@ def test_model_add_adopts_cluster_artifact_before_new_placement(mocker):
         },
     )
 
-    result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--json"])
+    result = runner.invoke(
+        app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--json"]
+    )
 
     assert result.exit_code == 0, result.stdout
     assert cli_data(result)["reused"] is True
@@ -1951,12 +2046,16 @@ def test_model_add_uses_automatic_best_node_by_default(mocker):
         },
     )
 
-    result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--json"])
+    result = runner.invoke(
+        app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--json"]
+    )
 
     assert result.exit_code == 0, result.stdout
     selected.assert_called_once()
     assert install.call_args.kwargs["node"] == "spark"
-    assert get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m")["selected_node"] == "spark"
+    assert (
+        get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m")["selected_node"] == "spark"
+    )
 
 
 def test_automatic_model_install_node_ranks_compatible_cluster_capacity(mocker):
@@ -2016,7 +2115,9 @@ def test_model_add_same_node_is_idempotent(mocker):
     mocker.patch("mn_cli.libs.model_cmds._local_runtime_node_name", return_value="mini")
     install = mocker.patch("mn_cli.libs.model_cmds.install_model_entry")
 
-    result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--local", "--json"])
+    result = runner.invoke(
+        app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--local", "--json"]
+    )
 
     assert result.exit_code == 0
     payload = cli_data(result)
@@ -2073,7 +2174,10 @@ def test_model_add_supports_local_and_repeated_node_replicas(mocker):
     assert result.exit_code == 0, result.stdout
     assert [item["node"] for item in cli_data(result)["results"]] == ["mini", "spark"]
     assert [
-        item["node"] for item in get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m")["installations"]
+        item["node"]
+        for item in get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m")[
+            "installations"
+        ]
     ] == [
         "mini",
         "spark",
@@ -2155,7 +2259,10 @@ def test_model_add_multi_node_retains_successful_partial_install(mocker):
     assert payload["status"] == "partial"
     assert [item["status"] for item in payload["results"]] == ["ready", "error"]
     assert [
-        item["node"] for item in get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m")["installations"]
+        item["node"]
+        for item in get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m")[
+            "installations"
+        ]
     ] == ["spark"]
 
 
@@ -2235,7 +2342,9 @@ def test_model_add_retains_artifact_as_unmanaged_when_route_finalization_fails(m
         side_effect=RuntimeError("gateway unavailable"),
     )
 
-    result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--local", "--json"])
+    result = runner.invoke(
+        app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--local", "--json"]
+    )
 
     assert result.exit_code == 1
     output = " ".join(result.stdout.split())
@@ -2347,12 +2456,17 @@ def test_model_add_syncs_provider_definition_to_all_cluster_nodes(
 def _assert_cold_configuration_unloaded(calls, target="nemotron-3.5-bolt-e4b:q4_k_m"):
     # Configure starts an asynchronous DMR preload. Synchronize with readiness
     # before unloading, so a successful add/update cannot leave cold weights resident.
-    configure = next(i for i, command in enumerate(calls)
-                     if command[:4] == ["docker", "model", "configure", "--context-size"])
+    configure = next(
+        i
+        for i, command in enumerate(calls)
+        if command[:4] == ["docker", "model", "configure", "--context-size"]
+    )
     ready = calls.index(["docker", "model", "run", "--detach", target])
     unload = calls.index(["docker", "model", "unload", target])
     assert configure < ready < unload
-    assert not any(command[:3] == ["docker", "model", "run"] for command in calls[unload + 1:])
+    assert not any(
+        command[:3] == ["docker", "model", "run"] for command in calls[unload + 1 :]
+    )
 
 
 def test_model_install_pulls_configures_and_leaves_cold_model_unloaded(mocker):
@@ -2391,7 +2505,12 @@ def test_model_install_pulls_configures_and_leaves_cold_model_unloaded(mocker):
     assert result.exit_code == 0
     assert "Model add successful." in result.stdout
     assert "nemotron-3.5-bolt-e4b:q4_k_m" in result.stdout
-    assert ["docker", "model", "pull", "hf.co/MirrorNeuronLab/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF:Q4_K_M"] in calls
+    assert [
+        "docker",
+        "model",
+        "pull",
+        "hf.co/MirrorNeuronLab/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF:Q4_K_M",
+    ] in calls
     assert [
         "docker",
         "model",
@@ -2407,7 +2526,9 @@ def test_model_install_pulls_configures_and_leaves_cold_model_unloaded(mocker):
 
 
 def test_model_install_syncs_local_dmr_gateway_route(mocker, monkeypatch):
-    monkeypatch.setenv("MN_NODE_HARDWARE_JSON", json.dumps({"platform": {"os": "darwin"}}))
+    monkeypatch.setenv(
+        "MN_NODE_HARDWARE_JSON", json.dumps({"platform": {"os": "darwin"}})
+    )
     synced = []
 
     def fake_run(command, **kwargs):
@@ -2465,8 +2586,12 @@ def test_model_install_syncs_local_dmr_gateway_route(mocker, monkeypatch):
     assert "nemotron-3.5-bolt-e4b:q4_k_m" in load_model_ownership()["models"]
 
 
-def test_model_install_local_dmr_publishes_status_without_peer_gateway_fanout(mocker, monkeypatch):
-    monkeypatch.setenv("MN_NODE_HARDWARE_JSON", json.dumps({"platform": {"os": "darwin"}}))
+def test_model_install_local_dmr_publishes_status_without_peer_gateway_fanout(
+    mocker, monkeypatch
+):
+    monkeypatch.setenv(
+        "MN_NODE_HARDWARE_JSON", json.dumps({"platform": {"os": "darwin"}})
+    )
     local_syncs = []
 
     def fake_run(command, **kwargs):
@@ -2482,7 +2607,7 @@ def test_model_install_local_dmr_publishes_status_without_peer_gateway_fanout(mo
         return _completed(command)
 
     mocker.patch("subprocess.run", side_effect=fake_run)
-    peer_client = mocker.patch("mn_cli.libs.model_cmds.Client")
+    peer_client = mocker.patch("mn_cli.libs.model_cmds.client.get_node_runtime_status")
     mocker.patch(
         "mn_cli.libs.model_cmds.client.get_system_summary",
         return_value=_cluster_summary(
@@ -2533,15 +2658,16 @@ def test_model_install_local_dmr_publishes_status_without_peer_gateway_fanout(mo
         ),
     )
 
-    result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--local"])
+    result = runner.invoke(
+        app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--local"]
+    )
 
     assert result.exit_code == 0
     assert (
         local_syncs[0]["runtime_endpoints"]["nemotron-3.5-bolt-e4b:q4_k_m"]["api_base"]
         == "http://model-runner.docker.internal/engines/v1"
     )
-    peer_client.assert_called_once_with(target="10.0.0.2:55051", timeout=5.0)
-    peer_client.return_value.sync_litellm_gateway.assert_not_called()
+    peer_client.assert_called_once_with("spark", timeout=5.0)
 
 
 def test_model_install_node_uses_prepare_runtime_model_not_ssh(mocker):
@@ -2592,7 +2718,11 @@ def test_model_install_node_uses_prepare_runtime_model_not_ssh(mocker):
             }
         ),
     )
-    mocker.patch("mn_cli.libs.model_cmds.Client", FakeClient)
+    local_core = FakeClient(target="local-core:55051")
+    mocker.patch(
+        "mn_cli.libs.model_cmds.client.prepare_runtime_model",
+        local_core.prepare_runtime_model,
+    )
     mocker.patch(
         "mn_cli.libs.model_cmds.sync_litellm_gateway",
         side_effect=lambda **kwargs: synced.append(kwargs) or {},
@@ -2603,10 +2733,13 @@ def test_model_install_node_uses_prepare_runtime_model_not_ssh(mocker):
         side_effect=AssertionError("remote install must not shell out"),
     )
 
-    result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--node", "spark"])
+    result = runner.invoke(
+        app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--node", "spark"]
+    )
 
     assert result.exit_code == 0
     prepare_payload = [payload for kind, payload in calls if kind == "prepare"][0]
+    assert prepare_payload["node"] == "spark"
     assert prepare_payload["model"] == "nemotron-3.5-bolt-e4b:q4_k_m"
     assert prepare_payload["source"] == "mn-cli"
     assert (
@@ -2626,7 +2759,9 @@ def test_model_install_node_uses_prepare_runtime_model_not_ssh(mocker):
 
 
 def test_model_update_refreshes_local_dmr_gateway_route(mocker, monkeypatch):
-    monkeypatch.setenv("MN_NODE_HARDWARE_JSON", json.dumps({"platform": {"os": "darwin"}}))
+    monkeypatch.setenv(
+        "MN_NODE_HARDWARE_JSON", json.dumps({"platform": {"os": "darwin"}})
+    )
     calls = []
     synced = []
 
@@ -2672,7 +2807,12 @@ def test_model_update_refreshes_local_dmr_gateway_route(mocker, monkeypatch):
     result = runner.invoke(app, ["model", "update", "nemotron-3.5-bolt-e4b:q4_k_m"])
 
     assert result.exit_code == 0
-    assert ["docker", "model", "pull", "hf.co/MirrorNeuronLab/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF:Q4_K_M"] in calls
+    assert [
+        "docker",
+        "model",
+        "pull",
+        "hf.co/MirrorNeuronLab/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF:Q4_K_M",
+    ] in calls
     _assert_cold_configuration_unloaded(calls)
     assert (
         synced[0]["runtime_endpoints"]["nemotron-3.5-bolt-e4b:q4_k_m"]["api_base"]
@@ -2727,7 +2867,7 @@ def test_model_install_node_syncs_only_the_calling_nodes_gateway(mocker):
                 }
             )
 
-        def sync_litellm_gateway(self, payload):
+        def sync_litellm_gateway(self, payload, *, timeout=None):
             node_syncs.append((self.target, payload))
             return json.dumps({"status": "running"})
 
@@ -2738,7 +2878,15 @@ def test_model_install_node_syncs_only_the_calling_nodes_gateway(mocker):
             _cluster_node("moon", "192.168.4.174"),
         ),
     )
-    mocker.patch("mn_cli.libs.model_cmds.Client", FakeClient)
+    local_core = FakeClient(target="local-core:55051")
+    mocker.patch(
+        "mn_cli.libs.model_cmds.client.prepare_runtime_model",
+        local_core.prepare_runtime_model,
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds.client.sync_litellm_gateway",
+        local_core.sync_litellm_gateway,
+    )
     mocker.patch(
         "mn_cli.libs.model_cmds.sync_litellm_gateway",
         side_effect=lambda **kwargs: local_syncs.append(kwargs) or {},
@@ -2749,10 +2897,12 @@ def test_model_install_node_syncs_only_the_calling_nodes_gateway(mocker):
         side_effect=AssertionError("remote install must not shell out"),
     )
 
-    result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--node", "spark"])
+    result = runner.invoke(
+        app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m", "--node", "spark"]
+    )
 
     assert result.exit_code == 0
-    assert calls[0][1] == "192.168.4.173:55052"
+    assert calls[0][1] == "local-core:55051"
     assert (
         local_syncs[0]["runtime_endpoints"]["nemotron-3.5-bolt-e4b:q4_k_m"]["api_base"]
         == "http://192.168.4.173:4000/v1"
@@ -2771,7 +2921,7 @@ def test_cluster_runtime_endpoint_sync_excludes_each_route_owner(mocker):
         def __init__(self, **kwargs):
             self.target = kwargs.get("target")
 
-        def sync_litellm_gateway(self, payload):
+        def sync_litellm_gateway(self, payload, *, timeout=None):
             node_syncs.append((self.target, payload))
             return json.dumps({"status": "running"})
 
@@ -2782,7 +2932,11 @@ def test_cluster_runtime_endpoint_sync_excludes_each_route_owner(mocker):
             _cluster_node("moon", "192.168.4.174"),
         ),
     )
-    mocker.patch("mn_cli.libs.model_cmds.Client", FakeClient)
+    local_core = FakeClient(target="local-core:55051")
+    mocker.patch(
+        "mn_cli.libs.model_cmds.client.sync_litellm_gateway",
+        local_core.sync_litellm_gateway,
+    )
 
     model_cmds._sync_gateway_runtime_endpoints_across_cluster(
         {
@@ -2805,12 +2959,15 @@ def test_cluster_runtime_endpoint_sync_excludes_each_route_owner(mocker):
     )
 
     routes_by_target = {
-        target: set(payload["runtime_endpoints"]) for target, payload in node_syncs
+        payload["node"]: set(payload["runtime_endpoints"])
+        for target, payload in node_syncs
     }
     assert routes_by_target == {
-        "192.168.4.173:55052": {"small"},
-        "192.168.4.174:55052": {"nemotron-3.5-lightning:latest"},
+        "spark": {"small"},
+        "moon": {"nemotron-3.5-lightning:latest"},
     }
+
+    assert all(target == "local-core:55051" for target, _ in node_syncs)
 
 
 def test_model_install_streams_pull_progress(mocker):
@@ -2848,7 +3005,13 @@ def test_model_install_streams_pull_progress(mocker):
     pull_kwargs = [
         kwargs
         for command, kwargs in calls
-        if command == ["docker", "model", "pull", "hf.co/MirrorNeuronLab/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF:Q4_K_M"]
+        if command
+        == [
+            "docker",
+            "model",
+            "pull",
+            "hf.co/MirrorNeuronLab/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF:Q4_K_M",
+        ]
     ][0]
     assert pull_kwargs["capture_output"] is False
 
@@ -2869,13 +3032,21 @@ def test_model_install_retries_transient_pull_failure(mocker):
             )
         if command[:4] == ["docker", "model", "run", "--help"]:
             return _completed(command, stdout="Options:\n")
-        if command == ["docker", "model", "pull", "hf.co/MirrorNeuronLab/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF:Q4_K_M"]:
+        if command == [
+            "docker",
+            "model",
+            "pull",
+            "hf.co/MirrorNeuronLab/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF:Q4_K_M",
+        ]:
             pull_attempts += 1
             if pull_attempts == 1:
                 return _completed(
                     command, returncode=1, stderr="writing blob: blob digest mismatch"
                 )
-        if command == ["docker", "model", "inspect", "nemotron-3.5-bolt-e4b:q4_k_m"] and pull_attempts < 2:
+        if (
+            command == ["docker", "model", "inspect", "nemotron-3.5-bolt-e4b:q4_k_m"]
+            and pull_attempts < 2
+        ):
             return _completed(command, returncode=1)
         return _completed(command)
 
@@ -2895,7 +3066,17 @@ def test_model_install_retries_transient_pull_failure(mocker):
     result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m"])
 
     assert result.exit_code == 0
-    assert calls.count(["docker", "model", "pull", "hf.co/MirrorNeuronLab/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF:Q4_K_M"]) == 2
+    assert (
+        calls.count(
+            [
+                "docker",
+                "model",
+                "pull",
+                "hf.co/MirrorNeuronLab/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF:Q4_K_M",
+            ]
+        )
+        == 2
+    )
     _assert_cold_configuration_unloaded(calls)
 
 
@@ -2966,7 +3147,9 @@ def test_model_install_state_can_be_listed_after_install(mocker):
         ),
     )
 
-    install_result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m"])
+    install_result = runner.invoke(
+        app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m"]
+    )
     list_result = runner.invoke(app, ["model", "list", "--json"])
 
     assert install_result.exit_code == 0
@@ -3015,8 +3198,22 @@ def test_model_install_verifies_context_with_configure_when_run_help_omits_it(mo
 
     assert result.exit_code == 0
     _assert_cold_configuration_unloaded(calls)
-    assert ["docker", "model", "configure", "--context-size", "8192", "--mode", "completion", "nemotron-3.5-bolt-e4b:q4_k_m"] in calls
-    assert calls.count(["docker", "model", "configure", "show", "nemotron-3.5-bolt-e4b:q4_k_m"]) >= 2
+    assert [
+        "docker",
+        "model",
+        "configure",
+        "--context-size",
+        "8192",
+        "--mode",
+        "completion",
+        "nemotron-3.5-bolt-e4b:q4_k_m",
+    ] in calls
+    assert (
+        calls.count(
+            ["docker", "model", "configure", "show", "nemotron-3.5-bolt-e4b:q4_k_m"]
+        )
+        >= 2
+    )
     assert [
         "docker",
         "model",
@@ -3193,7 +3390,9 @@ def test_model_doctor_reports_corrupted_gateway_config(tmp_path, monkeypatch, mo
         ),
     )
 
-    result = runner.invoke(app, ["model", "doctor", "nemotron-3.5-bolt-e4b:q4_k_m", "--json"])
+    result = runner.invoke(
+        app, ["model", "doctor", "nemotron-3.5-bolt-e4b:q4_k_m", "--json"]
+    )
 
     assert result.exit_code == 0
     payload = cli_data(result)
@@ -3247,7 +3446,12 @@ def test_model_install_blocks_incompatible_hardware_before_pull(mocker):
     result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m"])
 
     assert result.exit_code == 1
-    assert ["docker", "model", "pull", "hf.co/MirrorNeuronLab/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF:Q4_K_M"] not in calls
+    assert [
+        "docker",
+        "model",
+        "pull",
+        "hf.co/MirrorNeuronLab/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF:Q4_K_M",
+    ] not in calls
 
 
 def test_model_install_failure_does_not_record_manual_ownership(
@@ -3290,7 +3494,12 @@ def test_model_install_failure_does_not_record_manual_ownership(
     result = runner.invoke(app, ["model", "add", "nemotron-3.5-bolt-e4b:q4_k_m"])
 
     assert result.exit_code == 1
-    assert ["docker", "model", "pull", "hf.co/MirrorNeuronLab/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF:Q4_K_M"] in calls
+    assert [
+        "docker",
+        "model",
+        "pull",
+        "hf.co/MirrorNeuronLab/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF:Q4_K_M",
+    ] in calls
     assert load_model_ownership()["models"] == {}
 
 
@@ -3344,7 +3553,9 @@ def test_model_remove_uses_resolved_docker_model_with_force(mocker):
     mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway")
     mocker.patch("mn_cli.libs.model_cmds.reconcile_cluster_model_routes")
 
-    result = runner.invoke(app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--force", "--yes"])
+    result = runner.invoke(
+        app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--force", "--yes"]
+    )
 
     assert result.exit_code == 0
     assert "Model remove successful." in result.stdout
@@ -3352,7 +3563,9 @@ def test_model_remove_uses_resolved_docker_model_with_force(mocker):
 
 
 def test_model_remove_requires_yes_when_noninteractive():
-    result = runner.invoke(app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--json"])
+    result = runner.invoke(
+        app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--json"]
+    )
 
     assert result.exit_code == 2
     assert "requires --yes" in result.stdout
@@ -3382,7 +3595,9 @@ def test_model_remove_blocks_blueprint_owned_dmr(mocker):
     record_model_owner(entry, blueprint_id="assistant-blueprint")
     remove_artifact = mocker.patch("mn_cli.libs.model_cmds.remove_model_ref")
 
-    result = runner.invoke(app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--yes", "--json"])
+    result = runner.invoke(
+        app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--yes", "--json"]
+    )
 
     assert result.exit_code == 2
     assert "assistant-blueprint" in result.stdout
@@ -3399,7 +3614,15 @@ def test_model_remove_force_overrides_blueprint_owner_guard(mocker):
     mocker.patch("mn_cli.libs.model_cmds.reconcile_cluster_model_routes")
 
     result = runner.invoke(
-        app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--force", "--yes", "--json"]
+        app,
+        [
+            "model",
+            "remove",
+            "nemotron-3.5-bolt-e4b:q4_k_m",
+            "--force",
+            "--yes",
+            "--json",
+        ],
     )
 
     assert result.exit_code == 0, result.stdout
@@ -3420,7 +3643,14 @@ def test_model_remove_keep_artifact_reports_installed_dmr(mocker):
 
     result = runner.invoke(
         app,
-        ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--keep-artifact", "--yes", "--json"],
+        [
+            "model",
+            "remove",
+            "nemotron-3.5-bolt-e4b:q4_k_m",
+            "--keep-artifact",
+            "--yes",
+            "--json",
+        ],
     )
 
     assert result.exit_code == 0, result.stdout
@@ -3429,7 +3659,9 @@ def test_model_remove_keep_artifact_reports_installed_dmr(mocker):
     remove_artifact.assert_not_called()
     listed = runner.invoke(app, ["model", "list", "--json"])
     model = next(
-        item for item in cli_data(listed)["models"] if item["id"] == "nemotron-3.5-bolt-e4b:q4_k_m"
+        item
+        for item in cli_data(listed)["models"]
+        if item["id"] == "nemotron-3.5-bolt-e4b:q4_k_m"
     )
     assert model["state"] == "installed"
     assert model["registered"] is False
@@ -3446,7 +3678,9 @@ def test_model_remove_retains_degraded_registration_when_route_cleanup_fails(moc
         side_effect=RuntimeError("gateway unavailable"),
     )
 
-    result = runner.invoke(app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--yes", "--json"])
+    result = runner.invoke(
+        app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--yes", "--json"]
+    )
 
     assert result.exit_code == 1
     assert "registration is degraded and retained" in " ".join(result.stdout.split())
@@ -3465,7 +3699,9 @@ def test_model_remove_artifact_failure_retains_registration_and_routes(mocker):
     remove_route = mocker.patch("mn_cli.libs.model_cmds.remove_litellm_gateway_route")
     sync = mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway")
 
-    result = runner.invoke(app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--yes", "--json"])
+    result = runner.invoke(
+        app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--yes", "--json"]
+    )
 
     assert result.exit_code == 1
     assert get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m") is not None
@@ -3570,12 +3806,16 @@ def test_model_remove_local_dmr_uses_status_reconcile_without_peer_route_calls(m
         def __init__(self, **kwargs):
             self.target = kwargs.get("target")
 
-        def remove_litellm_gateway_route(self, payload):
+        def remove_litellm_gateway_route(self, payload, *, timeout=None):
             node_removed.append((self.target, payload))
             return json.dumps({"status": "removed"})
 
     mocker.patch("subprocess.run", side_effect=fake_run)
-    mocker.patch("mn_cli.libs.model_cmds.Client", FakeClient)
+    local_core = FakeClient(target="local-core:55051")
+    mocker.patch(
+        "mn_cli.libs.model_cmds.client.remove_litellm_gateway_route",
+        local_core.remove_litellm_gateway_route,
+    )
     mocker.patch(
         "mn_cli.libs.model_cmds.client.get_system_summary",
         return_value=_cluster_summary(
@@ -3590,11 +3830,16 @@ def test_model_remove_local_dmr_uses_status_reconcile_without_peer_route_calls(m
     mocker.patch("mn_cli.libs.model_cmds.sync_litellm_gateway")
     mocker.patch("mn_cli.libs.model_cmds.reconcile_cluster_model_routes")
 
-    result = runner.invoke(app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--force", "--yes"])
+    result = runner.invoke(
+        app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--force", "--yes"]
+    )
 
     assert result.exit_code == 0
     assert ["docker", "model", "rm", "--force", "nemotron-3.5-bolt-e4b:q4_k_m"] in calls
-    assert local_removed == ["nemotron-3.5-bolt-e4b:q4_k_m", "nemotron-3.5-bolt-e4b:q4_k_m"]
+    assert local_removed == [
+        "nemotron-3.5-bolt-e4b:q4_k_m",
+        "nemotron-3.5-bolt-e4b:q4_k_m",
+    ]
     assert node_removed == []
 
 
@@ -3611,7 +3856,11 @@ def test_model_remove_registered_remote_dmr_calls_node_runtime(mocker):
             removed.append((self.target, payload))
             return json.dumps({"status": "removed"})
 
-    mocker.patch("mn_cli.libs.model_cmds.Client", FakeClient)
+    local_core = FakeClient(target="local-core:55051")
+    mocker.patch(
+        "mn_cli.libs.model_cmds.client.prepare_runtime_model",
+        local_core.prepare_runtime_model,
+    )
     mocker.patch(
         "mn_cli.libs.model_cmds.client.get_system_summary",
         return_value=_cluster_summary(
@@ -3627,13 +3876,15 @@ def test_model_remove_registered_remote_dmr_calls_node_runtime(mocker):
         side_effect=AssertionError("remote route removal must not shell out"),
     )
 
-    result = runner.invoke(app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--force", "--yes"])
+    result = runner.invoke(
+        app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--force", "--yes"]
+    )
 
     assert result.exit_code == 0
     assert [
         (target, payload["model"], payload["action"]) for target, payload in removed
     ] == [
-        ("192.168.4.173:55052", "nemotron-3.5-bolt-e4b:q4_k_m", "remove"),
+        ("local-core:55051", "nemotron-3.5-bolt-e4b:q4_k_m", "remove"),
     ]
 
 
@@ -3650,7 +3901,15 @@ def test_model_remove_requires_target_for_replicated_model(mocker):
     )
 
     result = runner.invoke(
-        app, ["model", "remove", "nemotron-3.5-bolt-e4b:q4_k_m", "--force", "--yes", "--json"]
+        app,
+        [
+            "model",
+            "remove",
+            "nemotron-3.5-bolt-e4b:q4_k_m",
+            "--force",
+            "--yes",
+            "--json",
+        ],
     )
 
     assert result.exit_code == 2
@@ -3691,9 +3950,14 @@ def test_model_remove_target_keeps_other_replica_registered(mocker):
 
     assert result.exit_code == 0, result.stdout
     assert [
-        item["node"] for item in get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m")["installations"]
+        item["node"]
+        for item in get_registered_model("nemotron-3.5-bolt-e4b:q4_k_m")[
+            "installations"
+        ]
     ] == ["mini"]
-    removed.assert_called_once_with("nemotron-3.5-bolt-e4b:q4_k_m", node="spark", force=True)
+    removed.assert_called_once_with(
+        "nemotron-3.5-bolt-e4b:q4_k_m", node="spark", force=True
+    )
 
 
 def test_model_update_defaults_to_all_recorded_replicas(mocker):
@@ -3715,7 +3979,9 @@ def test_model_update_defaults_to_all_recorded_replicas(mocker):
     )
     add_registered_models([record])
 
-    result = runner.invoke(app, ["model", "update", "nemotron-3.5-bolt-e4b:q4_k_m", "--json"])
+    result = runner.invoke(
+        app, ["model", "update", "nemotron-3.5-bolt-e4b:q4_k_m", "--json"]
+    )
 
     assert result.exit_code == 0, result.stdout
     assert [call.kwargs["node"] for call in install.call_args_list] == ["mini", "spark"]
@@ -3724,18 +3990,36 @@ def test_model_update_defaults_to_all_recorded_replicas(mocker):
 @pytest.mark.parametrize("local_installed", [False, True])
 def test_model_list_keeps_all_unregistered_remote_owners(mocker, local_installed):
     model = "nemotron-3.5-bolt-e4b:q4_k_m"
-    mocker.patch("mn_cli.libs.model_cmds._installed_model_names", return_value={model} if local_installed else set())
-    mocker.patch("mn_cli.libs.model_cmds._local_runtime_node_name", return_value="local-owner")
+    mocker.patch(
+        "mn_cli.libs.model_cmds._installed_model_names",
+        return_value={model} if local_installed else set(),
+    )
+    mocker.patch(
+        "mn_cli.libs.model_cmds._local_runtime_node_name", return_value="local-owner"
+    )
     mocker.patch("mn_cli.libs.model_cmds.load_model_registry", return_value={})
     mocker.patch("mn_cli.libs.model_cmds.load_model_catalog", return_value={})
-    remotes = [{"name": "nemotron-3.5-bolt-e4b:q4_k_m", "model": model, "api_model": "nemotron-3.5-bolt-e4b:q4_k_m",
-                "node": owner, "base_url": f"http://{owner}:8080/v1"}
-               for owner in ("peer-a", "peer-b")]
-    mocker.patch("mn_cli.libs.model_cmds._cluster_model_records_for_list", return_value=remotes)
+    remotes = [
+        {
+            "name": "nemotron-3.5-bolt-e4b:q4_k_m",
+            "model": model,
+            "api_model": "nemotron-3.5-bolt-e4b:q4_k_m",
+            "node": owner,
+            "base_url": f"http://{owner}:8080/v1",
+        }
+        for owner in ("peer-a", "peer-b")
+    ]
+    mocker.patch(
+        "mn_cli.libs.model_cmds._cluster_model_records_for_list", return_value=remotes
+    )
     rows = model_cmds._runtime_model_list_payload()["models"]
     assert len(rows) == 1
     installations = rows[0]["installations"]
     expected = {"peer-a", "peer-b"} | ({"local-owner"} if local_installed else set())
     assert {item["node"] for item in installations} == expected
     assert len(installations) == len(expected)
-    assert all(item["local"] is False for item in installations if item["node"] != "local-owner")
+    assert all(
+        item["local"] is False
+        for item in installations
+        if item["node"] != "local-owner"
+    )

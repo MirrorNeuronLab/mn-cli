@@ -41,8 +41,12 @@ def custom_blueprint_storage_dir(repo: str) -> Path:
     return sdk_custom_blueprint_storage_dir(repo)
 
 
-def blueprint_storage_dir_for_source(source: str, *, use_default_cache: bool = False) -> Path:
-    return sdk_blueprint_storage_dir_for_source(source, use_default_cache=use_default_cache)
+def blueprint_storage_dir_for_source(
+    source: str, *, use_default_cache: bool = False
+) -> Path:
+    return sdk_blueprint_storage_dir_for_source(
+        source, use_default_cache=use_default_cache
+    )
 
 
 def blueprint_cache_dir_for_repo(repo: str) -> Path:
@@ -54,10 +58,14 @@ def resolved_blueprint_source(
     source: Optional[str],
     blueprint_repo: Optional[str],
 ) -> tuple[str, bool]:
-    return sdk_resolve_blueprint_source_location(source=source, blueprint_repo=blueprint_repo)
+    return sdk_resolve_blueprint_source_location(
+        source=source, blueprint_repo=blueprint_repo
+    )
 
 
-def load_blueprint_index(index_path: Path, *, require_paths: bool = False) -> list[dict[str, Any]]:
+def load_blueprint_index(
+    index_path: Path, *, require_paths: bool = False
+) -> list[dict[str, Any]]:
     try:
         return sdk_load_blueprint_index(index_path, require_paths=require_paths)
     except BlueprintCatalogError as exc:
@@ -72,7 +80,9 @@ def ensure_blueprint_source(
     offline: bool,
     revision: Optional[str],
 ) -> str:
-    repo_source, uses_default_repo = resolved_blueprint_source(source=source, blueprint_repo=blueprint_repo)
+    repo_source, uses_default_repo = resolved_blueprint_source(
+        source=source, blueprint_repo=blueprint_repo
+    )
     storage_dir = blueprint_storage_dir_for_source(
         repo_source,
         use_default_cache=uses_default_repo,
@@ -80,17 +90,26 @@ def ensure_blueprint_source(
 
     if not storage_dir.exists():
         if offline:
-            print_error(console, f"Blueprint storage was not found at {storage_dir}; offline mode cannot clone {repo_source!r}.")
+            print_error(
+                console,
+                f"Blueprint storage was not found at {storage_dir}; offline mode cannot clone {repo_source!r}.",
+            )
             raise typer.Exit(1)
         if uses_default_repo:
             print_info(console, f"Initializing blueprint storage at {storage_dir}…")
         else:
-            print_info(console, f"Initializing blueprint storage for {repo_source} at {storage_dir}…")
+            print_info(
+                console,
+                f"Initializing blueprint storage for {repo_source} at {storage_dir}…",
+            )
         clone_blueprint_repo(repo_source, storage_dir)
     elif update:
         git_pull(storage_dir)
     elif not source or storage_dir != Path(source).expanduser():
-        print_info(console, f"Using cached blueprint storage at {storage_dir}. Run 'mn blueprint update' or pass --update to refresh.")
+        print_info(
+            console,
+            f"Using cached blueprint storage at {storage_dir}. Run 'mn blueprint update' or pass --update to refresh.",
+        )
 
     if revision:
         if offline:
@@ -103,7 +122,9 @@ def ensure_blueprint_source(
 
 def clone_blueprint_repo(source: str, storage_dir: Path) -> None:
     storage_dir.parent.mkdir(parents=True, exist_ok=True)
-    res = subprocess.run(["git", "clone", source, str(storage_dir)], capture_output=True, text=True)
+    res = subprocess.run(
+        ["git", "clone", source, str(storage_dir)], capture_output=True, text=True
+    )
     if res.returncode != 0:
         logger.error("Failed to clone blueprint repository: %s", res.stderr)
         print_error(console, f"Failed to clone blueprint repository: {res.stderr}")
@@ -112,25 +133,43 @@ def clone_blueprint_repo(source: str, storage_dir: Path) -> None:
 
 def git_pull(storage_dir: Path) -> None:
     print_info(console, f"Updating blueprint storage at {storage_dir}…")
-    res = subprocess.run(["git", "-C", str(storage_dir), "pull", "--ff-only"], capture_output=True, text=True)
+    res = subprocess.run(
+        ["git", "-C", str(storage_dir), "pull", "--ff-only"],
+        capture_output=True,
+        text=True,
+    )
     if res.returncode != 0:
         logger.warning("Failed to update blueprint repository: %s", res.stderr)
         print_warning(console, f"Failed to update blueprint repository: {res.stderr}")
 
 
 def git_fetch(storage_dir: Path) -> None:
-    subprocess.run(["git", "-C", str(storage_dir), "fetch", "--all", "--tags"], capture_output=True, text=True)
+    subprocess.run(
+        ["git", "-C", str(storage_dir), "fetch", "--all", "--tags"],
+        capture_output=True,
+        text=True,
+    )
 
 
 def git_checkout(storage_dir: Path, revision: str) -> None:
-    res = subprocess.run(["git", "-C", str(storage_dir), "checkout", revision], capture_output=True, text=True)
+    res = subprocess.run(
+        ["git", "-C", str(storage_dir), "checkout", revision],
+        capture_output=True,
+        text=True,
+    )
     if res.returncode != 0:
-        print_error(console, f"Failed to checkout blueprint revision {revision}: {res.stderr}")
+        print_error(
+            console, f"Failed to checkout blueprint revision {revision}: {res.stderr}"
+        )
         raise typer.Exit(1)
 
 
 def git_revision(storage_dir: Path) -> Optional[str]:
-    res = subprocess.run(["git", "-C", str(storage_dir), "rev-parse", "HEAD"], capture_output=True, text=True)
+    res = subprocess.run(
+        ["git", "-C", str(storage_dir), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+    )
     if res.returncode != 0:
         return None
     stdout = getattr(res, "stdout", "") or ""

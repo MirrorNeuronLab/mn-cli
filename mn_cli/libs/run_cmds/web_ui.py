@@ -62,7 +62,9 @@ def _register_manifest_web_ui_handle(
     service = _manifest_web_ui_service(manifest_dict)
     if service is None:
         return None
-    url = _web_ui_url_from_configuration(configuration) or _web_ui_url_from_service(service)
+    url = _web_ui_url_from_configuration(configuration) or _web_ui_url_from_service(
+        service
+    )
     if not url:
         return None
 
@@ -185,7 +187,9 @@ def _web_ui_url_from_service(service: dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _web_ui_url_from_configuration(configuration: dict[str, Any] | None) -> Optional[str]:
+def _web_ui_url_from_configuration(
+    configuration: dict[str, Any] | None,
+) -> Optional[str]:
     web_ui = configuration.get("web_ui") if isinstance(configuration, dict) else None
     if not isinstance(web_ui, dict) or web_ui.get("enabled") is False:
         return None
@@ -193,7 +197,10 @@ def _web_ui_url_from_configuration(configuration: dict[str, Any] | None) -> Opti
     if not isinstance(service, dict):
         return None
     host = str(
-        service.get("advertise_host") or service.get("address") or service.get("host") or ""
+        service.get("advertise_host")
+        or service.get("address")
+        or service.get("host")
+        or ""
     ).strip()
     port = service.get("port")
     if not _usable_host(host) or not _usable_port(port):
@@ -264,7 +271,9 @@ def _web_ui_proxy_policy(manifest_dict: dict[str, Any], url: str) -> dict[str, A
     websocket_ports: set[int] = set()
     for service in _manifest_services(manifest_dict):
         port = service.get("port")
-        if not _usable_port(port) or not _service_can_share_web_ui_host(service, parsed.hostname or ""):
+        if not _usable_port(port) or not _service_can_share_web_ui_host(
+            service, parsed.hostname or ""
+        ):
             continue
         tags = {
             str(tag).strip().lower()
@@ -307,7 +316,9 @@ def _start_background_event_relay_if_needed(
         and submission_metadata.get("output_copy")
         else _shared_storage_metadata(manifest_dict)
     )
-    has_output_copy = bool(storage.get("output_copy")) if isinstance(storage, dict) else False
+    has_output_copy = (
+        bool(storage.get("output_copy")) if isinstance(storage, dict) else False
+    )
     if not _is_live_manifest(manifest_dict) and not has_output_copy:
         return
     if os.getenv("MN_RUN_BACKGROUND_EVENT_RELAY", "1").strip().lower() in {
@@ -346,9 +357,12 @@ def _start_background_event_relay_if_needed(
         command.extend(["--max-seconds", f"{max_seconds:g}"])
 
     from mn_sdk.blueprint_support.relay_ownership import relay_owner, process_identity
+
     ownership = relay_owner(dict(os.environ))
     if ownership:
-        command.extend(["--owner-home", ownership["home"], "--owner-stamp", ownership["stamp"]])
+        command.extend(
+            ["--owner-home", ownership["home"], "--owner-stamp", ownership["stamp"]]
+        )
     from mn_cli.runtime.idle_sleep import awake_command
 
     command = awake_command(command)
@@ -377,9 +391,7 @@ def _start_background_event_relay_if_needed(
         json.dumps(relay_info, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    console.print(
-        f"[green]Output event relay started[/green] (pid {process.pid})"
-    )
+    console.print(f"[green]Output event relay started[/green] (pid {process.pid})")
 
 
 def _shared_storage_metadata(manifest_dict: dict[str, Any]) -> dict[str, Any]:
@@ -399,9 +411,7 @@ def _is_live_manifest(manifest_dict: dict[str, Any]) -> bool:
         else {}
     )
     scheduler = (
-        policies.get("scheduler")
-        if isinstance(policies.get("scheduler"), dict)
-        else {}
+        policies.get("scheduler") if isinstance(policies.get("scheduler"), dict) else {}
     )
     job_type = str(
         policies.get("job_type")

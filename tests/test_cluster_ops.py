@@ -16,7 +16,9 @@ def test_cluster_credentials_compare_fingerprints_without_exposing_values():
     assert local.matches(remote)
     assert not local.matches(mismatch)
     assert "join-token" not in repr(local)
-    assert "raw-cookie-secret" not in repr(ClusterCredentials.from_values(token="join-token", cookie="raw-cookie-secret"))
+    assert "raw-cookie-secret" not in repr(
+        ClusterCredentials.from_values(token="join-token", cookie="raw-cookie-secret")
+    )
 
 
 def test_node_identity_normalizes_network_node_name():
@@ -38,14 +40,20 @@ def test_cluster_topology_detects_reciprocal_membership_and_remote_connection():
                     "self?": True,
                     "connected_nodes": ["mirror_neuron@local", "mirror_neuron@spark"],
                 },
-                {"name": "mirror_neuron@spark", "connected_nodes": ["mirror_neuron@spark"]},
+                {
+                    "name": "mirror_neuron@spark",
+                    "connected_nodes": ["mirror_neuron@spark"],
+                },
             ]
         }
     )
     remote = ClusterTopology.from_system_summary(
         {
             "nodes": [
-                {"name": "mirror_neuron@local", "connected_nodes": ["mirror_neuron@local"]},
+                {
+                    "name": "mirror_neuron@local",
+                    "connected_nodes": ["mirror_neuron@local"],
+                },
                 {
                     "name": "mirror_neuron@spark",
                     "self?": True,

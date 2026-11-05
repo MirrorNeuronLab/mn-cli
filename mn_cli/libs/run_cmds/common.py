@@ -330,11 +330,18 @@ def _load_bundle_manifest(
 
     with open(manifest_file, "r") as f:
         manifest_dict = json.load(f)
-    from mn_sdk.blueprints import MANIFEST_SCHEMA, compile_blueprint, read_blueprint, resolve_config
+    from mn_sdk.blueprints import (
+        MANIFEST_SCHEMA,
+        compile_blueprint,
+        read_blueprint,
+        resolve_config,
+    )
 
     if manifest_dict.get("$schema") == MANIFEST_SCHEMA:
         package = read_blueprint(bundle_dir)
-        manifest_dict = compile_blueprint(package, resolve_config(package, config_overrides)).manifest
+        manifest_dict = compile_blueprint(
+            package, resolve_config(package, config_overrides)
+        ).manifest
     return bundle_dir, manifest_file, manifest_dict
 
 

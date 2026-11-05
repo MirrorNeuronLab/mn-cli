@@ -203,22 +203,9 @@ def _cluster_node_native_sdk_endpoint(
 
 
 def _runtime_model_prepare_client(node: str, node_endpoint: dict[str, Any]) -> Client:
-    timeout = _runtime_model_prepare_timeout_seconds()
-    if _cluster_node_endpoint_is_local(node_endpoint):
-        return Client(
-            target=config.grpc_target,
-            timeout=timeout,
-            auth_token=config.grpc_auth_token,
-            admin_token=config.grpc_admin_token,
-        )
-
-    native_endpoint = _cluster_node_native_sdk_endpoint(node, node_endpoint["node"])
-    return Client(
-        target=native_endpoint["target"],
-        timeout=timeout,
-        auth_token=config.grpc_auth_token,
-        admin_token=config.grpc_admin_token,
-    )
+    # Core forwards the selected owner with its private federation credential.
+    # The SDK's prepare call supplies the model-operation deadline per request.
+    return client
 
 
 def _prepare_runtime_model_with_retry(
@@ -288,13 +275,10 @@ def _workflow_placement_candidates(
     list[tuple[tuple[float, float, float, str], str, dict[str, Any]]],
     dict[str, list[str]],
 ]:
-    candidates: list[
-        tuple[tuple[float, float, float, str], str, dict[str, Any]]
-    ] = []
+    candidates: list[tuple[tuple[float, float, float, str], str, dict[str, Any]]] = []
     rejections: dict[str, list[str]] = {}
     accelerator_required = (
-        requirements["min_gpu_count"] > 0
-        or requirements["min_gpu_memory_mb"] > 0
+        requirements["min_gpu_count"] > 0 or requirements["min_gpu_memory_mb"] > 0
     )
     for name in names:
         resource = resource_nodes.get(name) or system_nodes.get(name) or {}
@@ -320,9 +304,7 @@ def _workflow_placement_candidates(
             else 0.0
         )
         local_preference = (
-            1.0
-            if not accelerator_required and _workflow_node_is_local(system)
-            else 0.0
+            1.0 if not accelerator_required and _workflow_node_is_local(system) else 0.0
         )
         score = (
             headroom,
@@ -349,7 +331,11 @@ def _workflow_model_fallback_requirements(
     for requirement in runtime_model_requirements:
         if not isinstance(requirement, dict):
             continue
-        entry = requirement.get("entry") if isinstance(requirement.get("entry"), dict) else requirement
+        entry = (
+            requirement.get("entry")
+            if isinstance(requirement.get("entry"), dict)
+            else requirement
+        )
         fallback_ref = str(entry.get("fallback_model") or "").strip()
         if not fallback_ref:
             effective.append(requirement)
@@ -362,9 +348,7 @@ def _workflow_model_fallback_requirements(
         fallback_requirement = dict(requirement)
         fallback_requirement["entry"] = fallback_entry
         fallback_requirement["model"] = str(
-            fallback_entry.get("id")
-            or fallback_entry.get("model")
-            or fallback_ref
+            fallback_entry.get("id") or fallback_entry.get("model") or fallback_ref
         )
         fallback_requirement["label"] = str(
             fallback_entry.get("id")
@@ -512,7 +496,8 @@ def _validate_distributed_runtime_model_feasibility(
 
     for model_requirement in runtime_model_requirements:
         variants = model_requirement_variants(
-            model_requirement, model_entry_resolver=resolve_model_entry,
+            model_requirement,
+            model_entry_resolver=resolve_model_entry,
         )
 
         final_rejections: dict[str, list[str]] = {}
@@ -683,9 +668,7 @@ def _workflow_node_requirements(
     gpu = top_level.get("gpu") if isinstance(top_level.get("gpu"), dict) else {}
     if gpu:
         requested_count = (
-            gpu.get("min_count")
-            if "min_count" in gpu
-            else gpu.get("count", 1)
+            gpu.get("min_count") if "min_count" in gpu else gpu.get("count", 1)
         )
         requirements["min_gpu_count"] = max(
             requirements["min_gpu_count"],
@@ -1221,8 +1204,7 @@ def _install_runtime_cluster_model(
     node_label = node or "selected runtime node"
     node_endpoint = _cluster_node_endpoint(node)
     local_target = _cluster_node_endpoint_is_local(node_endpoint)
-    transport = "local runtime coordinator" if local_target else "native SDK gRPC"
-    print_info(console, f"Preparing runtime model {model_label} on {node_label} with {transport}…")
+    print_info(console, f"Preparing runtime model {model_label} on {node_label}…")
     runtime_client = _runtime_model_prepare_client(node, node_endpoint)
     prepare_payload = build_prepare_runtime_model_request(
         requirement=requirement,

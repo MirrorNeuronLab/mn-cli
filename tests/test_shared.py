@@ -9,11 +9,17 @@ import pytest
 
 for parent in Path(__file__).resolve().parents:
     sdk_path = parent / "mn-python-sdk"
-    if (sdk_path / "mn_sdk" / "runtime_config.py").exists() and str(sdk_path) not in sys.path:
+    if (sdk_path / "mn_sdk" / "runtime_config.py").exists() and str(
+        sdk_path
+    ) not in sys.path:
         sys.path.insert(0, str(sdk_path))
         break
 
-from mn_sdk.runtime_config import DEFAULT_GRPC_ADMIN_TOKEN, DEFAULT_GRPC_AUTH_TOKEN, RuntimeConfig
+from mn_sdk.runtime_config import (
+    DEFAULT_GRPC_ADMIN_TOKEN,
+    DEFAULT_GRPC_AUTH_TOKEN,
+    RuntimeConfig,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -75,7 +81,9 @@ def test_shared_client_passes_admin_token_for_current_sdk(monkeypatch, tmp_path)
     calls = []
 
     class CurrentClient:
-        def __init__(self, target=None, timeout=None, auth_token=None, admin_token=None):
+        def __init__(
+            self, target=None, timeout=None, auth_token=None, admin_token=None
+        ):
             calls.append(
                 {
                     "target": target,
@@ -121,7 +129,9 @@ def test_shared_client_reads_runtime_env_target_and_tokens(monkeypatch, tmp_path
     )
 
     class CurrentClient:
-        def __init__(self, target=None, timeout=None, auth_token=None, admin_token=None):
+        def __init__(
+            self, target=None, timeout=None, auth_token=None, admin_token=None
+        ):
             calls.append(
                 {
                     "target": target,
@@ -146,14 +156,15 @@ def test_shared_client_reads_runtime_env_target_and_tokens(monkeypatch, tmp_path
     ]
 
 
-def test_shared_client_prefers_runtime_endpoint_over_stale_core_target(monkeypatch, tmp_path):
+def test_shared_client_prefers_runtime_endpoint_over_stale_core_target(
+    monkeypatch, tmp_path
+):
     calls = []
     monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN", raising=False)
     state_dir = tmp_path / ".mn"
     state_dir.mkdir()
     (state_dir / "docker-compose.env").write_text(
-        "MN_GRPC_TARGET=localhost:55051\n"
-        "MN_GRPC_AUTH_TOKEN=auth-from-state\n",
+        "MN_GRPC_TARGET=localhost:55051\nMN_GRPC_AUTH_TOKEN=auth-from-state\n",
         encoding="utf-8",
     )
     (state_dir / "runtime-endpoints.json").write_text(
@@ -162,7 +173,9 @@ def test_shared_client_prefers_runtime_endpoint_over_stale_core_target(monkeypat
     )
 
     class CurrentClient:
-        def __init__(self, target=None, timeout=None, auth_token=None, admin_token=None):
+        def __init__(
+            self, target=None, timeout=None, auth_token=None, admin_token=None
+        ):
             calls.append(
                 {
                     "target": target,
@@ -196,7 +209,9 @@ def test_shared_client_reads_refreshed_token_files(monkeypatch, tmp_path):
     monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN", raising=False)
 
     class CurrentClient:
-        def __init__(self, target=None, timeout=None, auth_token=None, admin_token=None):
+        def __init__(
+            self, target=None, timeout=None, auth_token=None, admin_token=None
+        ):
             calls.append(
                 {
                     "target": target,
@@ -221,7 +236,9 @@ def test_shared_client_reads_refreshed_token_files(monkeypatch, tmp_path):
     ]
 
 
-def test_shared_client_reads_token_files_before_stale_runtime_env(monkeypatch, tmp_path):
+def test_shared_client_reads_token_files_before_stale_runtime_env(
+    monkeypatch, tmp_path
+):
     calls = []
     monkeypatch.delenv("MN_GRPC_ADMIN_TOKEN", raising=False)
     state_dir = tmp_path / ".mn"
@@ -235,7 +252,9 @@ def test_shared_client_reads_token_files_before_stale_runtime_env(monkeypatch, t
     (state_dir / "grpc_admin.token").write_text("admin-from-file\n", encoding="utf-8")
 
     class CurrentClient:
-        def __init__(self, target=None, timeout=None, auth_token=None, admin_token=None):
+        def __init__(
+            self, target=None, timeout=None, auth_token=None, admin_token=None
+        ):
             calls.append(
                 {
                     "target": target,

@@ -12,7 +12,11 @@ def _text(value):
 
 
 def _number(value):
-    return value if type(value) in (int, float) and math.isfinite(value) and value >= 0 else None
+    return (
+        value
+        if type(value) in (int, float) and math.isfinite(value) and value >= 0
+        else None
+    )
 
 
 def _memory(value):
@@ -24,7 +28,11 @@ def run_info_display(record):
     reservation = _record(placement.get("reservation"))
     owner = _text(placement.get("owner_node"))
     label = _text(placement.get("node_label"))
-    node = f"{label} ({owner})" if label and owner and label != owner else label or owner or "Not reported"
+    node = (
+        f"{label} ({owner})"
+        if label and owner and label != owner
+        else label or owner or "Not reported"
+    )
     state = reservation.get("state")
     amounts = {}
     if state == "reserved":
@@ -43,11 +51,20 @@ def run_info_display(record):
             amounts["reserved_gpu_memory"] = _memory(gpu_memory)
         if disk is not None and disk > 0:
             amounts["reserved_disk"] = _memory(disk)
-        resources = "Whole node" if reservation.get("mode") == "exclusive_node" else "Shared"
+        resources = (
+            "Whole node" if reservation.get("mode") == "exclusive_node" else "Shared"
+        )
         if not amounts:
             resources += "; amounts not reported"
     else:
-        resources = {"queued": "None; waiting for resources", "unreserved": "No resources reserved",
-                     "unavailable": "Unavailable"}.get(state, "Not reported")
-    return {"assigned_node": node, "reserved_resources": resources, **amounts,
-            **{key: value for key, value in record.items() if key != "placement"}}
+        resources = {
+            "queued": "None; waiting for resources",
+            "unreserved": "No resources reserved",
+            "unavailable": "Unavailable",
+        }.get(state, "Not reported")
+    return {
+        "assigned_node": node,
+        "reserved_resources": resources,
+        **amounts,
+        **{key: value for key, value in record.items() if key != "placement"},
+    }

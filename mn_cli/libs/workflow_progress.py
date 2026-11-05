@@ -54,9 +54,15 @@ class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
             binding_dict = binding if isinstance(binding, dict) else {}
             emits = str(raw.get("emits") or "") or None
             transition = raw.get("on") if isinstance(raw.get("on"), dict) else {}
-            target = transition.get(emits) if emits and isinstance(transition, dict) else None
+            target = (
+                transition.get(emits)
+                if emits and isinstance(transition, dict)
+                else None
+            )
             next_step = target.get("to") if isinstance(target, dict) else target
-            graph_step = graph_steps.get(step_id) if isinstance(graph_steps, dict) else {}
+            graph_step = (
+                graph_steps.get(step_id) if isinstance(graph_steps, dict) else {}
+            )
             live = self.workflow_kind == "service" and (
                 _truthy(raw.get("live"))
                 or _truthy(binding_dict.get("live"))
@@ -116,7 +122,9 @@ class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
     def _apply_event_token_usage(self, event: dict[str, Any]) -> None:
         if not isinstance(event, dict):
             return
-        payload = event.get("payload") if isinstance(event.get("payload"), dict) else event
+        payload = (
+            event.get("payload") if isinstance(event.get("payload"), dict) else event
+        )
         token_count = _extract_token_count(payload)
         if token_count is None:
             return
@@ -149,7 +157,9 @@ class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
             if isinstance(self.manifest.get("runtime"), dict)
             else {}
         )
-        bindings = runtime.get("bindings") if isinstance(runtime.get("bindings"), dict) else {}
+        bindings = (
+            runtime.get("bindings") if isinstance(runtime.get("bindings"), dict) else {}
+        )
         if not isinstance(raw_steps, list) or not isinstance(bindings, dict):
             return
 
@@ -188,7 +198,11 @@ class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
             if len(self._recent_events) > _EVENT_HISTORY_LIMIT:
                 del self._recent_events[:-_EVENT_HISTORY_LIMIT]
         if event_type in {"workflow_step_attempt_started", "workflow_step_beacon"}:
-            payload = event.get("payload") if isinstance(event.get("payload"), dict) else event
+            payload = (
+                event.get("payload")
+                if isinstance(event.get("payload"), dict)
+                else event
+            )
             step_id = str(payload.get("step") or payload.get("step_id") or "")
             if step_id in self.steps_by_id:
                 self._start_step(step_id, _workflow_event_epoch(event))
@@ -207,8 +221,7 @@ class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
             shown_steps = sum(
                 1
                 for step in self.steps
-                if step.status in {"done", "running", "idle"}
-                or step.ready_count > 0
+                if step.status in {"done", "running", "idle"} or step.ready_count > 0
             )
         else:
             shown_steps = sum(1 for step in self.steps if step.status == "done")
@@ -226,12 +239,18 @@ class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
                 else None
             )
             label = f"{icon} {step.label}"
-            shown_count = step.ready_count if self.workflow_kind == "service" else step.done_count
+            shown_count = (
+                step.ready_count if self.workflow_kind == "service" else step.done_count
+            )
             table.add_row(label, f"{shown_count}/{step.total_count}", style=style)
         return table
 
     def _agent_table(self) -> Table:
-        step = self.steps_by_id.get(self.current_step_id or "") if self.current_step_id else None
+        step = (
+            self.steps_by_id.get(self.current_step_id or "")
+            if self.current_step_id
+            else None
+        )
         title = "Agents"
         if step:
             title = f"{step.label}  |  {step.total_count} agents"
@@ -239,7 +258,7 @@ class BlueprintWorkflowProgress(SdkBlueprintWorkflowProgress):
         table.add_column("agent", no_wrap=True)
         table.add_column("working on", min_width=12)
         table.add_column("progress", justify="right")
-        for agent in (step.agents if step else []):
+        for agent in step.agents if step else []:
             table.add_row(
                 f"{_agent_icon(agent.status)} {agent.id}",
                 agent.working_on or agent.role or "worker",
@@ -324,7 +343,12 @@ def _agent_metrics(agent: AgentProgress) -> str:
     if agent.status == "idle":
         parts = ["idle"]
     else:
-        suffix = " est." if getattr(agent, "progress_source", "estimated") not in {"explicit", "items", "complete"} else ""
+        suffix = (
+            " est."
+            if getattr(agent, "progress_source", "estimated")
+            not in {"explicit", "items", "complete"}
+            else ""
+        )
         parts = [f"{agent.progress * 100:>3.0f}%{suffix}"]
     items_total = getattr(agent, "items_total", None)
     if items_total:
@@ -353,7 +377,14 @@ def _extract_workflow_agent_ids(payload: Any) -> set[str]:
             agent_ids.add(candidate.strip())
 
     for key, value in payload.items():
-        if key in {"agent", "worker", "step", "step_id", "current_step", "step_attempt"}:
+        if key in {
+            "agent",
+            "worker",
+            "step",
+            "step_id",
+            "current_step",
+            "step_attempt",
+        }:
             continue
         if isinstance(value, dict):
             agent_ids.update(_extract_workflow_agent_ids(value))
@@ -492,7 +523,9 @@ def _workflow_event_epoch(event: dict[str, Any]) -> float:
                 return float(value)
             if isinstance(value, str) and value.strip():
                 try:
-                    return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+                    return datetime.fromisoformat(
+                        value.replace("Z", "+00:00")
+                    ).timestamp()
                 except ValueError:
                     continue
     return datetime.now().timestamp()
@@ -580,7 +613,11 @@ def _job_started_at(*mappings: dict[str, Any]) -> float | None:
 
 
 def _text_list(value: Any) -> list[str]:
-    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
+    return (
+        [item for item in value if isinstance(item, str)]
+        if isinstance(value, list)
+        else []
+    )
 
 
 def _optional_int(value: Any) -> int | None:

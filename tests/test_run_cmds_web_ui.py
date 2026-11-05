@@ -45,7 +45,9 @@ def test_console_web_ui_url_reads_job_written_handle(tmp_path, monkeypatch):
     assert _console_web_ui_url_from_job_data("job-1") == "http://localhost:62000/"
 
 
-def test_console_web_ui_url_uses_local_job_route_for_registered_handle(tmp_path, monkeypatch, mocker):
+def test_console_web_ui_url_uses_local_job_route_for_registered_handle(
+    tmp_path, monkeypatch, mocker
+):
     job_dir = tmp_path / "job-data" / "job-1"
     job_dir.mkdir(parents=True)
     monkeypatch.setenv("MN_JOB_DATA_ROOT", str(tmp_path / "job-data"))
@@ -71,15 +73,20 @@ def test_console_web_ui_url_uses_job_route_for_deferred_worker_handle(mocker):
         ),
     )
 
-    assert _console_web_ui_url(
-        {"metadata": {"web_ui": {"enabled": True}}}, "job-dynamic-ui"
-    ) == "http://localhost:55173/jobs/job-dynamic-ui/ui"
+    assert (
+        _console_web_ui_url(
+            {"metadata": {"web_ui": {"enabled": True}}}, "job-dynamic-ui"
+        )
+        == "http://localhost:55173/jobs/job-dynamic-ui/ui"
+    )
 
 
 def test_register_manifest_web_ui_handle_uses_shared_claimer(tmp_path, monkeypatch):
     monkeypatch.setenv("MN_JOB_DATA_ROOT", str(tmp_path / "job-data"))
     manifest = {
-        "metadata": {"web_ui": {"title": "Warehouse AMR Monitor", "node_id": "warehouse"}},
+        "metadata": {
+            "web_ui": {"title": "Warehouse AMR Monitor", "node_id": "warehouse"}
+        },
         "agents": {
             "nodes": [
                 {
@@ -87,7 +94,9 @@ def test_register_manifest_web_ui_handle_uses_shared_claimer(tmp_path, monkeypat
                         {
                             "name": "warehouse-ui",
                             "tags": ["web_ui"],
-                            "meta": {"url": "http://${config.web_ui.service.advertise_host}:${config.web_ui.service.port}"},
+                            "meta": {
+                                "url": "http://${config.web_ui.service.advertise_host}:${config.web_ui.service.port}"
+                            },
                         },
                         {"name": "video", "port": 8080, "tags": ["video"]},
                         {"name": "rosbridge", "port": 9090, "tags": ["websocket"]},
@@ -111,7 +120,12 @@ def test_register_manifest_web_ui_handle_uses_shared_claimer(tmp_path, monkeypat
     url = _register_manifest_web_ui_handle(
         manifest,
         "job-1",
-        configuration={"web_ui": {"enabled": True, "service": {"advertise_host": "10.0.4.26", "port": 8088}}},
+        configuration={
+            "web_ui": {
+                "enabled": True,
+                "service": {"advertise_host": "10.0.4.26", "port": 8088},
+            }
+        },
     )
 
     assert url == "http://10.0.4.26:8088"
@@ -136,7 +150,9 @@ def test_manifest_url_skips_unresolved_templates():
                     "services": [
                         {
                             "tags": ["web_ui"],
-                            "meta": {"url": "http://${config.web_ui.service.advertise_host}:${config.web_ui.service.port}"},
+                            "meta": {
+                                "url": "http://${config.web_ui.service.advertise_host}:${config.web_ui.service.port}"
+                            },
                         }
                     ]
                 }
@@ -148,12 +164,14 @@ def test_manifest_url_skips_unresolved_templates():
 
 
 def test_submission_does_not_inject_dashboard_service(tmp_path):
-    manifest = workflow_manifest({
-        "graph_id": "plain-service",
-        "type": "service",
-        "nodes": [{"node_id": "worker", "config": {"environment": {}}}],
-        "entrypoints": ["worker"],
-    })
+    manifest = workflow_manifest(
+        {
+            "graph_id": "plain-service",
+            "type": "service",
+            "nodes": [{"node_id": "worker", "config": {"environment": {}}}],
+            "entrypoints": ["worker"],
+        }
+    )
 
     prepared = prepare_manifest_for_submission(tmp_path, manifest)
 

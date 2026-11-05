@@ -689,7 +689,9 @@ def _with_monitor_identity(
     return identified
 
 
-def _monitor_workflow_shape(stable_job_id: str | None, run_id: str | None) -> dict[str, Any] | None:
+def _monitor_workflow_shape(
+    stable_job_id: str | None, run_id: str | None
+) -> dict[str, Any] | None:
     """Fetch the public step contract independently of runtime progress."""
     if not stable_job_id:
         return None
@@ -719,16 +721,23 @@ def _monitor_workflow_shape(stable_job_id: str | None, run_id: str | None) -> di
             shape = fetch("/workflow/latest-run/steps")
         except (OSError, ValueError):
             shape = {}
-        if str(shape.get("run_id") or "") != str(run_id or "") or not shape.get("steps"):
+        if str(shape.get("run_id") or "") != str(run_id or "") or not shape.get(
+            "steps"
+        ):
             shape = fetch("/workflow/definition/steps")
-        return {"kind": str(job.get("type") or "batch"), "steps": shape.get("steps") or [],
-                "workflow_id": shape.get("workflow_id") or job.get("graph_id")}
+        return {
+            "kind": str(job.get("type") or "batch"),
+            "steps": shape.get("steps") or [],
+            "workflow_id": shape.get("workflow_id") or job.get("graph_id"),
+        }
     except (OSError, ValueError) as exc:
         logger.debug("Could not fetch workflow shape for %s: %s", stable_job_id, exc)
         return None
 
 
-def _with_monitor_shape(progress: dict[str, Any] | None, shape: dict[str, Any] | None) -> dict[str, Any] | None:
+def _with_monitor_shape(
+    progress: dict[str, Any] | None, shape: dict[str, Any] | None
+) -> dict[str, Any] | None:
     if not isinstance(progress, dict) or not shape:
         return progress
     result = dict(progress)
@@ -736,8 +745,11 @@ def _with_monitor_shape(progress: dict[str, Any] | None, shape: dict[str, Any] |
     result["workflow_kind"] = kind
     if not result.get("workflow_id"):
         result["workflow_id"] = shape.get("workflow_id")
-    runtime_steps = {str(step.get("id")): step for step in result.get("steps") or []
-                     if isinstance(step, dict) and step.get("id")}
+    runtime_steps = {
+        str(step.get("id")): step
+        for step in result.get("steps") or []
+        if isinstance(step, dict) and step.get("id")
+    }
     shaped = []
     active_id = str(result.get("current_step_id") or "")
     for index, declared in enumerate(shape.get("steps") or []):
@@ -747,28 +759,36 @@ def _with_monitor_shape(progress: dict[str, Any] | None, shape: dict[str, Any] |
         runtime = runtime_steps.pop(step_id, {})
         step = {**declared, **runtime}
         if kind == "service" and not runtime:
-            live = result.get("status") == "running" and (step_id == active_id or not active_id and index == 0)
+            live = result.get("status") == "running" and (
+                step_id == active_id or not active_id and index == 0
+            )
             step["status"] = "running" if live else "pending"
             step["current"] = live
-        runtime_agents = {str(agent.get("id") or agent.get("agent_id")): agent
-                          for agent in runtime.get("agents") or [] if isinstance(agent, dict)}
+        runtime_agents = {
+            str(agent.get("id") or agent.get("agent_id")): agent
+            for agent in runtime.get("agents") or []
+            if isinstance(agent, dict)
+        }
         agents = []
         for agent in declared.get("agents") or []:
             if not isinstance(agent, dict):
                 continue
             observed = runtime_agents.pop(str(agent.get("id")), {})
-            agents.append({
-                **agent, **observed,
-                "status": observed.get("status") or step.get("status") or "pending",
-            })
+            agents.append(
+                {
+                    **agent,
+                    **observed,
+                    "status": observed.get("status") or step.get("status") or "pending",
+                }
+            )
         step["agents"] = agents + list(runtime_agents.values())
         shaped.append(step)
     shaped.extend(runtime_steps.values())
     result["steps"] = shaped
     current_id = str((result.get("current_step") or {}).get("id") or active_id)
-    result["current_step"] = next((step for step in shaped if str(step.get("id")) == current_id), None) or next(
-        (step for step in shaped if step.get("current")), None
-    )
+    result["current_step"] = next(
+        (step for step in shaped if str(step.get("id")) == current_id), None
+    ) or next((step for step in shaped if step.get("current")), None)
     return result
 
 
@@ -785,7 +805,9 @@ def _live_monitor_api_stream(
         return False
 
     try:
-        return asyncio.run(_watch_api_stream(api_base_url, job_id, run_id, stable_job_id))
+        return asyncio.run(
+            _watch_api_stream(api_base_url, job_id, run_id, stable_job_id)
+        )
     except KeyboardInterrupt:
         return True
 
@@ -820,17 +842,24 @@ async def _watch_api_stream(api_base_url, job_id, run_id, stable_job_id):
                 return Panel("Connecting to workflow progress stream...", style="cyan")
             return generate_live_layout(job_id, self.data, state=self.state)
 
-    initial_progress = _with_monitor_shape(_with_monitor_identity(
-        _local_progress_from_run_store(job_id, {"job_id": job_id, "status": "running"}),
-        run_id=run_id,
-        stable_job_id=stable_job_id,
-    ), shape)
+    initial_progress = _with_monitor_shape(
+        _with_monitor_identity(
+            _local_progress_from_run_store(
+                job_id, {"job_id": job_id, "status": "running"}
+            ),
+            run_id=run_id,
+            stable_job_id=stable_job_id,
+        ),
+        shape,
+    )
     monitor_state = JobMonitorState()
     view = MonitorView(monitor_state, initial_progress)
     is_tty = _interactive_live_output()
     old_settings = None
     stream = watch_api_workflow_progress(
-        api_base_url, run_id or job_id, api_token=str(getattr(config, "api_token", "") or ""),
+        api_base_url,
+        run_id or job_id,
+        api_token=str(getattr(config, "api_token", "") or ""),
         timeout=_monitor_api_stream_timeout_seconds(),
     )
     pending = None
@@ -876,14 +905,19 @@ async def _watch_api_stream(api_base_url, job_id, run_id, stable_job_id):
                 except (AppError, ValidationError):
                     raise
                 except Exception as exc:
-                    logger.warning("Workflow progress stream ended category=%s", type(exc).__name__)
+                    logger.warning(
+                        "Workflow progress stream ended category=%s", type(exc).__name__
+                    )
                     return False
                 if isinstance(payload, dict):
-                    progress = _with_monitor_shape(_with_monitor_identity(
-                        _public_progress_from_api_snapshot(job_id, payload),
-                        run_id=run_id,
-                        stable_job_id=stable_job_id,
-                    ), shape)
+                    progress = _with_monitor_shape(
+                        _with_monitor_identity(
+                            _public_progress_from_api_snapshot(job_id, payload),
+                            run_id=run_id,
+                            stable_job_id=stable_job_id,
+                        ),
+                        shape,
+                    )
                     if progress is None:
                         continue
                     view.data = {
@@ -984,8 +1018,11 @@ def _live_monitor(
             while True:
                 if final_status in FINAL_STATUSES:
                     if not _handle_live_workflow_key(
-                        monitor_state, data, is_tty=is_tty,
-                        select_module=select, block_seconds=0.1,
+                        monitor_state,
+                        data,
+                        is_tty=is_tty,
+                        select_module=select,
+                        block_seconds=0.1,
                     ):
                         break
                     continue
@@ -993,11 +1030,14 @@ def _live_monitor(
                     with _temporary_monitor_rpc_timeout():
                         run_json = _get_run_for_monitor(job_id)
                         data = json.loads(run_json)
-                        data["workflow_progress"] = _with_monitor_shape(_with_monitor_identity(
-                            _workflow_progress_for_monitor(job_id, data),
-                            run_id=run_id,
-                            stable_job_id=stable_job_id,
-                        ), shape)
+                        data["workflow_progress"] = _with_monitor_shape(
+                            _with_monitor_identity(
+                                _workflow_progress_for_monitor(job_id, data),
+                                run_id=run_id,
+                                stable_job_id=stable_job_id,
+                            ),
+                            shape,
+                        )
                     last_good_data = data
                 except Exception as exc:
                     if _is_transient_monitor_fetch_error(exc):

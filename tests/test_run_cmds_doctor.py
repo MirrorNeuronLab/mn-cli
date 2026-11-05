@@ -32,23 +32,45 @@ from mn_cli.runtime import server as runtime_server
 runner = CliRunner()
 
 
-def test_offline_hostlocal_wheelhouse_is_mapped_into_core(tmp_path, monkeypatch, mocker):
+def test_offline_hostlocal_wheelhouse_is_mapped_into_core(
+    tmp_path, monkeypatch, mocker
+):
     from pathlib import PurePosixPath
+
     wheels = Path(os.environ["MN_HOME"]) / "airgap/restored/python/wheelhouse"
     wheels.mkdir(parents=True)
-    mocker.patch("mn_sdk.hostlocal_python.running_core_container", return_value="mirror-neuron-core")
+    mocker.patch(
+        "mn_sdk.hostlocal_python.running_core_container",
+        return_value="mirror-neuron-core",
+    )
     calls = []
 
     def run(command, **kwargs):
         calls.append(command)
-        return subprocess.CompletedProcess(command, 0, stdout="Python 3.12.2" if "--version" in command else "", stderr="")
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="Python 3.12.2" if "--version" in command else "",
+            stderr="",
+        )
 
     mocker.patch("mn_cli.libs.run_cmds.subprocess.run", side_effect=run)
-    run_cmds._doctor_prepare_python_env_from_content(blueprint_id="restored", node_id="python", packages=["--no-index", "--find-links", str(wheels), "dependency==1.0"], requirements_content="", timeout=1)
+    run_cmds._doctor_prepare_python_env_from_content(
+        blueprint_id="restored",
+        node_id="python",
+        packages=["--no-index", "--find-links", str(wheels), "dependency==1.0"],
+        requirements_content="",
+        timeout=1,
+    )
     assert str(wheels) not in calls[-1]
     assert "/root/.mn/airgap/restored/python/wheelhouse" in calls[-1]
     assert "--no-index" in calls[-1]
-    assert isinstance(run_cmds._doctor_runtime_python_env_path(wheels, core_container="mirror-neuron-core"), PurePosixPath)
+    assert isinstance(
+        run_cmds._doctor_runtime_python_env_path(
+            wheels, core_container="mirror-neuron-core"
+        ),
+        PurePosixPath,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -60,7 +82,8 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.delenv("MN_CONTAINER_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_BLUEPRINT_PYTHON_ENVS_DIR", raising=False)
     monkeypatch.delenv("MN_CONTAINER_BLUEPRINT_PYTHON_ENVS_DIR", raising=False)
-    monkeypatch.setattr('mn_cli.libs.run_cmds.models.sync_litellm_gateway',
+    monkeypatch.setattr(
+        "mn_cli.libs.run_cmds.models.sync_litellm_gateway",
         lambda **_kwargs: {
             "status": "running",
             "api_base": "http://mn-litellm-proxy:4000/v1",
@@ -77,16 +100,20 @@ def test_doctor_bundle_prepares_without_submitting_job(mocker, tmp_path):
         return_value={"status": "passing", "detail": "runtime ok"},
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds.handlers.doctor._doctor_validate_hardware", return_value={"ok": True}
+        "mn_cli.libs.run_cmds.handlers.doctor._doctor_validate_hardware",
+        return_value={"ok": True},
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds.handlers.doctor._doctor_validate_services", return_value={"ok": True}
+        "mn_cli.libs.run_cmds.handlers.doctor._doctor_validate_services",
+        return_value={"ok": True},
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds.handlers.doctor._doctor_validate_inputs", return_value={"ok": True}
+        "mn_cli.libs.run_cmds.handlers.doctor._doctor_validate_inputs",
+        return_value={"ok": True},
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds.handlers.doctor._doctor_validate_models", return_value={"ok": True}
+        "mn_cli.libs.run_cmds.handlers.doctor._doctor_validate_models",
+        return_value={"ok": True},
     )
     mocker.patch(
         "mn_cli.libs.run_cmds.handlers.doctor._prepare_runtime_models_for_run_or_exit",
@@ -100,9 +127,12 @@ def test_doctor_bundle_prepares_without_submitting_job(mocker, tmp_path):
         "mn_cli.libs.run_cmds.handlers.doctor._doctor_prepare_hostlocal_python_envs",
         return_value={"status": "skipped", "detail": "none"},
     )
-    mocker.patch("mn_cli.libs.run_cmds.handlers.doctor._stage_bundle_payloads", return_value={})
     mocker.patch(
-        "mn_cli.libs.run_cmds.handlers.doctor.blueprint_requires_context_engine", return_value=False
+        "mn_cli.libs.run_cmds.handlers.doctor._stage_bundle_payloads", return_value={}
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor.blueprint_requires_context_engine",
+        return_value=False,
     )
     mock_prepare = mocker.patch(
         "mn_cli.libs.run_cmds.handlers.doctor.prepare_job_submission",
@@ -114,8 +144,10 @@ def test_doctor_bundle_prepares_without_submitting_job(mocker, tmp_path):
     )
     mock_submit = mocker.patch("mn_cli.libs.run_cmds.client.create_job")
     mocker.patch("mn_cli.libs.run_cmds.handlers.doctor._doctor_print_report")
-    cleanup = mocker.patch("mn_cli.libs.run_cmds.handlers.doctor.cleanup_job_definition_resources",
-                           return_value={"storage_removed": True})
+    cleanup = mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor.cleanup_job_definition_resources",
+        return_value={"storage_removed": True},
+    )
 
     report = run_cmds.doctor_bundle(str(bundle_dir), no_llm_call=True, cleanup=True)
 
@@ -150,24 +182,34 @@ def test_doctor_bundle_check_only_skips_openshell_build(mocker, tmp_path):
         return_value={"status": "passing", "detail": "runtime ok"},
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds.handlers.doctor._doctor_validate_hardware", return_value={"ok": True}
+        "mn_cli.libs.run_cmds.handlers.doctor._doctor_validate_hardware",
+        return_value={"ok": True},
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds.handlers.doctor._doctor_validate_services", return_value={"ok": True}
+        "mn_cli.libs.run_cmds.handlers.doctor._doctor_validate_services",
+        return_value={"ok": True},
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds.handlers.doctor._doctor_validate_inputs", return_value={"ok": True}
+        "mn_cli.libs.run_cmds.handlers.doctor._doctor_validate_inputs",
+        return_value={"ok": True},
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds.handlers.doctor._doctor_validate_models", return_value={"ok": True}
+        "mn_cli.libs.run_cmds.handlers.doctor._doctor_validate_models",
+        return_value={"ok": True},
     )
     mocker.patch(
         "mn_cli.libs.run_cmds.handlers.doctor.prepare_manifest_for_submission",
         side_effect=lambda _bundle_dir, manifest, **_kwargs: manifest,
     )
-    mock_build = mocker.patch("mn_cli.libs.run_cmds.handlers.doctor._prepare_openshell_custom_images")
-    mocker.patch("mn_cli.libs.run_cmds.handlers.doctor._stage_bundle_payloads", return_value={})
-    mock_prepare_job = mocker.patch("mn_cli.libs.run_cmds.handlers.doctor.prepare_job_submission")
+    mock_build = mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor._prepare_openshell_custom_images"
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor._stage_bundle_payloads", return_value={}
+    )
+    mock_prepare_job = mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.doctor.prepare_job_submission"
+    )
     mocker.patch("mn_cli.libs.run_cmds.handlers.doctor._doctor_print_report")
 
     report = run_cmds.doctor_bundle(str(bundle_dir), check_only=True, no_llm_call=True)
@@ -197,7 +239,8 @@ def test_doctor_summary_redacts_and_marks_critical():
 def test_doctor_environment_probe_reports(mocker, tmp_path):
     env_dir = tmp_path / "venv"
     mocker.patch(
-        "mn_cli.libs.run_cmds.handlers.doctor._doctor_prepare_python_env", return_value=env_dir
+        "mn_cli.libs.run_cmds.handlers.doctor._doctor_prepare_python_env",
+        return_value=env_dir,
     )
     host_manifest = {
         "agents": {
@@ -869,7 +912,8 @@ def test_doctor_warns_when_explicit_python_cache_is_synchronized(
     monkeypatch.setenv("MN_BLUEPRINT_PYTHON_ENVS_DIR", str(configured))
     env_dir = configured / "digest"
     mocker.patch(
-        "mn_cli.libs.run_cmds.handlers.doctor._doctor_prepare_python_env", return_value=env_dir
+        "mn_cli.libs.run_cmds.handlers.doctor._doctor_prepare_python_env",
+        return_value=env_dir,
     )
     mocker.patch("mn_sdk.hostlocal_python.running_core_container", return_value="")
     manifest = {
@@ -951,7 +995,8 @@ def test_doctor_llm_and_embedding_smoke_uses_host_reachable_urls(mocker):
         return {"name": name, "status": "passing", "url": url}
 
     mocker.patch(
-        "mn_cli.libs.run_cmds.handlers.doctor._doctor_post_openai_payload", side_effect=fake_post
+        "mn_cli.libs.run_cmds.handlers.doctor._doctor_post_openai_payload",
+        side_effect=fake_post,
     )
 
     chat = run_cmds._doctor_chat_smoke(

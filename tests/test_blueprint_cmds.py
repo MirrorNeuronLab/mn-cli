@@ -2296,11 +2296,16 @@ def test_blueprint_add_defers_model_installation(monkeypatch, tmp_path, mocker, 
     catalog = tmp_path / "catalog"
     catalog.mkdir()
     _write_catalog(catalog / "index.json", [{"id": "worker", "path": "worker"}])
-    _write_manifest(catalog / "worker" / "manifest.json", _manifest_text(_runtime_model_manifest(model)))
+    _write_manifest(
+        catalog / "worker" / "manifest.json",
+        _manifest_text(_runtime_model_manifest(model)),
+    )
     _use_local_blueprint_source(monkeypatch, catalog)
     eager = mocker.patch.object(blueprint_cmds, "_install_blueprint_model_dependencies")
     pull = mocker.patch.object(blueprint_cmds, "_install_model_entry")
-    prepare = mocker.patch("mn_cli.libs.run_cmds.model_cluster._install_runtime_cluster_model")
+    prepare = mocker.patch(
+        "mn_cli.libs.run_cmds.model_cluster._install_runtime_cluster_model"
+    )
 
     result = runner.invoke(app, ["blueprint", "add", "worker"])
 
@@ -2308,21 +2313,36 @@ def test_blueprint_add_defers_model_installation(monkeypatch, tmp_path, mocker, 
     eager.assert_not_called()
     pull.assert_not_called()
     prepare.assert_not_called()
-    record = json.loads((tmp_path / ".mn" / "blueprint_installs" / "worker.json").read_text())
+    record = json.loads(
+        (tmp_path / ".mn" / "blueprint_installs" / "worker.json").read_text()
+    )
     requirement = record["models"][0]
     assert requirement["model"] == model
     assert requirement["install_policy"] == "on_first_model_call"
     assert requirement["status"] == "deferred_runtime_install"
-    expected = ["nemotron-3.5-lightning:latest", "bonsai2:ptq1_0", "nemotron-3.5-bolt-e4b:q4_k_m"] if model == "default" else [model]
+    expected = (
+        [
+            "nemotron-3.5-lightning:latest",
+            "bonsai2:ptq1_0",
+            "nemotron-3.5-bolt-e4b:q4_k_m",
+        ]
+        if model == "default"
+        else [model]
+    )
     assert requirement["selection_policy"] == expected
     assert "first use" in result.stdout
 
 
-def test_blueprint_add_rejects_invalid_model_without_installing(monkeypatch, tmp_path, mocker):
+def test_blueprint_add_rejects_invalid_model_without_installing(
+    monkeypatch, tmp_path, mocker
+):
     catalog = tmp_path / "catalog"
     catalog.mkdir()
     _write_catalog(catalog / "index.json", [{"id": "worker", "path": "worker"}])
-    _write_manifest(catalog / "worker" / "manifest.json", _manifest_text(_runtime_model_manifest("unknown-model:latest")))
+    _write_manifest(
+        catalog / "worker" / "manifest.json",
+        _manifest_text(_runtime_model_manifest("unknown-model:latest")),
+    )
     _use_local_blueprint_source(monkeypatch, catalog)
     eager = mocker.patch.object(blueprint_cmds, "_install_blueprint_model_dependencies")
     result = runner.invoke(app, ["blueprint", "add", "worker"])
@@ -2332,15 +2352,22 @@ def test_blueprint_add_rejects_invalid_model_without_installing(monkeypatch, tmp
 
 
 @pytest.mark.parametrize("fail", [False, True])
-def test_blueprint_add_prepares_native_skills_before_install_record(monkeypatch, tmp_path, mocker, fail):
+def test_blueprint_add_prepares_native_skills_before_install_record(
+    monkeypatch, tmp_path, mocker, fail
+):
     from mn_sdk import blueprint_install
+
     catalog = tmp_path / "catalog"
     catalog.mkdir()
     _write_catalog(catalog / "index.json", [{"id": "worker", "path": "worker"}])
-    _write_manifest(catalog / "worker" / "manifest.json", _manifest_text(_runtime_model_manifest("default")))
+    _write_manifest(
+        catalog / "worker" / "manifest.json",
+        _manifest_text(_runtime_model_manifest("default")),
+    )
     _use_local_blueprint_source(monkeypatch, catalog)
     record = tmp_path / ".mn/blueprint_installs/worker.json"
     calls = []
+
     def setup(root, **kwargs):
         assert root == catalog / "worker"
         assert not record.exists()
@@ -2348,6 +2375,7 @@ def test_blueprint_add_prepares_native_skills_before_install_record(monkeypatch,
         if fail:
             raise blueprint_install.SkillInstallError("native-skill")
         return [{"name": "native-skill", "status": "ready"}]
+
     monkeypatch.setattr(blueprint_install, "prepare_blueprint_install_skills", setup)
     result = runner.invoke(app, ["blueprint", "add", "worker"])
     assert result.exit_code == (1 if fail else 0), result.output

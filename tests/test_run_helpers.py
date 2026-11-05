@@ -33,17 +33,18 @@ def prepare_manifest_for_submission(bundle_dir, manifest, **kwargs):
         manifest = copy.deepcopy(manifest)
         manifest.update(
             {
-            "apiVersion": "mn.workflow/v1",
-            "kind": "Workflow",
-            "id": (
-                manifest.get("id")
-                or manifest.get("graph_id")
-                or manifest.get("workflow_id")
-                or "runtime-fixture"
-            ),
-            "contract": manifest.get("contract", {}),
-            "agents": manifest.get("agents") or {"nodes": manifest.get("nodes", [])},
-            "runtime": manifest.get("runtime", {}),
+                "apiVersion": "mn.workflow/v1",
+                "kind": "Workflow",
+                "id": (
+                    manifest.get("id")
+                    or manifest.get("graph_id")
+                    or manifest.get("workflow_id")
+                    or "runtime-fixture"
+                ),
+                "contract": manifest.get("contract", {}),
+                "agents": manifest.get("agents")
+                or {"nodes": manifest.get("nodes", [])},
+                "runtime": manifest.get("runtime", {}),
             }
         )
         manifest.pop("nodes", None)
@@ -62,6 +63,7 @@ def local_sdk_components(tmp_path):
         '[project]\nname="mn-python-sdk-common"\nversion="1.3.47"\n'
     )
 
+
 def _write_skill_pyproject(
     skills_root: Path,
     folder: str,
@@ -72,7 +74,9 @@ def _write_skill_pyproject(
 ) -> None:
     skill_dir = skills_root / folder
     skill_dir.mkdir(parents=True)
-    dependency_lines = ",\n".join(f'    "{dependency}"' for dependency in (dependencies or []))
+    dependency_lines = ",\n".join(
+        f'    "{dependency}"' for dependency in (dependencies or [])
+    )
     dependencies_text = f"[\n{dependency_lines}\n]" if dependency_lines else "[]"
     runtime_block = ""
     if runtime:
@@ -112,6 +116,7 @@ def test_workspace_root_infers_repo_from_cwd(tmp_path, monkeypatch):
     (workspace / "mn-skills").mkdir(parents=True)
     nested.mkdir(parents=True)
     monkeypatch.delenv("MN_WORKSPACE_ROOT", raising=False)
+    monkeypatch.setenv("MN_HOME", str(tmp_path / ".mn"))
     monkeypatch.chdir(nested)
 
     assert workspace_root() == workspace.resolve()
@@ -122,17 +127,23 @@ def test_prepare_manifest_for_submission_merges_runtime_env_and_metadata(tmp_pat
     bundle_dir.mkdir()
     config_dir = bundle_dir / "config"
     config_dir.mkdir()
-    (config_dir / "default.json").write_text(json.dumps({
-        "identity": {"blueprint_id": "bp"},
-        "vl_model": {"model": "default"},
-        "manifest_config_bindings": [
+    (config_dir / "default.json").write_text(
+        json.dumps(
             {
-                "config_path": "vl_model.model",
-                "manifest_path": "nodes.worker.config.environment.CUSTOM_MODEL",
+                "identity": {"blueprint_id": "bp"},
+                "vl_model": {"model": "default"},
+                "manifest_config_bindings": [
+                    {
+                        "config_path": "vl_model.model",
+                        "manifest_path": "nodes.worker.config.environment.CUSTOM_MODEL",
+                    }
+                ],
             }
-        ],
-    }))
-    (config_dir / "overwrite.json").write_text(json.dumps({"vl_model": {"model": "overwrite"}}))
+        )
+    )
+    (config_dir / "overwrite.json").write_text(
+        json.dumps({"vl_model": {"model": "overwrite"}})
+    )
 
     manifest = {
         "nodes": [
@@ -142,7 +153,9 @@ def test_prepare_manifest_for_submission_merges_runtime_env_and_metadata(tmp_pat
                     "environment": {
                         "MN_LLM_MODEL": "ollama/test",
                         "MN_LLM_API_KEY": "kept",
-                        "MN_BLUEPRINT_CONFIG_JSON": json.dumps({"identity": {"blueprint_id": "stale"}}),
+                        "MN_BLUEPRINT_CONFIG_JSON": json.dumps(
+                            {"identity": {"blueprint_id": "stale"}}
+                        ),
                     }
                 },
             }
@@ -160,7 +173,10 @@ def test_prepare_manifest_for_submission_merges_runtime_env_and_metadata(tmp_pat
     env = prepared["agents"]["nodes"][0]["config"]["environment"]
     injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
     assert injected_config["identity"]["blueprint_id"] == "bp"
-    assert injected_config["vl_model"] == {"model": "overwrite", "base_url": "http://local"}
+    assert injected_config["vl_model"] == {
+        "model": "overwrite",
+        "base_url": "http://local",
+    }
     assert env["VL_MODEL_NAME"] == "overwrite"
     assert env["OLLAMA_MODEL"] == "overwrite"
     assert env["VL_MODEL_BASE_URL"] == "http://local"
@@ -171,14 +187,18 @@ def test_prepare_manifest_for_submission_merges_runtime_env_and_metadata(tmp_pat
     assert prepared["metadata"]["mn_cli"]["blueprint_id"] == "bp"
 
 
-def test_prepare_manifest_auto_patches_skill_binary_deps_to_dockerworker(tmp_path, monkeypatch):
+def test_prepare_manifest_auto_patches_skill_binary_deps_to_dockerworker(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("MN_USE_LOCAL_SKILLS", "0")
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"
     sdk_root = tmp_path / "mn-python-sdk"
     bundle_dir.mkdir()
     sdk_root.mkdir()
-    (sdk_root / "pyproject.toml").write_text("[project]\nname='mirrorneuron-python-sdk'\n", encoding="utf-8")
+    (sdk_root / "pyproject.toml").write_text(
+        "[project]\nname='mirrorneuron-python-sdk'\n", encoding="utf-8"
+    )
     (bundle_dir / "config").mkdir()
     worker_dir = bundle_dir / "payloads" / "worker"
     worker_dir.mkdir(parents=True)
@@ -265,7 +285,9 @@ def test_prepare_manifest_auto_patches_skill_binary_deps_to_dockerworker(tmp_pat
 
     assert staged["staged"] is True
     dockerfile = payloads["__mn_skill_runtime/docker_worker/Dockerfile"].decode()
-    requirements = payloads["__mn_skill_runtime/docker_worker/requirements.txt"].decode()
+    requirements = payloads[
+        "__mn_skill_runtime/docker_worker/requirements.txt"
+    ].decode()
     assert "apt-get install" in dockerfile
     assert "w3m" in dockerfile
     assert "COPY build_context/mn-python-sdk" not in dockerfile
@@ -277,7 +299,9 @@ def test_prepare_manifest_auto_patches_skill_binary_deps_to_dockerworker(tmp_pat
     assert "example-external>=1" in requirements
 
 
-def test_prepare_manifest_injects_gar_skill_dependencies_for_hostlocal(tmp_path, monkeypatch):
+def test_prepare_manifest_injects_gar_skill_dependencies_for_hostlocal(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("MN_USE_LOCAL_SKILLS", "0")
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
@@ -327,7 +351,9 @@ def test_prepare_manifest_injects_gar_skill_dependencies_for_hostlocal(tmp_path,
     assert str(tmp_path / "mn-skills") not in env.get("PYTHONPATH", "")
 
 
-def test_prepare_manifest_stages_local_skill_dependencies_in_dev(tmp_path, monkeypatch, local_sdk_components):
+def test_prepare_manifest_stages_local_skill_dependencies_in_dev(
+    tmp_path, monkeypatch, local_sdk_components
+):
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"
     bundle_dir.mkdir()
@@ -341,7 +367,9 @@ def test_prepare_manifest_stages_local_skill_dependencies_in_dev(tmp_path, monke
         "evidence_engine_skill",
         "mirrorneuron-evidence-engine-skill",
     )
-    skill_module = skills_root / "evidence_engine_skill" / "src" / "mn_evidence_engine_skill"
+    skill_module = (
+        skills_root / "evidence_engine_skill" / "src" / "mn_evidence_engine_skill"
+    )
     skill_module.mkdir(parents=True)
     (skill_module / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
     monkeypatch.setenv("MN_ENV", "dev")
@@ -381,7 +409,9 @@ def test_prepare_manifest_stages_local_skill_dependencies_in_dev(tmp_path, monke
     remaining = [item["name"] for item in prepared["skill_dependencies"]]
     assert remaining == ["mn-python-sdk-rag"]
     assert prepared["metadata"]["mn_local_skill_dependencies"]["packages"] == [
-        "mirrorneuron-evidence-engine-skill", "mirrorneuron-python-sdk", "mn-python-sdk-common"
+        "mirrorneuron-evidence-engine-skill",
+        "mirrorneuron-python-sdk",
+        "mn-python-sdk-common",
     ]
 
     staged = stage_skill_dependency_payloads_for_manifest(
@@ -400,21 +430,31 @@ def test_prepare_manifest_stages_local_skill_dependencies_in_dev(tmp_path, monke
         in payloads
     )
     requirements = payloads["worker/docker_worker/requirements.txt"].decode()
-    local_requirements = payloads["worker/docker_worker/local-requirements.txt"].decode()
+    local_requirements = payloads[
+        "worker/docker_worker/local-requirements.txt"
+    ].decode()
     dockerfile = payloads["worker/docker_worker/Dockerfile"].decode()
     assert "mn-python-sdk-rag==1.2.14" in requirements
     assert "mirrorneuron-evidence-engine-skill" not in requirements
     assert "/tmp/mn-skill-runtime/local/evidence_engine_skill" not in requirements
     assert "/tmp/mn-skill-runtime/local/evidence_engine_skill" in local_requirements
     assert "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt" in dockerfile
-    assert "COPY local-requirements.txt /tmp/mn-skill-runtime/local-requirements.txt" in dockerfile
+    assert (
+        "COPY local-requirements.txt /tmp/mn-skill-runtime/local-requirements.txt"
+        in dockerfile
+    )
     assert "COPY __mn_skill_dependencies/local/evidence_engine_skill" in dockerfile
-    assert "pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
+    assert (
+        "pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt"
+        in dockerfile
+    )
     assert "-r /tmp/mn-skill-runtime/local-requirements.txt" in requirements
     assert dockerfile.count("pip install") == 1
 
 
-def test_prepare_manifest_stages_local_skill_dependencies_from_runtime_env(tmp_path, monkeypatch, local_sdk_components):
+def test_prepare_manifest_stages_local_skill_dependencies_from_runtime_env(
+    tmp_path, monkeypatch, local_sdk_components
+):
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"
     runtime_home = tmp_path / ".mn"
@@ -430,7 +470,9 @@ def test_prepare_manifest_stages_local_skill_dependencies_from_runtime_env(tmp_p
         "evidence_engine_skill",
         "mirrorneuron-evidence-engine-skill",
     )
-    skill_module = skills_root / "evidence_engine_skill" / "src" / "mn_evidence_engine_skill"
+    skill_module = (
+        skills_root / "evidence_engine_skill" / "src" / "mn_evidence_engine_skill"
+    )
     skill_module.mkdir(parents=True)
     (skill_module / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
 
@@ -471,7 +513,9 @@ def test_prepare_manifest_stages_local_skill_dependencies_from_runtime_env(tmp_p
         in payloads
     )
     requirements = payloads["worker/docker_worker/requirements.txt"].decode()
-    local_requirements = payloads["worker/docker_worker/local-requirements.txt"].decode()
+    local_requirements = payloads[
+        "worker/docker_worker/local-requirements.txt"
+    ].decode()
     assert "/tmp/mn-skill-runtime/local/evidence_engine_skill" not in requirements
     assert "/tmp/mn-skill-runtime/local/evidence_engine_skill" in local_requirements
 
@@ -480,6 +524,7 @@ def test_prepare_manifest_stages_declared_rag_components_for_dockerworker_source
     tmp_path, monkeypatch
 ):
     from mn_sdk.components.installation import SDKInstallation
+
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     sdk = tmp_path / "mn-python-sdk"
@@ -489,21 +534,43 @@ def test_prepare_manifest_stages_declared_rag_components_for_dockerworker_source
         (project / "pyproject.toml").write_text(
             f'[project]\nname="mn-python-sdk-{name}"\nversion="0.1.0"\n'
         )
-    (sdk / "pyproject.toml").write_text('[project]\nname="mirrorneuron-python-sdk"\nversion="1.3.13"\n')
-    monkeypatch.setattr("mn_sdk.components.installation.sdk_installation", lambda: SDKInstallation("local", source_root=sdk))
+    (sdk / "pyproject.toml").write_text(
+        '[project]\nname="mirrorneuron-python-sdk"\nversion="1.3.13"\n'
+    )
+    monkeypatch.setattr(
+        "mn_sdk.components.installation.sdk_installation",
+        lambda: SDKInstallation("local", source_root=sdk),
+    )
     monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path))
     manifest = {
-        "packages": [{"type": "pip", "source": "gar", "name": "mn-python-sdk-rag", "version": "0.1.99"}],
-        "nodes": [{"node_id":"worker", "config": {
-            "runner_module":"MirrorNeuron.Runner.DockerWorker",
-            "docker_worker_image":"worker/docker_worker", "environment":{},
-        }}],
+        "packages": [
+            {
+                "type": "pip",
+                "source": "gar",
+                "name": "mn-python-sdk-rag",
+                "version": "0.1.99",
+            }
+        ],
+        "nodes": [
+            {
+                "node_id": "worker",
+                "config": {
+                    "runner_module": "MirrorNeuron.Runner.DockerWorker",
+                    "docker_worker_image": "worker/docker_worker",
+                    "environment": {},
+                },
+            }
+        ],
     }
     payloads = {"worker/docker_worker/Dockerfile": b"FROM python:3.12-slim\n"}
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
-    stage_skill_dependency_payloads_for_manifest(prepared, payloads, bundle_dir=bundle_dir)
+    stage_skill_dependency_payloads_for_manifest(
+        prepared, payloads, bundle_dir=bundle_dir
+    )
     requirements = payloads["worker/docker_worker/requirements.txt"].decode()
-    local_requirements = payloads["worker/docker_worker/local-requirements.txt"].decode()
+    local_requirements = payloads[
+        "worker/docker_worker/local-requirements.txt"
+    ].decode()
     dockerfile = payloads["worker/docker_worker/Dockerfile"].decode()
     assert "mn-python-sdk-rag==0.1.0" not in requirements
     assert "mn-python-sdk-rag==0.1.99" not in requirements
@@ -531,7 +598,9 @@ def test_prepare_manifest_stages_local_skill_dependencies_only_in_docker_workdir
         "evidence_engine_skill",
         "mirrorneuron-evidence-engine-skill",
     )
-    skill_module = skills_root / "evidence_engine_skill" / "src" / "mn_evidence_engine_skill"
+    skill_module = (
+        skills_root / "evidence_engine_skill" / "src" / "mn_evidence_engine_skill"
+    )
     skill_module.mkdir(parents=True)
     (skill_module / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
     monkeypatch.setenv("MN_ENV", "dev")
@@ -556,7 +625,10 @@ def test_prepare_manifest_stages_local_skill_dependencies_only_in_docker_workdir
                     "workdir": "/mn/job/document_workflow",
                     "upload_paths": [
                         {"source": "document_workflow", "target": "document_workflow"},
-                        {"source": "examples/sample_inputs", "target": "vc_assistant/examples/sample_inputs"},
+                        {
+                            "source": "examples/sample_inputs",
+                            "target": "vc_assistant/examples/sample_inputs",
+                        },
                         {"source": "knowledge", "target": "knowledge"},
                     ],
                     "environment": {},
@@ -577,7 +649,9 @@ def test_prepare_manifest_stages_local_skill_dependencies_only_in_docker_workdir
     ]
 
 
-def test_prepare_manifest_localizes_skill_dependencies_for_hostlocal_dev(tmp_path, monkeypatch, local_sdk_components):
+def test_prepare_manifest_localizes_skill_dependencies_for_hostlocal_dev(
+    tmp_path, monkeypatch, local_sdk_components
+):
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"
     bundle_dir.mkdir()
@@ -620,12 +694,16 @@ def test_prepare_manifest_localizes_skill_dependencies_for_hostlocal_dev(tmp_pat
 
     assert prepared["skill_dependencies"] == []
     assert "mn_local_skill_dependencies" in prepared["metadata"]
-    packages = prepared["agents"]["nodes"][0]["config"]["python_environment"]["packages"]
+    packages = prepared["agents"]["nodes"][0]["config"]["python_environment"][
+        "packages"
+    ]
     assert str(skills_root / "evidence_engine_skill") in packages
     assert "mirrorneuron-evidence-engine-skill==1.2.7" not in packages
 
 
-def test_prepare_manifest_gar_skill_runtime_uses_pinned_requirements_not_local_sources(tmp_path, monkeypatch):
+def test_prepare_manifest_gar_skill_runtime_uses_pinned_requirements_not_local_sources(
+    tmp_path, monkeypatch
+):
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"
     bundle_dir.mkdir()
@@ -694,13 +772,20 @@ def test_prepare_manifest_gar_skill_runtime_uses_pinned_requirements_not_local_s
     assert "example-external>=1" in runtime["requirements_text"]
 
     payloads: dict[str, bytes] = {}
-    stage_skill_runtime_support_payloads_for_manifest(prepared, payloads, bundle_dir=bundle_dir)
+    stage_skill_runtime_support_payloads_for_manifest(
+        prepared, payloads, bundle_dir=bundle_dir
+    )
     dockerfile = payloads["__mn_skill_runtime/docker_worker/Dockerfile"].decode()
-    requirements = payloads["__mn_skill_runtime/docker_worker/requirements.txt"].decode()
+    requirements = payloads[
+        "__mn_skill_runtime/docker_worker/requirements.txt"
+    ].decode()
     assert "COPY build_context/w3m_browser_skill" not in dockerfile
     assert "/tmp/mn-local-packages" not in dockerfile
     assert "--index-url\n" not in requirements
-    assert "--index-url https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/" in requirements
+    assert (
+        "--index-url https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/"
+        in requirements
+    )
     assert "--extra-index-url https://pypi.org/simple" in requirements
     assert "mirrorneuron-w3m-browser-skill==1.2.7" in requirements
 
@@ -786,7 +871,9 @@ def test_generated_skill_runtime_installs_local_dev_skills_before_verification(
     assert dockerfile.index(local_install) < dockerfile.index(verification)
 
 
-def test_stage_skill_dependency_payloads_injects_pinned_gar_requirements_for_dockerworker(tmp_path):
+def test_stage_skill_dependency_payloads_injects_pinned_gar_requirements_for_dockerworker(
+    tmp_path,
+):
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     manifest = {
@@ -822,12 +909,21 @@ def test_stage_skill_dependency_payloads_injects_pinned_gar_requirements_for_doc
     requirements = payloads["worker/docker_worker/requirements.txt"].decode()
     dockerfile = payloads["worker/docker_worker/Dockerfile"].decode()
     assert "mn-python-sdk-rag==1.2.7" in requirements
-    assert "https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/" in requirements
+    assert (
+        "https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/"
+        in requirements
+    )
     assert "--index-url\n" not in requirements
-    assert "--index-url https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/" in requirements
+    assert (
+        "--index-url https://us-central1-python.pkg.dev/mirrorneuron-public-packages/agent-skills/simple/"
+        in requirements
+    )
     assert "--extra-index-url https://pypi.org/simple" in requirements
     assert "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt" in dockerfile
-    assert "pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
+    assert (
+        "pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt"
+        in dockerfile
+    )
 
 
 def test_stage_skill_dependency_payloads_ignores_comment_only_dependency_text(tmp_path):
@@ -871,25 +967,53 @@ def test_stage_skill_dependency_payloads_ignores_comment_only_dependency_text(tm
     dockerfile = payloads["worker/docker_worker/Dockerfile"].decode()
     assert "mn-python-sdk-rag==1.2.7" in requirements
     assert "COPY requirements.txt /tmp/mn-skill-runtime/requirements.txt" in dockerfile
-    assert "pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt" in dockerfile
+    assert (
+        "pip install --timeout 120 --retries 10 --break-system-packages --no-cache-dir -r /tmp/mn-skill-runtime/requirements.txt"
+        in dockerfile
+    )
 
 
-def test_prepare_manifest_adds_component_upload_for_manual_sdk_worker(tmp_path, monkeypatch):
+def test_prepare_manifest_adds_component_upload_for_manual_sdk_worker(
+    tmp_path, monkeypatch
+):
     component = tmp_path / "mn-python-sdk/packages/common"
     component.mkdir(parents=True)
-    (component / "pyproject.toml").write_text("[project]\nname='mn-python-sdk-common'\nversion='0.1.0'\n")
+    (component / "pyproject.toml").write_text(
+        "[project]\nname='mn-python-sdk-common'\nversion='0.1.0'\n"
+    )
     monkeypatch.setenv("MN_WORKSPACE_ROOT", str(tmp_path))
-    manifest = {"agents": {"nodes": [{"node_id": "worker", "config": {
-        "runner_module": "MirrorNeuron.Runner.DockerWorker",
-        "build_context_upload_paths": [{"base": "workspace_root", "source": "mn-python-sdk", "target": "worker/build_context/mn-python-sdk"}],
-    }}]}}
+    manifest = {
+        "agents": {
+            "nodes": [
+                {
+                    "node_id": "worker",
+                    "config": {
+                        "runner_module": "MirrorNeuron.Runner.DockerWorker",
+                        "build_context_upload_paths": [
+                            {
+                                "base": "workspace_root",
+                                "source": "mn-python-sdk",
+                                "target": "worker/build_context/mn-python-sdk",
+                            }
+                        ],
+                    },
+                }
+            ]
+        }
+    }
     assert ensure_sdk_build_context_uploads(manifest)["added"] == 1
     uploads = manifest["agents"]["nodes"][0]["config"]["build_context_upload_paths"]
-    assert {"base": "workspace_root", "source": "mn-python-sdk/packages/common", "target": "worker/build_context/mn-python-sdk/packages/common"} in uploads
+    assert {
+        "base": "workspace_root",
+        "source": "mn-python-sdk/packages/common",
+        "target": "worker/build_context/mn-python-sdk/packages/common",
+    } in uploads
     assert ensure_sdk_build_context_uploads(manifest)["added"] == 0
 
 
-def test_prepare_manifest_localizes_sdk_with_dev_skill_worker(tmp_path, monkeypatch, local_sdk_components):
+def test_prepare_manifest_localizes_sdk_with_dev_skill_worker(
+    tmp_path, monkeypatch, local_sdk_components
+):
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"
     sdk_root = tmp_path / "mn-python-sdk"
@@ -966,7 +1090,9 @@ def test_prepare_manifest_localizes_sdk_with_dev_skill_worker(tmp_path, monkeypa
     ]
 
     payloads: dict[str, bytes] = {}
-    stage_skill_dependency_payloads_for_manifest(prepared, payloads, bundle_dir=bundle_dir)
+    stage_skill_dependency_payloads_for_manifest(
+        prepared, payloads, bundle_dir=bundle_dir
+    )
 
     requirements = payloads["document_workflow/docker_worker/requirements.txt"].decode()
     local_requirements = payloads[
@@ -978,10 +1104,15 @@ def test_prepare_manifest_localizes_sdk_with_dev_skill_worker(tmp_path, monkeypa
     assert "/tmp/mn-skill-runtime/local/mn-python-sdk" in local_requirements
     assert "COPY __mn_skill_dependencies/local/text_analysis_skill" in dockerfile
     assert "COPY __mn_skill_dependencies/local/mn-python-sdk" in dockerfile
-    assert any(key.endswith("mn-python-sdk/mn_sdk/blueprint_support/runtime.py") for key in payloads)
+    assert any(
+        key.endswith("mn-python-sdk/mn_sdk/blueprint_support/runtime.py")
+        for key in payloads
+    )
 
 
-def test_prepare_manifest_skill_runtime_node_scope_patches_only_selected_nodes(tmp_path, monkeypatch):
+def test_prepare_manifest_skill_runtime_node_scope_patches_only_selected_nodes(
+    tmp_path, monkeypatch
+):
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"
     bundle_dir.mkdir()
@@ -1040,9 +1171,17 @@ def test_prepare_manifest_skill_runtime_node_scope_patches_only_selected_nodes(t
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
     nodes = {node["node_id"]: node for node in prepared["agents"]["nodes"]}
 
-    assert nodes["research_worker"]["config"]["runner_module"] == "MirrorNeuron.Runner.DockerWorker"
-    assert nodes["local_worker"]["config"]["runner_module"] == "MirrorNeuron.Runner.HostLocal"
-    assert prepared["metadata"]["mn_skill_runtime"]["patched_nodes"] == ["research_worker"]
+    assert (
+        nodes["research_worker"]["config"]["runner_module"]
+        == "MirrorNeuron.Runner.DockerWorker"
+    )
+    assert (
+        nodes["local_worker"]["config"]["runner_module"]
+        == "MirrorNeuron.Runner.HostLocal"
+    )
+    assert prepared["metadata"]["mn_skill_runtime"]["patched_nodes"] == [
+        "research_worker"
+    ]
 
 
 def test_stage_upload_path_payloads_stages_top_level_blueprint_sources(tmp_path):
@@ -1066,7 +1205,10 @@ def test_stage_upload_path_payloads_stages_top_level_blueprint_sources(tmp_path)
                     "config": {
                         "upload_paths": [
                             {"source": "worker", "target": "worker"},
-                            {"source": "examples/sample_inputs", "target": "vc_assistant/examples/sample_inputs"},
+                            {
+                                "source": "examples/sample_inputs",
+                                "target": "vc_assistant/examples/sample_inputs",
+                            },
                         ]
                     },
                 }
@@ -1075,14 +1217,18 @@ def test_stage_upload_path_payloads_stages_top_level_blueprint_sources(tmp_path)
     }
     payloads = {"worker/run.py": b"print('hi')\n"}
 
-    staged = stage_upload_path_payloads_for_manifest(manifest, payloads, bundle_dir=bundle_dir)
+    staged = stage_upload_path_payloads_for_manifest(
+        manifest, payloads, bundle_dir=bundle_dir
+    )
 
     assert staged == {"staged": True, "sources": ["examples/sample_inputs"]}
     assert payloads["examples/sample_inputs/company/brief.txt"] == b"sample evidence\n"
     assert "examples/sample_inputs/company/__pycache__/brief.pyc" not in payloads
 
 
-def test_prepare_manifest_leaves_manual_docker_worker_skill_policy_alone(tmp_path, monkeypatch):
+def test_prepare_manifest_leaves_manual_docker_worker_skill_policy_alone(
+    tmp_path, monkeypatch
+):
     bundle_dir = tmp_path / "bundle"
     skills_root = tmp_path / "mn-skills"
     bundle_dir.mkdir()
@@ -1124,11 +1270,16 @@ def test_prepare_manifest_leaves_manual_docker_worker_skill_policy_alone(tmp_pat
 
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
 
-    assert prepared["agents"]["nodes"][0]["config"]["runner_module"] == "MirrorNeuron.Runner.HostLocal"
+    assert (
+        prepared["agents"]["nodes"][0]["config"]["runner_module"]
+        == "MirrorNeuron.Runner.HostLocal"
+    )
     assert "mn_skill_runtime" not in prepared.get("metadata", {})
 
 
-def test_prepare_manifest_for_submission_lowers_workflow_manifest_for_core_runtime(tmp_path):
+def test_prepare_manifest_for_submission_lowers_workflow_manifest_for_core_runtime(
+    tmp_path,
+):
     bundle_dir = tmp_path / "workflow_bundle"
     bundle_dir.mkdir()
     (bundle_dir / "config").mkdir()
@@ -1159,8 +1310,18 @@ def test_prepare_manifest_for_submission_lowers_workflow_manifest_for_core_runti
             "schema": "mn.agents.communication_graph/v1",
             "entrypoints": ["ingress"],
             "nodes": [
-                {"node_id": "ingress", "agent_type": "router", "type": "map", "config": {}},
-                {"node_id": "worker", "agent_type": "executor", "type": "generic", "config": {}},
+                {
+                    "node_id": "ingress",
+                    "agent_type": "router",
+                    "type": "map",
+                    "config": {},
+                },
+                {
+                    "node_id": "worker",
+                    "agent_type": "executor",
+                    "type": "generic",
+                    "config": {},
+                },
             ],
             "edges": [
                 {
@@ -1194,7 +1355,9 @@ def test_prepare_manifest_for_submission_lowers_workflow_manifest_for_core_runti
     assert "edges" not in prepared
 
 
-def test_stage_sdk_payloads_for_component_dependent_hostlocal_worker(tmp_path, monkeypatch):
+def test_stage_sdk_payloads_for_component_dependent_hostlocal_worker(
+    tmp_path, monkeypatch
+):
     bundle_dir = tmp_path / "bundle"
     script_dir = bundle_dir / "payloads" / "simulation_loop" / "scripts"
     config_dir = bundle_dir / "config"
@@ -1373,7 +1536,9 @@ def test_prepare_manifest_injects_docker_model_runner_llm_env_by_node_runtime(tm
     assert host_env["MN_LLM_MAX_TOKENS"] == "800"
 
 
-def test_prepare_manifest_retains_managed_model_requirements_for_deferred_owner_preparation(tmp_path):
+def test_prepare_manifest_retains_managed_model_requirements_for_deferred_owner_preparation(
+    tmp_path,
+):
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     config_dir = bundle_dir / "config"
@@ -1406,7 +1571,10 @@ def test_prepare_manifest_retains_managed_model_requirements_for_deferred_owner_
         "runtime": {
             "models": {
                 "primary": {"model": "default"},
-                "service_model": {"provider": "nvidia_service", "model": "remote/model"},
+                "service_model": {
+                    "provider": "nvidia_service",
+                    "model": "remote/model",
+                },
             },
             "bindings": {
                 "startup_folder_watcher": {
@@ -1454,14 +1622,19 @@ def test_prepare_manifest_retains_managed_model_requirements_for_deferred_owner_
     assert prepared["runtime"] == manifest["runtime"]
     worker = prepared["agents"]["nodes"][0]
     assert worker["requires_services"] == manifest["nodes"][0]["requires_services"]
-    assert worker["placement_requirements"] == manifest["nodes"][0]["placement_requirements"]
+    assert (
+        worker["placement_requirements"]
+        == manifest["nodes"][0]["placement_requirements"]
+    )
     env = prepared["agents"]["nodes"][0]["config"]["environment"]
     assert env["MN_RUNTIME_MODEL_MANAGED"] == "1"
     assert env["MN_LLM_PROVIDER"] == "docker_model_runner"
     assert env["MN_LLM_API_BASE"] == "auto"
 
 
-def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_fake_llm(tmp_path):
+def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_fake_llm(
+    tmp_path,
+):
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     config_dir = bundle_dir / "config"
@@ -1489,13 +1662,29 @@ def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_f
             {"name": "redis"},
         ],
         "runtime": {
-            "models": {"primary": {"provider": "docker_model_runner", "model": "nemotron-3.5-bolt-e4b:q4_k_m"}},
-            "bindings": {"worker": {"workers": [{"id": "worker", "model": "nemotron-3.5-bolt-e4b:q4_k_m"}]}},
+            "models": {
+                "primary": {
+                    "provider": "docker_model_runner",
+                    "model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                }
+            },
+            "bindings": {
+                "worker": {
+                    "workers": [
+                        {"id": "worker", "model": "nemotron-3.5-bolt-e4b:q4_k_m"}
+                    ]
+                }
+            },
         },
         "nodes": [
             {
                 "node_id": "worker",
-                "requires_services": [{"name": "docker-model-runner", "model": "nemotron-3.5-bolt-e4b:q4_k_m"}],
+                "requires_services": [
+                    {
+                        "name": "docker-model-runner",
+                        "model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                    }
+                ],
                 "placement_requirements": {
                     "models": [
                         {
@@ -1513,7 +1702,10 @@ def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_f
     prepared = prepare_manifest_for_submission(
         bundle_dir,
         manifest,
-        env_overrides={"MN_LLM_PROVIDER": "fake", "MN_LLM_MODEL": "fake-deterministic-blueprint-agent"},
+        env_overrides={
+            "MN_LLM_PROVIDER": "fake",
+            "MN_LLM_MODEL": "fake-deterministic-blueprint-agent",
+        },
         submission_metadata={"fake_llm": True},
     )
 
@@ -1522,7 +1714,10 @@ def test_prepare_manifest_strips_docker_model_runner_scheduler_requirement_for_f
     assert "model" not in prepared["runtime"]["bindings"]["worker"]["workers"][0]
     assert "requires_services" not in prepared["agents"]["nodes"][0]
     assert "placement_requirements" not in prepared["agents"]["nodes"][0]
-    assert prepared["agents"]["nodes"][0]["config"]["environment"]["MN_LLM_PROVIDER"] == "fake"
+    assert (
+        prepared["agents"]["nodes"][0]["config"]["environment"]["MN_LLM_PROVIDER"]
+        == "fake"
+    )
 
 
 def test_prepare_manifest_model_only_llm_config_retains_first_use_preparation(tmp_path):
@@ -1554,7 +1749,9 @@ def test_prepare_manifest_model_only_llm_config_retains_first_use_preparation(tm
     assert "MN_LLM_RUNTIME_MODEL" not in env
 
 
-def test_prepare_manifest_for_submission_injects_flow_nodes_and_scheduler_binding(tmp_path):
+def test_prepare_manifest_for_submission_injects_flow_nodes_and_scheduler_binding(
+    tmp_path,
+):
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     config_dir = bundle_dir / "config"
@@ -1563,7 +1760,10 @@ def test_prepare_manifest_for_submission_injects_flow_nodes_and_scheduler_bindin
         json.dumps(
             {
                 "identity": {"blueprint_id": "safety_video_analyser"},
-                "llm": {"provider": "docker_model_runner", "model": "nemotron-3.5-bolt-e4b:q4_k_m"},
+                "llm": {
+                    "provider": "docker_model_runner",
+                    "model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                },
                 "node_allocation": {
                     "report_generator_preferred_node": "mirror_neuron@192.168.4.173"
                 },
@@ -1667,7 +1867,9 @@ def test_flow_node_local_video_inputs_promote_to_blob_refs(tmp_path, monkeypatch
 
     prepared = prepare_manifest_for_submission(bundle_dir, manifest)
     payloads = {}
-    summary = stage_local_input_payloads_for_manifest(prepared, payloads, bundle_dir=bundle_dir)
+    summary = stage_local_input_payloads_for_manifest(
+        prepared, payloads, bundle_dir=bundle_dir
+    )
 
     assert summary["folders"][0]["file_count"] == 1
     assert "safety_video_analyser/mn_local_inputs/videos/work_safety_1.mp4" in payloads
@@ -1678,7 +1880,10 @@ def test_flow_node_local_video_inputs_promote_to_blob_refs(tmp_path, monkeypatch
     assert payloads == {}
     ref = prepared["metadata"]["mn_artifacts"]["blob_refs"][0]
     assert ref["type"] == "blob_ref"
-    assert ref["payload_path"] == "safety_video_analyser/mn_local_inputs/videos/work_safety_1.mp4"
+    assert (
+        ref["payload_path"]
+        == "safety_video_analyser/mn_local_inputs/videos/work_safety_1.mp4"
+    )
     assert ref["locations"][0]["node"] == "mirror_neuron@node-a"
 
 
@@ -1726,13 +1931,23 @@ def test_stage_local_input_payloads_after_manifest_preparation(tmp_path):
     )
     payloads = {}
 
-    summary = stage_local_input_payloads_for_manifest(prepared, payloads, bundle_dir=bundle_dir)
+    summary = stage_local_input_payloads_for_manifest(
+        prepared, payloads, bundle_dir=bundle_dir
+    )
 
     env = prepared["agents"]["nodes"][0]["config"]["environment"]
     injected_config = json.loads(env["MN_BLUEPRINT_CONFIG_JSON"])
-    assert injected_config["tax_documents"]["folder_path"] == "mn_local_inputs/tax_documents"
-    assert injected_config["inputs"]["payload"]["document_folder"] == "mn_local_inputs/tax_documents"
-    assert payloads["tax_workflow/mn_local_inputs/tax_documents/w2.txt"] == b"wages 100\n"
+    assert (
+        injected_config["tax_documents"]["folder_path"]
+        == "mn_local_inputs/tax_documents"
+    )
+    assert (
+        injected_config["inputs"]["payload"]["document_folder"]
+        == "mn_local_inputs/tax_documents"
+    )
+    assert (
+        payloads["tax_workflow/mn_local_inputs/tax_documents/w2.txt"] == b"wages 100\n"
+    )
     assert "tax_workflow/mn_local_inputs/tax_documents/ignore.csv" not in payloads
     assert summary["folders"][0]["file_count"] == 1
 
@@ -1741,41 +1956,51 @@ def test_prepare_manifest_for_submission_renders_agent_templates(tmp_path, monke
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     (bundle_dir / "config").mkdir()
-    (bundle_dir / "config" / "default.json").write_text(json.dumps({"identity": {"blueprint_id": "bp"}}))
+    (bundle_dir / "config" / "default.json").write_text(
+        json.dumps({"identity": {"blueprint_id": "bp"}})
+    )
 
     agent_root = tmp_path / "mn-agents"
     agent_dir = agent_root / "control_message_router_agent"
     resources_dir = agent_dir / "src" / "mn_control_message_router_agent" / "resources"
     resources_dir.mkdir(parents=True)
-    (agent_root / "index.json").write_text(json.dumps({
-        "schema_version": "mn-agents.index.v2",
-        "agents": [
+    (agent_root / "index.json").write_text(
+        json.dumps(
             {
+                "schema_version": "mn-agents.index.v2",
+                "agents": [
+                    {
+                        "agent_id": "mn-agents.control.message_router",
+                        "template_id": "mn-agents.control.message_router",
+                        "version": 1,
+                        "distribution": "mn-control-message-router-agent",
+                        "module": "mn_control_message_router_agent",
+                        "package_kind": "runtime_node",
+                        "resource_path": "control_message_router_agent/src/mn_control_message_router_agent/resources/agent.json",
+                        "template_category": "control",
+                    }
+                ],
+            }
+        )
+    )
+    (resources_dir / "agent.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "mn.agent.package.v1",
+                "package_kind": "runtime_node",
                 "agent_id": "mn-agents.control.message_router",
                 "template_id": "mn-agents.control.message_router",
                 "version": 1,
-                "distribution": "mn-control-message-router-agent",
-                "module": "mn_control_message_router_agent",
-                "package_kind": "runtime_node",
-                "resource_path": "control_message_router_agent/src/mn_control_message_router_agent/resources/agent.json",
-                "template_category": "control",
+                "defaults": {
+                    "agent_type": "router",
+                    "type": "map",
+                    "role": "coordinator",
+                    "emit_type": "start",
+                },
+                "inputs": {"required": []},
             }
-        ]
-    }))
-    (resources_dir / "agent.json").write_text(json.dumps({
-        "schema_version": "mn.agent.package.v1",
-        "package_kind": "runtime_node",
-        "agent_id": "mn-agents.control.message_router",
-        "template_id": "mn-agents.control.message_router",
-        "version": 1,
-        "defaults": {
-            "agent_type": "router",
-            "type": "map",
-            "role": "coordinator",
-            "emit_type": "start",
-        },
-        "inputs": {"required": []},
-    }))
+        )
+    )
     monkeypatch.setenv("MN_AGENTS_ROOT", str(agent_root))
 
     prepared = prepare_manifest_for_submission(
@@ -1807,8 +2032,12 @@ def test_blueprint_config_ignores_misnamed_overwrite_file(tmp_path):
     bundle_dir = tmp_path / "bundle"
     config_dir = bundle_dir / "config"
     config_dir.mkdir(parents=True)
-    (config_dir / "default.json").write_text(json.dumps({"vl_model": {"model": "default"}}))
-    (config_dir / "overwrites.json").write_text(json.dumps({"vl_model": {"model": "wrong-name"}}))
+    (config_dir / "default.json").write_text(
+        json.dumps({"vl_model": {"model": "default"}})
+    )
+    (config_dir / "overwrites.json").write_text(
+        json.dumps({"vl_model": {"model": "wrong-name"}})
+    )
 
     config = load_blueprint_config(bundle_dir)
 
@@ -1820,7 +2049,9 @@ def test_blueprint_config_rejects_invalid_overwrite_data_format(tmp_path, payloa
     bundle_dir = tmp_path / "bundle"
     config_dir = bundle_dir / "config"
     config_dir.mkdir(parents=True)
-    (config_dir / "default.json").write_text(json.dumps({"vl_model": {"model": "default"}}))
+    (config_dir / "default.json").write_text(
+        json.dumps({"vl_model": {"model": "default"}})
+    )
     (config_dir / "overwrite.json").write_text(payload)
 
     with pytest.raises((json.JSONDecodeError, ValueError)):
@@ -1911,7 +2142,9 @@ def PathLikeName(path: str) -> str:
     return path.rsplit("/", 1)[-1]
 
 
-def test_prepare_manifest_stages_local_skill_dependencies_from_workspace_fallback_when_env_roots_are_stale(tmp_path, monkeypatch, local_sdk_components):
+def test_prepare_manifest_stages_local_skill_dependencies_from_workspace_fallback_when_env_roots_are_stale(
+    tmp_path, monkeypatch, local_sdk_components
+):
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     (bundle_dir / "config").mkdir()
@@ -1969,8 +2202,15 @@ def test_prepare_manifest_stages_local_skill_dependencies_from_workspace_fallbac
     local_metadata = prepared["metadata"]["mn_local_skill_dependencies"]
     assert [item["name"] for item in remaining_dependencies] == ["mn-python-sdk-rag"]
     assert local_metadata["context_root"] == ".mn-local-skills"
-    assert local_metadata["packages"] == ["mirrorneuron-evidence-engine-skill", "mirrorneuron-python-sdk", "mn-python-sdk-common"]
-    assert local_metadata["sources"][0]["target"] == "worker/.mn-local-skills/evidence_engine_skill"
+    assert local_metadata["packages"] == [
+        "mirrorneuron-evidence-engine-skill",
+        "mirrorneuron-python-sdk",
+        "mn-python-sdk-common",
+    ]
+    assert (
+        local_metadata["sources"][0]["target"]
+        == "worker/.mn-local-skills/evidence_engine_skill"
+    )
 
     payloads: dict[str, bytes] = {}
     stage_skill_dependency_payloads_for_manifest(

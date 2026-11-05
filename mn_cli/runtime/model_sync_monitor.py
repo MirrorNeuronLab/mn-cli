@@ -194,9 +194,12 @@ def _retry_delay(failures: int, minimum: float, maximum: float) -> float:
 def _result_error(result: dict[str, Any]) -> str:
     errors = result.get("errors") or []
     if errors:
-        return "; ".join(
-            str(item.get("error") or item)
-            for item in errors
-            if isinstance(item, dict)
-        ) or "cluster model reconciliation was not acknowledged"
+        return (
+            "; ".join(
+                str(item.get("error") or item)
+                for item in errors
+                if isinstance(item, dict)
+            )
+            or "cluster model reconciliation was not acknowledged"
+        )
     return f"cluster model reconciliation status={result.get('status') or 'unknown'}"

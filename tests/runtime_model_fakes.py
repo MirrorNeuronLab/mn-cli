@@ -159,8 +159,9 @@ class FakeRuntimeModelCluster:
             docker_model_name=run_cmds.docker_model_name,
             cluster_provided_model=run_cmds.cluster_provided_model,
             record_model_owner=lambda *_args, **_kwargs: None,
-            model_installed=lambda model: model
-            in self.installed_by_node.get("mirror_neuron@mac", set()),
+            model_installed=lambda model: (
+                model in self.installed_by_node.get("mirror_neuron@mac", set())
+            ),
             install_model_entry=self._unexpected_local_install,
             resolve_model_endpoint=lambda **_kwargs: None,
             resolve_cluster_model=run_cmds._resolve_runtime_cluster_model,
@@ -201,9 +202,7 @@ class FakeRuntimeModelCluster:
         status = "already_installed" if runtime_model in installed else "installed"
         installed.add(runtime_model)
         host = next(
-            item["grpc_host"]
-            for item in self.system["nodes"]
-            if item["name"] == node
+            item["grpc_host"] for item in self.system["nodes"] if item["name"] == node
         )
         api_base = (
             "http://host.docker.internal:12434/engines/v1"

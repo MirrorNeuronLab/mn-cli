@@ -12,7 +12,11 @@ def test_sidecar_uses_actual_mounted_storage_owner(tmp_path, owner):
     stat.write_text(f"#!/bin/sh\nprintf '%s' '{owner}'\n")
     stat.chmod(0o755)
     result = subprocess.run(
-        ["/bin/sh", "-ec", SHARED_STORAGE_OWNER_SCRIPT + '\nprintf "%s:%s" "$PUID" "$PGID"'],
+        [
+            "/bin/sh",
+            "-ec",
+            SHARED_STORAGE_OWNER_SCRIPT + '\nprintf "%s:%s" "$PUID" "$PGID"',
+        ],
         env={**os.environ, "PATH": str(tmp_path), "PUID": "1000", "PGID": "1000"},
         capture_output=True,
         text=True,

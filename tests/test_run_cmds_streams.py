@@ -40,7 +40,8 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_RUNTIME_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_CONTAINER_SHARED_STORAGE_ROOT", raising=False)
-    monkeypatch.setattr('mn_cli.libs.run_cmds.handlers.monitor.sync_litellm_gateway',
+    monkeypatch.setattr(
+        "mn_cli.libs.run_cmds.handlers.monitor.sync_litellm_gateway",
         lambda **_kwargs: {
             "status": "running",
             "api_base": "http://mn-litellm-proxy:4000/v1",

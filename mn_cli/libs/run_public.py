@@ -22,12 +22,20 @@ from mn_cli.shared import client, console, logger
 
 
 def list_runs(
-    job: str | None = typer.Option(None, "--job", help="Only show runs belonging to this durable job."),
-    blueprint: str | None = typer.Option(None, "--blueprint", help="Only show runs for this blueprint ID."),
-    follow: bool = typer.Option(False, "--follow", "-f", help="Refresh until interrupted."),
+    job: str | None = typer.Option(
+        None, "--job", help="Only show runs belonging to this durable job."
+    ),
+    blueprint: str | None = typer.Option(
+        None, "--blueprint", help="Only show runs for this blueprint ID."
+    ),
+    follow: bool = typer.Option(
+        False, "--follow", "-f", help="Refresh until interrupted."
+    ),
     limit: int = typer.Option(20, "--limit", min=1, help="Maximum runs to show."),
     runs_root: str | None = typer.Option(None, "--runs-root", hidden=True),
-    interval: float = typer.Option(2.0, "--interval", min=0.1, help="Refresh interval when following."),
+    interval: float = typer.Option(
+        2.0, "--interval", min=0.1, help="Refresh interval when following."
+    ),
 ) -> None:
     """List execution runs, optionally filtered by job or blueprint."""
     if job:
@@ -39,25 +47,41 @@ def list_runs(
         )
         if not isinstance(items, list):
             items = []
-        items = [{**item, "record_source": "runtime"} for item in items if isinstance(item, dict)]
+        items = [
+            {**item, "record_source": "runtime"}
+            for item in items
+            if isinstance(item, dict)
+        ]
         print_collection(
             console,
             "Runs",
             items,
-            columns=(("ID", "run_id"), ("Kind", "kind"), ("State", "status"), ("Job", "job_id"), ("Updated", "updated_at")),
+            columns=(
+                ("ID", "run_id"),
+                ("Kind", "kind"),
+                ("State", "status"),
+                ("Job", "job_id"),
+                ("Updated", "updated_at"),
+            ),
         )
         return
     if follow and json_enabled():
         list_from_store, _, _ = blueprint_cmds._load_observability_api()
         try:
             while True:
-                local_items = list_from_store(runs_root=runs_root, blueprint_id=blueprint, limit=limit)
+                local_items = list_from_store(
+                    runs_root=runs_root, blueprint_id=blueprint, limit=limit
+                )
                 items = _merge_run_items(
                     local_items,
-                    _runtime_run_items(blueprint_id=blueprint, limit=limit, local_items=local_items),
+                    _runtime_run_items(
+                        blueprint_id=blueprint, limit=limit, local_items=local_items
+                    ),
                     limit=limit,
                 )
-                emit_stream_record("snapshot", data={"items": items, "count": len(items)})
+                emit_stream_record(
+                    "snapshot", data={"items": items, "count": len(items)}
+                )
                 import time
 
                 time.sleep(max(interval, 0.1))
@@ -79,18 +103,29 @@ def list_runs(
     )
     items = _merge_run_items(
         local_items,
-        _runtime_run_items(blueprint_id=blueprint, limit=limit, local_items=local_items),
+        _runtime_run_items(
+            blueprint_id=blueprint, limit=limit, local_items=local_items
+        ),
         limit=limit,
     )
     print_collection(
         console,
         "Runs",
         items,
-        columns=(("ID", "run_id"), ("Kind", "blueprint_id"), ("State", "status"), ("Record", "record_source"), ("Node / Owner", "job_id"), ("Updated", "updated_at")),
+        columns=(
+            ("ID", "run_id"),
+            ("Kind", "blueprint_id"),
+            ("State", "status"),
+            ("Record", "record_source"),
+            ("Node / Owner", "job_id"),
+            ("Updated", "updated_at"),
+        ),
     )
 
 
-def _runtime_run_items(*, blueprint_id: str | None, limit: int, local_items: list[dict] | None = None) -> list[dict]:
+def _runtime_run_items(
+    *, blueprint_id: str | None, limit: int, local_items: list[dict] | None = None
+) -> list[dict]:
     """Read all visible durable-job runs when Core is reachable.
 
     The local run store receives the submission mapping before terminal
@@ -99,7 +134,9 @@ def _runtime_run_items(*, blueprint_id: str | None, limit: int, local_items: lis
     """
 
     try:
-        jobs_payload = json.loads(client.list_jobs(include_archived=True, page_size=max(limit, 50)))
+        jobs_payload = json.loads(
+            client.list_jobs(include_archived=True, page_size=max(limit, 50))
+        )
     except Exception as exc:
         reason = history_reason(exc)
         if reason is None:
@@ -147,13 +184,17 @@ def _runs_for_job(job_id: str, job_blueprint_id: str, limit: int) -> list[dict]:
     while True:
         try:
             runs_payload = json.loads(
-                client.list_runs(job_id, page_size=max(limit, 50), page_token=page_token)
+                client.list_runs(
+                    job_id, page_size=max(limit, 50), page_token=page_token
+                )
             )
         except Exception as exc:
             reason = history_reason(exc)
             if reason is None:
                 raise
-            logger.debug("Run list using history job_id=%s category=%s", job_id[:160], reason)
+            logger.debug(
+                "Run list using history job_id=%s category=%s", job_id[:160], reason
+            )
             break
         runs = (
             runs_payload.get("data")
@@ -173,7 +214,11 @@ def _runs_for_job(job_id: str, job_blueprint_id: str, limit: int) -> list[dict]:
             if job_blueprint_id:
                 item.setdefault("blueprint_id", job_blueprint_id)
             items.append(item)
-        next_token = str(runs_payload.get("next_page_token") or "") if isinstance(runs_payload, dict) else ""
+        next_token = (
+            str(runs_payload.get("next_page_token") or "")
+            if isinstance(runs_payload, dict)
+            else ""
+        )
         if not next_token or next_token == page_token:
             break
         page_token = next_token
@@ -209,19 +254,28 @@ def _merge_run_items(
         if run_id not in live_ids:
             if "placement" in item:
                 item["placement"] = None
-            item["retry"] = {"available": False, "reason": "Recovery is unverified. Check Core availability and plan a retry."}
+            item["retry"] = {
+                "available": False,
+                "reason": "Recovery is unverified. Check Core availability and plan a retry.",
+            }
         if run_id not in live_ids and str(item.get("status") or "").lower() not in {
-            "completed", "failed", "cancelled", "canceled", "unknown",
+            "completed",
+            "failed",
+            "cancelled",
+            "canceled",
+            "unknown",
         }:
             item["status"] = "unknown"
 
     return sorted(
         merged.values(),
-        key=lambda item: item.get("updated_at")
-        or item.get("ended_at")
-        or item.get("started_at")
-        or item.get("submitted_at")
-        or "",
+        key=lambda item: (
+            item.get("updated_at")
+            or item.get("ended_at")
+            or item.get("started_at")
+            or item.get("submitted_at")
+            or ""
+        ),
         reverse=True,
     )[:limit]
 
@@ -233,48 +287,104 @@ def show_run(run_id: str = typer.Argument(help="Execution run ID.")) -> None:
 
 def retry_run(
     run_id: str = typer.Argument(help="Failed execution run ID."),
-    queue: bool = typer.Option(False, "--queue", help="Queue this retry when resources are busy."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Verify recovery without starting work."),
-    settings: list[str] = typer.Option([], "--set", help="Explicit declared retry setting: path=value. Repeatable."),
-    idempotency_key: str | None = typer.Option(None, "--idempotency-key", help="Reuse this key after a lost response."),
-    expected_attempt: int | None = typer.Option(None, "--expected-attempt", min=1, help="Original attempt selection when resubmitting a lost response."),
-    checkpoint_revision: str | None = typer.Option(None, "--checkpoint-revision", help="Original checkpoint selection when resubmitting a lost response."),
+    queue: bool = typer.Option(
+        False, "--queue", help="Queue this retry when resources are busy."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Verify recovery without starting work."
+    ),
+    settings: list[str] = typer.Option(
+        [], "--set", help="Explicit declared retry setting: path=value. Repeatable."
+    ),
+    idempotency_key: str | None = typer.Option(
+        None, "--idempotency-key", help="Reuse this key after a lost response."
+    ),
+    expected_attempt: int | None = typer.Option(
+        None,
+        "--expected-attempt",
+        min=1,
+        help="Original attempt selection when resubmitting a lost response.",
+    ),
+    checkpoint_revision: str | None = typer.Option(
+        None,
+        "--checkpoint-revision",
+        help="Original checkpoint selection when resubmitting a lost response.",
+    ),
 ) -> None:
     """Retry unfinished work from the failed run's last verified checkpoint."""
     context = {"run_id": run_id}
     try:
         overrides = parse_retry_settings(settings)
         if (expected_attempt is None) != (checkpoint_revision is None):
-            raise ValidationError("Use --expected-attempt and --checkpoint-revision together.")
+            raise ValidationError(
+                "Use --expected-attempt and --checkpoint-revision together."
+            )
         if expected_attempt is not None and (not idempotency_key or dry_run):
-            raise ValidationError("Resubmission requires --idempotency-key and cannot use --dry-run.")
+            raise ValidationError(
+                "Resubmission requires --idempotency-key and cannot use --dry-run."
+            )
         if checkpoint_revision is not None:
             import re
+
             if not re.fullmatch(r"[a-f0-9]{64}", checkpoint_revision):
-                raise ValidationError("Checkpoint revision must be a SHA-256 revision from the original retry plan.")
+                raise ValidationError(
+                    "Checkpoint revision must be a SHA-256 revision from the original retry plan."
+                )
         try:
-            plan = ({"eligible": True, "expected_attempt": expected_attempt, "checkpoint_revision": checkpoint_revision}
-                    if expected_attempt is not None else json.loads(client.plan_run_retry(run_id, configuration_overrides=overrides)))
+            plan = (
+                {
+                    "eligible": True,
+                    "expected_attempt": expected_attempt,
+                    "checkpoint_revision": checkpoint_revision,
+                }
+                if expected_attempt is not None
+                else json.loads(
+                    client.plan_run_retry(run_id, configuration_overrides=overrides)
+                )
+            )
         except grpc.RpcError as exc:
-            if exc.code() != grpc.StatusCode.NOT_FOUND or mapped_run_record(run_id) is None:
+            if (
+                exc.code() != grpc.StatusCode.NOT_FOUND
+                or mapped_run_record(run_id) is None
+            ):
                 raise
-            plan = {"run_id": run_id, "record_source": "history", "eligible": False,
-                    "reason": "Stored history remains, but its Core control record is missing. Start a new run."}
+            plan = {
+                "run_id": run_id,
+                "record_source": "history",
+                "eligible": False,
+                "reason": "Stored history remains, but its Core control record is missing. Start a new run.",
+            }
         if dry_run:
             print_detail(console, "Retry plan", plan)
             return
         if plan.get("eligible") is not True:
             raise ValidationError(str(plan.get("reason") or "Retry is unavailable."))
         key = idempotency_key or str(uuid4())
-        context.update(idempotency_key=key, expected_attempt=plan["expected_attempt"], checkpoint_revision=plan["checkpoint_revision"])
+        context.update(
+            idempotency_key=key,
+            expected_attempt=plan["expected_attempt"],
+            checkpoint_revision=plan["checkpoint_revision"],
+        )
         if not json_enabled():
-            console.print(f"Retry request: {key}\nAttempt: {plan['expected_attempt']}\nCheckpoint: {plan['checkpoint_revision']}")
-        result = json.loads(client.retry_run(
-            run_id, expected_attempt=plan["expected_attempt"], checkpoint_revision=plan["checkpoint_revision"],
-            configuration_overrides=overrides, idempotency_key=key,
-            **({"admission_policy": "enqueue_if_busy"} if queue is True else {})))
+            console.print(
+                f"Retry request: {key}\nAttempt: {plan['expected_attempt']}\nCheckpoint: {plan['checkpoint_revision']}"
+            )
+        result = json.loads(
+            client.retry_run(
+                run_id,
+                expected_attempt=plan["expected_attempt"],
+                checkpoint_revision=plan["checkpoint_revision"],
+                configuration_overrides=overrides,
+                idempotency_key=key,
+                **({"admission_policy": "enqueue_if_busy"} if queue is True else {}),
+            )
+        )
         result["idempotency_key"] = key
-        print_detail(console, "Retry queued" if result.get("status") == "queued" else "Retry accepted", result)
+        print_detail(
+            console,
+            "Retry queued" if result.get("status") == "queued" else "Retry accepted",
+            result,
+        )
     except Exception as exc:
         handle_cli_error(exc, console, "run retry", command_context=context)
 
@@ -293,7 +403,10 @@ def watch_run(run_id: str = typer.Argument(help="Execution run ID.")) -> None:
     try:
         emit_stream_record("snapshot", data=run_record)
         stream = client.stream_events(
-            runtime_job_id, follow=True, timeout=None, heartbeat_interval_ms=1_000,
+            runtime_job_id,
+            follow=True,
+            timeout=None,
+            heartbeat_interval_ms=1_000,
         )
         try:
             for event_json in stream:
@@ -307,19 +420,31 @@ def watch_run(run_id: str = typer.Argument(help="Execution run ID.")) -> None:
             close = getattr(stream, "close", None)
             if close is not None:
                 close()
-        record_result({"run_id": run_id, "runtime_job_id": runtime_job_id, "detached": False})
+        record_result(
+            {"run_id": run_id, "runtime_job_id": runtime_job_id, "detached": False}
+        )
     except KeyboardInterrupt:
-        record_result({"run_id": run_id, "runtime_job_id": runtime_job_id, "detached": True})
+        record_result(
+            {"run_id": run_id, "runtime_job_id": runtime_job_id, "detached": True}
+        )
 
 
 def logs(
     run_id: str = typer.Argument(help="Execution run ID."),
-    channel: str = typer.Option("logs", "--channel", help="Stream channel: logs, events, or all."),
-    lines: int = typer.Option(50, "--lines", "-n", min=1, help="Number of records to show."),
+    channel: str = typer.Option(
+        "logs", "--channel", help="Stream channel: logs, events, or all."
+    ),
+    lines: int = typer.Option(
+        50, "--lines", "-n", min=1, help="Number of records to show."
+    ),
     level: str | None = typer.Option(None, "--level", help="Minimum log level."),
-    follow: bool = typer.Option(False, "--follow", "-f", help="Continue printing records."),
+    follow: bool = typer.Option(
+        False, "--follow", "-f", help="Continue printing records."
+    ),
     runs_root: str | None = typer.Option(None, "--runs-root", hidden=True),
-    interval: float = typer.Option(1.0, "--interval", min=0.1, help="Polling interval when following."),
+    interval: float = typer.Option(
+        1.0, "--interval", min=0.1, help="Polling interval when following."
+    ),
 ) -> None:
     """Show stored run logs, events, or the merged operational stream."""
     normalized = channel.strip().lower()
@@ -337,10 +462,19 @@ def logs(
         )
         return
     if normalized == "logs":
-        blueprint_cmds.blueprint_logs(run_id, lines=lines, level=level, follow=follow, runs_root=runs_root, interval=interval)
+        blueprint_cmds.blueprint_logs(
+            run_id,
+            lines=lines,
+            level=level,
+            follow=follow,
+            runs_root=runs_root,
+            interval=interval,
+        )
         return
     if normalized == "events":
-        blueprint_cmds.blueprint_tail(run_id, lines=lines, follow=follow, runs_root=runs_root, interval=interval)
+        blueprint_cmds.blueprint_tail(
+            run_id, lines=lines, follow=follow, runs_root=runs_root, interval=interval
+        )
         return
     if normalized == "all":
         blueprint_cmds.blueprint_stream(
@@ -372,7 +506,9 @@ def _json_logs(
     try:
         while True:
             if channel == "logs":
-                records = tools["read_run_logs"](run_id, runs_root=runs_root, level=level, limit=lines)
+                records = tools["read_run_logs"](
+                    run_id, runs_root=runs_root, level=level, limit=lines
+                )
             elif channel == "events":
                 _, _, read_run_events = blueprint_cmds._load_observability_api()
                 records = read_run_events(run_id, runs_root=runs_root, limit=lines)
@@ -396,7 +532,14 @@ def _json_logs(
                     emit_stream_record("event", data=record)
             else:
                 collected.extend(selected)
-                record_result({"run_id": run_id, "channel": channel, "items": collected, "count": len(collected)})
+                record_result(
+                    {
+                        "run_id": run_id,
+                        "channel": channel,
+                        "items": collected,
+                        "count": len(collected),
+                    }
+                )
                 return
             import time
 
@@ -422,7 +565,9 @@ def result(
         data=run_record,
         output_dir=destination,
     )
-    record_result({"run_id": run_id, "runtime_job_id": runtime_job_id, "output": str(destination)})
+    record_result(
+        {"run_id": run_id, "runtime_job_id": runtime_job_id, "output": str(destination)}
+    )
     if not json_enabled():
         console.print(f"Results saved to {destination}")
 
@@ -439,7 +584,9 @@ def compare(*args, **kwargs) -> None:
 
 def human_list(
     run_id: str = typer.Argument(help="Execution run ID."),
-    pending: bool = typer.Option(False, "--pending", help="Show only pending input requests."),
+    pending: bool = typer.Option(
+        False, "--pending", help="Show only pending input requests."
+    ),
     runs_root: str | None = typer.Option(None, "--runs-root", hidden=True),
 ) -> None:
     """List human collaboration events for one run."""
@@ -458,9 +605,13 @@ def human_list(
         records.append(
             {
                 **event,
-                "id": event.get("id") or payload.get("request_id") or payload.get("notice_id"),
+                "id": event.get("id")
+                or payload.get("request_id")
+                or payload.get("notice_id"),
                 "kind": event.get("type") or event.get("channel") or "human",
-                "state": event.get("state") or payload.get("status") or ("pending" if pending else "recorded"),
+                "state": event.get("state")
+                or payload.get("status")
+                or ("pending" if pending else "recorded"),
                 "owner": payload.get("reviewer") or event.get("component") or "",
                 "updated_at": event.get("ts") or event.get("timestamp") or "",
             }
@@ -469,7 +620,13 @@ def human_list(
         console,
         "Human events",
         records,
-        columns=(("ID", "id"), ("Kind", "kind"), ("State", "state"), ("Owner", "owner"), ("Updated", "updated_at")),
+        columns=(
+            ("ID", "id"),
+            ("Kind", "kind"),
+            ("State", "state"),
+            ("Owner", "owner"),
+            ("Updated", "updated_at"),
+        ),
     )
 
 
@@ -484,7 +641,11 @@ def human_ack(*args, **kwargs) -> None:
 
 
 def _runtime_job_id(run_id: str, *, run_record: dict | None = None) -> str:
-    payload = run_record if isinstance(run_record, dict) else json.loads(client.get_run(run_id))
+    payload = (
+        run_record
+        if isinstance(run_record, dict)
+        else json.loads(client.get_run(run_id))
+    )
     for key in ("runtime_job_id", "runtime_run_id", "execution_id"):
         value = payload.get(key) if isinstance(payload, dict) else None
         if value:

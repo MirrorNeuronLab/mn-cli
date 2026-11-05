@@ -23,7 +23,11 @@ from mn_cli.shared import console
 from mn_cli.libs.ui import print_error
 
 
-def load_observability_api() -> tuple[Callable[..., list[dict[str, Any]]], Callable[..., dict[str, Any]], Callable[..., list[dict[str, Any]]]]:
+def load_observability_api() -> tuple[
+    Callable[..., list[dict[str, Any]]],
+    Callable[..., dict[str, Any]],
+    Callable[..., list[dict[str, Any]]],
+]:
     return list_runs, load_run, read_run_events
 
 
@@ -101,7 +105,14 @@ def final_artifact(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def artifact_headline(artifact: dict[str, Any]) -> str:
-    for key in ("recommended_action", "recommendation", "decision", "risk_level", "priority", "summary"):
+    for key in (
+        "recommended_action",
+        "recommendation",
+        "decision",
+        "risk_level",
+        "priority",
+        "summary",
+    ):
         if key in artifact:
             return display(artifact[key])
     return display(artifact)
@@ -117,10 +128,14 @@ def job_id_from_record(record: dict[str, Any]) -> str:
     return str(job.get("job_id") or "")
 
 
-def load_run_or_exit(run_id: str, runs_root: Optional[str], *, include_observability: bool = False) -> dict[str, Any]:
+def load_run_or_exit(
+    run_id: str, runs_root: Optional[str], *, include_observability: bool = False
+) -> dict[str, Any]:
     _, load_run, _ = load_observability_api()
     try:
-        return load_run(run_id, runs_root=runs_root, include_observability=include_observability)
+        return load_run(
+            run_id, runs_root=runs_root, include_observability=include_observability
+        )
     except FileNotFoundError as exc:
         print_error(console, exc, code="MN_NOT_FOUND")
         raise typer.Exit(2)
@@ -140,14 +155,58 @@ def render_markdown_export(record: dict[str, Any]) -> str:
     lines = [f"# Blueprint Run {run.get('run_id', 'unknown')}", ""]
     lines.extend(["## Summary", ""])
     lines.extend(markdown_table(list(run_summary_with_job(record).items())))
-    lines.extend(["", "## Final Artifact", "", "```json", json.dumps(artifact, indent=2, sort_keys=True), "```"])
+    lines.extend(
+        [
+            "",
+            "## Final Artifact",
+            "",
+            "```json",
+            json.dumps(artifact, indent=2, sort_keys=True),
+            "```",
+        ]
+    )
     web_ui = record.get("web_ui") or {}
     if web_ui:
         lines.extend(["", "## Web UI", ""])
-        lines.extend(markdown_table([("URL", web_ui.get("url")), ("Adapter", web_ui.get("adapter")), ("Status", web_ui.get("status"))]))
-    lines.extend(["", "## Result", "", "```json", json.dumps(record.get("result") or {}, indent=2, sort_keys=True), "```"])
-    lines.extend(["", "## Inputs", "", "```json", json.dumps(record.get("inputs") or {}, indent=2, sort_keys=True), "```"])
-    lines.extend(["", "## Config", "", "```json", json.dumps(record.get("config") or {}, indent=2, sort_keys=True), "```"])
+        lines.extend(
+            markdown_table(
+                [
+                    ("URL", web_ui.get("url")),
+                    ("Adapter", web_ui.get("adapter")),
+                    ("Status", web_ui.get("status")),
+                ]
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Result",
+            "",
+            "```json",
+            json.dumps(record.get("result") or {}, indent=2, sort_keys=True),
+            "```",
+        ]
+    )
+    lines.extend(
+        [
+            "",
+            "## Inputs",
+            "",
+            "```json",
+            json.dumps(record.get("inputs") or {}, indent=2, sort_keys=True),
+            "```",
+        ]
+    )
+    lines.extend(
+        [
+            "",
+            "## Config",
+            "",
+            "```json",
+            json.dumps(record.get("config") or {}, indent=2, sort_keys=True),
+            "```",
+        ]
+    )
     lines.extend(["", "## Event Tail", "", "```json"])
     for event in (record.get("events") or [])[-20:]:
         lines.append(json.dumps(event, sort_keys=True))
@@ -158,11 +217,16 @@ def render_markdown_export(record: dict[str, Any]) -> str:
 def print_events(events: list[dict[str, Any]]) -> None:
     for event in events:
         timestamp = event.get("timestamp") or event.get("time") or event.get("ts") or ""
-        event_type = event.get("type") or event.get("event") or event.get("name") or "event"
+        event_type = (
+            event.get("type") or event.get("event") or event.get("name") or "event"
+        )
         details = {
             key: value
             for key, value in event.items()
             if key not in {"timestamp", "time", "ts", "type", "event", "name"}
         }
         detail_text = json.dumps(details, sort_keys=True) if details else ""
-        console.print(f"{display(timestamp, max_length=36)} {display(event_type, max_length=48)} {detail_text}", markup=False)
+        console.print(
+            f"{display(timestamp, max_length=36)} {display(event_type, max_length=48)} {detail_text}",
+            markup=False,
+        )

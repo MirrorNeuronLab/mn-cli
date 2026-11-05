@@ -16,7 +16,6 @@ execution lock. Permanent deletion/revocation ends observation; temporary
 transport failures reconnect without a run lifetime cutoff. PID metadata also
 records process birth identity.
 
-
 The CLI requires Python 3.12 or newer. The managed runtime and contributor/CI toolchains use Python 3.12, matching Core HostLocal, the SDK, and the API.
 
 Blueprint preflight delegates placement mode and single-node eligibility to the
@@ -121,6 +120,30 @@ When Syncthing shared storage is enabled (the default), `mn node add` treats
 reciprocal Syncthing device and shared-folder registration as a precondition of
 Core federation. It verifies both sidecars after configuration; a failure
 creates no new Core peer registration.
+
+CLI join orchestration lives in `runtime.cluster_join`, with existing server
+entrypoints and helper injection preserved. SDK validates handshake identity,
+endpoints, credentials and independent stores before the storage prerequisite;
+it owns reciprocal registration, bounded readiness and rollback. Existing
+registrations survive a failed rejoin. The command still returns success once
+federation is ready if model synchronization is pending, and reports that the
+existing model monitor will retry.
+
+Peer model snapshots use `Client.get_node_runtime_status` against local Core
+with a five-second deadline. Remote model preparation and gateway operations use
+their owner-addressable Core RPCs, retaining the selected node and deadlines.
+CLI never substitutes its installation token for a peer credential. Both Cores
+must support the new status RPC; older Cores receive an upgrade diagnostic.
+Each failed peer refresh carries one normalized failure into reconciliation,
+marks inventory incomplete, preserves routes and defers event acknowledgment,
+including when a stale cached snapshot exists. Missing publication is reported
+only after a successful read; an explicitly published empty inventory is valid.
+Monitor timing and recovery ownership are unchanged.
+Peer routes consume Core's `litellm.url` advertisement, preserving non-default
+gateway ports rather than substituting port 4000.
+Routes owned by the target node are excluded from its proxy. Legacy owner labels
+are also checked against the complete gateway address, including scheme and port;
+two Cores sharing a host address must retain each other's distinct gateway routes.
 
 `mn node remove NODE --yes` removes that reciprocal federated-peer registration
 from the current Core. It requires the same deliberate confirmation as other
@@ -288,6 +311,7 @@ Only measured upstream progress may be presented as a percentage.
 - `--yes` answers confirmation only, `--force` overrides one documented
   precondition but never supplies consent, and `--dry-run` never mutates.
   Destructive JSON/non-interactive commands require `--yes`.
+
 ## Durable Job/Run Contract
 
 `mn job list/create/show/start/archive/reset-data/delete` addresses durable job
@@ -605,7 +629,6 @@ Changes to CLI/API parity or shared behavior also require the corresponding
 contract suite in `mn-system-tests`, but this repository's own tests remain the
 primary gate for command and presentation behavior.
 
-
 ## Canonical blueprint packages
 
 All blueprint folders and ZIPs use the blueprint/v1 manifest schema and role
@@ -662,6 +685,7 @@ Install the updated CLI and SDK and restart the native runtime service to enable
 the monitor. No runtime reset or blueprint modification is required. Registration
 is distinct from completed file transfer; DockerWorker preparation still verifies
 the staged context and its readiness marker before building.
+
 # Desktop identity and reconnect contract
 
 Independent desktop federation stores a version-1 node identity under MN_HOME,
@@ -689,16 +713,16 @@ codes remain stable. Unknown errors retain `MN_EXECUTION_FAILED`; raw exception
 text never becomes an admission explanation. Applications must branch on codes,
 not message text. `AppError.category` and `AppError.retryable` are additive.
 
-| Problem code | Symbolic code | Category | HTTP | Retryable |
-| --- | --- | --- | --- | --- |
-| 1001 | `MN_MEMORY_REQUIREMENT_UNMET` | hardware | 422 | false |
-| 1002 | `MN_CPU_REQUIREMENT_UNMET` | hardware | 422 | false |
-| 1003 | `MN_GPU_REQUIREMENT_UNMET` | hardware | 422 | false |
-| 2001 | `MN_GPU_MEMORY_UNAVAILABLE` | capacity | 503 | true |
-| 2002 | `MN_DISK_UNAVAILABLE` | capacity | 503 | true |
-| 2003 | `MN_RESOURCE_EXHAUSTED` | capacity | 503 | true |
-| 3001 | `MN_SCHEDULING_UNAVAILABLE` | scheduling | 503 | true |
-| 4001 | `MN_PLACEMENT_UNSATISFIED` | placement | 422 | false |
+| Problem code | Symbolic code                 | Category   | HTTP | Retryable |
+| ------------ | ----------------------------- | ---------- | ---- | --------- |
+| 1001         | `MN_MEMORY_REQUIREMENT_UNMET` | hardware   | 422  | false     |
+| 1002         | `MN_CPU_REQUIREMENT_UNMET`    | hardware   | 422  | false     |
+| 1003         | `MN_GPU_REQUIREMENT_UNMET`    | hardware   | 422  | false     |
+| 2001         | `MN_GPU_MEMORY_UNAVAILABLE`   | capacity   | 503  | true      |
+| 2002         | `MN_DISK_UNAVAILABLE`         | capacity   | 503  | true      |
+| 2003         | `MN_RESOURCE_EXHAUSTED`       | capacity   | 503  | true      |
+| 3001         | `MN_SCHEDULING_UNAVAILABLE`   | scheduling | 503  | true      |
+| 4001         | `MN_PLACEMENT_UNSATISFIED`    | placement  | 422  | false     |
 
 Hardware errors require a configuration or hardware change. Capacity and
 scheduling errors may succeed after availability changes; retryable is not a
@@ -801,7 +825,6 @@ identify `record_source: runtime|history`; stored-only recovery is unverified or
 blocked with a practical reason. A missing stored control record and an unavailable
 runtime are distinct from an entirely unknown run ID.
 
-
 Managed Markdown context turns may bind a trusted serving-tokenizer integration
 with `MN_CONTEXT_TOKEN_COUNTER_FACTORY=package.module:create_counter`. The factory
 receives `request`, `scope` and `principal` keyword arguments and returns a
@@ -854,6 +877,7 @@ than operating-system or runtime installers. Keep it private: configuration and
 local data may contain sensitive values. Core, SDK, CLI and API must be upgraded
 together for the new streamed backup RPCs. `mn blueprint export <run-id>` remains
 a run report export (JSON/Markdown/HTML), with no job restore counterpart.
+
 # Configured OpenShell policies
 
 OpenShell workers may declare `policy_config_bindings: true` and bind unquoted
@@ -891,7 +915,6 @@ including level, blueprint owner, UTC timestamp and actor attribution.
 The SDK selects meaningful activity for the CLI, API, desktop and web monitors;
 raw events remain available for diagnostics.
 
-
 ## Completed analysis and host delivery
 
 The attached run command and background relay resolve host output sources using
@@ -901,7 +924,6 @@ all declared files must still be ready before the configured host copy is delive
 A copy failure is reported separately: completed analysis is retained and does
 not require repeating model calls. Delivery uses the SDK's UTC run archives and
 latest.html entry point, with host receipts outside frozen analysis artifacts.
-
 
 ## Automatic waiting and queue inspection
 
@@ -928,7 +950,6 @@ and `mn run retry` accept `--queue` to wait for compatible capacity explicitly.
 `mn job relocate JOB --node NODE` moves an idle Job and its data using Core's
 fenced transfer. Pause schedules and finish resource cleanup first. Repeating
 an interrupted move resumes it; `--abort` is valid only before ownership commit.
-
 
 ## Source package launch configuration
 

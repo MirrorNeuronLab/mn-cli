@@ -21,21 +21,31 @@ def isolated_identity_home(monkeypatch, tmp_path):
     monkeypatch.setenv("MN_HOME", str(tmp_path))
 
 
-
 @pytest.mark.parametrize("actual", ["nonode@nohost", "different@host", ""])
-def test_runtime_status_rejects_invalid_identity_in_machine_output(mocker, tmp_path, actual):
+def test_runtime_status_rejects_invalid_identity_in_machine_output(
+    mocker, tmp_path, actual
+):
     _patch_targets(mocker, tmp_path, web_ui_installed=True)
-    mocker.patch.object(runtime_health.client, "get_system_summary", return_value=json.dumps({
-        "nodes": [{"name": actual, "self?": True}]
-    }))
-    mocker.patch("mn_cli.libs.runtime_health.urllib.request.urlopen", side_effect=[
-        _HttpResponse({"status": "ok", "api_contract": "mirrorneuron.rest.v1"}),
-        _HttpResponse({"status": "ok", "component": "web-ui"}),
-    ])
+    mocker.patch.object(
+        runtime_health.client,
+        "get_system_summary",
+        return_value=json.dumps({"nodes": [{"name": actual, "self?": True}]}),
+    )
+    mocker.patch(
+        "mn_cli.libs.runtime_health.urllib.request.urlopen",
+        side_effect=[
+            _HttpResponse({"status": "ok", "api_contract": "mirrorneuron.rest.v1"}),
+            _HttpResponse({"status": "ok", "component": "web-ui"}),
+        ],
+    )
     result = runner.invoke(app, ["runtime", "status", "--json"])
     assert result.exit_code == 1
     assert "MN_NODE_IDENTITY_INVALID" in result.stdout
-    assert cli_data(result)["identity"] == {"expected": "test@host", "actual": actual, "valid": False}
+    assert cli_data(result)["identity"] == {
+        "expected": "test@host",
+        "actual": actual,
+        "valid": False,
+    }
 
 
 def cli_data(result):
@@ -46,7 +56,11 @@ def cli_data(result):
 
 def test_runtime_health_all_passing(mocker, tmp_path):
     _patch_targets(mocker, tmp_path, web_ui_installed=True)
-    mocker.patch.object(runtime_health.client, "get_system_summary", return_value='{"nodes":[{"name":"test@host","self":true}]}')
+    mocker.patch.object(
+        runtime_health.client,
+        "get_system_summary",
+        return_value='{"nodes":[{"name":"test@host","self":true}]}',
+    )
     mocker.patch(
         "mn_cli.libs.runtime_health.urllib.request.urlopen",
         side_effect=[
@@ -58,12 +72,20 @@ def test_runtime_health_all_passing(mocker, tmp_path):
     report = runtime_health.collect_runtime_health(timeout=1)
 
     assert report["overall"] == "passing"
-    assert [component["status"] for component in report["components"]] == ["passing", "passing", "passing"]
+    assert [component["status"] for component in report["components"]] == [
+        "passing",
+        "passing",
+        "passing",
+    ]
 
 
 def test_runtime_health_api_down_is_critical(mocker, tmp_path):
     _patch_targets(mocker, tmp_path, web_ui_installed=True)
-    mocker.patch.object(runtime_health.client, "get_system_summary", return_value='{"nodes":[{"name":"test@host","self":true}]}')
+    mocker.patch.object(
+        runtime_health.client,
+        "get_system_summary",
+        return_value='{"nodes":[{"name":"test@host","self":true}]}',
+    )
     mocker.patch(
         "mn_cli.libs.runtime_health.urllib.request.urlopen",
         side_effect=[
@@ -81,7 +103,11 @@ def test_runtime_health_api_down_is_critical(mocker, tmp_path):
 
 def test_runtime_health_grpc_down_is_critical(mocker, tmp_path):
     _patch_targets(mocker, tmp_path, web_ui_installed=True)
-    mocker.patch.object(runtime_health.client, "get_system_summary", side_effect=RuntimeError("grpc unavailable"))
+    mocker.patch.object(
+        runtime_health.client,
+        "get_system_summary",
+        side_effect=RuntimeError("grpc unavailable"),
+    )
     mocker.patch(
         "mn_cli.libs.runtime_health.urllib.request.urlopen",
         side_effect=[
@@ -97,7 +123,9 @@ def test_runtime_health_grpc_down_is_critical(mocker, tmp_path):
     assert report["components"][0]["status"] == "critical"
 
 
-def test_runtime_health_uses_injected_core_client_without_shared_client(mocker, tmp_path):
+def test_runtime_health_uses_injected_core_client_without_shared_client(
+    mocker, tmp_path
+):
     _patch_targets(mocker, tmp_path, web_ui_installed=True)
     shared_summary = mocker.patch.object(
         runtime_health.client,
@@ -123,10 +151,19 @@ def test_runtime_health_uses_injected_core_client_without_shared_client(mocker, 
 def test_runtime_health_web_ui_down_when_advertised_is_critical(mocker, tmp_path):
     endpoints = _patch_targets(mocker, tmp_path, web_ui_installed=False)
     endpoints.write_text(
-        json.dumps({"web_ui": {"url": "http://localhost:55173"}, "api": {"base_url": "http://localhost:54001/api/v1"}}),
+        json.dumps(
+            {
+                "web_ui": {"url": "http://localhost:55173"},
+                "api": {"base_url": "http://localhost:54001/api/v1"},
+            }
+        ),
         encoding="utf-8",
     )
-    mocker.patch.object(runtime_health.client, "get_system_summary", return_value='{"nodes":[{"name":"test@host","self":true}]}')
+    mocker.patch.object(
+        runtime_health.client,
+        "get_system_summary",
+        return_value='{"nodes":[{"name":"test@host","self":true}]}',
+    )
     mocker.patch(
         "mn_cli.libs.runtime_health.urllib.request.urlopen",
         side_effect=[
@@ -144,10 +181,16 @@ def test_runtime_health_web_ui_down_when_advertised_is_critical(mocker, tmp_path
 
 def test_runtime_health_web_ui_not_installed_is_warning(mocker, tmp_path):
     _patch_targets(mocker, tmp_path, web_ui_installed=False)
-    mocker.patch.object(runtime_health.client, "get_system_summary", return_value='{"nodes":[{"name":"test@host","self":true}]}')
+    mocker.patch.object(
+        runtime_health.client,
+        "get_system_summary",
+        return_value='{"nodes":[{"name":"test@host","self":true}]}',
+    )
     mocker.patch(
         "mn_cli.libs.runtime_health.urllib.request.urlopen",
-        return_value=_HttpResponse({"status": "ok", "api_contract": "mirrorneuron.rest.v1"}),
+        return_value=_HttpResponse(
+            {"status": "ok", "api_contract": "mirrorneuron.rest.v1"}
+        ),
     )
 
     report = runtime_health.collect_runtime_health(timeout=1)
@@ -223,7 +266,9 @@ def test_runtime_status_human_output_wraps_long_details_for_narrow_console(mocke
         "ipv4:192.168.4.27:55051 error: Operation not permitted"
     )
     report["components"][1]["status"] = "critical"
-    report["components"][1]["error"] = "<urlopen error [Errno 1] Operation not permitted>"
+    report["components"][1]["error"] = (
+        "<urlopen error [Errno 1] Operation not permitted>"
+    )
     stream = StringIO()
     mocker.patch(
         "mn_cli.libs.runtime_health.console",
@@ -258,8 +303,13 @@ def test_runtime_doctor_detects_stale_litellm_gateway_config(mocker):
         "mn_cli.libs.runtime_health.collect_runtime_status",
         return_value=_status_report(overall="passing"),
     )
-    mocker.patch("mn_cli.libs.runtime_health.docker_status", return_value={"running": True})
-    mocker.patch("mn_cli.libs.runtime_health.dmr_api_list_models", return_value={"nemotron-3.5-bolt-e4b:q4_k_m"})
+    mocker.patch(
+        "mn_cli.libs.runtime_health.docker_status", return_value={"running": True}
+    )
+    mocker.patch(
+        "mn_cli.libs.runtime_health.dmr_api_list_models",
+        return_value={"nemotron-3.5-bolt-e4b:q4_k_m"},
+    )
     mocker.patch(
         "mn_cli.libs.runtime_health.validate_litellm_gateway_config_file",
         return_value={
@@ -271,7 +321,11 @@ def test_runtime_doctor_detects_stale_litellm_gateway_config(mocker):
     )
     mocker.patch(
         "mn_cli.libs.runtime_health.litellm_gateway_health",
-        return_value={"ok": True, "url": "http://127.0.0.1:4000/v1/models", "models": []},
+        return_value={
+            "ok": True,
+            "url": "http://127.0.0.1:4000/v1/models",
+            "models": [],
+        },
     )
 
     report = runtime_health.collect_runtime_doctor(timeout=1)
@@ -279,7 +333,10 @@ def test_runtime_doctor_detects_stale_litellm_gateway_config(mocker):
     gateway = report["foundation"]["litellm_gateway"]
     assert report["overall"] == "critical"
     assert gateway["status"] == "critical"
-    assert gateway["missing_models"] == ["nemotron-3.5-bolt-e4b:q4_k_m", "nemotron-3.5-lightning:latest"]
+    assert gateway["missing_models"] == [
+        "nemotron-3.5-bolt-e4b:q4_k_m",
+        "nemotron-3.5-lightning:latest",
+    ]
     assert "stale config" in gateway["detail"]
 
 
@@ -374,7 +431,9 @@ def test_runtime_doctor_command_json_exits_nonzero_for_stale_gateway(mocker):
     assert result.exit_code == 1
     payload = cli_data(result)
     assert payload["overall"] == "critical"
-    assert payload["components"][0]["missing_models"] == ["nemotron-3.5-lightning:latest"]
+    assert payload["components"][0]["missing_models"] == [
+        "nemotron-3.5-lightning:latest"
+    ]
 
 
 def test_runtime_health_repair_rechecks_after_restart(mocker):
@@ -383,23 +442,57 @@ def test_runtime_health_repair_rechecks_after_restart(mocker):
             "overall": "critical",
             "checked_at": "2026-06-03T00:00:00Z",
             "components": [
-                {"name": "core_grpc", "status": "passing", "target": "localhost:55051", "duration_ms": 1},
-                {"name": "api", "status": "critical", "target": "http://localhost:54001/api/v1/health", "duration_ms": 1},
-                {"name": "web_ui", "status": "critical", "target": "http://localhost:55173/health", "duration_ms": 1},
+                {
+                    "name": "core_grpc",
+                    "status": "passing",
+                    "target": "localhost:55051",
+                    "duration_ms": 1,
+                },
+                {
+                    "name": "api",
+                    "status": "critical",
+                    "target": "http://localhost:54001/api/v1/health",
+                    "duration_ms": 1,
+                },
+                {
+                    "name": "web_ui",
+                    "status": "critical",
+                    "target": "http://localhost:55173/health",
+                    "duration_ms": 1,
+                },
             ],
         },
         {
             "overall": "passing",
             "checked_at": "2026-06-03T00:00:01Z",
             "components": [
-                {"name": "core_grpc", "status": "passing", "target": "localhost:55051", "duration_ms": 1},
-                {"name": "api", "status": "passing", "target": "http://localhost:54001/api/v1/health", "duration_ms": 1},
-                {"name": "web_ui", "status": "passing", "target": "http://localhost:55173/health", "duration_ms": 1},
+                {
+                    "name": "core_grpc",
+                    "status": "passing",
+                    "target": "localhost:55051",
+                    "duration_ms": 1,
+                },
+                {
+                    "name": "api",
+                    "status": "passing",
+                    "target": "http://localhost:54001/api/v1/health",
+                    "duration_ms": 1,
+                },
+                {
+                    "name": "web_ui",
+                    "status": "passing",
+                    "target": "http://localhost:55173/health",
+                    "duration_ms": 1,
+                },
             ],
         },
     ]
-    mock_collect = mocker.patch("mn_cli.libs.runtime_health.collect_runtime_doctor", side_effect=reports)
-    mock_repair = mocker.patch("mn_cli.libs.runtime_health._repair_runtime_sidecars", return_value=True)
+    mock_collect = mocker.patch(
+        "mn_cli.libs.runtime_health.collect_runtime_doctor", side_effect=reports
+    )
+    mock_repair = mocker.patch(
+        "mn_cli.libs.runtime_health._repair_runtime_sidecars", return_value=True
+    )
 
     result = runner.invoke(app, ["runtime", "doctor", "--json", "--repair"])
 
@@ -412,18 +505,32 @@ def test_runtime_health_repair_rechecks_after_restart(mocker):
 def _patch_targets(mocker, tmp_path: Path, *, web_ui_installed: bool) -> Path:
     endpoints = tmp_path / "runtime-endpoints.json"
     mocker.patch("mn_cli.libs.runtime_health.RUNTIME_ENDPOINTS_FILE", endpoints)
-    mocker.patch("mn_cli.libs.runtime_health.runtime_compose_available", return_value=False)
-    mocker.patch("mn_cli.libs.runtime_health.compose_web_ui_enabled", return_value=False)
-    mocker.patch("mn_cli.libs.runtime_health._runtime_base_env", return_value={"MN_NODE_NAME": "test@host", "MN_HOME": str(tmp_path)})
+    mocker.patch(
+        "mn_cli.libs.runtime_health.runtime_compose_available", return_value=False
+    )
+    mocker.patch(
+        "mn_cli.libs.runtime_health.compose_web_ui_enabled", return_value=False
+    )
+    mocker.patch(
+        "mn_cli.libs.runtime_health._runtime_base_env",
+        return_value={"MN_NODE_NAME": "test@host", "MN_HOME": str(tmp_path)},
+    )
     mocker.patch(
         "mn_cli.libs.runtime_health._runtime_endpoint_snapshot",
         return_value={
             "api": {"base_url": "http://localhost:54001/api/v1"},
             "grpc": {"target": "localhost:55051"},
-            **({"web_ui": {"url": "http://localhost:55173"}} if web_ui_installed else {}),
+            **(
+                {"web_ui": {"url": "http://localhost:55173"}}
+                if web_ui_installed
+                else {}
+            ),
         },
     )
-    mocker.patch("mn_cli.libs.runtime_health.find_web_ui_dir", return_value=(tmp_path / "web-ui") if web_ui_installed else None)
+    mocker.patch(
+        "mn_cli.libs.runtime_health.find_web_ui_dir",
+        return_value=(tmp_path / "web-ui") if web_ui_installed else None,
+    )
     return endpoints
 
 
@@ -465,11 +572,42 @@ def _status_report(*, overall: str) -> dict:
             "web_ui": "http://localhost:55173",
         },
         "components": [
-            {"name": "core_grpc", "status": "passing", "target": "localhost:55051", "duration_ms": 1},
-            {"name": "api", "status": "passing", "target": "http://localhost:54001/api/v1/health", "duration_ms": 1},
-            {"name": "web_ui", "status": "warning", "target": "http://localhost:55173", "duration_ms": 1, "detail": "web ui is not installed"},
+            {
+                "name": "core_grpc",
+                "status": "passing",
+                "target": "localhost:55051",
+                "duration_ms": 1,
+            },
+            {
+                "name": "api",
+                "status": "passing",
+                "target": "http://localhost:54001/api/v1/health",
+                "duration_ms": 1,
+            },
+            {
+                "name": "web_ui",
+                "status": "warning",
+                "target": "http://localhost:55173",
+                "duration_ms": 1,
+                "detail": "web ui is not installed",
+            },
         ],
-        "nodes": {"available": True, "total": 1, "by_status": {"healthy": 1}, "items": []},
-        "jobs": {"available": True, "total": 2, "by_status": {"running": 1, "completed": 1}, "active": 1, "active_by_status": {"running": 1}},
-        "shared_storage": {"host_root": "/tmp/mn-shared", "runtime_root": "/runtime/shared", "configured": True},
+        "nodes": {
+            "available": True,
+            "total": 1,
+            "by_status": {"healthy": 1},
+            "items": [],
+        },
+        "jobs": {
+            "available": True,
+            "total": 2,
+            "by_status": {"running": 1, "completed": 1},
+            "active": 1,
+            "active_by_status": {"running": 1},
+        },
+        "shared_storage": {
+            "host_root": "/tmp/mn-shared",
+            "runtime_root": "/runtime/shared",
+            "configured": True,
+        },
     }

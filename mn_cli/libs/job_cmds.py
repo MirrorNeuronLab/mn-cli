@@ -13,7 +13,14 @@ from mn_cli.libs.operation_cmds import start_and_watch
 from mn_cli.libs.ui import print_success_confirmation
 from mn_cli.shared import client, console
 
-_ACTIVE_JOB_STATUSES = {"pending", "validated", "scheduled", "running", "paused", "cancelling"}
+_ACTIVE_JOB_STATUSES = {
+    "pending",
+    "validated",
+    "scheduled",
+    "running",
+    "paused",
+    "cancelling",
+}
 _ALL_JOBS_LIMIT = 2_147_483_647
 _NODE_LIST_COLUMNS = (
     ("Node", "node"),
@@ -21,26 +28,6 @@ _NODE_LIST_COLUMNS = (
     ("Status", "status"),
     ("Role", "role"),
 )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def nodes():
@@ -62,7 +49,7 @@ def nodes():
         )
         record_result(summary)
     except Exception as e:
-        handle_cli_error(e, console, 'nodes')
+        handle_cli_error(e, console, "nodes")
 
 
 def show_node(node_name: str = typer.Argument(help="Runtime node name.")):
@@ -77,14 +64,17 @@ def show_node(node_name: str = typer.Argument(help="Runtime node name.")):
                 item
                 for item in items
                 if isinstance(item, dict)
-                and str(item.get("name") or item.get("node") or item.get("id")) == node_name
+                and str(item.get("name") or item.get("node") or item.get("id"))
+                == node_name
             ),
             None,
         )
         if node is None:
             from mn_cli.libs.ui import print_error
 
-            print_error(console, f"Node {node_name!r} was not found.", code="MN_NOT_FOUND")
+            print_error(
+                console, f"Node {node_name!r} was not found.", code="MN_NOT_FOUND"
+            )
             raise typer.Exit(2)
         from mn_cli.libs.ui import print_detail
 
@@ -109,11 +99,16 @@ def _reject_unnamed_node_health(summary):
             continue
         identity = node.get("identity")
         if _node_text(node, "name", "node", "id") == "nonode@nohost" or (
-            isinstance(identity, dict) and identity.get("expected") and identity.get("valid") is False
+            isinstance(identity, dict)
+            and identity.get("expected")
+            and identity.get("valid") is False
         ):
-            node.update(status="identity_invalid", scheduling_eligible=False,
-                        job_owner_eligible=False,
-                        repair="Restore the original node identity and run mn runtime start. Existing job ownership requires explicit repair.")
+            node.update(
+                status="identity_invalid",
+                scheduling_eligible=False,
+                job_owner_eligible=False,
+                repair="Restore the original node identity and run mn runtime start. Existing job ownership requires explicit repair.",
+            )
 
 
 def _strip_node_list_restart_history(value):
@@ -141,7 +136,9 @@ def _node_list_restart_history_key(key: object) -> bool:
         "exhaustedreason",
     }:
         return True
-    return "restart" in normalized and ("history" in normalized or "reason" in normalized)
+    return "restart" in normalized and (
+        "history" in normalized or "reason" in normalized
+    )
 
 
 def _node_list_items(nodes: object) -> list[dict[str, str]]:
@@ -150,11 +147,7 @@ def _node_list_items(nodes: object) -> list[dict[str, str]]:
     if not isinstance(nodes, list):
         return []
 
-    return [
-        _node_list_item(node)
-        for node in nodes
-        if isinstance(node, dict)
-    ]
+    return [_node_list_item(node) for node in nodes if isinstance(node, dict)]
 
 
 def _node_list_item(node: dict) -> dict[str, str]:
@@ -199,8 +192,12 @@ def _node_job_ownership(node: dict) -> str:
 
 def reconcile_node(
     node_name: str,
-    reason: str = typer.Option("", "--reason", help="Reason recorded on reconciliation events."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Plan reconciliation without moving work."),
+    reason: str = typer.Option(
+        "", "--reason", help="Reason recorded on reconciliation events."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Plan reconciliation without moving work."
+    ),
 ):
     """Reconcile jobs affected by an unavailable node"""
     try:
@@ -224,9 +221,15 @@ def reconcile_node(
 def drain_node(
     node_name: str,
     reason: str = typer.Option("", "--reason", help="Reason recorded on drain events."),
-    deadline: str = typer.Option("30m", "--deadline", help="Drain deadline, e.g. 30m, 10s, 1h."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Plan the drain without changing node state."),
-    wait: bool = typer.Option(False, "--wait", help="Poll drain status until it completes or blocks."),
+    deadline: str = typer.Option(
+        "30m", "--deadline", help="Drain deadline, e.g. 30m, 10s, 1h."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Plan the drain without changing node state."
+    ),
+    wait: bool = typer.Option(
+        False, "--wait", help="Poll drain status until it completes or blocks."
+    ),
     ignore_system_jobs: bool = typer.Option(
         True,
         "--ignore-system-jobs/--include-system-jobs",
@@ -262,7 +265,9 @@ def drain_node(
 
 def undrain_node(
     node_name: str,
-    reason: str = typer.Option("", "--reason", help="Reason recorded on undrain events."),
+    reason: str = typer.Option(
+        "", "--reason", help="Reason recorded on undrain events."
+    ),
     mark_eligible: bool = typer.Option(
         False,
         "--mark-eligible",
@@ -298,7 +303,9 @@ def maintenance_node(
         "--enable/--disable",
         help="Enable or disable maintenance mode.",
     ),
-    reason: str = typer.Option("", "--reason", help="Reason recorded on maintenance events."),
+    reason: str = typer.Option(
+        "", "--reason", help="Reason recorded on maintenance events."
+    ),
 ):
     """Toggle node maintenance mode without moving existing work"""
     try:
@@ -356,7 +363,9 @@ def _print_node_mutation_confirmation(
     node_name: str,
     details: dict | None = None,
 ) -> None:
-    detail_items: list[tuple[str, object]] = [("Node", payload.get("node") or node_name)]
+    detail_items: list[tuple[str, object]] = [
+        ("Node", payload.get("node") or node_name)
+    ]
     detail_items.extend(
         [
             ("Reason", payload.get("reason")),
@@ -395,7 +404,9 @@ def metrics():
             status_counts[status] = status_counts.get(status, 0) + 1
             for agent in job.get("agents", []):
                 pressure = agent.get("backpressure", {})
-                depth = int(pressure.get("queue_depth", agent.get("mailbox_depth", 0)) or 0)
+                depth = int(
+                    pressure.get("queue_depth", agent.get("mailbox_depth", 0)) or 0
+                )
                 queue_depth_total += depth
                 queue_depth_max = max(queue_depth_max, depth)
                 if pressure.get("backpressure") is True:

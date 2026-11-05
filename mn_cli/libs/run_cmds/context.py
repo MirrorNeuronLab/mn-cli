@@ -24,6 +24,7 @@ from .model_cluster import (
     _runtime_model_prepare_client,
 )
 
+
 def _ensure_context_engine_for_run_if_needed(
     bundle_dir: Path,
     manifest: dict[str, Any],

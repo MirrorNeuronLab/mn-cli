@@ -83,7 +83,9 @@ def _updated_env_lines(original_lines: list[str], updates: dict[str, str]) -> li
     return lines
 
 
-def _env_lines_without_keys(original_lines: list[str], keys: set[str]) -> tuple[list[str], bool]:
+def _env_lines_without_keys(
+    original_lines: list[str], keys: set[str]
+) -> tuple[list[str], bool]:
     lines: list[str] = []
     changed = False
     for line in original_lines:

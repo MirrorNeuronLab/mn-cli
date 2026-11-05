@@ -9,8 +9,10 @@ runner = CliRunner()
 
 
 def test_run_list_marks_unconfirmed_local_running_record_unknown():
-    local = [{"run_id": identifier, "status": "running", "placement": {"owner_node": "old"}}
-             for identifier in ("old", "live")]
+    local = [
+        {"run_id": identifier, "status": "running", "placement": {"owner_node": "old"}}
+        for identifier in ("old", "live")
+    ]
     core = [{"run_id": "live", "status": "completed"}]
 
     result = {item["run_id"]: item for item in _merge_run_items(local, core, limit=10)}
@@ -28,7 +30,12 @@ def test_run_list_reads_archived_and_locally_mapped_job_runs(mocker):
     list_runs = mocker.patch(
         "mn_cli.libs.run_public.client.list_runs",
         side_effect=[
-            json.dumps({"items": [{"run_id": "old", "status": "completed"}], "next_page_token": "more"}),
+            json.dumps(
+                {
+                    "items": [{"run_id": "old", "status": "completed"}],
+                    "next_page_token": "more",
+                }
+            ),
             json.dumps({"items": [{"run_id": "recent", "status": "failed"}]}),
         ],
     )
@@ -48,7 +55,9 @@ def _documents(output: str) -> list[dict]:
     return [json.loads(line) for line in output.splitlines() if line.strip()]
 
 
-def test_run_result_resolves_runtime_job_and_uses_run_scoped_output(mocker, monkeypatch, tmp_path):
+def test_run_result_resolves_runtime_job_and_uses_run_scoped_output(
+    mocker, monkeypatch, tmp_path
+):
     monkeypatch.setenv("MN_HOME", str(tmp_path / "mn-home"))
     mocker.patch(
         "mn_cli.libs.run_public.client.get_run",
@@ -125,9 +134,7 @@ def test_run_watch_uses_the_v1_run_id_not_the_job_id(mocker):
     result = runner.invoke(app, ["run", "watch", "run-1"])
 
     assert result.exit_code == 0
-    monitor.assert_called_once_with(
-        "run-1", run_id="run-1", stable_job_id="stable-job"
-    )
+    monitor.assert_called_once_with("run-1", run_id="run-1", stable_job_id="stable-job")
 
 
 def test_run_logs_json_one_shot_uses_standard_envelope(mocker):
@@ -204,11 +211,7 @@ def test_run_list_enriches_local_mapping_with_runtime_status(mocker):
     mocker.patch(
         "mn_cli.libs.run_public.client.list_jobs",
         return_value=json.dumps(
-            {
-                "items": [
-                    {"job_id": "stable-job", "blueprint_id": "blueprint-1"}
-                ]
-            }
+            {"items": [{"job_id": "stable-job", "blueprint_id": "blueprint-1"}]}
         ),
     )
     mocker.patch(

@@ -9,7 +9,13 @@ from rich.live import Live
 from rich.table import Table
 
 from mn_cli.error_handler import handle_cli_error
-from mn_cli.libs.ui import print_detail, print_error, print_info, print_success_confirmation, print_warning
+from mn_cli.libs.ui import (
+    print_detail,
+    print_error,
+    print_info,
+    print_success_confirmation,
+    print_warning,
+)
 from mn_cli.output import emit_stream_record, json_enabled, record_result
 from mn_cli.shared import client, console
 
@@ -50,7 +56,10 @@ def start_and_watch(
             runtime_client=selected_client,
         )
     except KeyboardInterrupt:
-        print_info(console, f"Detached from operation {operation_id}; it continues in the cluster.")
+        print_info(
+            console,
+            f"Detached from operation {operation_id}; it continues in the cluster.",
+        )
         console.print(f"Operation ID: {operation_id}")
         return operation
 
@@ -60,7 +69,9 @@ def status(
 ):
     """Show a durable group operation and its item states."""
     try:
-        print_detail(console, "Operation", _json_object(client.get_operation(operation_id)))
+        print_detail(
+            console, "Operation", _json_object(client.get_operation(operation_id))
+        )
     except Exception as error:
         handle_cli_error(
             error,
@@ -77,7 +88,10 @@ def watch(
     try:
         _watch(_json_object(client.get_operation(operation_id)), action="Operation")
     except KeyboardInterrupt:
-        print_info(console, f"Detached from operation {operation_id}; it continues in the cluster.")
+        print_info(
+            console,
+            f"Detached from operation {operation_id}; it continues in the cluster.",
+        )
         console.print(f"Operation ID: {operation_id}")
     except Exception as error:
         handle_cli_error(
@@ -122,7 +136,9 @@ def _watch(
             if stop_on_deferred and event.get("type") == "operation_deferred":
                 break
     else:
-        with Live(_operation_table(operation, items), console=console, refresh_per_second=8) as live:
+        with Live(
+            _operation_table(operation, items), console=console, refresh_per_second=8
+        ) as live:
             for event_json in selected_client.stream_operation_events(
                 operation_id,
                 after_sequence=sequence,
@@ -148,7 +164,9 @@ def _watch(
 def _print_completion(action: str, operation: dict[str, Any]) -> None:
     operation_id = _operation_id(operation)
     status = str(operation.get("status") or "unknown")
-    counters = operation.get("counters") if isinstance(operation.get("counters"), dict) else {}
+    counters = (
+        operation.get("counters") if isinstance(operation.get("counters"), dict) else {}
+    )
     failed = _int(counters.get("failed"))
     deferred = _int(counters.get("deferred"))
 
@@ -158,7 +176,9 @@ def _print_completion(action: str, operation: dict[str, Any]) -> None:
         raise typer.Exit(1)
 
     if status not in _TERMINAL_OPERATION_STATUSES:
-        print_info(console, f"{action} is waiting for deferred work ({deferred} item(s)).")
+        print_info(
+            console, f"{action} is waiting for deferred work ({deferred} item(s))."
+        )
         console.print(f"Operation ID: {operation_id}")
         return
 
@@ -169,7 +189,10 @@ def _print_completion(action: str, operation: dict[str, Any]) -> None:
         console,
         action,
         status=message,
-        details={"Operation ID": operation_id, "Completed": _int(counters.get("finished"))},
+        details={
+            "Operation ID": operation_id,
+            "Completed": _int(counters.get("finished")),
+        },
     )
 
 
@@ -199,16 +222,24 @@ def _print_plain_event(
     if event_type == "item_started":
         print_info(console, f"{item_id}: started")
     elif status == "failed":
-        print_warning(console, f"{item_id}: {event.get('error') or 'operation item failed'}")
+        print_warning(
+            console, f"{item_id}: {event.get('error') or 'operation item failed'}"
+        )
     elif status == "cancellation_pending":
-        print_info(console, f"{item_id}: cancellation accepted; cleanup queued on owner node")
+        print_info(
+            console, f"{item_id}: cancellation accepted; cleanup queued on owner node"
+        )
     elif event_type in {"item_completed", "item_deferred"}:
         prefix = "✓" if status in _SUCCESS_ITEM_STATUSES else "→"
         console.print(f"{prefix} {item_id}: {status or 'completed'}")
 
 
-def _operation_table(operation: dict[str, Any], items: dict[str, dict[str, Any]]) -> Table:
-    counters = operation.get("counters") if isinstance(operation.get("counters"), dict) else {}
+def _operation_table(
+    operation: dict[str, Any], items: dict[str, dict[str, Any]]
+) -> Table:
+    counters = (
+        operation.get("counters") if isinstance(operation.get("counters"), dict) else {}
+    )
     completed_items = [
         event
         for event in items.values()
@@ -225,9 +256,7 @@ def _operation_table(operation: dict[str, Any], items: dict[str, dict[str, Any]]
         if str(event.get("status") or "") == "cancellation_pending"
     )
     failed = sum(
-        1
-        for event in completed_items
-        if str(event.get("status") or "") == "failed"
+        1 for event in completed_items if str(event.get("status") or "") == "failed"
     )
     finished = len(completed_items)
     total = _int(counters.get("total")) or _int(operation.get("target_count"))
@@ -249,7 +278,9 @@ def _operation_table(operation: dict[str, Any], items: dict[str, dict[str, Any]]
         f"succeeded {succeeded}, deferred {deferred}, failed {failed}",
     )
     for item_id, event in list(items.items())[-5:]:
-        table.add_row(item_id, str(event.get("status") or event.get("type") or "updated"))
+        table.add_row(
+            item_id, str(event.get("status") or event.get("type") or "updated")
+        )
     return table
 
 

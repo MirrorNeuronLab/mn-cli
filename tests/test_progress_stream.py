@@ -53,7 +53,9 @@ def test_api_progress_stream_uses_v2_execution_run_route(mocker):
 
 
 def test_runtime_model_prepare_progress_flushes_immediately():
-    stream = ProgressSnapshotStream(BlueprintWorkflowProgress({"workflow": {"steps": []}}))
+    stream = ProgressSnapshotStream(
+        BlueprintWorkflowProgress({"workflow": {"steps": []}})
+    )
 
     assert stream.observe_event(
         {
@@ -69,15 +71,38 @@ def test_runtime_model_prepare_progress_flushes_immediately():
 
 
 def test_monitor_manifest_keeps_child_metadata_and_live_steps():
-    view = BlueprintWorkflowProgress({'workflow': {'steps': [
-        {'id': 'review'}, {'id': 'review:p0', 'parent_step_id': 'review',
-                           'child_round': 0, 'child_phase': 'planning'}]}})
-    assert view.steps_by_id['review:p0'].parent_step_id == 'review'
-    view.update({'type': 'workflow_child_plan_committed', 'topology_delta': {
-        'steps_added': [{'id': 'review:r1:scan', 'parent_step_id': 'review',
-                         'child_round': 1, 'child_phase': 'executing'}]}})
-    assert view.steps_by_id['review:r1:scan'].child_round == 1
-
+    view = BlueprintWorkflowProgress(
+        {
+            "workflow": {
+                "steps": [
+                    {"id": "review"},
+                    {
+                        "id": "review:p0",
+                        "parent_step_id": "review",
+                        "child_round": 0,
+                        "child_phase": "planning",
+                    },
+                ]
+            }
+        }
+    )
+    assert view.steps_by_id["review:p0"].parent_step_id == "review"
+    view.update(
+        {
+            "type": "workflow_child_plan_committed",
+            "topology_delta": {
+                "steps_added": [
+                    {
+                        "id": "review:r1:scan",
+                        "parent_step_id": "review",
+                        "child_round": 1,
+                        "child_phase": "executing",
+                    }
+                ]
+            },
+        }
+    )
+    assert view.steps_by_id["review:r1:scan"].child_round == 1
 
 
 def test_async_watch_closes_open_http_response_on_cancel(monkeypatch):
@@ -87,6 +112,7 @@ def test_async_watch_closes_open_http_response_on_cancel(monkeypatch):
 
     async def observe():
         reading, closed = asyncio.Event(), asyncio.Event()
+
         class Body(httpx.AsyncByteStream):
             async def __aiter__(self):
                 reading.set()
@@ -100,9 +126,16 @@ def test_async_watch_closes_open_http_response_on_cancel(monkeypatch):
             assert request.url.path == "/api/v1/runs/example/events/stream"
             assert request.headers["authorization"] == "Bearer fixture"
             return httpx.Response(200, stream=Body())
+
         real_client = httpx.AsyncClient
-        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(respond), **kw))
-        stream = watch_api_workflow_progress("http://owner/api/v1", "example", api_token="fixture")
+        monkeypatch.setattr(
+            httpx,
+            "AsyncClient",
+            lambda **kw: real_client(transport=httpx.MockTransport(respond), **kw),
+        )
+        stream = watch_api_workflow_progress(
+            "http://owner/api/v1", "example", api_token="fixture"
+        )
         pending = asyncio.create_task(anext(stream))
         await asyncio.wait_for(reading.wait(), 2)
         pending.cancel()

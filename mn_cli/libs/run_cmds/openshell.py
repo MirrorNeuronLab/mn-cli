@@ -36,6 +36,7 @@ OPENSHELL_RUNNER_MODULES = {
     "MirrorNeuron.Sandbox.OpenShell",
 }
 
+
 def _openshell_executable() -> str:
     user_executable = Path.home() / ".local" / "bin" / "openshell"
     if user_executable.is_file() and os.access(user_executable, os.X_OK):
@@ -53,6 +54,7 @@ def _openshell_executable() -> str:
         ),
     )
 
+
 def _prepare_openshell_custom_images(
     bundle_dir: Path,
     manifest_dict: dict[str, Any],
@@ -61,7 +63,9 @@ def _prepare_openshell_custom_images(
     shared_sandbox_submission_id: str | None = None,
 ) -> None:
     nodes = manifest_nodes(manifest_dict)
-    flow = manifest_dict.get("flow") if isinstance(manifest_dict.get("flow"), dict) else {}
+    flow = (
+        manifest_dict.get("flow") if isinstance(manifest_dict.get("flow"), dict) else {}
+    )
     if not nodes and isinstance(flow.get("nodes"), list):
         nodes = [node for node in flow["nodes"] if isinstance(node, dict)]
 
@@ -99,7 +103,9 @@ def _prepare_openshell_custom_images(
                 )
 
         if source_path is not None:
-            build_source = _openshell_skill_dependency_context(source_path, manifest_dict)
+            build_source = _openshell_skill_dependency_context(
+                source_path, manifest_dict
+            )
             try:
                 config["from"] = _build_openshell_from_image(
                     build_source, node.get("node_id") or "openshell"
@@ -110,7 +116,9 @@ def _prepare_openshell_custom_images(
 
         if shared_sandbox_job_id and config.get("reuse_shared_sandbox") is True:
             if not shared_sandbox_submission_id:
-                raise ValueError("Shared OpenShell preparation requires a definition submission ID")
+                raise ValueError(
+                    "Shared OpenShell preparation requires a definition submission ID"
+                )
             _prepare_openshell_shared_sandbox(
                 bundle_dir,
                 config,
@@ -124,6 +132,7 @@ def _prepare_openshell_custom_images(
                 job_id=shared_sandbox_job_id,
                 submission_id=shared_sandbox_submission_id,
             )
+
 
 def _openshell_gateway_endpoint() -> str:
     configured_endpoint = os.getenv("OPENSHELL_GATEWAY_ENDPOINT")
@@ -150,18 +159,25 @@ def _openshell_gateway_endpoint() -> str:
 
     return f"http://127.0.0.1:{os.getenv('OPENSHELL_GATEWAY_PORT', '58080')}"
 
+
 def _openshell_env() -> dict[str, str]:
-    return gateway_environment(os.environ, {"OPENSHELL_GATEWAY_ENDPOINT": _openshell_runtime_gateway_endpoint()})[0]
+    return gateway_environment(
+        os.environ,
+        {"OPENSHELL_GATEWAY_ENDPOINT": _openshell_runtime_gateway_endpoint()},
+    )[0]
+
 
 def _openshell_runtime_gateway_endpoint() -> str:
     runtime_env = read_env_file(mn_home() / "docker-compose.env")
     endpoint = runtime_env.get("OPENSHELL_GATEWAY_ENDPOINT", "").strip()
     return endpoint
 
+
 def _openshell_config_dir() -> Path:
     return Path(
         os.getenv("OPENSHELL_CONFIG_DIR", str(Path.home() / ".config" / "openshell"))
     ).expanduser()
+
 
 def _openshell_gateway_name(*, env: dict[str, str] | None = None) -> str:
     source_env = env or os.environ
@@ -183,6 +199,7 @@ def _openshell_gateway_name(*, env: dict[str, str] | None = None) -> str:
         return "openshell"
     return ""
 
+
 def _openshell_gateway_metadata(gateway_name: str) -> dict[str, Any]:
     if not gateway_name:
         return {}
@@ -195,6 +212,7 @@ def _openshell_gateway_metadata(gateway_name: str) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return metadata if isinstance(metadata, dict) else {}
+
 
 def _openshell_local_from_path(bundle_dir: Path, source: Any) -> Path | None:
     if not isinstance(source, str) or not source.strip():
@@ -231,6 +249,7 @@ def _openshell_conventional_local_image_context(
     if context.is_dir() and (context / "Dockerfile").is_file():
         return context
     return None
+
 
 def _prepare_openshell_shared_sandbox(
     bundle_dir: Path,
@@ -281,7 +300,9 @@ def _prepare_openshell_shared_sandbox(
         policy = _openshell_policy_path(bundle_dir, config.get("policy"))
         if policy is not None:
             if config.get("policy_config_bindings") is True:
-                policy = materialize_worker_policy(policy, config, mn_home() / "openshell" / "policies")
+                policy = materialize_worker_policy(
+                    policy, config, mn_home() / "openshell" / "policies"
+                )
             command.extend(["--policy", str(policy)])
         for provider in config.get("providers") or []:
             if isinstance(provider, str) and provider.strip():
@@ -314,6 +335,7 @@ def _prepare_openshell_shared_sandbox(
 
     config["sandbox_name"] = sandbox_name
     config["ssh_host"] = f"openshell-{sandbox_name}"
+
 
 def _openshell_shared_sandbox_name(job_id: str) -> str:
     raw_job_id = str(job_id).strip() or "job"
@@ -363,6 +385,7 @@ def _record_openshell_native_resource(
     ):
         resources.append(descriptor)
 
+
 def _openshell_policy_path(bundle_dir: Path, source: Any) -> Path | None:
     if not isinstance(source, str) or not source.strip():
         return None
@@ -376,23 +399,34 @@ def _openshell_policy_path(bundle_dir: Path, source: Any) -> Path | None:
         resolved = candidate.resolve()
         if resolved.is_file():
             return resolved
-    print_error(console, f"OpenShell policy file was not found: {source}", code="MN_NOT_FOUND")
+    print_error(
+        console, f"OpenShell policy file was not found: {source}", code="MN_NOT_FOUND"
+    )
     raise typer.Exit(2)
 
-def _openshell_skill_dependency_context(source_path: Path, manifest: dict[str, Any]) -> Path:
+
+def _openshell_skill_dependency_context(
+    source_path: Path, manifest: dict[str, Any]
+) -> Path:
     requirements_text = gar_requirements_text(manifest)
     local_sources = _local_skill_dependency_source_records(manifest)
     if not requirements_text and not local_sources:
         return source_path
 
     source_root = source_path.parent if source_path.is_file() else source_path
-    temp_context = Path(tempfile.mkdtemp(prefix=f"mn-openshell-skill-deps-{source_root.name}."))
+    temp_context = Path(
+        tempfile.mkdtemp(prefix=f"mn-openshell-skill-deps-{source_root.name}.")
+    )
     shutil.copytree(source_root, temp_context, dirs_exist_ok=True)
     dockerfile = temp_context / "Dockerfile"
     requirements = temp_context / "requirements.txt"
-    existing_requirements = requirements.read_text(encoding="utf-8") if requirements.is_file() else ""
+    existing_requirements = (
+        requirements.read_text(encoding="utf-8") if requirements.is_file() else ""
+    )
     requirements.write_text(
-        _requirements_text([*existing_requirements.splitlines(), *requirements_text.splitlines()]),
+        _requirements_text(
+            [*existing_requirements.splitlines(), *requirements_text.splitlines()]
+        ),
         encoding="utf-8",
     )
     staged_payloads: dict[str, bytes] = {}
@@ -410,10 +444,12 @@ def _openshell_skill_dependency_context(source_path: Path, manifest: dict[str, A
         )
     if local_context_sources:
         requirements.write_text(
-            _requirements_text([
-                *requirements.read_text(encoding="utf-8").splitlines(),
-                "-r /tmp/mn-skill-runtime/local-requirements.txt",
-            ]),
+            _requirements_text(
+                [
+                    *requirements.read_text(encoding="utf-8").splitlines(),
+                    "-r /tmp/mn-skill-runtime/local-requirements.txt",
+                ]
+            ),
             encoding="utf-8",
         )
     dockerfile.write_text(
@@ -424,6 +460,7 @@ def _openshell_skill_dependency_context(source_path: Path, manifest: dict[str, A
         encoding="utf-8",
     )
     return temp_context
+
 
 def _build_openshell_from_image(source_path: Path, node_id: Any) -> str:
     console.print(
@@ -481,8 +518,13 @@ def _build_openshell_from_image(source_path: Path, node_id: Any) -> str:
     )
     return image_ref
 
+
 def _openshell_gateway_uses_local_docker() -> bool:
-    return gateway_environment(os.environ, {"OPENSHELL_GATEWAY_ENDPOINT": _openshell_runtime_gateway_endpoint()})[1]
+    return gateway_environment(
+        os.environ,
+        {"OPENSHELL_GATEWAY_ENDPOINT": _openshell_runtime_gateway_endpoint()},
+    )[1]
+
 
 def _build_local_docker_sandbox_image(source_path: Path) -> str:
     source_path = source_path.resolve()
@@ -499,7 +541,9 @@ def _build_local_docker_sandbox_image(source_path: Path) -> str:
     return image_ref
 
 
-def _run_streaming_local_docker_build(command: list[str]) -> subprocess.CompletedProcess[str]:
+def _run_streaming_local_docker_build(
+    command: list[str],
+) -> subprocess.CompletedProcess[str]:
     process = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
@@ -513,7 +557,9 @@ def _run_streaming_local_docker_build(command: list[str]) -> subprocess.Complete
             recent_output.append(line)
             del recent_output[:-400]
             console.print(line.rstrip("\n"), highlight=False)
-    return subprocess.CompletedProcess(command, process.wait(), "".join(recent_output), "")
+    return subprocess.CompletedProcess(
+        command, process.wait(), "".join(recent_output), ""
+    )
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

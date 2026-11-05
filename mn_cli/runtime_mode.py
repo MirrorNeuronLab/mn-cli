@@ -16,7 +16,9 @@ def local_runtime_mode() -> str | None:
     return None
 
 
-def running_core_container(*, timeout_seconds: float = DOCKER_TIMEOUT_SECONDS) -> str | None:
+def running_core_container(
+    *, timeout_seconds: float = DOCKER_TIMEOUT_SECONDS
+) -> str | None:
     """Return the active local Docker Core container, if one is running."""
     for container_name in CORE_CONTAINERS:
         if _container_running(container_name, timeout_seconds=timeout_seconds):

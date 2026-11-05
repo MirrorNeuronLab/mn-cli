@@ -38,7 +38,9 @@ IMMEDIATE_PROGRESS_EVENTS = {
 
 
 class ProgressSnapshotStream:
-    def __init__(self, view: BlueprintWorkflowProgress, *, min_interval: float = 0.5) -> None:
+    def __init__(
+        self, view: BlueprintWorkflowProgress, *, min_interval: float = 0.5
+    ) -> None:
         self.view = view
         self.min_interval = max(float(min_interval), 0.5)
         self._last_emit_at = 0.0
@@ -48,7 +50,10 @@ class ProgressSnapshotStream:
         self.view.update(event)
         event_type = str(event.get("type") or "")
         now = time.monotonic()
-        if self._event_should_flush(event_type) or now - self._last_emit_at >= self.min_interval:
+        if (
+            self._event_should_flush(event_type)
+            or now - self._last_emit_at >= self.min_interval
+        ):
             self._last_emit_at = now
             self._pending = False
             return True
@@ -68,9 +73,14 @@ class ProgressSnapshotStream:
     @staticmethod
     def _event_should_flush(event_type: str) -> bool:
         normalized = str(event_type or "").strip().lower()
-        if normalized in TERMINAL_EVENT_TYPES or normalized in IMMEDIATE_PROGRESS_EVENTS:
+        if (
+            normalized in TERMINAL_EVENT_TYPES
+            or normalized in IMMEDIATE_PROGRESS_EVENTS
+        ):
             return True
-        return "failed" in normalized or "error" in normalized or "timed_out" in normalized
+        return (
+            "failed" in normalized or "error" in normalized or "timed_out" in normalized
+        )
 
 
 def _progress_request(api_base_url, run_id, api_token):
@@ -98,7 +108,9 @@ class _SnapshotDecoder:
             if event in {"snapshot", "run.snapshot", "message"} and data:
                 payload = json.loads("\n".join(data))
                 if isinstance(payload, dict):
-                    if payload.get("type") == "run.snapshot" and isinstance(payload.get("data"), dict):
+                    if payload.get("type") == "run.snapshot" and isinstance(
+                        payload.get("data"), dict
+                    ):
                         return payload["data"]
                     if "type" not in payload:
                         return payload
@@ -106,20 +118,30 @@ class _SnapshotDecoder:
 
 
 def stream_api_workflow_progress(
-    api_base_url: str, run_id: str, *, api_token: str = "", timeout: float = 10.0,
+    api_base_url: str,
+    run_id: str,
+    *,
+    api_token: str = "",
+    timeout: float = 10.0,
 ):
     if not api_base_url:
         return
     url, headers = _progress_request(api_base_url, run_id, api_token)
     decoder = _SnapshotDecoder()
-    with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout) as response:
+    with urllib.request.urlopen(
+        urllib.request.Request(url, headers=headers), timeout=timeout
+    ) as response:
         for raw in response:
-            snapshot = decoder.feed(raw.decode("utf-8", errors="replace").rstrip("\r\n"))
+            snapshot = decoder.feed(
+                raw.decode("utf-8", errors="replace").rstrip("\r\n")
+            )
             if snapshot is not None:
                 yield snapshot
 
 
-async def watch_api_workflow_progress(api_base_url, run_id, *, api_token="", timeout=10.0):
+async def watch_api_workflow_progress(
+    api_base_url, run_id, *, api_token="", timeout=10.0
+):
     import httpx
     from mn_sdk.errors import AppError
 
@@ -128,10 +150,15 @@ async def watch_api_workflow_progress(api_base_url, run_id, *, api_token="", tim
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         async with client.stream("GET", url, headers=headers) as response:
             if response.status_code in (401, 403):
-                raise AppError("MN_PERMISSION_DENIED", "Permission was denied for this MirrorNeuron operation.",
-                               exit_code=13, http_status=response.status_code)
+                raise AppError(
+                    "MN_PERMISSION_DENIED",
+                    "Permission was denied for this MirrorNeuron operation.",
+                    exit_code=13,
+                    http_status=response.status_code,
+                )
             if 400 <= response.status_code < 500 and response.status_code != 404:
                 from mn_sdk.errors import ValidationError
+
                 raise ValidationError("The workflow progress request was rejected.")
             response.raise_for_status()
             async for line in response.aiter_lines():

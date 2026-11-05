@@ -43,21 +43,13 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": [
-          "type",
-          "source",
-          "name",
-          "version"
-        ],
+        "required": ["type", "source", "name", "version"],
         "properties": {
           "type": {
             "const": "pip"
           },
           "source": {
-            "enum": [
-              "gar",
-              "payload"
-            ]
+            "enum": ["gar", "payload"]
           },
           "name": {
             "type": "string",
@@ -72,10 +64,7 @@
             "minLength": 1
           },
           "format": {
-            "enum": [
-              "source",
-              "wheel"
-            ]
+            "enum": ["source", "wheel"]
           }
         },
         "additionalProperties": true
@@ -85,21 +74,13 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": [
-          "type",
-          "source",
-          "name",
-          "version"
-        ],
+        "required": ["type", "source", "name", "version"],
         "properties": {
           "type": {
             "const": "pip"
           },
           "source": {
-            "enum": [
-              "gar",
-              "payload"
-            ]
+            "enum": ["gar", "payload"]
           },
           "name": {
             "type": "string",
@@ -114,10 +95,7 @@
             "minLength": 1
           },
           "format": {
-            "enum": [
-              "source",
-              "wheel"
-            ]
+            "enum": ["source", "wheel"]
           }
         },
         "additionalProperties": true
@@ -130,19 +108,14 @@
     "entrypoints": false,
     "contract": {
       "type": "object",
-      "required": [
-        "inputs",
-        "outputs"
-      ],
+      "required": ["inputs", "outputs"],
       "properties": {
         "inputs": {
           "type": "object"
         },
         "outputs": {
           "type": "object",
-          "required": [
-            "primary"
-          ],
+          "required": ["primary"],
           "properties": {
             "primary": {
               "type": "object"
@@ -173,10 +146,7 @@
           "minLength": 1
         },
         "mode": {
-          "enum": [
-            "static_dag",
-            "dynamic_dag"
-          ]
+          "enum": ["static_dag", "dynamic_dag"]
         },
         "entrypoint": {
           "type": "string",
@@ -194,19 +164,13 @@
           "oneOf": [
             {
               "type": "string",
-              "enum": [
-                "parallel",
-                "serial"
-              ]
+              "enum": ["parallel", "serial"]
             },
             {
               "type": "object",
               "properties": {
                 "strategy": {
-                  "enum": [
-                    "parallel",
-                    "serial"
-                  ]
+                  "enum": ["parallel", "serial"]
                 },
                 "max_parallel_steps": {
                   "type": "integer",
@@ -256,9 +220,7 @@
               "minProperties": 1,
               "additionalProperties": {
                 "type": "object",
-                "required": [
-                  "run"
-                ],
+                "required": ["run"],
                 "properties": {
                   "id": {
                     "type": "string",
@@ -287,22 +249,14 @@
               "minItems": 1,
               "items": {
                 "type": "object",
-                "required": [
-                  "id",
-                  "strategy",
-                  "controller",
-                  "templates"
-                ],
+                "required": ["id", "strategy", "controller", "templates"],
                 "properties": {
                   "id": {
                     "type": "string",
                     "minLength": 1
                   },
                   "strategy": {
-                    "enum": [
-                      "replace_path",
-                      "checkpoint_fanout"
-                    ]
+                    "enum": ["replace_path", "checkpoint_fanout"]
                   },
                   "controller": {
                     "type": "string",
@@ -341,19 +295,14 @@
           "type": "object"
         },
         "observers": {
-          "type": [
-            "array",
-            "object"
-          ]
+          "type": ["array", "object"]
         },
         "steps": {
           "type": "array",
           "minItems": 1,
           "items": {
             "type": "object",
-            "required": [
-              "id"
-            ],
+            "required": ["id"],
             "properties": {
               "id": {
                 "type": "string",
@@ -367,11 +316,7 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": [
-              "id",
-              "from",
-              "to"
-            ],
+            "required": ["id", "from", "to"],
             "properties": {
               "id": {
                 "type": "string",
@@ -411,12 +356,7 @@
     },
     "agents": {
       "type": "object",
-      "required": [
-        "schema",
-        "nodes",
-        "edges",
-        "entrypoints"
-      ],
+      "required": ["schema", "nodes", "edges", "entrypoints"],
       "properties": {
         "schema": {
           "const": "mn.agents.communication_graph/v1"
@@ -434,9 +374,7 @@
           "minItems": 1,
           "items": {
             "type": "object",
-            "required": [
-              "node_id"
-            ],
+            "required": ["node_id"],
             "properties": {
               "node_id": {
                 "type": "string",
@@ -450,11 +388,7 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": [
-              "edge_id",
-              "from_node",
-              "to_node"
-            ],
+            "required": ["edge_id", "from_node", "to_node"],
             "properties": {
               "edge_id": {
                 "type": "string",
@@ -480,9 +414,7 @@
     },
     "runtime": {
       "type": "object",
-      "required": [
-        "bindings"
-      ],
+      "required": ["bindings"],
       "properties": {
         "bindings": {
           "type": "object"
@@ -502,11 +434,7 @@
                 "type": "string"
               },
               "backend": {
-                "enum": [
-                  "auto",
-                  "llama.cpp",
-                  "vllm"
-                ]
+                "enum": ["auto", "llama.cpp", "vllm"]
               },
               "context_size": {
                 "type": "integer",
@@ -520,11 +448,7 @@
               },
               "source": {
                 "type": "object",
-                "required": [
-                  "type",
-                  "path",
-                  "format"
-                ],
+                "required": ["type", "path", "format"],
                 "properties": {
                   "type": {
                     "const": "payload"
@@ -534,11 +458,7 @@
                     "minLength": 1
                   },
                   "format": {
-                    "enum": [
-                      "gguf",
-                      "safetensors",
-                      "dduf"
-                    ]
+                    "enum": ["gguf", "safetensors", "dduf"]
                   },
                   "digest": {
                     "type": "string",

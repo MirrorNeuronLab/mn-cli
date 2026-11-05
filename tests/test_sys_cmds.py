@@ -37,7 +37,9 @@ def test_runtime_cleanup_dry_run_reports_confirmed_candidates(monkeypatch):
         "cache": {"removed_count": 1, "reclaimed_bytes": 1024, "errors": []},
     }
 
-    monkeypatch.setattr(native_service, "_native_resource_reference_checker", lambda: object())
+    monkeypatch.setattr(
+        native_service, "_native_resource_reference_checker", lambda: object()
+    )
     monkeypatch.setattr(
         registry,
         "reconcile_native_resources",
@@ -117,13 +119,19 @@ def test_remove_node_confirms_and_uses_the_sdk_federation_control(monkeypatch):
 def test_stop_clears_join_metadata_before_teardown(monkeypatch, mocker, tmp_path):
     calls = []
 
-    monkeypatch.setattr(sys_cmds, "_clear_join_owner_metadata", lambda: calls.append("clear-join"))
-    monkeypatch.setattr(sys_cmds, "_stop_network_runtime", lambda: calls.append("network-runtime"))
+    monkeypatch.setattr(
+        sys_cmds, "_clear_join_owner_metadata", lambda: calls.append("clear-join")
+    )
+    monkeypatch.setattr(
+        sys_cmds, "_stop_network_runtime", lambda: calls.append("network-runtime")
+    )
     monkeypatch.setattr(sys_cmds, "runtime_compose_available", lambda: False)
     monkeypatch.setattr(sys_cmds, "web_ui_pid_files", lambda: ())
     monkeypatch.setattr(sys_cmds, "api_pid_files", lambda: ())
     monkeypatch.setattr(sys_cmds, "native_sdk_grpc_pid_files", lambda: ())
-    monkeypatch.setattr(sys_cmds, "_stop_matching_sidecar_processes", lambda *_args: None)
+    monkeypatch.setattr(
+        sys_cmds, "_stop_matching_sidecar_processes", lambda *_args: None
+    )
     mocker.patch.object(sys_cmds.subprocess, "run")
 
     sys_cmds.stop()
@@ -136,12 +144,22 @@ def test_restart_sidecars_api_only_restarts_api_without_web_ui(mocker, tmp_path)
     mocker.patch.object(sys_cmds, "api_pid_files", return_value=api_pid_files)
     mocker.patch.object(sys_cmds, "runtime_compose_available", return_value=False)
     mocker.patch.object(sys_cmds, "_runtime_base_env", return_value={})
-    stop_sidecar = mocker.patch.object(sys_cmds, "_stop_sidecar_processes", return_value=True)
-    stop_matching = mocker.patch.object(sys_cmds, "_stop_matching_sidecar_processes", return_value=True)
-    start_api = mocker.patch.object(sys_cmds, "_start_api_if_installed", return_value=True)
-    start_web_ui = mocker.patch.object(sys_cmds, "_start_web_ui_if_installed", return_value=True)
+    stop_sidecar = mocker.patch.object(
+        sys_cmds, "_stop_sidecar_processes", return_value=True
+    )
+    stop_matching = mocker.patch.object(
+        sys_cmds, "_stop_matching_sidecar_processes", return_value=True
+    )
+    start_api = mocker.patch.object(
+        sys_cmds, "_start_api_if_installed", return_value=True
+    )
+    start_web_ui = mocker.patch.object(
+        sys_cmds, "_start_web_ui_if_installed", return_value=True
+    )
     mocker.patch.object(sys_cmds, "find_web_ui_dir", return_value=None)
-    write_endpoints = mocker.patch.object(sys_cmds, "_write_runtime_endpoints_file", return_value={})
+    write_endpoints = mocker.patch.object(
+        sys_cmds, "_write_runtime_endpoints_file", return_value={}
+    )
 
     sys_cmds.restart_sidecars(api=True, web_ui=False)
 
@@ -155,14 +173,19 @@ def test_restart_sidecars_api_only_restarts_api_without_web_ui(mocker, tmp_path)
     write_endpoints.assert_called_once_with(env, web_ui_available=False)
 
 
-@pytest.mark.parametrize("profile,native_ui,available", [
-    (None, False, False),
-    (None, True, True),
-    ("web-ui,openshell", False, True),
-    ("openshell", False, False),
-    ("openshell", True, True),
-])
-def test_api_restart_publishes_installed_web_ui_endpoint(mocker, tmp_path, profile, native_ui, available):
+@pytest.mark.parametrize(
+    "profile,native_ui,available",
+    [
+        (None, False, False),
+        (None, True, True),
+        ("web-ui,openshell", False, True),
+        ("openshell", False, False),
+        ("openshell", True, True),
+    ],
+)
+def test_api_restart_publishes_installed_web_ui_endpoint(
+    mocker, tmp_path, profile, native_ui, available
+):
     compose = tmp_path / "docker-compose.yml"
     compose_env = tmp_path / "docker-compose.env"
     if profile is not None:
@@ -172,8 +195,16 @@ def test_api_restart_publishes_installed_web_ui_endpoint(mocker, tmp_path, profi
     mocker.patch.object(server_cmds, "RUNTIME_COMPOSE_FILE", compose)
     mocker.patch.object(server_cmds, "RUNTIME_COMPOSE_ENV", compose_env)
     mocker.patch.object(server_cmds, "RUNTIME_ENDPOINTS_FILE", endpoint_file)
-    mocker.patch.object(sys_cmds, "_runtime_base_env", return_value={"MN_WEB_UI_HOST": "127.0.0.1", "MN_WEB_UI_PORT": "55222"})
-    mocker.patch.object(sys_cmds, "find_web_ui_dir", return_value=tmp_path / "webui" if native_ui else None)
+    mocker.patch.object(
+        sys_cmds,
+        "_runtime_base_env",
+        return_value={"MN_WEB_UI_HOST": "127.0.0.1", "MN_WEB_UI_PORT": "55222"},
+    )
+    mocker.patch.object(
+        sys_cmds,
+        "find_web_ui_dir",
+        return_value=tmp_path / "webui" if native_ui else None,
+    )
     mocker.patch.object(sys_cmds, "_stop_sidecar_processes")
     mocker.patch.object(sys_cmds, "_stop_matching_sidecar_processes")
     mocker.patch.object(sys_cmds, "_start_api_if_installed", return_value=True)
@@ -184,7 +215,11 @@ def test_api_restart_publishes_installed_web_ui_endpoint(mocker, tmp_path, profi
     endpoints = json.loads(endpoint_file.read_text())
     assert ("web_ui" in endpoints) is available
     if available:
-        assert endpoints["web_ui"] == {"url": "http://127.0.0.1:55222", "host": "127.0.0.1", "port": "55222"}
+        assert endpoints["web_ui"] == {
+            "url": "http://127.0.0.1:55222",
+            "host": "127.0.0.1",
+            "port": "55222",
+        }
     start_web_ui.assert_not_called()
 
 
@@ -194,12 +229,22 @@ def test_restart_sidecars_web_ui_only_restarts_web_ui_without_api(mocker, tmp_pa
     mocker.patch.object(sys_cmds, "web_ui_pid_files", return_value=web_pid_files)
     mocker.patch.object(sys_cmds, "runtime_compose_available", return_value=False)
     mocker.patch.object(sys_cmds, "_runtime_base_env", return_value={})
-    stop_sidecar = mocker.patch.object(sys_cmds, "_stop_sidecar_processes", return_value=True)
-    stop_matching = mocker.patch.object(sys_cmds, "_stop_matching_sidecar_processes", return_value=True)
-    start_api = mocker.patch.object(sys_cmds, "_start_api_if_installed", return_value=True)
-    start_web_ui = mocker.patch.object(sys_cmds, "_start_web_ui_if_installed", return_value=True)
+    stop_sidecar = mocker.patch.object(
+        sys_cmds, "_stop_sidecar_processes", return_value=True
+    )
+    stop_matching = mocker.patch.object(
+        sys_cmds, "_stop_matching_sidecar_processes", return_value=True
+    )
+    start_api = mocker.patch.object(
+        sys_cmds, "_start_api_if_installed", return_value=True
+    )
+    start_web_ui = mocker.patch.object(
+        sys_cmds, "_start_web_ui_if_installed", return_value=True
+    )
     mocker.patch.object(sys_cmds, "find_web_ui_dir", return_value=web_ui_dir)
-    write_endpoints = mocker.patch.object(sys_cmds, "_write_runtime_endpoints_file", return_value={})
+    write_endpoints = mocker.patch.object(
+        sys_cmds, "_write_runtime_endpoints_file", return_value={}
+    )
 
     sys_cmds.restart_sidecars(api=False, web_ui=True)
 
@@ -234,7 +279,9 @@ def test_stop_sweeps_orphan_native_sidecars(mocker, tmp_path):
     mocker.patch.object(sys_cmds, "web_ui_pid_files", return_value=())
     mocker.patch.object(sys_cmds, "api_pid_files", return_value=())
     mocker.patch.object(sys_cmds, "native_sdk_grpc_pid_files", return_value=())
-    stop_matching = mocker.patch.object(sys_cmds, "_stop_matching_sidecar_processes", return_value=True)
+    stop_matching = mocker.patch.object(
+        sys_cmds, "_stop_matching_sidecar_processes", return_value=True
+    )
 
     sys_cmds.stop()
 
@@ -245,7 +292,9 @@ def test_stop_sweeps_orphan_native_sidecars(mocker, tmp_path):
     ]
 
 
-def test_stop_sidecar_processes_kills_running_processes_and_cleans_pid_files(mocker, tmp_path):
+def test_stop_sidecar_processes_kills_running_processes_and_cleans_pid_files(
+    mocker, tmp_path
+):
     running_pid_file = tmp_path / "api-watchdog.pid"
     stale_pid_file = tmp_path / "api.pid"
     running_pid_file.write_text("1234")
@@ -291,7 +340,9 @@ def test_stop_matching_sidecar_processes_kills_pgrep_matches(mocker):
 
 
 def test_stop_matching_sidecar_processes_ignores_missing_pgrep(mocker):
-    mocker.patch.object(server_cmds.subprocess, "check_output", side_effect=FileNotFoundError)
+    mocker.patch.object(
+        server_cmds.subprocess, "check_output", side_effect=FileNotFoundError
+    )
     kill = mocker.patch.object(server_cmds, "kill_tree")
 
     assert sys_cmds._stop_matching_sidecar_processes("mn-api", "REST API") is False

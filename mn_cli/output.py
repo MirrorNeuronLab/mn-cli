@@ -26,8 +26,12 @@ _OUTPUT_SECRET_KEY = re.compile(
     r"(^|[\s_-])token($|[\s_-])|(^|[\s_-])api[\s_-]?key($|[\s_-]))"
 )
 _OUTPUT_BEARER = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+")
-_OUTPUT_ENV_SECRET = re.compile(r"(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|COOKIE|CREDENTIAL)[A-Z0-9_]*=)([^\s]+)")
-_OUTPUT_URL_SECRET = re.compile(r"(?i)([?&](?:token|access_token|api_key|key|signature|password|secret)=)[^&\s]+")
+_OUTPUT_ENV_SECRET = re.compile(
+    r"(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|COOKIE|CREDENTIAL)[A-Z0-9_]*=)([^\s]+)"
+)
+_OUTPUT_URL_SECRET = re.compile(
+    r"(?i)([?&](?:token|access_token|api_key|key|signature|password|secret)=)[^&\s]+"
+)
 
 REMOVED_COMMANDS: dict[tuple[str, ...], str] = {
     ("blueprint", "install"): "mn blueprint add",
@@ -84,7 +88,14 @@ class RemediatingTyperGroup(TyperGroup):
                 )
         return None
 
-    def main(self, args=None, prog_name=None, complete_var=None, standalone_mode=True, **extra):
+    def main(
+        self,
+        args=None,
+        prog_name=None,
+        complete_var=None,
+        standalone_mode=True,
+        **extra,
+    ):
         resolved_args = list(sys.argv[1:] if args is None else args)
         removed_option = next(
             (option for option in REMOVED_OPTIONS if option in resolved_args),
@@ -107,7 +118,14 @@ class RemediatingTyperGroup(TyperGroup):
                     "warnings": [],
                     "meta": {
                         "command": " ".join(
-                            ["mn", *[part for part in resolved_args if not part.startswith("-")][:2]]
+                            [
+                                "mn",
+                                *[
+                                    part
+                                    for part in resolved_args
+                                    if not part.startswith("-")
+                                ][:2],
+                            ]
                         ),
                         "timestamp": _timestamp(),
                         "duration_ms": 0,
@@ -140,7 +158,11 @@ class RemediatingTyperGroup(TyperGroup):
         except Exception as exc:
             if not callable(getattr(exc, "format_message", None)):
                 raise
-            command_parts = [part for part in resolved_args if part != "--json" and not part.startswith("-")]
+            command_parts = [
+                part
+                for part in resolved_args
+                if part != "--json" and not part.startswith("-")
+            ]
             payload = {
                 "schema": CLI_SCHEMA,
                 "ok": False,
@@ -173,7 +195,9 @@ class CommandSession:
     stream_output: Any = None
 
 
-_SESSION: ContextVar[CommandSession | None] = ContextVar("mn_cli_output_session", default=None)
+_SESSION: ContextVar[CommandSession | None] = ContextVar(
+    "mn_cli_output_session", default=None
+)
 
 
 def current_session() -> CommandSession | None:
@@ -201,8 +225,14 @@ def record_warning(message: Any, *, code: str | None = None) -> None:
     session.warnings.append(warning)
 
 
-def record_error(error: AppError | Exception, *, command_context: dict[str, Any] | None = None) -> AppError:
-    app_error = error if isinstance(error, AppError) else normalize_exception(error, context=command_context)
+def record_error(
+    error: AppError | Exception, *, command_context: dict[str, Any] | None = None
+) -> AppError:
+    app_error = (
+        error
+        if isinstance(error, AppError)
+        else normalize_exception(error, context=command_context)
+    )
     command = str((command_context or {}).get("command") or "").strip()
     if command:
         from mn_cli.error_handler import contextualize_cli_error
@@ -255,7 +285,11 @@ def wrap_command(callback: Callable[..., Any], command: str) -> Callable[..., An
 
     @functools.wraps(callback)
     def wrapped(*args: Any, **kwargs: Any) -> Any:
-        json_output = bool(kwargs.get(json_parameter, False)) if json_parameter else bool(kwargs.pop("json_output", False))
+        json_output = (
+            bool(kwargs.get(json_parameter, False))
+            if json_parameter
+            else bool(kwargs.pop("json_output", False))
+        )
         session = CommandSession(command=command, json_output=json_output)
         session.stream_output = sys.stdout
         token = _SESSION.set(session)
@@ -269,7 +303,11 @@ def wrap_command(callback: Callable[..., Any], command: str) -> Callable[..., An
                 shared_console = console
                 original_console_file = getattr(console, "_file", None)
                 console._file = capture
-            stdout_context = contextlib.redirect_stdout(capture) if json_output else contextlib.nullcontext()
+            stdout_context = (
+                contextlib.redirect_stdout(capture)
+                if json_output
+                else contextlib.nullcontext()
+            )
             with stdout_context:
                 result = callback(*args, **kwargs)
             if result is not None and session.data is None:
@@ -297,10 +335,17 @@ def wrap_command(callback: Callable[..., Any], command: str) -> Callable[..., An
                 _recover_captured_data(session, capture.getvalue())
                 if exc.exit_code:
                     exit_code = int(exc.exit_code)
-                    if session.error is not None and session.error.exit_code != exit_code:
-                        generic_validation = session.error.code == "MN_COMMAND_FAILED" and exit_code == 2
+                    if (
+                        session.error is not None
+                        and session.error.exit_code != exit_code
+                    ):
+                        generic_validation = (
+                            session.error.code == "MN_COMMAND_FAILED" and exit_code == 2
+                        )
                         session.error = AppError(
-                            "MN_VALIDATION_FAILED" if generic_validation else session.error.code,
+                            "MN_VALIDATION_FAILED"
+                            if generic_validation
+                            else session.error.code,
                             session.error.user_message,
                             internal_message=session.error.internal_message,
                             hint=(
@@ -310,7 +355,9 @@ def wrap_command(callback: Callable[..., Any], command: str) -> Callable[..., An
                             ),
                             details=session.error.details,
                             exit_code=exit_code,
-                            http_status=422 if exit_code == 2 else session.error.http_status,
+                            http_status=422
+                            if exit_code == 2
+                            else session.error.http_status,
                             cause=session.error.cause,
                         )
                 if exc.exit_code and session.error is None:
@@ -340,7 +387,8 @@ def wrap_command(callback: Callable[..., Any], command: str) -> Callable[..., An
                         ),
                         details=(
                             session.data
-                            if (diagnostic or validation) and isinstance(session.data, dict)
+                            if (diagnostic or validation)
+                            and isinstance(session.data, dict)
                             else None
                         ),
                         exit_code=exit_code,
@@ -379,7 +427,11 @@ def wrap_command(callback: Callable[..., Any], command: str) -> Callable[..., An
             inspect.Parameter(
                 "json_output",
                 kind=inspect.Parameter.KEYWORD_ONLY,
-                default=typer.Option(False, "--json", help="Print a versioned machine-readable JSON result."),
+                default=typer.Option(
+                    False,
+                    "--json",
+                    help="Print a versioned machine-readable JSON result.",
+                ),
                 annotation=bool,
             )
         )
@@ -428,7 +480,11 @@ def _emit_final(session: CommandSession) -> None:
         else:
             emit_stream_record("complete", data=session.data or {})
         return
-    payload = error_envelope(session, session.error) if session.error else success_envelope(session)
+    payload = (
+        error_envelope(session, session.error)
+        if session.error
+        else success_envelope(session)
+    )
     typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
@@ -505,7 +561,10 @@ def _redact_output(value: Any, *, key: str = "") -> Any:
             return value
         return value if value in (None, "") else "[redacted]"
     if isinstance(value, dict):
-        return {str(item_key): _redact_output(item, key=str(item_key)) for item_key, item in value.items()}
+        return {
+            str(item_key): _redact_output(item, key=str(item_key))
+            for item_key, item in value.items()
+        }
     if isinstance(value, list):
         return [_redact_output(item) for item in value]
     if isinstance(value, tuple):

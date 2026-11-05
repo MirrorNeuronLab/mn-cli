@@ -53,7 +53,9 @@ def hydrate_payload_models(
     command_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
     runtime_env: dict[str, str] | None = None,
 ) -> list[dict[str, str]]:
-    runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
+    runtime = (
+        manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
+    )
     models = runtime.get("models") if isinstance(runtime.get("models"), dict) else {}
     refs = _blob_refs(manifest)
     results: list[dict[str, str]] = []
@@ -64,9 +66,7 @@ def hydrate_payload_models(
         if not isinstance(source, dict) or source.get("type") != "payload":
             continue
         target = str(
-            declaration.get("runtime_model")
-            or declaration.get("model")
-            or model_id
+            declaration.get("runtime_model") or declaration.get("model") or model_id
         ).strip()
         if not target:
             raise AirGapError(f"runtime.models.{model_id} is missing runtime_model")
@@ -124,7 +124,9 @@ def hydrate_payload_models(
             check=False,
         )
         if packaged.returncode != 0:
-            detail = (packaged.stderr or packaged.stdout or "docker model package failed").strip()
+            detail = (
+                packaged.stderr or packaged.stdout or "docker model package failed"
+            ).strip()
             raise AirGapError(f"Could not package payload model {target}: {detail}")
         results.append({"id": str(model_id), "model": target, "status": "packaged"})
     return results
@@ -145,13 +147,9 @@ def hydrate_extracted_airgap(
         raise AirGapError(
             f"Unsupported air-gap marker schema {marker.get('schema_version')!r}"
         )
-    capsule_reference = str(marker.get("capsule_manifest") or "").replace(
-        "\\", "/"
-    )
+    capsule_reference = str(marker.get("capsule_manifest") or "").replace("\\", "/")
     if not capsule_reference or PurePosixPath(capsule_reference).is_absolute():
-        raise AirGapError(
-            f"Unsafe capsule path: {marker.get('capsule_manifest')!r}"
-        )
+        raise AirGapError(f"Unsafe capsule path: {marker.get('capsule_manifest')!r}")
     capsule_path = (
         bundle_dir / Path(*PurePosixPath(capsule_reference).parts)
     ).resolve()
@@ -194,7 +192,9 @@ def hydrate_extracted_airgap(
                 check=False,
             )
             if loaded.returncode != 0:
-                detail = (loaded.stderr or loaded.stdout or "docker image load failed").strip()
+                detail = (
+                    loaded.stderr or loaded.stdout or "docker image load failed"
+                ).strip()
                 raise AirGapError(f"Could not load air-gap Docker image: {detail}")
     wheelhouse = root / "airgap" / "python" / "wheelhouse"
     manifest.setdefault("metadata", {})["mn_airgap"] = {
@@ -247,11 +247,11 @@ def _resolve_payload_asset(
         return path
 
     prefix = logical_path.rstrip("/") + "/"
-    children = {
-        path: ref for path, ref in refs.items() if path.startswith(prefix)
-    }
+    children = {path: ref for path, ref in refs.items() if path.startswith(prefix)}
     if not children:
-        raise AirGapError(f"Payload model directory is unavailable: payloads/{logical_path}")
+        raise AirGapError(
+            f"Payload model directory is unavailable: payloads/{logical_path}"
+        )
     identity = hashlib.sha256(
         json.dumps(
             {
@@ -281,9 +281,19 @@ def _resolve_payload_asset(
 
 
 def _blob_refs(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
-    artifacts = metadata.get("mn_artifacts") if isinstance(metadata.get("mn_artifacts"), dict) else {}
-    refs = artifacts.get("blob_refs") if isinstance(artifacts.get("blob_refs"), list) else []
+    metadata = (
+        manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    )
+    artifacts = (
+        metadata.get("mn_artifacts")
+        if isinstance(metadata.get("mn_artifacts"), dict)
+        else {}
+    )
+    refs = (
+        artifacts.get("blob_refs")
+        if isinstance(artifacts.get("blob_refs"), list)
+        else []
+    )
     return {
         str(item.get("payload_path")): item
         for item in refs

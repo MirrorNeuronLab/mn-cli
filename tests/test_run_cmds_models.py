@@ -67,7 +67,10 @@ def test_manifest_for_model_validation_excludes_all_live_models_for_fake_llm():
         "runtime": {
             "models": {
                 "primary": {"model": "default"},
-                "secondary": {"provider": "docker_model_runner", "model": "nemotron-3.5-bolt-e4b:q4_k_m"},
+                "secondary": {
+                    "provider": "docker_model_runner",
+                    "model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                },
                 "external": {"provider": "nvidia_service", "model": "service-model"},
             }
         }
@@ -147,7 +150,10 @@ def _cctv_placement_manifest():
         "runtime": {
             "placement": {"mode": "single_node"},
             "models": {
-                "primary": {"provider": "docker_model_runner", "model": "nemotron-3.5-bolt-e4b:q4_k_m"}
+                "primary": {
+                    "provider": "docker_model_runner",
+                    "model": "nemotron-3.5-bolt-e4b:q4_k_m",
+                }
             },
             "memory": {"enabled": True},
         },
@@ -383,13 +389,17 @@ def test_selected_workflow_node_controls_model_placement_and_gateway_sync(mocker
     ):
         placement = run_cmds._resolve_runtime_cluster_model(
             requirement={"model": "nemotron-3.5-bolt-e4b:q4_k_m"},
-            entry={"id": "nemotron-3.5-bolt-e4b:q4_k_m", "requirements": {"min_vram_gb": 8}},
+            entry={
+                "id": "nemotron-3.5-bolt-e4b:q4_k_m",
+                "requirements": {"min_vram_gb": 8},
+            },
         )
     assert placement["node"] == "mirror_neuron@spark"
     assert placement["source"] == "workflow_placement"
 
     sync = mocker.patch(
-        "mn_cli.libs.run_cmds.models.sync_litellm_gateway", return_value={"status": "running"}
+        "mn_cli.libs.run_cmds.models.sync_litellm_gateway",
+        return_value={"status": "running"},
     )
     endpoints = run_cmds._sync_litellm_gateway_for_runtime_models(
         {
@@ -408,7 +418,10 @@ def test_selected_workflow_node_controls_model_placement_and_gateway_sync(mocker
         env_overrides={"MN_SELECTED_RUNTIME_NODE": "mirror_neuron@spark"},
     )
     sync.assert_called_once()
-    assert endpoints["nemotron-3.5-bolt-e4b:q4_k_m"]["api_base"] == "http://mn-litellm-proxy:4000/v1"
+    assert (
+        endpoints["nemotron-3.5-bolt-e4b:q4_k_m"]["api_base"]
+        == "http://mn-litellm-proxy:4000/v1"
+    )
     remotes = load_model_remotes()["remotes"]
     assert len(remotes) == 1
     assert next(iter(remotes.values()))["base_url"] == "http://spark:4000/v1"
@@ -467,9 +480,7 @@ def test_prepare_runtime_models_installs_missing_model_for_run(
     record = load_model_ownership()["models"]["nemotron-3.5-bolt-e4b:q4_k_m"]
     assert record["owners"]["vc_assistant"]["blueprint_revision"] == "rev-1"
     output = capsys.readouterr().out
-    assert (
-        "Runtime model nemotron-3.5-bolt-e4b:q4_k_m is not installed." in output
-    )
+    assert "Runtime model nemotron-3.5-bolt-e4b:q4_k_m is not installed." in output
     assert "Installing runtime model nemotron-3.5-bolt-e4b:q4_k_m" in output
     assert re.search(r"Docker\s+Model\s+Runner", output)
     assert "Runtime models ready: nemotron-3.5-bolt-e4b:q4_k_m" in output
@@ -666,7 +677,10 @@ def test_runtime_model_ready_label_includes_remote_already_installed_node():
         }
     )
 
-    assert label == "nemotron-3.5-bolt-e4b:q4_k_m already installed on mirror_neuron@192.168.5.10"
+    assert (
+        label
+        == "nemotron-3.5-bolt-e4b:q4_k_m already installed on mirror_neuron@192.168.5.10"
+    )
 
 
 def test_model_remove_remote_records_matches_aliases(tmp_path, monkeypatch):
@@ -842,7 +856,9 @@ def test_prepare_runtime_models_does_not_install_via_core_on_capable_cluster_nod
     )
 
 
-def _preferred_large_model_config(default_model: str = "nemotron-3.5-bolt-e4b:q4_k_m") -> dict:
+def _preferred_large_model_config(
+    default_model: str = "nemotron-3.5-bolt-e4b:q4_k_m",
+) -> dict:
     return {
         "llm": {
             "enabled": True,
@@ -933,7 +949,9 @@ def test_default_llm_alias_detection_is_explicit():
         run_cmds._blueprint_requests_default_llm({"llm": {"model": "default"}}) is True
     )
     assert (
-        run_cmds._blueprint_requests_default_llm({"llm": {"model": "nemotron-3.5-bolt-e4b:q4_k_m"}})
+        run_cmds._blueprint_requests_default_llm(
+            {"llm": {"model": "nemotron-3.5-bolt-e4b:q4_k_m"}}
+        )
         is False
     )
     assert (
@@ -1288,7 +1306,7 @@ def test_prepare_runtime_models_surfaces_large_profile_prepare_failure_without_f
     assert "code=model.prepare_install_failed" in output
 
 
-def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_or_core(
+def test_runtime_cluster_model_install_uses_local_core_for_selected_owner(
     mocker, capsys
 ):
     progress_descriptions: list[str] = []
@@ -1330,7 +1348,8 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
     mocker.patch("mn_cli.libs.run_cmds.model_cluster.use_progress", return_value=True)
     mocker.patch("mn_cli.libs.run_cmds.model_cluster.Progress", FakeProgress)
     remote_client_class = mocker.patch("mn_cli.libs.run_cmds.model_cluster.Client")
-    remote_client = remote_client_class.return_value
+    remote_client = run_cmds.client
+    mocker.patch("mn_cli.libs.run_cmds.model_cluster.client.prepare_runtime_model")
     remote_client.prepare_runtime_model.return_value = json.dumps(
         {
             "status": "installed",
@@ -1366,12 +1385,7 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
     )
 
     shell.assert_not_called()
-    remote_client_class.assert_called_once_with(
-        target="192.168.4.173:55052",
-        timeout=run_cmds.DEFAULT_RUNTIME_MODEL_PREPARE_TIMEOUT_SECONDS,
-        auth_token=run_cmds.config.grpc_auth_token,
-        admin_token=run_cmds.config.grpc_admin_token,
-    )
+    remote_client_class.assert_not_called()
     remote_client.prepare_runtime_model.assert_called_once()
     payload = remote_client.prepare_runtime_model.call_args.args[0]
     assert payload["node"] == "mirror_neuron@192.168.4.173"
@@ -1382,8 +1396,7 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
     assert result["endpoint"]["source"] == "remote_litellm_gateway"
     output = " ".join(capsys.readouterr().err.split())
     assert (
-        "Preparing runtime model nemotron-3.5-lightning:latest on mirror_neuron@192.168.4.173 "
-        "with native SDK gRPC"
+        "Preparing runtime model nemotron-3.5-lightning:latest on mirror_neuron@192.168.4.173"
     ) in output
     assert len(progress_descriptions) == 1
     assert (
@@ -1392,7 +1405,7 @@ def test_runtime_cluster_model_install_uses_target_node_native_sdk_grpc_not_ssh_
     ) in progress_descriptions[0]
 
 
-def test_runtime_cluster_model_install_uses_long_timeout_for_local_runtime_coordinator(
+def test_runtime_cluster_model_install_reuses_local_runtime_client(
     mocker,
 ):
     mocker.patch(
@@ -1411,7 +1424,8 @@ def test_runtime_cluster_model_install_uses_long_timeout_for_local_runtime_coord
         ),
     )
     local_client_class = mocker.patch("mn_cli.libs.run_cmds.model_cluster.Client")
-    local_client = local_client_class.return_value
+    local_client = run_cmds.client
+    mocker.patch("mn_cli.libs.run_cmds.model_cluster.client.prepare_runtime_model")
     local_client.prepare_runtime_model.return_value = json.dumps(
         {
             "status": "installed",
@@ -1431,19 +1445,17 @@ def test_runtime_cluster_model_install_uses_long_timeout_for_local_runtime_coord
             "model": "nemotron-3.5-bolt-e4b:q4_k_m",
             "provider": "docker_model_runner",
         },
-        model={"id": "nemotron-3.5-bolt-e4b:q4_k_m", "model": "nemotron-3.5-bolt-e4b:q4_k_m"},
+        model={
+            "id": "nemotron-3.5-bolt-e4b:q4_k_m",
+            "model": "nemotron-3.5-bolt-e4b:q4_k_m",
+        },
         cluster={"node": "mirror_neuron@192.168.5.10"},
         backend="llama.cpp",
         context_size=4096,
         force=False,
     )
 
-    local_client_class.assert_called_once_with(
-        target=run_cmds.config.grpc_target,
-        timeout=run_cmds.DEFAULT_RUNTIME_MODEL_PREPARE_TIMEOUT_SECONDS,
-        auth_token=run_cmds.config.grpc_auth_token,
-        admin_token=run_cmds.config.grpc_admin_token,
-    )
+    local_client_class.assert_not_called()
     local_client.prepare_runtime_model.assert_called_once()
     assert result["endpoint"]["source"] == "local-dmr"
     assert result["endpoint"]["node"] == "mirror_neuron@192.168.5.10"
@@ -1511,7 +1523,9 @@ def test_runtime_model_preflight_ignores_skill_owned_rag_model(mocker, tmp_path)
             "embedding_model": "huggingface.co/zenmagnets/Nemotron-3-Embed-1B-Q4_K_M-GGUF:Q4_K_M",
         },
     }
-    mocker.patch("mn_cli.libs.run_cmds.models.load_blueprint_config", return_value=config)
+    mocker.patch(
+        "mn_cli.libs.run_cmds.models.load_blueprint_config", return_value=config
+    )
 
     plan = run_cmds._build_runtime_model_prepare_plan(tmp_path, {"nodes": []})
 
@@ -1597,7 +1611,9 @@ def test_adaptive_model_placement_prepares_selected_node_and_routes_workers_thro
 ):
     bundle_dir = tmp_path / "source-assistant"
     manifest = _write_adaptive_source_model_config(bundle_dir)
-    cluster = fake_runtime_model_cluster_factory(include_spark=include_spark, local_memory_mb=local_memory_mb)
+    cluster = fake_runtime_model_cluster_factory(
+        include_spark=include_spark, local_memory_mb=local_memory_mb
+    )
     if already_installed:
         cluster.installed_by_node[expected_node] = {expected_chat_model}
     dependencies = cluster.dependencies()
@@ -1790,7 +1806,9 @@ def test_runtime_model_preflight_rejects_ineligible_node_before_prepare(mocker):
             }
         ]
     }
-    prepare = mocker.patch("mn_cli.libs.run_cmds.model_cluster._install_runtime_cluster_model")
+    prepare = mocker.patch(
+        "mn_cli.libs.run_cmds.model_cluster._install_runtime_cluster_model"
+    )
 
     with pytest.raises(RuntimeError, match="Per-node rejection reasons") as error:
         run_cmds._preflight_and_apply_runtime_model_placement(
@@ -1863,7 +1881,10 @@ def test_runtime_model_preflight_selects_small_fallback_for_default_on_small_nod
 
     assert placement["selected_node"] == "mirror_neuron@mac"
     assert placement["requirements"]["model_requirements"][0]["min_memory_mb"] == 16384
-    assert placement["model_fallbacks"][0]["fallback"]["id"] == "nemotron-3.5-bolt-e4b:q4_k_m"
+    assert (
+        placement["model_fallbacks"][0]["fallback"]["id"]
+        == "nemotron-3.5-bolt-e4b:q4_k_m"
+    )
     with run_cmds._runtime_model_placement_scope(
         {
             "MN_SELECTED_RUNTIME_NODE": "mirror_neuron@mac",
@@ -1917,7 +1938,9 @@ def test_distributed_runtime_model_preflight_rejects_before_prepare(mocker):
             }
         ]
     }
-    prepare = mocker.patch("mn_cli.libs.run_cmds.model_cluster._install_runtime_cluster_model")
+    prepare = mocker.patch(
+        "mn_cli.libs.run_cmds.model_cluster._install_runtime_cluster_model"
+    )
 
     with pytest.raises(
         RuntimeError,
@@ -1971,7 +1994,10 @@ def test_cluster_node_endpoint_is_local_uses_local_host_alias(monkeypatch):
         "host": "192.168.6.28",
         "port": "55051",
     }
-    monkeypatch.setattr('mn_cli.libs.run_cmds.model_cluster._local_host_addresses', lambda: {"192.168.6.28"})
+    monkeypatch.setattr(
+        "mn_cli.libs.run_cmds.model_cluster._local_host_addresses",
+        lambda: {"192.168.6.28"},
+    )
 
     assert run_cmds._cluster_node_endpoint_is_local(node_endpoint) is True
 
@@ -1982,12 +2008,17 @@ def test_cluster_node_endpoint_is_not_local_for_remote_host(monkeypatch):
         "host": "192.168.4.173",
         "port": "55051",
     }
-    monkeypatch.setattr('mn_cli.libs.run_cmds.model_cluster._local_host_addresses', lambda: {"192.168.6.28"})
+    monkeypatch.setattr(
+        "mn_cli.libs.run_cmds.model_cluster._local_host_addresses",
+        lambda: {"192.168.6.28"},
+    )
 
     assert run_cmds._cluster_node_endpoint_is_local(node_endpoint) is False
 
 
-def test_runtime_cluster_model_install_requires_native_sdk_grpc_metadata(mocker):
+def test_runtime_cluster_model_install_leaves_native_endpoint_resolution_to_core(
+    mocker,
+):
     mocker.patch(
         "mn_cli.libs.run_cmds.client.get_system_summary",
         return_value=json.dumps(
@@ -2004,27 +2035,30 @@ def test_runtime_cluster_model_install_requires_native_sdk_grpc_metadata(mocker)
     )
     remote_client_class = mocker.patch("mn_cli.libs.run_cmds.model_cluster.Client")
     shell = mocker.patch("mn_cli.libs.run_cmds.subprocess.run")
-
-    with pytest.raises(RuntimeError, match="does not advertise native SDK gRPC"):
-        run_cmds._install_runtime_cluster_model(
-            requirement={"context_size": 8192},
-            entry={
-                "id": "nemotron-3.5-lightning:latest",
-                "model": "nemotron-3.5-lightning:latest",
-                "provider": "docker_model_runner",
-            },
-            model={
-                "id": "nemotron-3.5-lightning:latest",
-                "model": "nemotron-3.5-lightning:latest",
-            },
-            cluster={"node": "mirror_neuron@192.168.4.173"},
-            backend="llama.cpp",
-            context_size=8192,
-            force=False,
-        )
+    prepare = mocker.patch(
+        "mn_cli.libs.run_cmds.model_cluster.client.prepare_runtime_model",
+        return_value=json.dumps({"status": "installed", "endpoint": {}}),
+    )
+    run_cmds._install_runtime_cluster_model(
+        requirement={"context_size": 8192},
+        entry={
+            "id": "nemotron-3.5-lightning:latest",
+            "model": "nemotron-3.5-lightning:latest",
+            "provider": "docker_model_runner",
+        },
+        model={
+            "id": "nemotron-3.5-lightning:latest",
+            "model": "nemotron-3.5-lightning:latest",
+        },
+        cluster={"node": "mirror_neuron@192.168.4.173"},
+        backend="llama.cpp",
+        context_size=8192,
+        force=False,
+    )
 
     shell.assert_not_called()
     remote_client_class.assert_not_called()
+    assert prepare.call_args.args[0]["node"] == "mirror_neuron@192.168.4.173"
 
 
 def test_prepare_runtime_models_uses_default_model_fallback_without_capable_cluster_node(
@@ -2159,7 +2193,8 @@ def test_prepare_runtime_models_uses_default_model_fallback_without_capable_clus
     assert effective_config["llm"]["max_tokens"] == 1800
     assert effective_config["llm"]["num_retries"] == 2
     assert (
-        effective_config["llm"]["configs"]["primary"]["runtime_model"] == "nemotron-3.5-bolt-e4b:q4_k_m"
+        effective_config["llm"]["configs"]["primary"]["runtime_model"]
+        == "nemotron-3.5-bolt-e4b:q4_k_m"
     )
     assert effective_config["llm"]["configs"]["primary"]["max_tokens"] == 1800
     assert effective_config["llm"]["configs"]["primary"]["num_retries"] == 2

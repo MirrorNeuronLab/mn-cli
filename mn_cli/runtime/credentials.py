@@ -1,4 +1,5 @@
 """Installer-compatible, per-installation Core credentials."""
+
 import os
 from pathlib import Path
 import secrets
@@ -19,6 +20,7 @@ def resolve_grpc_token(home: Path, kind: str) -> str:
     home.mkdir(parents=True, exist_ok=True)
     # Resolve concurrent first starts under one installation lock.
     from mn_cli.runtime.identity import identity_lock
+
     with identity_lock(home):
         try:
             current = path.read_text().strip()
@@ -29,7 +31,9 @@ def resolve_grpc_token(home: Path, kind: str) -> str:
         # Credential files retain the existing plain-token wire format.
         temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
         try:
-            with open(temporary, "w", opener=lambda name, flags: os.open(name, flags, 0o600)) as handle:
+            with open(
+                temporary, "w", opener=lambda name, flags: os.open(name, flags, 0o600)
+            ) as handle:
                 handle.write(token + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())

@@ -19,7 +19,9 @@ def test_tokens_are_private_stable_and_distinct_per_installation(tmp_path, monke
     assert resolve_grpc_token(home, "auth") != tokens[0]
 
 
-def test_legacy_defaults_are_replaced_and_saved_files_override_stale_environment(tmp_path, monkeypatch):
+def test_legacy_defaults_are_replaced_and_saved_files_override_stale_environment(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("MN_GRPC_AUTH_TOKEN", "mirror_neuron_password")
     (tmp_path / "grpc_auth.token").write_text("mirror_neuron_password")
     token = resolve_grpc_token(tmp_path, "auth")

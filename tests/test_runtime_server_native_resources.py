@@ -32,7 +32,9 @@ def test_compose_env_includes_sdk_node_resource_advertisement(monkeypatch):
         server,
         "node_resource_environment",
         lambda env: {
-            "MN_NODE_HARDWARE_JSON": json.dumps(hardware, sort_keys=True, separators=(",", ":")),
+            "MN_NODE_HARDWARE_JSON": json.dumps(
+                hardware, sort_keys=True, separators=(",", ":")
+            ),
             "MN_NODE_DISPLAY_NAME": "sdk-node",
             "MN_NODE_CPU_MODEL": "SDK CPU",
             "MN_NODE_RUNTIME_DRIVERS": "host_local",
@@ -52,7 +54,9 @@ def test_runtime_compose_template_passes_node_advertisement_contract():
     root = Path(__file__).resolve().parents[2]
     if not (root / "mn-deploy").is_dir():
         pytest.skip("mn-deploy sibling repository is not available")
-    compose_text = (root / "mn-deploy" / "docker-compose.yml").read_text(encoding="utf-8")
+    compose_text = (root / "mn-deploy" / "docker-compose.yml").read_text(
+        encoding="utf-8"
+    )
 
     for key in (
         "MN_NODE_HARDWARE_JSON",
@@ -98,7 +102,9 @@ def test_compose_env_preserves_native_sdk_loopback_bind(monkeypatch, tmp_path):
 
     assert env["MN_NATIVE_SDK_GRPC_HOST"] == "127.0.0.1"
     assert env["MN_NETWORK_ADVERTISE_HOST"] == "192.168.5.21"
-    assert "MN_NATIVE_SDK_GRPC_HOST=127.0.0.1" in compose_env.read_text(encoding="utf-8")
+    assert "MN_NATIVE_SDK_GRPC_HOST=127.0.0.1" in compose_env.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_compose_env_preserves_explicit_native_sdk_bind_override(monkeypatch, tmp_path):
@@ -123,7 +129,9 @@ def test_compose_env_preserves_native_sdk_grpc_target(monkeypatch, tmp_path):
 
 
 def test_network_core_env_includes_native_sdk_target_for_worker_core(monkeypatch):
-    monkeypatch.setattr(server.os, "uname", lambda: type("Uname", (), {"sysname": "Linux"})())
+    monkeypatch.setattr(
+        server.os, "uname", lambda: type("Uname", (), {"sysname": "Linux"})()
+    )
     monkeypatch.setattr(server, "_ensure_redis_ha_settings", lambda env, **_kwargs: env)
     monkeypatch.setattr(server, "_ensure_node_advertisement_settings", lambda env: env)
 
@@ -151,7 +159,9 @@ def test_network_core_env_includes_native_sdk_target_for_worker_core(monkeypatch
 
 
 def test_network_core_env_advertises_worker_native_sdk_grpc_in_hardware(monkeypatch):
-    monkeypatch.setattr(server.os, "uname", lambda: type("Uname", (), {"sysname": "Linux"})())
+    monkeypatch.setattr(
+        server.os, "uname", lambda: type("Uname", (), {"sysname": "Linux"})()
+    )
     monkeypatch.setattr(server, "_ensure_redis_ha_settings", lambda env, **_kwargs: env)
 
     def fake_node_resource_environment(*, env, **_kwargs):
@@ -164,7 +174,9 @@ def test_network_core_env_advertises_worker_native_sdk_grpc_in_hardware(monkeypa
         }
         return {"MN_NODE_HARDWARE_JSON": json.dumps({"native_sdk_grpc": native})}
 
-    monkeypatch.setattr(server, "node_resource_environment", fake_node_resource_environment)
+    monkeypatch.setattr(
+        server, "node_resource_environment", fake_node_resource_environment
+    )
     monkeypatch.setattr(server, "_detect_host_gpu_count", lambda: 0)
 
     env = server._network_core_env(
@@ -188,8 +200,12 @@ def test_network_core_env_advertises_worker_native_sdk_grpc_in_hardware(monkeypa
     assert hardware["native_sdk_grpc"]["bind_host"] == "0.0.0.0"
 
 
-def test_network_core_env_uses_host_docker_internal_for_networked_container(monkeypatch):
-    monkeypatch.setattr(server.os, "uname", lambda: type("Uname", (), {"sysname": "Linux"})())
+def test_network_core_env_uses_host_docker_internal_for_networked_container(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        server.os, "uname", lambda: type("Uname", (), {"sysname": "Linux"})()
+    )
     monkeypatch.setattr(server, "_ensure_redis_ha_settings", lambda env, **_kwargs: env)
     monkeypatch.setattr(server, "_ensure_node_advertisement_settings", lambda env: env)
 
@@ -212,7 +228,9 @@ def test_network_core_env_uses_host_docker_internal_for_networked_container(monk
     assert env["MN_NATIVE_SDK_GRPC_TARGET"] == "host.docker.internal:55052"
 
 
-def test_native_sdk_grpc_command_falls_back_to_importable_source_module(monkeypatch, tmp_path):
+def test_native_sdk_grpc_command_falls_back_to_importable_source_module(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(server, "VENV_DIR", tmp_path / "venv")
     monkeypatch.delenv("MN_NATIVE_SDK_GRPC_SOURCE", raising=False)
 
@@ -222,7 +240,9 @@ def test_native_sdk_grpc_command_falls_back_to_importable_source_module(monkeypa
     assert command[-2:] == ["-m", "mn_sdk.native_runtime_service"]
 
 
-def test_native_sdk_grpc_command_respects_explicit_source_disable(monkeypatch, tmp_path):
+def test_native_sdk_grpc_command_respects_explicit_source_disable(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(server, "VENV_DIR", tmp_path / "venv")
     monkeypatch.setenv("MN_NATIVE_SDK_GRPC_SOURCE", "0")
 

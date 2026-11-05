@@ -57,9 +57,7 @@ def test_version_prints_worker_mode(mocker, no_local_runtime_mode):
 
     assert result.exit_code == 0
     assert result.stdout == (
-        f"{format_banner('MirrorNeuron CLI')}\n"
-        "version 1.2.3\n"
-        "runtime mode: worker\n"
+        f"{format_banner('MirrorNeuron CLI')}\nversion 1.2.3\nruntime mode: worker\n"
     )
 
 
@@ -71,9 +69,7 @@ def test_short_version_prints_worker_mode(mocker, no_local_runtime_mode):
 
     assert result.exit_code == 0
     assert result.stdout == (
-        f"{format_banner('MirrorNeuron CLI')}\n"
-        "version 1.2.3\n"
-        "runtime mode: worker\n"
+        f"{format_banner('MirrorNeuron CLI')}\nversion 1.2.3\nruntime mode: worker\n"
     )
 
 
@@ -144,16 +140,45 @@ def test_command_help_includes_argument_description_and_examples():
 def test_job_and_run_commands_have_distinct_resource_semantics():
     command = get_command(app)
     assert {"deployment", "event"}.isdisjoint(command.commands)
-    assert list(command.commands["schedule"].commands) == ["list", "show", "set-time", "cancel"]
+    assert list(command.commands["schedule"].commands) == [
+        "list",
+        "show",
+        "set-time",
+        "cancel",
+    ]
     assert list(command.commands["job"].commands) == [
-        "list", "create", "backup", "restore", "show", "relocate", "analysis", "start", "archive", "reset-data", "delete",
+        "list",
+        "create",
+        "backup",
+        "restore",
+        "show",
+        "relocate",
+        "analysis",
+        "start",
+        "archive",
+        "reset-data",
+        "delete",
     ]
     assert list(command.commands["run"].commands) == [
-        "list", "show", "info", "watch", "logs", "result", "resources", "compare",
-        "pause", "resume", "retry", "cancel", "delete", "human",
+        "list",
+        "show",
+        "info",
+        "watch",
+        "logs",
+        "result",
+        "resources",
+        "compare",
+        "pause",
+        "resume",
+        "retry",
+        "cancel",
+        "delete",
+        "human",
     ]
     assert list(command.commands["run"].commands["human"].commands) == [
-        "list", "respond", "ack",
+        "list",
+        "respond",
+        "ack",
     ]
     assert "remove" in command.commands["node"].commands
 
@@ -170,7 +195,9 @@ def test_runtime_help_includes_sidecar_restart_command():
 
 def test_runtime_start_checks_for_available_upgrade(mocker):
     start_server = mocker.patch("mn_cli.libs.sys_cmds._start_server")
-    notify = mocker.patch("mn_cli.libs.sys_cmds.update_cmds.notify_if_upgrade_available")
+    notify = mocker.patch(
+        "mn_cli.libs.sys_cmds.update_cmds.notify_if_upgrade_available"
+    )
 
     result = runner.invoke(app, ["runtime", "start"])
 
@@ -225,7 +252,9 @@ def test_every_leaf_command_exposes_json():
             for name, child in children.items():
                 visit(child, [*path, name])
             return
-        if not any("--json" in getattr(parameter, "opts", ()) for parameter in current.params):
+        if not any(
+            "--json" in getattr(parameter, "opts", ()) for parameter in current.params
+        ):
             missing.append(" ".join(path))
 
     visit(command, ["mn"])

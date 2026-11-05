@@ -14,13 +14,26 @@ def test_run_show_uses_verified_shared_record_when_core_lost_run(monkeypatch):
             return grpc.StatusCode.NOT_FOUND
 
     rendered = []
-    monkeypatch.setattr(job_definition_cmds, "client", SimpleNamespace(
-        get_run=lambda _run_id: (_ for _ in ()).throw(Missing()),
-    ))
-    monkeypatch.setattr(job_definition_cmds, "mapped_run_record", lambda _run_id: {
-        "run_id": "run-old", "status": "failed",
-    })
-    monkeypatch.setattr(job_definition_cmds, "print_detail", lambda _console, title, value: rendered.append((title, value)))
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "client",
+        SimpleNamespace(
+            get_run=lambda _run_id: (_ for _ in ()).throw(Missing()),
+        ),
+    )
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "mapped_run_record",
+        lambda _run_id: {
+            "run_id": "run-old",
+            "status": "failed",
+        },
+    )
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "print_detail",
+        lambda _console, title, value: rendered.append((title, value)),
+    )
 
     job_definition_cmds.run_status("run-old")
 
@@ -97,7 +110,13 @@ def test_run_resume_shows_activity_while_waiting_for_runtime(monkeypatch):
         return json.dumps({"run_id": run_id, "status": "resumed"})
 
     monkeypatch.setattr(job_definition_cmds, "activity", fake_activity)
-    monkeypatch.setattr(job_definition_cmds, "client", SimpleNamespace(resume_run=resume, get_run=lambda _: json.dumps({"status": "paused"})))
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "client",
+        SimpleNamespace(
+            resume_run=resume, get_run=lambda _: json.dumps({"status": "paused"})
+        ),
+    )
     monkeypatch.setattr(
         job_definition_cmds,
         "print_success_confirmation",
@@ -111,7 +130,9 @@ def test_run_resume_shows_activity_while_waiting_for_runtime(monkeypatch):
         ("start", "Resuming run run-1…"),
         ("end", "Resuming run run-1…"),
     ]
-    assert rendered == [("Run resume", {"status": "resumed", "details": {"Run ID": "run-1"}})]
+    assert rendered == [
+        ("Run resume", {"status": "resumed", "details": {"Run ID": "run-1"}})
+    ]
 
 
 def test_run_delete_confirms_and_delegates_active_run_cleanup_to_core(monkeypatch):
@@ -123,8 +144,10 @@ def test_run_delete_confirms_and_delegates_active_run_cleanup_to_core(monkeypatc
         job_definition_cmds,
         "client",
         SimpleNamespace(
-            delete_run=lambda run_id, confirmed: calls.append((run_id, confirmed))
-            or json.dumps({"run_id": run_id, "status": "deleted"})
+            delete_run=lambda run_id, confirmed: (
+                calls.append((run_id, confirmed))
+                or json.dumps({"run_id": run_id, "status": "deleted"})
+            )
         ),
     )
     monkeypatch.setattr(
@@ -153,7 +176,9 @@ def test_run_delete_confirms_and_delegates_active_run_cleanup_to_core(monkeypatc
 
 
 @pytest.mark.parametrize("owner_node", [None, "remote"])
-def test_create_prepares_source_bundle_before_stable_submission(monkeypatch, tmp_path, owner_node):
+def test_create_prepares_source_bundle_before_stable_submission(
+    monkeypatch, tmp_path, owner_node
+):
     bundle = tmp_path / "blueprint"
     bundle.mkdir()
     prepared = SimpleNamespace(
@@ -245,7 +270,9 @@ def test_create_prepares_source_bundle_before_stable_submission(monkeypatch, tmp
     printed = []
     monkeypatch.setattr(job_definition_cmds, "record_result", printed.append)
 
-    job_definition_cmds.create(str(bundle), job_id="stable-job", config=None, node=owner_node)
+    job_definition_cmds.create(
+        str(bundle), job_id="stable-job", config=None, node=owner_node
+    )
     for key, value in runtime_paths.items():
         assert calls["prepare"][2]["env"][key] == value
     if owner_node:
@@ -299,9 +326,7 @@ def test_delete_cleans_every_historical_run_and_definition_resources(monkeypatch
     job_definition_cmds.delete("stable-job", yes=True)
 
     assert cleaned == ["run-1", "run-2", "stable-job"]
-    assert printed == [
-        {"job_id": "stable-job", "status": "deleted", "confirmed": True}
-    ]
+    assert printed == [{"job_id": "stable-job", "status": "deleted", "confirmed": True}]
 
 
 def test_delete_attempts_local_cleanup_after_core_closes_runs(monkeypatch):
@@ -330,9 +355,7 @@ def test_delete_attempts_local_cleanup_after_core_closes_runs(monkeypatch):
         if job_id == "run-1":
             raise JobResourceCleanupError("OpenShell sandbox is busy")
 
-    monkeypatch.setattr(
-        job_definition_cmds, "cleanup_job_resources", cleanup
-    )
+    monkeypatch.setattr(job_definition_cmds, "cleanup_job_resources", cleanup)
     monkeypatch.setattr(
         job_definition_cmds,
         "handle_cli_error",
@@ -458,32 +481,64 @@ def test_delete_cleans_historical_runs_from_v2_items_response(monkeypatch):
 
 def test_busy_start_acknowledges_automatic_queue_without_confirmation(monkeypatch):
     messages, rendered = [], []
-    receipt = {"run_id": "run-b", "status": "queued", "admission": {
-        "owner_node": "spark@pc", "position": 1,
-        "message": "Queued on Spark behind Research assistant. It will start automatically when the current run finishes."}}
-    monkeypatch.setattr(job_definition_cmds, "client", SimpleNamespace(start_run=lambda *_args, **_kwargs: json.dumps(receipt)))
-    monkeypatch.setattr(job_definition_cmds, "require_confirmation", lambda *_args, **_kwargs: pytest.fail("queueing must not ask for confirmation"))
-    monkeypatch.setattr(job_definition_cmds, "print_info", lambda _console, message: messages.append(message))
-    monkeypatch.setattr(job_definition_cmds, "print_success_confirmation", lambda _console, label, **kwargs: rendered.append(label))
+    receipt = {
+        "run_id": "run-b",
+        "status": "queued",
+        "admission": {
+            "owner_node": "spark@pc",
+            "position": 1,
+            "message": "Queued on Spark behind Research assistant. It will start automatically when the current run finishes.",
+        },
+    }
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "client",
+        SimpleNamespace(start_run=lambda *_args, **_kwargs: json.dumps(receipt)),
+    )
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "require_confirmation",
+        lambda *_args, **_kwargs: pytest.fail("queueing must not ask for confirmation"),
+    )
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "print_info",
+        lambda _console, message: messages.append(message),
+    )
+    monkeypatch.setattr(
+        job_definition_cmds,
+        "print_success_confirmation",
+        lambda _console, label, **kwargs: rendered.append(label),
+    )
     monkeypatch.setattr(job_definition_cmds, "record_result", lambda _result: None)
-    job_definition_cmds.start("job-b", run_id="run-b", inputs=None, force=False, yes=False)
+    job_definition_cmds.start(
+        "job-b", run_id="run-b", inputs=None, force=False, yes=False
+    )
     assert messages == [receipt["admission"]["message"]]
     assert rendered == ["Run queued"]
 
 
-@pytest.mark.parametrize("code", [grpc.StatusCode.PERMISSION_DENIED, grpc.StatusCode.INVALID_ARGUMENT])
+@pytest.mark.parametrize(
+    "code", [grpc.StatusCode.PERMISSION_DENIED, grpc.StatusCode.INVALID_ARGUMENT]
+)
 def test_run_show_preserves_owner_error_when_verified_history_exists(monkeypatch, code):
     from unittest.mock import Mock
+
     class Failure(grpc.RpcError):
         def code(self):
             return code
+
     error = Failure()
     history, render, handle = Mock(return_value={"status": "completed"}), Mock(), Mock()
     monkeypatch.setattr(job_definition_cmds, "mapped_run_record", history)
     monkeypatch.setattr(job_definition_cmds, "print_detail", render)
     monkeypatch.setattr(job_definition_cmds, "handle_cli_error", handle)
-    monkeypatch.setattr(job_definition_cmds, "client", SimpleNamespace(get_run=Mock(side_effect=error)))
+    monkeypatch.setattr(
+        job_definition_cmds, "client", SimpleNamespace(get_run=Mock(side_effect=error))
+    )
     job_definition_cmds.run_status("r")
     history.assert_not_called()
     render.assert_not_called()
-    handle.assert_called_once_with(error, job_definition_cmds.console, "run show", command_context={"run_id": "r"})
+    handle.assert_called_once_with(
+        error, job_definition_cmds.console, "run show", command_context={"run_id": "r"}
+    )

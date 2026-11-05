@@ -13,7 +13,11 @@ def test_macos_assertion_released_on_error(mocker):
     process.terminate.assert_called_once()
     process.wait.assert_called_once()
     assert idle_sleep.awake_command(["python", "relay"]) == [
-        "/usr/bin/caffeinate", "-i", "python", "relay"]
+        "/usr/bin/caffeinate",
+        "-i",
+        "python",
+        "relay",
+    ]
 
 
 def test_other_platforms_do_not_launch_assertion(mocker):

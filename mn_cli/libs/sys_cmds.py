@@ -11,7 +11,12 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from mn_cli.banner import format_banner
 from mn_cli.shared import console, logger
 from mn_cli.error_handler import handle_cli_error
-from mn_cli.libs.ui import print_error, print_info, print_success_confirmation, require_confirmation
+from mn_cli.libs.ui import (
+    print_error,
+    print_info,
+    print_success_confirmation,
+    require_confirmation,
+)
 from mn_cli.output import record_result
 from mn_cli.terminal import use_progress
 from mn_cli import update_cmds
@@ -52,23 +57,33 @@ CONTEXT_ENGINE_EXPECTATION = (
     "CPU package with one DuckDB index per job."
 )
 
+
 def start(
     host: Optional[str] = typer.Option(
         None,
         "--host",
         help="Federation-reachable host or IP advertised by this node.",
     ),
-    grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Core gRPC port."),
+    grpc_port: int = typer.Option(
+        int(DEFAULT_GRPC_PORT), "--grpc-port", help="Core gRPC port."
+    ),
 ):
     """Start a federation-capable MirrorNeuron runtime"""
     console.print(format_banner("MirrorNeuron Local Runtime"))
     _start_server(host=host, grpc_port=grpc_port)
     update_cmds.notify_if_upgrade_available()
 
+
 def join(
     host: str,
-    token: str = typer.Option(..., "--token", help="Join token printed by mn runtime start on the remote node."),
-    grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Remote node gRPC port."),
+    token: str = typer.Option(
+        ...,
+        "--token",
+        help="Join token printed by mn runtime start on the remote node.",
+    ),
+    grpc_port: int = typer.Option(
+        int(DEFAULT_GRPC_PORT), "--grpc-port", help="Remote node gRPC port."
+    ),
     local_host: Optional[str] = typer.Option(
         None,
         "--local-host",
@@ -96,13 +111,16 @@ def join(
         action="Node join",
     )
 
+
 def expose_node(
     host: Optional[str] = typer.Option(
         None,
         "--host",
         help="Advertised host or IP that the main MirrorNeuron node can reach.",
     ),
-    grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Core gRPC port."),
+    grpc_port: int = typer.Option(
+        int(DEFAULT_GRPC_PORT), "--grpc-port", help="Core gRPC port."
+    ),
     dist_port: int = typer.Option(
         int(DEFAULT_DIST_PORT),
         "--dist-port",
@@ -134,10 +152,17 @@ def expose_node(
         docker_network_name=docker_network_name,
     )
 
+
 def add_node(
     host: str,
-    token: str = typer.Option(..., "--token", help="Join token printed by mn runtime start on the remote node."),
-    grpc_port: int = typer.Option(int(DEFAULT_GRPC_PORT), "--grpc-port", help="Remote exposed node gRPC port."),
+    token: str = typer.Option(
+        ...,
+        "--token",
+        help="Join token printed by mn runtime start on the remote node.",
+    ),
+    grpc_port: int = typer.Option(
+        int(DEFAULT_GRPC_PORT), "--grpc-port", help="Remote exposed node gRPC port."
+    ),
     docker_network_mode: Optional[str] = typer.Option(
         None,
         "--network",
@@ -201,28 +226,56 @@ def _confirm_node_removal(node_name: str, *, yes: bool) -> None:
         yes=yes,
     )
 
+
 def stop():
     """Stop MirrorNeuron services"""
     print_info(console, "Stopping MirrorNeuron services…")
     _clear_join_owner_metadata()
     _stop_network_runtime()
-    
+
     if runtime_compose_available():
         print_info(console, "Stopping Docker runtime (Compose)…")
-        subprocess.run(runtime_compose_cmd("down"), stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        subprocess.run(
+            runtime_compose_cmd("down"),
+            stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+        )
         try:
             from mn_sdk.native_resources import stop_docker_worker_services
 
             stop_docker_worker_services()
         except Exception:
-            logger.debug("Failed to stop DockerWorker Compose services during runtime stop", exc_info=True)
-        subprocess.run(["docker", "rm", "-f", COMPOSE_SENTINEL_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-        subprocess.run(["docker", "rm", "-f", SYNCTHING_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+            logger.debug(
+                "Failed to stop DockerWorker Compose services during runtime stop",
+                exc_info=True,
+            )
+        subprocess.run(
+            ["docker", "rm", "-f", COMPOSE_SENTINEL_CONTAINER],
+            stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+        )
+        subprocess.run(
+            ["docker", "rm", "-f", SYNCTHING_CONTAINER],
+            stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+        )
     else:
         print_info(console, "Stopping Core service (Docker: mirror-neuron-core)…")
-        subprocess.run(["docker", "stop", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-        subprocess.run(["docker", "rm", "mirror-neuron-core"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-        subprocess.run(["docker", "rm", "-f", SYNCTHING_CONTAINER], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        subprocess.run(
+            ["docker", "stop", "mirror-neuron-core"],
+            stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+        )
+        subprocess.run(
+            ["docker", "rm", "mirror-neuron-core"],
+            stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+        )
+        subprocess.run(
+            ["docker", "rm", "-f", SYNCTHING_CONTAINER],
+            stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+        )
 
     for pid_file, name in [
         *web_ui_pid_files(),
@@ -260,13 +313,17 @@ def cleanup(
         "--dry-run",
         help="Report confirmed cleanup candidates without removing them.",
     ),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Apply cleanup without prompting."),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Apply cleanup without prompting."
+    ),
     include_cache: bool = typer.Option(
         False,
         "--include-cache",
         help="Also apply the managed DockerWorker image cache policy.",
     ),
-    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print machine-readable JSON."
+    ),
 ):
     """Safely reconcile node-local Docker and OpenShell resources."""
 
@@ -345,8 +402,12 @@ def _native_cleanup_result(summary: dict, *, dry_run: bool) -> dict:
     errors = [*_sanitized_cleanup_errors(summary.get("errors"))]
     errors.extend(_sanitized_cleanup_errors(cache.get("errors")))
     removed = summary.get("removed") if isinstance(summary.get("removed"), list) else []
-    preserved = summary.get("preserved") if isinstance(summary.get("preserved"), list) else []
-    deferred = summary.get("deferred") if isinstance(summary.get("deferred"), list) else []
+    preserved = (
+        summary.get("preserved") if isinstance(summary.get("preserved"), list) else []
+    )
+    deferred = (
+        summary.get("deferred") if isinstance(summary.get("deferred"), list) else []
+    )
     return {
         "dry_run": dry_run,
         "removed_count": len(removed),
@@ -371,9 +432,15 @@ def _sanitized_cleanup_errors(values: object) -> list[str]:
 
 
 def health(
-    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
-    timeout: float = typer.Option(3.0, "--timeout", min=0.1, help="Per-component timeout in seconds."),
-    repair: bool = typer.Option(False, "--repair", help="Restart unhealthy API/Web UI sidecars when possible."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print machine-readable JSON."
+    ),
+    timeout: float = typer.Option(
+        3.0, "--timeout", min=0.1, help="Per-component timeout in seconds."
+    ),
+    repair: bool = typer.Option(
+        False, "--repair", help="Restart unhealthy API/Web UI sidecars when possible."
+    ),
 ):
     """Report Core gRPC, REST API, and Web UI health"""
     from mn_cli.libs.runtime_health import health as runtime_health
@@ -382,8 +449,12 @@ def health(
 
 
 def status(
-    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
-    timeout: float = typer.Option(3.0, "--timeout", min=0.1, help="Per-component timeout in seconds."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print machine-readable JSON."
+    ),
+    timeout: float = typer.Option(
+        3.0, "--timeout", min=0.1, help="Per-component timeout in seconds."
+    ),
 ):
     """Report runtime endpoints, health, nodes, jobs, and shared storage"""
     from mn_cli.libs.runtime_health import status as runtime_status
@@ -392,9 +463,17 @@ def status(
 
 
 def doctor(
-    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
-    timeout: float = typer.Option(3.0, "--timeout", min=0.1, help="Per-component timeout in seconds."),
-    repair: bool = typer.Option(False, "--repair", help="Repair unhealthy replaceable runtime sidecars, then recheck."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print machine-readable JSON."
+    ),
+    timeout: float = typer.Option(
+        3.0, "--timeout", min=0.1, help="Per-component timeout in seconds."
+    ),
+    repair: bool = typer.Option(
+        False,
+        "--repair",
+        help="Repair unhealthy replaceable runtime sidecars, then recheck.",
+    ),
 ):
     """Check runtime foundation services before running blueprints"""
     from mn_cli.libs.runtime_health import doctor as runtime_doctor
@@ -450,8 +529,11 @@ def restart_sidecars(
         next_steps="mn runtime status",
     )
 
+
 def ensure_context_engine(
-    force: bool = typer.Option(False, "--force", help="Recreate the context engine even if it is running."),
+    force: bool = typer.Option(
+        False, "--force", help="Recreate the context engine even if it is running."
+    ),
 ):
     """Prepare and start the packaged Membrane context engine service"""
     try:
@@ -491,20 +573,25 @@ def ensure_context_engine(
         handle_cli_error(exc, console, "runtime ensure-context-engine")
         raise typer.Exit(1)
 
+
 def _sidecar_runtime_env() -> dict[str, str]:
     compose_runtime = runtime_compose_available()
     env = _runtime_base_env(compose_runtime)
     env.setdefault("MN_API_HOST", DEFAULT_HOST)
     env["MN_API_PORT"] = _sidecar_port_value(env, "MN_API_PORT", DEFAULT_API_PORT)
     env.setdefault("MN_WEB_UI_HOST", DEFAULT_HOST)
-    env["MN_WEB_UI_PORT"] = _sidecar_port_value(env, "MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT)
+    env["MN_WEB_UI_PORT"] = _sidecar_port_value(
+        env, "MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT
+    )
     return env
+
 
 def _sidecar_port_value(env: dict[str, str], key: str, default: str) -> str:
     value = str(env.get(key) or "").strip()
     if not value:
         value = default
     return _valid_port_text(value, default)
+
 
 def _stop_sidecar_processes(pid_files: tuple[tuple[Path, str], ...]) -> bool:
     stopped = False
@@ -529,11 +616,13 @@ def _stop_sidecar_processes(pid_files: tuple[tuple[Path, str], ...]) -> bool:
         time.sleep(1)
     return stopped
 
+
 def _unlink_pid_file(pid_file: Path) -> None:
     try:
         pid_file.unlink(missing_ok=True)
     except OSError:
         pass
+
 
 def refresh_token():
     """Rotate the persistent MirrorNeuron network join token"""

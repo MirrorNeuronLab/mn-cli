@@ -8,11 +8,7 @@ from mn_cli import runtime_state
 def test_read_env_file_ignores_comments_blanks_and_malformed_lines(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "\n"
-        "# comment\n"
-        "FOO=bar\n"
-        "MALFORMED\n"
-        " SPACED = value \n",
+        "\n# comment\nFOO=bar\nMALFORMED\n SPACED = value \n",
         encoding="utf-8",
     )
 
@@ -68,7 +64,9 @@ def test_read_json_file_returns_none_for_missing_or_invalid_json(tmp_path):
     assert runtime_state.read_json_file(valid) == {"ok": True}
 
 
-def test_read_json_object_returns_empty_dict_for_missing_invalid_or_non_object_json(tmp_path):
+def test_read_json_object_returns_empty_dict_for_missing_invalid_or_non_object_json(
+    tmp_path,
+):
     assert runtime_state.read_json_object(tmp_path / "missing.json") == {}
 
     invalid = tmp_path / "invalid.json"

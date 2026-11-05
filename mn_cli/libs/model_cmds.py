@@ -19,7 +19,6 @@ from mn_sdk import (
     DEFAULT_MODEL_ID,
     DOCKER_MODEL_RUNNER_HOST_API_BASE,
     AppError,
-    Client,
     ModelRegistryError,
     add_registered_models,
     assess_model_compatibility,
@@ -66,6 +65,11 @@ from mn_sdk import (
     validate_litellm_gateway_config_file,
 )
 from mn_sdk.errors import normalize_exception
+from mn_sdk.model_access.status import (
+    model_status_failure,
+    read_owner_model_status,
+    unpublished_model_status,
+)
 from mn_sdk.model_sources import is_docker_model, model_source
 from mn_sdk import (
     docker_status as sdk_docker_status,
@@ -242,7 +246,11 @@ def _runtime_model_list_payload(*, available: bool = False) -> dict[str, Any]:
             for item in installations
         }
         for installation in _remote_installations_for_model(model, remote_records):
-            identity = (installation.get("node"), installation.get("model"), installation.get("api_base", ""))
+            identity = (
+                installation.get("node"),
+                installation.get("model"),
+                installation.get("api_base", ""),
+            )
             if identity not in seen:
                 installations.append(installation)
                 seen.add(identity)
@@ -365,8 +373,11 @@ def add_model(
         requested_nodes = _normalized_node_options(node)
         if installing_default:
             entry = select_default_add_model(
-                nodes=requested_nodes or (
-                    [] if local else _normalized_node_options(_selected_model_install_node())
+                nodes=requested_nodes
+                or (
+                    []
+                    if local
+                    else _normalized_node_options(_selected_model_install_node())
                 ),
                 local=local,
                 backend=backend,
@@ -376,13 +387,19 @@ def add_model(
                 remote_compatibility=_remote_node_compatibility,
             )
             if entry.get("provider") == "litellm_proxy" and context_size is not None:
-                raise ValueError("DMR context options cannot be used with a provider default")
+                raise ValueError(
+                    "DMR context options cannot be used with a provider default"
+                )
             model = str(entry["id"])
             # Installing the policy's fallback must not pin it as an override.
             default = False
         requested = str(model or "").strip()
         existing_record = get_registered_model(requested)
-        if existing_record is not None and not (local or requested_nodes) and not installing_default:
+        if (
+            existing_record is not None
+            and not (local or requested_nodes)
+            and not installing_default
+        ):
             raise ValueError(
                 f"model {requested!r} is already registered; run 'mn model remove {requested}' before adding it again"
             )
@@ -395,21 +412,34 @@ def add_model(
                 requested, backend=backend, context_size=context_size
             )
             cataloged = False
-        if installing_default and existing_record is not None and not (local or requested_nodes):
+        if (
+            installing_default
+            and existing_record is not None
+            and not (local or requested_nodes)
+        ):
             sync_litellm_gateway(restart=True)
-            cluster_results = _sync_default_model_across_cluster(restart=True, quiet=json_output)
+            cluster_results = _sync_default_model_across_cluster(
+                restart=True, quiet=json_output
+            )
             if any(result.get("status") == "error" for result in cluster_results):
-                raise RuntimeError("the default could not be synchronized to every cluster gateway")
+                raise RuntimeError(
+                    "the default could not be synchronized to every cluster gateway"
+                )
             payload = {"status": "ready", "model": existing_record, "reused": True}
             if json_output:
                 record_result(payload)
             else:
                 print_success_confirmation(
-                    console, "Model add", status="ready",
+                    console,
+                    "Model add",
+                    status="ready",
                     details=[("Model", requested), ("Reused", "yes")],
                 )
             return
-        if existing_record is not None and existing_record.get("kind") not in {"dmr", "docker"}:
+        if existing_record is not None and existing_record.get("kind") not in {
+            "dmr",
+            "docker",
+        }:
             raise ValueError(f"model {requested!r} is already registered as a provider")
         if (local and requested_nodes) or len(requested_nodes) > 1 or existing_record:
             payload = _add_dmr_replicas(
@@ -490,7 +520,10 @@ def add_model(
                     raise RuntimeError(compatibility_result.message)
                 if entry.get("preparation"):
                     from mn_sdk import prepare_dmr_model
-                    entry = prepare_dmr_model(entry, accelerator=compatibility_result.accelerator)
+
+                    entry = prepare_dmr_model(
+                        entry, accelerator=compatibility_result.accelerator
+                    )
                 result = {
                     "entry": entry,
                     "docker_model": target,
@@ -686,7 +719,13 @@ def _add_dmr_replicas(
                 if _model_installed(target_model):
                     if entry.get("preparation"):
                         from mn_sdk import prepare_dmr_model
-                        entry = prepare_dmr_model(entry, accelerator=preflight[target_node]["compatibility"].get("accelerator"))
+
+                        entry = prepare_dmr_model(
+                            entry,
+                            accelerator=preflight[target_node]["compatibility"].get(
+                                "accelerator"
+                            ),
+                        )
                     result = {
                         "entry": entry,
                         "docker_model": target_model,
@@ -707,7 +746,11 @@ def _add_dmr_replicas(
                         context_size=context_size,
                         force=force,
                     )
-                entry = result.get("entry") if isinstance(result.get("entry"), dict) else entry
+                entry = (
+                    result.get("entry")
+                    if isinstance(result.get("entry"), dict)
+                    else entry
+                )
                 resolved_backend = str(
                     (result.get("compatibility") or {}).get("backend")
                     or backend
@@ -1345,8 +1388,15 @@ def doctor_model(
                 runner_running = node_status in {"healthy", "joining"}
                 endpoint_ok = True
                 if is_docker_model(entry) or entry.get("preparation"):
-                    candidate = next((item for item in inventory if docker_model_match_keys(target)
-                                      & _model_payload_match_keys(item)), {})
+                    candidate = next(
+                        (
+                            item
+                            for item in inventory
+                            if docker_model_match_keys(target)
+                            & _model_payload_match_keys(item)
+                        ),
+                        {},
+                    )
                     runner_running = candidate.get("running") is True
                     endpoint_ok = candidate.get("endpoint_ok") is True
                 status = {
@@ -1386,8 +1436,13 @@ def doctor_model(
             compatibility_payload = compatibility.to_dict()
             if is_docker_model(entry) or entry.get("preparation"):
                 from mn_sdk.model_service import doctor_runtime_model
+
                 diagnosis = doctor_runtime_model(str(entry["id"]))
-                status = diagnosis["docker"] if is_docker_model(entry) else diagnosis["docker_model_runner"]
+                status = (
+                    diagnosis["docker"]
+                    if is_docker_model(entry)
+                    else diagnosis["docker_model_runner"]
+                )
                 installed = diagnosis["model"]["installed"]
                 endpoint_ok = status["endpoint_ok"]
                 runner_running = status["running"]
@@ -1396,7 +1451,8 @@ def doctor_model(
                 installed = _model_installed(target)
                 endpoint_ok = _endpoint_responds()
                 runner_running = (
-                    bool(status.get("running")) or "running" in json.dumps(status).lower()
+                    bool(status.get("running"))
+                    or "running" in json.dumps(status).lower()
                 )
             hardware_payload = detect_host_hardware().to_dict()
         gateway_health = litellm_gateway_health()
@@ -1422,7 +1478,11 @@ def doctor_model(
             "docker" if is_docker_model(entry) else "docker_model_runner": {
                 "status": status,
                 "running": runner_running,
-                "endpoint": (status.get("endpoint") if is_docker_model(entry) or entry.get("preparation") else DOCKER_MODEL_RUNNER_HOST_API_BASE)
+                "endpoint": (
+                    status.get("endpoint")
+                    if is_docker_model(entry) or entry.get("preparation")
+                    else DOCKER_MODEL_RUNNER_HOST_API_BASE
+                )
                 if not remote_selected
                 else selected_node,
                 "endpoint_ok": endpoint_ok,
@@ -1501,22 +1561,32 @@ def _dmr_installation_health(entry: dict[str, Any], node_name: str) -> dict[str,
     if node_name in {"", "local", local_node}:
         if entry.get("preparation"):
             from mn_sdk.model_service import doctor_runtime_model
+
             diagnosis = doctor_runtime_model(str(entry["id"]))
-            return {"node": node_name or local_node, "local": True,
-                    "installed": diagnosis["model"]["installed"],
-                    "running": diagnosis["docker_model_runner"]["running"],
-                    "compatibility": diagnosis["compatibility"],
-                    "health": "healthy" if diagnosis["ok"] else "unavailable"}
+            return {
+                "node": node_name or local_node,
+                "local": True,
+                "installed": diagnosis["model"]["installed"],
+                "running": diagnosis["docker_model_runner"]["running"],
+                "compatibility": diagnosis["compatibility"],
+                "health": "healthy" if diagnosis["ok"] else "unavailable",
+            }
         if is_docker_model(entry):
             from mn_sdk.model_service import doctor_runtime_model
+
             diagnosis = doctor_runtime_model(str(entry["id"]))
-            return {"node": node_name or local_node, "local": True,
-                    "installed": diagnosis["model"]["installed"],
-                    "running": diagnosis["docker"]["running"],
-                    "compatibility": diagnosis["compatibility"],
-                    "health": diagnosis["docker"]["lifecycle_state"]
-                    if diagnosis["ok"] and not diagnosis["docker"]["running"]
-                    else "healthy" if diagnosis["ok"] else "unavailable"}
+            return {
+                "node": node_name or local_node,
+                "local": True,
+                "installed": diagnosis["model"]["installed"],
+                "running": diagnosis["docker"]["running"],
+                "compatibility": diagnosis["compatibility"],
+                "health": diagnosis["docker"]["lifecycle_state"]
+                if diagnosis["ok"] and not diagnosis["docker"]["running"]
+                else "healthy"
+                if diagnosis["ok"]
+                else "unavailable",
+            }
         compatibility = assess_model_compatibility(entry).to_dict()
         installed = _model_installed(target)
         status = _docker_status()
@@ -1546,23 +1616,38 @@ def _dmr_installation_health(entry: dict[str, Any], node_name: str) -> dict[str,
         ).lower()
         running = node_status in {"healthy", "joining"}
         if is_docker_model(entry) or entry.get("preparation"):
-            candidate = next((item for item in inventory if docker_model_match_keys(target)
-                              & _model_payload_match_keys(item)), {})
-            running = candidate.get("running") is True and candidate.get("endpoint_ok") is True
+            candidate = next(
+                (
+                    item
+                    for item in inventory
+                    if docker_model_match_keys(target) & _model_payload_match_keys(item)
+                ),
+                {},
+            )
+            running = (
+                candidate.get("running") is True
+                and candidate.get("endpoint_ok") is True
+            )
         compatibility = _remote_node_compatibility(
             entry,
             selected_node=node_name,
             node=endpoint.get("node") or {},
         )
         idle = is_docker_model(entry) and candidate.get("lifecycle_state") == "idle"
-        healthy = bool(installed and (running or idle) and compatibility.get("ok") is not False)
+        healthy = bool(
+            installed and (running or idle) and compatibility.get("ok") is not False
+        )
         return {
             "node": node_name,
             "local": False,
             "installed": installed,
             "running": running,
             "compatibility": compatibility,
-            "health": "idle" if healthy and idle else "healthy" if healthy else "unavailable",
+            "health": "idle"
+            if healthy and idle
+            else "healthy"
+            if healthy
+            else "unavailable",
         }
     except (RuntimeError, StopIteration) as exc:
         return {
@@ -1908,7 +1993,9 @@ def _registered_model_payload(
         "routed": routed,
         "node": node,
         "model": record.get("model") or model_id,
-        "docker_model": record.get("model") or model_id if kind in {"dmr", "docker"} else None,
+        "docker_model": record.get("model") or model_id
+        if kind in {"dmr", "docker"}
+        else None,
         "api_model": record.get("api_model") or model_id,
         "backend": record.get("backend") or "",
         "cataloged": bool(record.get("cataloged")),
@@ -1938,9 +2025,13 @@ def _stored_registered_model_payload(record: dict[str, Any]) -> dict[str, Any]:
         "registered": True,
         "installed": None,
         "routed": None,
-        "node": str(record.get("selected_node") or "") if kind in {"dmr", "docker"} else "",
+        "node": str(record.get("selected_node") or "")
+        if kind in {"dmr", "docker"}
+        else "",
         "model": record.get("model") or model_id,
-        "docker_model": (record.get("model") or model_id) if kind in {"dmr", "docker"} else None,
+        "docker_model": (record.get("model") or model_id)
+        if kind in {"dmr", "docker"}
+        else None,
         "api_model": record.get("api_model") or model_id,
         "backend": record.get("backend") or "",
         "cataloged": bool(record.get("cataloged")),
@@ -2074,7 +2165,9 @@ def _available_model_payload(entry: dict[str, Any]) -> dict[str, Any]:
         "id": str(entry.get("id") or entry.get("model") or ""),
         "name": entry.get("name") or entry.get("id") or entry.get("model"),
         "kind": kind,
-        "source": str((entry.get("registry") or {}).get("source") or "provider") if kind == "provider" else model_source(entry),
+        "source": str((entry.get("registry") or {}).get("source") or "provider")
+        if kind == "provider"
+        else model_source(entry),
         "state": "available",
         "registered": False,
         "installed": False,
@@ -2280,7 +2373,11 @@ def _update_dmr_registration(
     include_local: bool = False,
 ) -> dict[str, Any]:
     entry = _dmr_entry_for_record_or_ref(record, str(record.get("id") or ""))
-    context_size = entry.get("context_size") if is_docker_model(entry) else record.get("context_size")
+    context_size = (
+        entry.get("context_size")
+        if is_docker_model(entry)
+        else record.get("context_size")
+    )
     local_node = _local_runtime_node_name() or "local"
     recorded_installations = [
         dict(item)
@@ -2421,9 +2518,8 @@ def _model_owner_ids(model: str) -> list[str]:
 def _remove_runtime_model_on_cluster_node(
     model: str, *, node: str, force: bool
 ) -> None:
-    node_endpoint = _cluster_node_endpoint(node)
-    runtime_client = _native_runtime_client_for_node(node_endpoint)
-    response = runtime_client.prepare_runtime_model(
+    _cluster_node_endpoint(node)
+    response = client.prepare_runtime_model(
         {
             "action": "remove",
             "model": model,
@@ -2499,7 +2595,6 @@ def _install_model_on_cluster_node(
     update: bool = False,
 ) -> dict[str, Any]:
     node_endpoint = _cluster_node_endpoint(node)
-    runtime_client = _native_runtime_client_for_node(node_endpoint)
     docker_model = docker_model_name(entry)
     request = build_prepare_runtime_model_request(
         requirement={"model": docker_model},
@@ -2512,7 +2607,7 @@ def _install_model_on_cluster_node(
         source="mn-cli",
         action="update" if update else None,
     )
-    payload = call_prepare_runtime_model(runtime_client, request, logger=logger)
+    payload = call_prepare_runtime_model(client, request, logger=logger)
     install = payload.get("install") if isinstance(payload.get("install"), dict) else {}
     compatibility = (
         install.get("compatibility")
@@ -2662,7 +2757,9 @@ def _node_litellm_gateway_api_base(node_endpoint: dict[str, Any]) -> str:
         node_endpoint.get("node") if isinstance(node_endpoint.get("node"), dict) else {}
     )
     gateway = (
-        node_endpoint.get("litellm_gateway")
+        node.get("litellm")
+        if isinstance(node.get("litellm"), dict)
+        else node_endpoint.get("litellm_gateway")
         if isinstance(node_endpoint.get("litellm_gateway"), dict)
         else node.get("litellm_gateway")
         if isinstance(node.get("litellm_gateway"), dict)
@@ -2777,17 +2874,12 @@ def _cluster_runtime_status_endpoints(*, quiet: bool = False) -> list[dict[str, 
             else {}
         )
         snapshot = snapshots.get(node_name, {})
-        if _model_status_needs_peer_refresh(snapshot) and not live_endpoint.get(
-            "self"
-        ):
+        status_error = None
+        if _model_status_needs_peer_refresh(snapshot) and not live_endpoint.get("self"):
             try:
                 snapshot = _authoritative_peer_runtime_status_node(live_endpoint)
             except Exception as exc:
-                if not quiet:
-                    print_warning(
-                        console,
-                        f"Could not read authoritative model status from {node_name}: {exc}",
-                    )
+                status_error = model_status_failure(exc)
         node = {**snapshot, **live_node}
         if isinstance(snapshot.get("runtime_status"), dict):
             node["runtime_status"] = snapshot["runtime_status"]
@@ -2800,6 +2892,8 @@ def _cluster_runtime_status_endpoints(*, quiet: bool = False) -> list[dict[str, 
         }
         if endpoint["self"] and event_ids:
             endpoint["status_event_ids"] = event_ids
+        if status_error:
+            endpoint["status_error"] = status_error
         endpoints.append(endpoint)
     return endpoints
 
@@ -2836,19 +2930,9 @@ def _authoritative_peer_runtime_status_node(
     node_endpoint: dict[str, Any],
 ) -> dict[str, Any]:
     node_name = str(node_endpoint.get("node_name") or "").strip()
-    target = str(node_endpoint.get("grpc_target") or "").strip()
-    if not node_name or not target:
-        raise RuntimeError("peer runtime-status endpoint is incomplete")
-    peer = Client(target=target, timeout=RUNTIME_STATUS_PEER_TIMEOUT_SECONDS)
-    payload = json.loads(peer.get_runtime_statuses())
-    nodes = payload.get("nodes") if isinstance(payload, dict) else None
-    for node in nodes or []:
-        if not isinstance(node, dict):
-            continue
-        candidate = str(node.get("name") or node.get("node") or "").strip()
-        if candidate == node_name and _model_status_published(node):
-            return node
-    raise RuntimeError(f"cluster node {node_name} has not published model status")
+    return read_owner_model_status(
+        client, node_name, timeout=RUNTIME_STATUS_PEER_TIMEOUT_SECONDS
+    )
 
 
 def _local_cluster_node_endpoint() -> dict[str, Any] | None:
@@ -2905,55 +2989,6 @@ def _extract_host_candidates_from_text(value: str) -> set[str]:
 
 def _resolved_local_hostnames() -> set[str]:
     return _host_discovery.resolved_local_hostnames()
-
-
-def _native_runtime_client_for_node(node_endpoint: dict[str, Any]) -> Client:
-    if _cluster_node_is_local(node_endpoint):
-        return client
-
-    node_name = str(node_endpoint.get("node_name") or "")
-    native_endpoint = _cluster_node_native_sdk_endpoint(
-        node_name, node_endpoint["node"]
-    )
-    return Client(
-        target=native_endpoint["target"],
-        timeout=_runtime_model_prepare_timeout_seconds(),
-        auth_token=cli_config.grpc_auth_token,
-        admin_token=cli_config.grpc_admin_token,
-    )
-
-
-def _node_native_sdk_grpc_info(node: dict[str, Any]) -> dict[str, Any] | None:
-    return _host_discovery.node_native_sdk_grpc_info(node)
-
-
-def _cluster_node_native_sdk_endpoint(
-    node_name: str, node: dict[str, Any]
-) -> dict[str, str]:
-    native = _node_native_sdk_grpc_info(node)
-    if not native:
-        raise RuntimeError(
-            f"cluster node {node_name} does not advertise native SDK gRPC; "
-            "restart that node with an updated `mn runtime start`"
-        )
-    if native.get("enabled") is False:
-        raise RuntimeError(
-            f"cluster node {node_name} advertises native SDK gRPC as disabled"
-        )
-    target = str(native.get("target") or "").strip()
-    host = str(native.get("host") or "").strip()
-    port = str(native.get("port") or "").strip()
-    if target and (not host or not port) and ":" in target:
-        parsed_host, parsed_port = target.rsplit(":", 1)
-        host = host or parsed_host.strip()
-        port = port or parsed_port.strip()
-    if not target and host and port:
-        target = f"{host}:{port}"
-    if not target or not host or not port:
-        raise RuntimeError(
-            f"cluster node {node_name} advertises incomplete native SDK gRPC metadata"
-        )
-    return {"target": target, "host": host, "port": port}
 
 
 def _runtime_model_prepare_timeout_seconds() -> float:
@@ -3017,8 +3052,7 @@ def _sync_external_litellm_config_across_cluster(
     for node_endpoint in _cluster_node_endpoints(quiet=True):
         node_name = str(node_endpoint.get("node_name") or "")
         try:
-            runtime_client = _native_runtime_client_for_node(node_endpoint)
-            response = runtime_client.sync_litellm_gateway(
+            response = client.sync_litellm_gateway(
                 {
                     "node": node_name,
                     "external_litellm_config": forwarded_config,
@@ -3026,7 +3060,8 @@ def _sync_external_litellm_config_across_cluster(
                     "external_managed_by": "model_registry_fanout",
                     "restart": restart,
                     "source": "mn-cli-model-registry-fanout",
-                }
+                },
+                timeout=_runtime_model_prepare_timeout_seconds(),
             )
             results.append({"node": node_name, "status": "ok", "response": response})
         except Exception as exc:
@@ -3081,14 +3116,14 @@ def _sync_gateway_runtime_endpoints_across_cluster(
         if not node_routes:
             continue
         try:
-            runtime_client = _native_runtime_client_for_node(node_endpoint)
-            response = runtime_client.sync_litellm_gateway(
+            response = client.sync_litellm_gateway(
                 {
                     "node": node_name,
                     "runtime_endpoints": node_routes,
                     "restart": restart,
                     "source": "mn-cli-runtime-endpoint-fanout",
-                }
+                },
+                timeout=_runtime_model_prepare_timeout_seconds(),
             )
             results.append({"node": node_name, "status": "ok", "response": response})
         except Exception as exc:
@@ -3214,20 +3249,19 @@ def reconcile_cluster_model_routes(
             entries = _runtime_model_inventory_for_node(node_endpoint)
         except Exception as exc:
             entries = []
+            failure = model_status_failure(exc)
             errors.append(
                 {
                     "node": node_name,
                     "stage": "inventory",
-                    "error": str(exc),
+                    **failure,
                 }
             )
-            node_results.append(
-                {"node": node_name, "status": "error", "error": str(exc)}
-            )
+            node_results.append({"node": node_name, "status": "error", **failure})
             if not quiet:
                 print_warning(
                     console,
-                    f"No synchronized runtime model status for {node_name}: {exc}",
+                    f"Model synchronization pending for {node_name}: {failure['error']}",
                 )
         else:
             snapshot = _runtime_model_status_snapshot(node_endpoint)
@@ -3485,18 +3519,25 @@ def _publish_local_runtime_model_inventory(
 
 
 def _runtime_model_status_snapshot(node_endpoint: dict[str, Any]) -> dict[str, Any]:
+    if failure := node_endpoint.get("status_error"):
+        raise AppError(failure["code"], failure["error"], hint=failure.get("hint"))
     node = node_endpoint.get("node")
     runtime_status = node.get("runtime_status") if isinstance(node, dict) else None
     snapshot = (
         runtime_status.get("models") if isinstance(runtime_status, dict) else None
     )
-    if not isinstance(snapshot, dict):
+    if snapshot is None:
         node_name = str(node_endpoint.get("node_name") or "")
-        raise RuntimeError(f"cluster node {node_name} has not published model status")
+        raise unpublished_model_status(node_name)
+    if not isinstance(snapshot, dict):
+        raise AppError(
+            "MN_FAILED_PRECONDITION", "The node published invalid model status."
+        )
     if not str(snapshot.get("revision") or "").strip():
         node_name = str(node_endpoint.get("node_name") or "")
-        raise RuntimeError(
-            f"cluster node {node_name} published model status without a revision"
+        raise AppError(
+            "MN_FAILED_PRECONDITION",
+            f"Model status from {node_name} has no revision.",
         )
     return snapshot
 
@@ -3509,8 +3550,9 @@ def _runtime_model_inventory_for_node(
     status = snapshot.get("status")
     models = status.get("models") if isinstance(status, dict) else None
     if not isinstance(models, list):
-        raise RuntimeError(
-            f"cluster node {node_name} published a non-list model inventory"
+        raise AppError(
+            "MN_FAILED_PRECONDITION",
+            f"Model inventory from {node_name} must be a list.",
         )
     return [
         entry
@@ -3621,21 +3663,26 @@ def _runtime_endpoints_for_gateway_node(
     target_host = str(node_endpoint.get("host") or "").strip().lower()
 
     def owned_by_target(endpoint: dict[str, Any]) -> bool:
-        if str(endpoint.get("node") or "").strip() == target:
+        owner = str(endpoint.get("node") or "").strip()
+        if owner == target:
             return True
         if (
             str(endpoint.get("source") or "").strip()
             not in CLUSTER_REMOTE_MODEL_SOURCES
-        ):
+        ) or not target_host:
             return False
         try:
-            endpoint_host = str(
-                urllib.parse.urlparse(str(endpoint.get("api_base") or "")).hostname
-                or ""
-            ).lower()
+            destination = urllib.parse.urlparse(str(endpoint.get("api_base") or ""))
+            gateway = urllib.parse.urlparse(
+                _node_litellm_gateway_api_base(node_endpoint)
+            )
+            return (
+                destination.scheme == gateway.scheme
+                and destination.hostname == gateway.hostname
+                and destination.port == gateway.port
+            )
         except ValueError:
             return False
-        return bool(target_host and endpoint_host == target_host)
 
     return {
         str(key): endpoint
@@ -3659,15 +3706,15 @@ def _runtime_endpoints_for_local_gateway(
 def _remove_gateway_route_on_cluster_node(
     model: str, *, node: str, restart: bool
 ) -> str:
-    node_endpoint = _cluster_node_endpoint(node)
-    runtime_client = _native_runtime_client_for_node(node_endpoint)
-    return runtime_client.remove_litellm_gateway_route(
+    _cluster_node_endpoint(node)
+    return client.remove_litellm_gateway_route(
         {
             "node": node,
             "model": model,
             "restart": restart,
             "source": "mn-cli-remove-route",
-        }
+        },
+        timeout=_runtime_model_prepare_timeout_seconds(),
     )
 
 
@@ -3723,15 +3770,15 @@ def _remove_gateway_route_across_cluster(
         if origin_node and node_name == origin_node:
             continue
         try:
-            runtime_client = _native_runtime_client_for_node(node_endpoint)
-            response = runtime_client.remove_litellm_gateway_route(
+            response = client.remove_litellm_gateway_route(
                 {
                     "node": node_name,
                     "model": model,
                     "origin_node": origin_node or "",
                     "restart": restart,
                     "source": "mn-cli-remove-route-fanout",
-                }
+                },
+                timeout=_runtime_model_prepare_timeout_seconds(),
             )
             results.append({"node": node_name, "status": "ok", "response": response})
         except Exception as exc:
@@ -4024,6 +4071,7 @@ def _docker(
 ) -> subprocess.CompletedProcess[str]:
     from mn_sdk.dmr_managed import command_environment
     from mn_sdk.model_runtime import docker_cli_path_environment
+
     command = ["docker", *args]
     try:
         result = subprocess.run(

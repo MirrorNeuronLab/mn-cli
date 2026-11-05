@@ -12,17 +12,30 @@ from mn_cli.libs.run_cmds import (
     _emit_validation_report,
     _normalize_validation_output,
 )
-from mn_sdk.submission_preparation import blueprint_runtime_environment, load_blueprint_config
+from mn_sdk.submission_preparation import (
+    blueprint_runtime_environment,
+    load_blueprint_config,
+)
 from mn_cli.shared import client, console
 from mn_sdk import run_service_validation
 
 
 def list_services(
-    name: Annotated[Optional[str], typer.Option("--name", help="Filter by service name.")] = None,
-    node: Annotated[Optional[str], typer.Option("--node", help="Filter by node name.")] = None,
-    job_id: Annotated[Optional[str], typer.Option("--job-id", help="Filter by job ID.")] = None,
-    status: Annotated[Optional[str], typer.Option("--status", help="Filter by health status.")] = None,
-    all_statuses: Annotated[bool, typer.Option("--all", help="Show warning and critical services too.")] = False,
+    name: Annotated[
+        Optional[str], typer.Option("--name", help="Filter by service name.")
+    ] = None,
+    node: Annotated[
+        Optional[str], typer.Option("--node", help="Filter by node name.")
+    ] = None,
+    job_id: Annotated[
+        Optional[str], typer.Option("--job-id", help="Filter by job ID.")
+    ] = None,
+    status: Annotated[
+        Optional[str], typer.Option("--status", help="Filter by health status.")
+    ] = None,
+    all_statuses: Annotated[
+        bool, typer.Option("--all", help="Show warning and critical services too.")
+    ] = False,
 ):
     """List registered services"""
     try:
@@ -34,12 +47,22 @@ def list_services(
             passing_only=not all_statuses,
         )
         payload = json.loads(response)
-        items = payload.get("services") or payload.get("data") or [] if isinstance(payload, dict) else []
+        items = (
+            payload.get("services") or payload.get("data") or []
+            if isinstance(payload, dict)
+            else []
+        )
         print_collection(
             console,
             "Services",
             items,
-            columns=(("ID", "id"), ("Kind", "name"), ("State", "status"), ("Node / Owner", "node"), ("Updated", "updated_at")),
+            columns=(
+                ("ID", "id"),
+                ("Kind", "name"),
+                ("State", "status"),
+                ("Node / Owner", "node"),
+                ("Updated", "updated_at"),
+            ),
         )
     except Exception as exc:
         handle_cli_error(exc, console, "service list")
@@ -47,9 +70,15 @@ def list_services(
 
 def resolve_service(
     name: str,
-    tag: Annotated[Optional[list[str]], typer.Option("--tag", help="Require a service tag.")] = None,
-    node: Annotated[Optional[str], typer.Option("--node", help="Filter by node name.")] = None,
-    all_statuses: Annotated[bool, typer.Option("--all", help="Return warning and critical services too.")] = False,
+    tag: Annotated[
+        Optional[list[str]], typer.Option("--tag", help="Require a service tag.")
+    ] = None,
+    node: Annotated[
+        Optional[str], typer.Option("--node", help="Filter by node name.")
+    ] = None,
+    all_statuses: Annotated[
+        bool, typer.Option("--all", help="Return warning and critical services too.")
+    ] = False,
 ):
     """Resolve healthy instances for one service"""
     try:
@@ -60,7 +89,11 @@ def resolve_service(
             passing_only=not all_statuses,
         )
         payload = json.loads(response)
-        print_detail(console, "Service", payload if isinstance(payload, dict) else {"services": payload})
+        print_detail(
+            console,
+            "Service",
+            payload if isinstance(payload, dict) else {"services": payload},
+        )
     except Exception as exc:
         handle_cli_error(
             exc,
@@ -119,7 +152,9 @@ def check_services(
             )
             return
 
-        _emit_validation_report(report, output_format, title="Service validation failed")
+        _emit_validation_report(
+            report, output_format, title="Service validation failed"
+        )
         raise typer.Exit(1)
     except typer.Exit:
         raise

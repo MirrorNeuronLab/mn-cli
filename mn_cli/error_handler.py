@@ -206,9 +206,14 @@ def handle_cli_error(
     run_id = error_context.get("run_id")
     logger.error(
         "CLI command failed error_code=%s category=%s operation=%s run_id=%s",
-        app_error.code if re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", app_error.code) else "unknown",
-        app_error.category, error_context["command"][:80],
-        run_id if isinstance(run_id, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", run_id) else "",
+        app_error.code
+        if re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", app_error.code)
+        else "unknown",
+        app_error.category,
+        error_context["command"][:80],
+        run_id
+        if isinstance(run_id, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", run_id)
+        else "",
     )
     print_cli_error(
         app_error, console, debug=debug_enabled() if debug is None else debug
@@ -314,7 +319,9 @@ def print_cli_error(
 
         console = error_console
     print_error(console, escape(app_error.user_message), code=app_error.code)
-    console.print(f"[dim]Problem code: {app_error.problem_code} ({app_error.category})[/dim]")
+    console.print(
+        f"[dim]Problem code: {app_error.problem_code} ({app_error.category})[/dim]"
+    )
     if app_error.hint:
         console.print(f"[bold yellow]! Hint:[/bold yellow] {escape(app_error.hint)}")
     if debug and app_error.internal_message:
@@ -351,7 +358,9 @@ def _resource_identifier(
         family_index = args.index(family)
     except ValueError:
         return None
-    if action and (family_index + 1 >= len(args) or args[family_index + 1].startswith("-")):
+    if action and (
+        family_index + 1 >= len(args) or args[family_index + 1].startswith("-")
+    ):
         return None
     candidate_index = family_index + (2 if action else 1)
     if candidate_index < len(args) and not args[candidate_index].startswith("-"):

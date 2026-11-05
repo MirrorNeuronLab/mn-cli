@@ -14,24 +14,36 @@ if TYPE_CHECKING:
 PAGE_SIZE = 4
 
 
-def child_steps_table(steps: list[dict[str, Any]], state: JobMonitorState) -> Table | None:
+def child_steps_table(
+    steps: list[dict[str, Any]], state: JobMonitorState
+) -> Table | None:
     from mn_cli.libs.ui import _monitor_safe_text
 
     children = [step for step in steps if step.get("parent_step_id")]
     state.child_count = len(children)
     if not children:
         return None
-    done = sum(step.get("status") in {"done", "completed", "skipped"} for step in children)
+    done = sum(
+        step.get("status") in {"done", "completed", "skipped"} for step in children
+    )
     failed = sum(step.get("status") in {"failed", "blocked"} for step in children)
     failed_focus = next(
-        (i for i, step in enumerate(children) if step.get("status") in {"failed", "blocked"}),
+        (
+            i
+            for i, step in enumerate(children)
+            if step.get("status") in {"failed", "blocked"}
+        ),
         len(children) - 1,
     )
     focus = next(
         (i for i, step in enumerate(children) if step.get("status") == "running"),
         failed_focus,
     )
-    start = (focus // PAGE_SIZE) * PAGE_SIZE if state.child_offset is None else state.child_offset
+    start = (
+        (focus // PAGE_SIZE) * PAGE_SIZE
+        if state.child_offset is None
+        else state.child_offset
+    )
     start = min(max(start, 0), ((len(children) - 1) // PAGE_SIZE) * PAGE_SIZE)
     state.child_page_start = start
     title = (
@@ -48,18 +60,31 @@ def child_steps_table(steps: list[dict[str, Any]], state: JobMonitorState) -> Ta
     table.add_column("Task", ratio=3, overflow="fold")
     table.add_column("Status", width=7)
     table.add_column("Time", justify="right", width=5)
-    parent_labels = {str(step.get("id")): str(step.get("label") or step.get("id"))
-                     for step in steps if not step.get("parent_step_id")}
+    parent_labels = {
+        str(step.get("id")): str(step.get("label") or step.get("id"))
+        for step in steps
+        if not step.get("parent_step_id")
+    }
     previous_parent = None
     for step in page:
         parent = str(step["parent_step_id"])
         if parent != previous_parent:
-            table.add_row("", Text(parent_labels.get(parent, parent) + " · sub-workflow", style="bold"), "", "")
+            table.add_row(
+                "",
+                Text(
+                    parent_labels.get(parent, parent) + " · sub-workflow", style="bold"
+                ),
+                "",
+                "",
+            )
             previous_parent = parent
         status = str(step.get("status") or "pending")
         color = {
-            "running": "cyan", "failed": "red", "blocked": "red",
-            "completed": "green", "done": "green",
+            "running": "cyan",
+            "failed": "red",
+            "blocked": "red",
+            "completed": "green",
+            "done": "green",
         }.get(status, "dim")
         task_id = str(step.get("id") or "?")
         if len(parents) == 1:
@@ -79,7 +104,9 @@ def child_steps_table(steps: list[dict[str, Any]], state: JobMonitorState) -> Ta
         elapsed = f"{int(seconds) // 60}:{int(seconds) % 60:02d}" if seconds else "—"
         table.add_row(
             Text(str(step.get("child_round", "?"))),
-            task, Text(status, style=color), Text(elapsed),
+            task,
+            Text(status, style=color),
+            Text(elapsed),
         )
     table.caption = "[ / ] page child steps · f follow active step"
     return table

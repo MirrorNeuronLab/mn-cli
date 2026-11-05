@@ -40,7 +40,8 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_RUNTIME_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_CONTAINER_SHARED_STORAGE_ROOT", raising=False)
-    monkeypatch.setattr('mn_cli.libs.run_cmds.outputs.sync_litellm_gateway',
+    monkeypatch.setattr(
+        "mn_cli.libs.run_cmds.outputs.sync_litellm_gateway",
         lambda **_kwargs: {
             "status": "running",
             "api_base": "http://mn-litellm-proxy:4000/v1",
@@ -381,7 +382,7 @@ def test_resolve_job_result_reads_staged_snapshot(monkeypatch):
 
     monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.setattr(run_cmds.RuntimeConfig, "from_env", lambda: RuntimeConfig())
-    monkeypatch.setattr('mn_cli.libs.run_cmds.outputs.resolve_json_reference', resolve)
+    monkeypatch.setattr("mn_cli.libs.run_cmds.outputs.resolve_json_reference", resolve)
 
     assert run_cmds._resolve_job_result({"result_ref": reference}) == {
         "final_artifact": {"ok": True}
@@ -393,7 +394,8 @@ def test_fetch_and_save_results_preserves_failed_worker_payload(
     monkeypatch,
     tmp_path,
 ):
-    monkeypatch.setattr('mn_cli.libs.run_cmds.outputs._resolve_job_result',
+    monkeypatch.setattr(
+        "mn_cli.libs.run_cmds.outputs._resolve_job_result",
         lambda _job: {"status": "failed", "error": "worker failed"},
     )
     monkeypatch.setattr(run_cmds.client, "stream_events", lambda *_args, **_kwargs: [])
@@ -517,20 +519,27 @@ def test_materialize_publishes_result_for_actual_execution_id(tmp_path):
     actual_run.mkdir(parents=True)
     (source / "report.md").write_text("# Report\n")
     target = tmp_path / "Downloads" / "purchasing_manager"
-    copied = run_cmds._materialize_shared_storage_outputs({
-        "host_root": str(host_root),
-        "host_submission_path": str(submission),
-        "runtime_root": "/runtime/shared",
-        "run_id": "planned-run",
-        "output_copy": [{
-            "source_path": "/runtime/shared/submissions/sub-1/outputs/user",
-            "target_path": str(target),
-            "kind": "directory",
-            "result": {"kind": "output_folder", "label": "Output folder"},
-        }],
-    }, execution_id="actual-run")
+    copied = run_cmds._materialize_shared_storage_outputs(
+        {
+            "host_root": str(host_root),
+            "host_submission_path": str(submission),
+            "runtime_root": "/runtime/shared",
+            "run_id": "planned-run",
+            "output_copy": [
+                {
+                    "source_path": "/runtime/shared/submissions/sub-1/outputs/user",
+                    "target_path": str(target),
+                    "kind": "directory",
+                    "result": {"kind": "output_folder", "label": "Output folder"},
+                }
+            ],
+        },
+        execution_id="actual-run",
+    )
     assert copied is True
-    event = json.loads((submission / "delivery/actual-run/events.jsonl").read_text().splitlines()[0])
+    event = json.loads(
+        (submission / "delivery/actual-run/events.jsonl").read_text().splitlines()[0]
+    )
     assert event["payload"]["run_id"] == "actual-run"
     assert not (submission / "outputs" / "runs" / "planned-run").exists()
 
@@ -600,7 +609,8 @@ def test_detached_batch_run_starts_output_event_relay_for_shared_storage(
     monkeypatch.setenv("MN_SHARED_STORAGE_ROOT", str(tmp_path / "shared"))
     monkeypatch.setenv("MN_RUNTIME_SHARED_STORAGE_ROOT", "/runtime/shared")
     mocker.patch(
-        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id", return_value="batch-output-run"
+        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id",
+        return_value="batch-output-run",
     )
     mocker.patch(
         "mn_cli.libs.run_cmds.client.create_job",
@@ -696,19 +706,46 @@ def test_detached_batch_run_starts_output_event_relay_for_shared_storage(
     }
 
 
-def test_terminal_delivery_passes_physical_result_reference_and_does_not_fail_analysis(monkeypatch, tmp_path, capsys):
+def test_terminal_delivery_passes_physical_result_reference_and_does_not_fail_analysis(
+    monkeypatch, tmp_path, capsys
+):
     from mn_cli.libs import run_cmds
-    storage={'host_submission_path':str(tmp_path / 'sub-1'), 'output_copy':[{}]}
-    ref={'version':'mn.staged_artifact/v1','storage':'syncthing','submission_id':'sub-1',
-        'run_id':'physical','relative_path':'outputs/runs/physical/result.json','sha256':'a'*64,'size_bytes':2}
-    monkeypatch.setattr(run_cmds.client, 'get_run', lambda _: json.dumps({'status':'completed','result_ref':ref}))
-    captured=[]
-    monkeypatch.setattr('mn_cli.libs.run_cmds.outputs._materialize_shared_storage_outputs', lambda s, **kw: captured.append(kw['execution_id']) or True)
-    assert run_cmds._materialize_terminal_run_outputs(storage, 'cli-label', 'completed') is True
-    assert captured==['physical']
-    monkeypatch.setattr(run_cmds.client, 'get_run', lambda _: (_ for _ in ()).throw(OSError('transport unavailable')))
-    assert run_cmds._materialize_terminal_run_outputs(storage, 'cli-label', 'completed') is False
-    assert 'Analysis completed' in capsys.readouterr().err
+
+    storage = {"host_submission_path": str(tmp_path / "sub-1"), "output_copy": [{}]}
+    ref = {
+        "version": "mn.staged_artifact/v1",
+        "storage": "syncthing",
+        "submission_id": "sub-1",
+        "run_id": "physical",
+        "relative_path": "outputs/runs/physical/result.json",
+        "sha256": "a" * 64,
+        "size_bytes": 2,
+    }
+    monkeypatch.setattr(
+        run_cmds.client,
+        "get_run",
+        lambda _: json.dumps({"status": "completed", "result_ref": ref}),
+    )
+    captured = []
+    monkeypatch.setattr(
+        "mn_cli.libs.run_cmds.outputs._materialize_shared_storage_outputs",
+        lambda s, **kw: captured.append(kw["execution_id"]) or True,
+    )
+    assert (
+        run_cmds._materialize_terminal_run_outputs(storage, "cli-label", "completed")
+        is True
+    )
+    assert captured == ["physical"]
+    monkeypatch.setattr(
+        run_cmds.client,
+        "get_run",
+        lambda _: (_ for _ in ()).throw(OSError("transport unavailable")),
+    )
+    assert (
+        run_cmds._materialize_terminal_run_outputs(storage, "cli-label", "completed")
+        is False
+    )
+    assert "Analysis completed" in capsys.readouterr().err
 
 
 @pytest.fixture(autouse=True)
@@ -717,4 +754,7 @@ def isolated_relay_installation(tmp_path, monkeypatch):
     home.mkdir()
     (home / "grpc_auth.token").write_text("isolated-cli-credential")
     monkeypatch.setenv("MN_HOME", str(home))
-    monkeypatch.setattr("mn_sdk.blueprint_support.relay_ownership.process_identity", lambda pid: "fixture-relay")
+    monkeypatch.setattr(
+        "mn_sdk.blueprint_support.relay_ownership.process_identity",
+        lambda pid: "fixture-relay",
+    )

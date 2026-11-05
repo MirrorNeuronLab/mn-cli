@@ -84,7 +84,9 @@ def _stream_and_format_events(
             job_task = progress.add_task("[cyan]Submitting job bundle...", total=100)
 
             try:
-                for event_json in client.stream_events(job_id, follow=True, timeout=None, heartbeat_interval_ms=5000):
+                for event_json in client.stream_events(
+                    job_id, follow=True, timeout=None, heartbeat_interval_ms=5000
+                ):
                     try:
                         event = json.loads(event_json)
                         event_type = event.get("type")
@@ -132,7 +134,8 @@ def _stream_and_format_events(
                                 job_task,
                                 description=f"[green]Running: {msg_count} routed messages, {log_writer.event_count} events logged...",
                                 completed=min(
-                                    stage_map.get("job_running", 62) + (log_writer.event_count % 35),
+                                    stage_map.get("job_running", 62)
+                                    + (log_writer.event_count % 35),
                                     90,
                                 ),
                             )
@@ -189,7 +192,9 @@ def _stream_and_format_events(
                                 completed=stage_map.get("job_running", 62),
                             )
                     except Exception:
-                        log_writer.run_logger.exception("Failed to process streamed event")
+                        log_writer.run_logger.exception(
+                            "Failed to process streamed event"
+                        )
             except Exception:
                 log_writer.run_logger.exception(
                     "Job event stream failed; falling back to status polling"
@@ -263,6 +268,7 @@ def _stream_and_format_events(
         return "cancelled"
     return str(status_text).lower()
 
+
 def _stream_and_format_workflow_events(
     job_id: str,
     manifest: dict[str, Any],
@@ -332,6 +338,7 @@ def _stream_and_format_workflow_events(
         elif event_type == "job_cancelled":
             status_text = "cancelled"
         return event_type in {"job_completed", "job_failed", "job_cancelled"}
+
     try:
         if is_tty:
             live = Live(
@@ -407,7 +414,9 @@ def _stream_and_format_workflow_events(
                             try:
                                 process_event(str(payload))
                             except Exception:
-                                log_writer.run_logger.exception("Failed to process streamed event")
+                                log_writer.run_logger.exception(
+                                    "Failed to process streamed event"
+                                )
                             if live is not None and progress_stream.flush_due():
                                 live.update(view.render())
                 finally:
@@ -430,7 +439,9 @@ def _stream_and_format_workflow_events(
                             if process_event(event_json):
                                 break
                         except Exception:
-                            log_writer.run_logger.exception("Failed to process streamed event")
+                            log_writer.run_logger.exception(
+                                "Failed to process streamed event"
+                            )
                         if live is not None and progress_stream.flush_due():
                             live.update(view.render())
                 except Exception:
@@ -492,7 +503,9 @@ def _stream_and_format_workflow_events(
 def _runtime_model_event_message(event: dict[str, Any]) -> str:
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     if str(event.get("type") or "") == "runtime_model_install_progress":
-        model = _runtime_model_display_name(str(payload.get("model") or "runtime model"))
+        model = _runtime_model_display_name(
+            str(payload.get("model") or "runtime model")
+        )
         node = str(payload.get("node") or "the selected node")
         phase = str(payload.get("phase") or "resolving").replace("_", " ")
         progress = _runtime_model_download_progress(payload)
@@ -569,6 +582,7 @@ def _follow_workflow_job_events(
         live.update(view.render())
     return last_status
 
+
 def _extract_int(value: Any) -> int | None:
     if value is None:
         return None
@@ -577,13 +591,20 @@ def _extract_int(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
 
+
 def _run_id_from_payload(payload: Any) -> str | None:
     if isinstance(payload, dict):
         for key in ("run_id", "runId"):
             candidate = payload.get(key)
             if isinstance(candidate, str) and candidate:
                 return candidate
-        nested = payload.get("job") or payload.get("summary") or payload.get("metadata") or payload.get("manifest") or payload.get("payload")
+        nested = (
+            payload.get("job")
+            or payload.get("summary")
+            or payload.get("metadata")
+            or payload.get("manifest")
+            or payload.get("payload")
+        )
         if isinstance(nested, (dict, list)):
             return _run_id_from_payload(nested)
         if isinstance(payload.get("recent_events"), list):
@@ -598,6 +619,7 @@ def _run_id_from_payload(payload: Any) -> str | None:
             if candidate:
                 return candidate
     return None
+
 
 def _read_workflow_resource_tokens(run_id: str) -> int | None:
     try:
@@ -621,7 +643,10 @@ def _read_workflow_resource_tokens(run_id: str) -> int | None:
     total = _extract_int(usage.get("total_tokens"))
     return total
 
-def _attach_workflow_resource_tokens(view: BlueprintWorkflowProgress, job_id: str) -> None:
+
+def _attach_workflow_resource_tokens(
+    view: BlueprintWorkflowProgress, job_id: str
+) -> None:
     try:
         run_json = client.get_run(job_id)
         payload = json.loads(run_json)
@@ -633,6 +658,7 @@ def _attach_workflow_resource_tokens(view: BlueprintWorkflowProgress, job_id: st
     resource_tokens = _read_workflow_resource_tokens(run_id)
     if resource_tokens is not None:
         view.set_resource_token_total(resource_tokens)
+
 
 def _follow_job_events(
     job_id: str,

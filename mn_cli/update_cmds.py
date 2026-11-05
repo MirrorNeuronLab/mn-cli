@@ -21,7 +21,13 @@ from urllib.parse import quote
 
 import typer
 
-from mn_cli.libs.ui import print_confirmed, print_error, print_info, print_success_confirmation, print_warning
+from mn_cli.libs.ui import (
+    print_confirmed,
+    print_error,
+    print_info,
+    print_success_confirmation,
+    print_warning,
+)
 from mn_cli.output import json_enabled, record_result
 from mn_cli.shared import console
 from mn_cli.terminal import is_ci, is_interactive
@@ -225,10 +231,14 @@ def upgrade(
     _print_updates(available)
 
     if check_only:
-        record_result({"updates": available, "count": len(available), "mutation": False})
+        record_result(
+            {"updates": available, "count": len(available), "mutation": False}
+        )
         return
 
-    print_warning(console, "Upgrading will stop all MirrorNeuron components and all running jobs.")
+    print_warning(
+        console, "Upgrading will stop all MirrorNeuron components and all running jobs."
+    )
     print_warning(
         console,
         "Upgrade only when no important jobs are running; backward compatibility is not guaranteed between releases.",
@@ -236,10 +246,18 @@ def upgrade(
 
     if not yes:
         if json_enabled() or not is_interactive():
-            print_error(console, "Runtime upgrade requires --yes in JSON or non-interactive mode.", code="MN_CONFIRMATION_REQUIRED")
+            print_error(
+                console,
+                "Runtime upgrade requires --yes in JSON or non-interactive mode.",
+                code="MN_CONFIRMATION_REQUIRED",
+            )
             raise typer.Exit(2)
         if not typer.confirm("Do you want to upgrade now?", default=False):
-            print_error(console, "Runtime upgrade was not confirmed.", code="MN_CONFIRMATION_REQUIRED")
+            print_error(
+                console,
+                "Runtime upgrade was not confirmed.",
+                code="MN_CONFIRMATION_REQUIRED",
+            )
             raise typer.Exit(2)
 
     perform_upgrade(available)

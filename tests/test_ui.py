@@ -20,9 +20,13 @@ from mn_cli.libs.ui import (
 )
 
 
-def _capture_console(*, no_color: bool = True, width: int = 120) -> tuple[Console, StringIO]:
+def _capture_console(
+    *, no_color: bool = True, width: int = 120
+) -> tuple[Console, StringIO]:
     stream = StringIO()
-    return Console(file=stream, force_terminal=False, no_color=no_color, width=width), stream
+    return Console(
+        file=stream, force_terminal=False, no_color=no_color, width=width
+    ), stream
 
 
 def test_print_success_confirmation_outputs_structured_lines():
@@ -32,15 +36,22 @@ def test_print_success_confirmation_outputs_structured_lines():
         console,
         "Node join",
         status="connected",
-        details=[("Node", "mirror_neuron@192.168.4.173"), ("Remote Redis", "192.168.4.173:56380")],
+        details=[
+            ("Node", "mirror_neuron@192.168.4.173"),
+            ("Remote Redis", "192.168.4.173:56380"),
+        ],
         next_steps=("mn node list", "mn resource show"),
     )
 
     output = [line.strip() for line in stream.getvalue().splitlines() if line.strip()]
     assert any(line == "✓ Node join successful." for line in output)
     assert any("Status:" in line and "connected" in line for line in output)
-    assert any("Node:" in line and "mirror_neuron@192.168.4.173" in line for line in output)
-    assert any("Remote Redis:" in line and "192.168.4.173:56380" in line for line in output)
+    assert any(
+        "Node:" in line and "mirror_neuron@192.168.4.173" in line for line in output
+    )
+    assert any(
+        "Remote Redis:" in line and "192.168.4.173:56380" in line for line in output
+    )
     assert any("Next:" in line for line in output)
     assert "Details" not in stream.getvalue()
 
@@ -56,7 +67,10 @@ def test_print_success_confirmation_keeps_detail_labels_readable():
             ("Host", "192.168.4.173"),
             ("gRPC", "192.168.4.173:55051"),
             ("Node", "mirror_neuron@192.168.4.173"),
-            ("Token", "bdf21a9c1f101cce95786862b19ab5b0ac1f5d196d2183e7bcec5b4bc9ec6c4d"),
+            (
+                "Token",
+                "bdf21a9c1f101cce95786862b19ab5b0ac1f5d196d2183e7bcec5b4bc9ec6c4d",
+            ),
         ],
         next_steps="mn node add 192.168.4.173 --token bdf21a9c1f101cce95786862b19ab5b0ac1f5d196d2183e7bcec5b4bc9ec6c4d",
     )
@@ -293,7 +307,9 @@ def test_workflow_monitor_omits_token_counts_in_overview_and_agent_detail():
     state = JobMonitorState()
     state.detail_mode = True
     detail = Console(record=True, width=160)
-    detail.print(generate_workflow_progress_layout("run-metered", progress, state=state))
+    detail.print(
+        generate_workflow_progress_layout("run-metered", progress, state=state)
+    )
     detail_text = detail.export_text()
     assert "tokens" not in detail_text.lower()
     assert "999" not in detail_text
@@ -346,56 +362,88 @@ def test_monitor_agent_tables_omit_mail_column():
 
 def test_event_feed_prefers_query_message_over_agent_id():
     from mn_cli.libs.ui import _event_detail_text
+
     query = "MATCH (n) RETURN n.logical_id LIMIT 2"
-    assert _event_detail_text({
-        "agent_id": "long_agent_identifier",
-        "payload": {"message": query},
-    }) == query
+    assert (
+        _event_detail_text(
+            {
+                "agent_id": "long_agent_identifier",
+                "payload": {"message": query},
+            }
+        )
+        == query
+    )
     assert _event_detail_text({"detail": query, "agent_id": "worker"}) == query
 
 
 def test_dynamic_child_panel_follows_pages_and_keeps_parent_counts():
-    steps = [{'id': 'review', 'label': 'Review', 'status': 'running', 'agents': []}]
-    steps += [{'id': f'review:r1:scan{i}', 'parent_step_id': 'review',
-               'child_round': 1, 'child_phase': 'executing',
-               'status': 'completed' if i < 8 else 'running' if i == 8 else 'pending',
-               'elapsed_seconds': 123, 'agents': []} for i in range(18)]
+    steps = [{"id": "review", "label": "Review", "status": "running", "agents": []}]
+    steps += [
+        {
+            "id": f"review:r1:scan{i}",
+            "parent_step_id": "review",
+            "child_round": 1,
+            "child_phase": "executing",
+            "status": "completed" if i < 8 else "running" if i == 8 else "pending",
+            "elapsed_seconds": 123,
+            "agents": [],
+        }
+        for i in range(18)
+    ]
     for width in (60, 160):
         state = JobMonitorState()
         console, stream = _capture_console(width=width)
-        progress = {'steps': steps, 'status': 'running'}
-        console.print(generate_workflow_progress_layout('run', progress, state=state))
+        progress = {"steps": steps, "status": "running"}
+        console.print(generate_workflow_progress_layout("run", progress, state=state))
         text = stream.getvalue()
-        assert '0/1 steps' in text
-        assert 'scan8' in text
-        assert 'scan0' not in text
-        assert '2:03' in text
+        assert "0/1 steps" in text
+        assert "scan8" in text
+        assert "scan0" not in text
+        assert "2:03" in text
         assert state.child_page_start == 8
-        state.handle_key('[', 0)
-        console.print(generate_workflow_progress_layout('run', progress, state=state))
+        state.handle_key("[", 0)
+        console.print(generate_workflow_progress_layout("run", progress, state=state))
         assert state.child_page_start == 4
-        assert 'scan4' in stream.getvalue()
-        state.handle_key('f', 0)
-        console.print(generate_workflow_progress_layout('run', progress, state=state))
+        assert "scan4" in stream.getvalue()
+        state.handle_key("f", 0)
+        console.print(generate_workflow_progress_layout("run", progress, state=state))
         assert state.child_page_start == 8
 
 
 def test_child_panel_failure_and_new_round_are_visible_without_markup():
     state = JobMonitorState()
-    steps = [{'id': 'review', 'status': 'running', 'agents': []},
-             {'id': 'review:p0', 'parent_step_id': 'review', 'child_round': 0,
-              'child_phase': 'planning', 'status': 'done'}]
+    steps = [
+        {"id": "review", "status": "running", "agents": []},
+        {
+            "id": "review:p0",
+            "parent_step_id": "review",
+            "child_round": 0,
+            "child_phase": "planning",
+            "status": "done",
+        },
+    ]
     # A round discovered after the initial snapshot must immediately appear.
     console, stream = _capture_console(width=100)
-    console.print(generate_workflow_progress_layout('run', {'steps': steps}, state=state))
-    steps.append({'id': 'review:r1:scan', 'parent_step_id': 'review', 'child_round': 1,
-                  'child_phase': 'executing', 'status': 'failed',
-                  'status_reason': '[red]provider denied[/red]\x1b\x07'})
-    console.print(generate_workflow_progress_layout('run', {'steps': steps}, state=state))
+    console.print(
+        generate_workflow_progress_layout("run", {"steps": steps}, state=state)
+    )
+    steps.append(
+        {
+            "id": "review:r1:scan",
+            "parent_step_id": "review",
+            "child_round": 1,
+            "child_phase": "executing",
+            "status": "failed",
+            "status_reason": "[red]provider denied[/red]\x1b\x07",
+        }
+    )
+    console.print(
+        generate_workflow_progress_layout("run", {"steps": steps}, state=state)
+    )
     output = stream.getvalue()
-    assert 'r1:scan' in output
-    assert '[red]provider denied[/red]' in output
-    assert '\x1b' not in output and '\x07' not in output
+    assert "r1:scan" in output
+    assert "[red]provider denied[/red]" in output
+    assert "\x1b" not in output and "\x07" not in output
     assert state.child_count == 2
 
 
@@ -403,20 +451,32 @@ def test_child_tree_shows_descriptive_labels_and_unique_ids():
     for width in (60, 160):
         console, stream = _capture_console(width=width)
         steps = [
-            {'id': 'review', 'label': 'Review', 'status': 'failed'},
-            {'id': 'review:r1:scan-3', 'parent_step_id': 'review',
-             'label': 'Scan source: api.py', 'status': 'failed', 'child_round': 1},
+            {"id": "review", "label": "Review", "status": "failed"},
+            {
+                "id": "review:r1:scan-3",
+                "parent_step_id": "review",
+                "label": "Scan source: api.py",
+                "status": "failed",
+                "child_round": 1,
+            },
         ]
-        console.print(generate_workflow_progress_layout('run', {'steps': steps, 'status': 'failed'}))
+        console.print(
+            generate_workflow_progress_layout(
+                "run", {"steps": steps, "status": "failed"}
+            )
+        )
         text = stream.getvalue()
-        assert 'api.py' in text
-        assert 'r1:scan-3' in text
-        assert '└─' in text
-        assert 'inspection remains' in text
+        assert "api.py" in text
+        assert "r1:scan-3" in text
+        assert "└─" in text
+        assert "inspection remains" in text
 
 
 def test_activity_feed_leads_with_domain_message_in_plain_output():
     from mn_cli.libs.ui import _event_summary_text
-    text = _event_summary_text({'type': 'agent_activity', 'message': 'Person presence confirmed'})
-    assert text.plain == 'Person presence confirmed'
-    assert 'AGENT_ACTIVITY' not in text.plain
+
+    text = _event_summary_text(
+        {"type": "agent_activity", "message": "Person presence confirmed"}
+    )
+    assert text.plain == "Person presence confirmed"
+    assert "AGENT_ACTIVITY" not in text.plain

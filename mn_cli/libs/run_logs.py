@@ -10,13 +10,29 @@ from typing import Optional
 
 
 STANDARD_EVENTS = {
-    "init", "job_pending", "job_validated", "job_scheduled", "job_running",
-    "job_completed", "job_failed", "job_paused", "job_resumed", "job_cancelled",
-    "agent_recovery_started", "agent_recovered",
-    "agent_message_received", "aggregator_received", "aggregator_duplicate_ignored",
-    "executor_lease_requested", "executor_lease_acquired", "executor_lease_released",
-    "sandbox_job_started", "sandbox_job_completed", "sandbox_job_failed",
-    "node_up", "node_down"
+    "init",
+    "job_pending",
+    "job_validated",
+    "job_scheduled",
+    "job_running",
+    "job_completed",
+    "job_failed",
+    "job_paused",
+    "job_resumed",
+    "job_cancelled",
+    "agent_recovery_started",
+    "agent_recovered",
+    "agent_message_received",
+    "aggregator_received",
+    "aggregator_duplicate_ignored",
+    "executor_lease_requested",
+    "executor_lease_acquired",
+    "executor_lease_released",
+    "sandbox_job_started",
+    "sandbox_job_completed",
+    "sandbox_job_failed",
+    "node_up",
+    "node_down",
 }
 
 
@@ -116,7 +132,10 @@ class JobLogWriter:
             json.dump(data, f, indent=2, sort_keys=True)
 
     def _rotate_if_needed(self):
-        if not self.events_file.exists() or self.events_file.stat().st_size < self.max_bytes:
+        if (
+            not self.events_file.exists()
+            or self.events_file.stat().st_size < self.max_bytes
+        ):
             return
 
         for index in range(self.backup_count - 1, 0, -1):
@@ -154,7 +173,9 @@ class JobLogWriter:
             try:
                 lines = path.read_text(encoding="utf-8").splitlines()
             except OSError:
-                self.run_logger.exception("Failed to load existing event keys from %s", path)
+                self.run_logger.exception(
+                    "Failed to load existing event keys from %s", path
+                )
                 continue
             for line in lines:
                 try:
@@ -183,7 +204,9 @@ def extract_web_ui_url(event: dict) -> Optional[str]:
     payload = event.get("payload") if isinstance(event, dict) else None
     if not isinstance(payload, dict):
         payload = event if isinstance(event, dict) else {}
-    web_ui = payload.get("web_ui") if isinstance(payload.get("web_ui"), dict) else payload
+    web_ui = (
+        payload.get("web_ui") if isinstance(payload.get("web_ui"), dict) else payload
+    )
     url = web_ui.get("url") or web_ui.get("web_ui_url") or web_ui.get("local_url")
     return str(url) if url else None
 
@@ -215,8 +238,12 @@ def materialize_sent_email_copy(log_dir: Path, payload: dict):
     def resolve_path(raw_path: Optional[str], suffix: str) -> Path:
         if raw_path:
             return email_dir / Path(raw_path).name
-        stem = str(payload.get("provider_id") or payload.get("subject") or time.time_ns())
-        safe_stem = "".join(ch if ch.isalnum() or ch in "._-" else "-" for ch in stem)[:96]
+        stem = str(
+            payload.get("provider_id") or payload.get("subject") or time.time_ns()
+        )
+        safe_stem = "".join(ch if ch.isalnum() or ch in "._-" else "-" for ch in stem)[
+            :96
+        ]
         return email_dir / f"{safe_stem or time.time_ns()}.{suffix}"
 
     html_path = resolve_path(sent_copy.get("html_path"), "html")
@@ -234,4 +261,6 @@ def materialize_sent_email_copy(log_dir: Path, payload: dict):
             "host_text_path": str(text_path),
             "host_metadata_path": str(metadata_path),
         }
-        metadata_path.write_text(json.dumps(host_metadata, indent=2, sort_keys=True), encoding="utf-8")
+        metadata_path.write_text(
+            json.dumps(host_metadata, indent=2, sort_keys=True), encoding="utf-8"
+        )

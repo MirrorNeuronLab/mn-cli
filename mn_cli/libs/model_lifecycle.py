@@ -31,9 +31,8 @@ def _operate(action, model, *, node, local, json_output):
             "local",
             model_cmds._local_runtime_node_name(),
         }:
-            endpoint = model_cmds._cluster_node_endpoint(selected)
-            client = model_cmds._native_runtime_client_for_node(endpoint)
-            response = client.prepare_runtime_model(
+            model_cmds._cluster_node_endpoint(selected)
+            response = model_cmds.client.prepare_runtime_model(
                 {"action": action, "model": model, "node": selected}
             )
             result = json.loads(response) if isinstance(response, str) else response

@@ -6,8 +6,13 @@ def test_mn_cli_does_not_import_blueprint_support_skill():
     offenders: list[str] = []
     for path in root.rglob("*.py"):
         text = path.read_text(encoding="utf-8")
-        forbidden_import = "from mn_blueprint_support" in text or "import mn_blueprint_support" in text
-        forbidden_bootstrap = "_inject_local_blueprint_support_path" in text or "_ensure_blueprint_support_path" in text
+        forbidden_import = (
+            "from mn_blueprint_support" in text or "import mn_blueprint_support" in text
+        )
+        forbidden_bootstrap = (
+            "_inject_local_blueprint_support_path" in text
+            or "_ensure_blueprint_support_path" in text
+        )
         forbidden_path = "mn-skills/blueprint_support_skill/src" in text
         if forbidden_import or forbidden_bootstrap or forbidden_path:
             offenders.append(str(path.relative_to(root.parent)))

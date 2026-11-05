@@ -25,7 +25,9 @@ from mn_sdk.blueprint_source import (
 )
 from mn_sdk import is_default_model_entry, runtime_model_selection_policy
 from mn_sdk.context_engine_readiness import wait_for_context_engine
-from mn_sdk.context_session.client import connection_settings as context_connection_settings
+from mn_sdk.context_session.client import (
+    connection_settings as context_connection_settings,
+)
 from mn_sdk.model_runtime import DEFAULT_CONTEXT_ENGINE_MODEL
 from mn_sdk.native_resources import (
     DEFAULT_MODEL_RUNNER_PROXY_PORT as SDK_DEFAULT_MODEL_RUNNER_PROXY_PORT,
@@ -62,7 +64,11 @@ from mn_cli.runtime.watchdog import launch_watchdog, watchdog_restart_settings
 from mn_cli.runtime import native_sdk_config
 from mn_cli.runtime.syncthing_bootstrap import SYNCTHING_LAN_ONLY_ENTRYPOINT_SCRIPT
 from mn_cli.config import CONFIG_FIELDS, CliConfig, parse_path
-from mn_cli.runtime.identity import resolve_identity, probe_core_identity, observe_core_identity
+from mn_cli.runtime.identity import (
+    resolve_identity,
+    probe_core_identity,
+    observe_core_identity,
+)
 from mn_cli.libs.ui import (
     print_confirmed,
     print_error,
@@ -1005,11 +1011,13 @@ def _resolve_mn_cookie() -> str:
 
 def _resolve_grpc_auth_token() -> str:
     from mn_cli.runtime.credentials import resolve_grpc_token
+
     return resolve_grpc_token(DIR, "auth")
 
 
 def _resolve_grpc_admin_token() -> str:
     from mn_cli.runtime.credentials import resolve_grpc_token
+
     return resolve_grpc_token(DIR, "admin")
 
 
@@ -1808,9 +1816,9 @@ def _connect_syncthing_peers(
         remote_api_info = dict(remote_info)
         remote_api_info["api_host"] = str(remote_info.get("host") or "")
         _ensure_syncthing_folder(remote_api_info, (local_info,))
-        if not _syncthing_peer_is_registered(local_info, remote_info) or not _syncthing_peer_is_registered(
-            remote_api_info, local_info
-        ):
+        if not _syncthing_peer_is_registered(
+            local_info, remote_info
+        ) or not _syncthing_peer_is_registered(remote_api_info, local_info):
             raise RuntimeError(
                 "Syncthing did not retain reciprocal shared-storage device registration"
             )
@@ -1927,7 +1935,9 @@ def _reconcile_syncthing_federated_peers(
                 (current_local, "127.0.0.1"),
                 (current_remote, str(remote_info.get("host") or "")),
             ):
-                status = _syncthing_status(api_host, int(info["gui_port"]), info["api_key"])
+                status = _syncthing_status(
+                    api_host, int(info["gui_port"]), info["api_key"]
+                )
                 device_id = str(status.get("myID") or "").strip()
                 if not device_id:
                     raise RuntimeError("Syncthing did not return its device identity")
@@ -2059,16 +2069,26 @@ def _ensure_desktop_identity(env: dict[str, str]) -> dict[str, str]:
     observed = _docker_container_env_value(LOCAL_CORE_CONTAINER, "MN_NODE_NAME")
     runtime_name = observe_core_identity(env)
     if "nonode@nohost" in (configured, observed, runtime_name):
-        print_warning(console, "Records owned by nonode@nohost require explicit repair; startup will not reassign their ownership.")
+        print_warning(
+            console,
+            "Records owned by nonode@nohost require explicit repair; startup will not reassign their ownership.",
+        )
     name = resolve_identity(
-        DIR, configured=configured or env.get("MN_NODE_NAME", ""),
-        explicit=os.getenv("MN_NODE_NAME", ""), observed=observed, runtime_name=runtime_name,
+        DIR,
+        configured=configured or env.get("MN_NODE_NAME", ""),
+        explicit=os.getenv("MN_NODE_NAME", ""),
+        observed=observed,
+        runtime_name=runtime_name,
     )
     env = dict(env)
     env.update(MN_NODE_NAME=name, MN_MODEL_SERVICE_NODE_NAME=name)
-    _write_env_file_values(RUNTIME_COMPOSE_ENV, {
-        "MN_NODE_NAME": name, "MN_MODEL_SERVICE_NODE_NAME": name,
-    })
+    _write_env_file_values(
+        RUNTIME_COMPOSE_ENV,
+        {
+            "MN_NODE_NAME": name,
+            "MN_MODEL_SERVICE_NODE_NAME": name,
+        },
+    )
     return env
 
 
@@ -3406,7 +3426,9 @@ def _print_runtime_join_ready(
         if probe_core_identity(env) is True:
             break
         if attempt == 4:
-            raise RuntimeError("MN_NODE_IDENTITY_INVALID: Core did not become ready with its configured identity. Inspect Core startup logs and restore the original configuration.")
+            raise RuntimeError(
+                "MN_NODE_IDENTITY_INVALID: Core did not become ready with its configured identity. Inspect Core startup logs and restore the original configuration."
+            )
         time.sleep(0.5)
 
     container_names = (LOCAL_CORE_CONTAINER,)
@@ -3757,83 +3779,23 @@ def _join_network(
     docker_network_name: Optional[str] = None,
     action: str = "Node join",
 ) -> dict:
+    import sys
     from mn_sdk import join_federated_node
-
-    target = f"{seed_host}:{grpc_port}"
-    local_host = (host or _detect_lan_ip()).strip()
-    requested_mode = _docker_network_mode(docker_network_mode, default="disabled")
-    network_name = _docker_network_name(docker_network_name)
-    env = _runtime_base_env(runtime_compose_available())
-    env.update(_shared_storage_env_from_runtime_env(env))
-    env = _ensure_syncthing_for_runtime(env, advertised_host=local_host)
-    local_syncthing = _syncthing_node_info(env, local_host)
-    local_node_name = _network_node_name(local_host)
-    if requested_mode != "disabled":
-        _ensure_network_docker_network(requested_mode, network_name)
-        if _docker_network_uses_internal_identity(requested_mode):
-            local_node_name = _docker_node_name(_resolve_node_alias(env))
     from mn_cli.shared import client as local_client
+    from mn_cli.runtime.cluster_join import join_network
 
-    # A running Core is authoritative. Joining must not recreate it because
-    # that could interrupt jobs and erase the standalone-store boundary
-    # federation is intended to preserve.
-    running_node_name = _running_core_node_name(local_client)
-    env = _ensure_desktop_identity(env)
-    local_node_name = env.get("MN_NODE_NAME") or local_node_name
-    if running_node_name and running_node_name != local_node_name:
-        raise RuntimeError("MN_NODE_IDENTITY_INVALID: Run mn runtime start to restore the configured identity before joining a peer.")
-    if not running_node_name:
-        _ensure_local_cluster_runtime_for_join(
-            local_host=local_host,
-            node_name=local_node_name,
-            docker_network_mode=requested_mode,
-            docker_network_name=network_name,
-        )
-    print_info(console, f"Establishing federated peer relationship with {target}…")
-    try:
-        join_options: dict[str, Any] = {
-            "host": seed_host,
-            "token": token,
-            "grpc_port": grpc_port,
-            "local_host": _running_core_advertised_host(local_client) or local_host,
-        }
-        if local_syncthing.get("enabled"):
-            join_options["before_registration"] = (
-                lambda remote_info: _require_syncthing_peer_connection(
-                    local_syncthing,
-                    remote_info.get("syncthing")
-                    if isinstance(remote_info.get("syncthing"), dict)
-                    else {},
-                )
-            )
-        joined = join_federated_node(local_client, **join_options)
-    except Exception as exc:
-        if getattr(exc, "code", None):
-            raise
-        _raise_join_handshake_error(exc, target)
-
-    remote_node = str(joined.get("node_name") or "")
-    if not remote_node or remote_node == "nonode@nohost":
-        raise RuntimeError("The peer did not return a valid node identity. Repair the peer runtime before retrying mn node add.")
-    details: list[tuple[str, str]] = [("Node", remote_node)]
-    details.append(("Mode", "federated"))
-    model_reconcile = _reconcile_cluster_models_after_membership_change()
-    if model_reconcile and model_reconcile.get("nodes"):
-        details.append(
-            (
-                "Models",
-                f"{int(model_reconcile.get('models') or 0)} shared across "
-                f"{len(model_reconcile.get('nodes') or [])} nodes",
-            )
-        )
-    print_success_confirmation(
-        console,
-        action,
-        status="federated",
-        details=details,
-        next_steps=("mn node list", "mn resource show", "mn model list"),
+    return join_network(
+        sys.modules[__name__],
+        local_client=local_client,
+        join_peer=join_federated_node,
+        seed_host=seed_host,
+        token=token,
+        host=host,
+        grpc_port=grpc_port,
+        docker_network_mode=docker_network_mode,
+        docker_network_name=docker_network_name,
+        action=action,
     )
-    return joined
 
 
 def _running_core_node_name(client: Any) -> str:
@@ -4111,7 +4073,9 @@ def _remove_env_file_keys(path: Path, keys: set[str]) -> None:
 def _runtime_base_env(compose_runtime: bool) -> dict[str, str]:
     env = _read_env_file(RUNTIME_COMPOSE_ENV) if compose_runtime else {}
     env.update(os.environ)
-    retired = sorted(key for key in RETIRED_RUNTIME_ENV_KEYS if str(env.get(key) or "").strip())
+    retired = sorted(
+        key for key in RETIRED_RUNTIME_ENV_KEYS if str(env.get(key) or "").strip()
+    )
     if retired:
         raise RuntimeError(
             "Unsupported retired runtime settings: "
@@ -4295,7 +4259,9 @@ def ensure_context_engine_runtime(
     # MEMBRANE_DIR belonged to the legacy in-run Compose build path.  The
     # engine is now an installed image in every mode, so it is not runtime
     # configuration any more.
-    _remove_env_file_keys(RUNTIME_COMPOSE_ENV, {"MEMBRANE_DIR", "MN_CONTEXT_MODEL_RUNNER_MODEL"})
+    _remove_env_file_keys(
+        RUNTIME_COMPOSE_ENV, {"MEMBRANE_DIR", "MN_CONTEXT_MODEL_RUNNER_MODEL"}
+    )
     env.pop("MEMBRANE_DIR", None)
     _write_env_file_values(RUNTIME_COMPOSE_ENV, updates)
     RUNTIME_COMPOSE_ENV.chmod(0o600)
@@ -4319,7 +4285,9 @@ def ensure_context_engine_runtime(
     else:
         status = "already_running"
 
-    context_address, context_token = context_connection_settings(env=env, runtime_env=env)
+    context_address, context_token = context_connection_settings(
+        env=env, runtime_env=env
+    )
     readiness = wait_for_context_engine(address=context_address, token=context_token)
 
     return {
@@ -4341,11 +4309,15 @@ def _docker_image_inspect_ok(image: str) -> bool:
 
 
 def _context_engine_source_mode(env: dict[str, str]) -> bool:
-    mode = str(
-        os.getenv("MN_MEMBRANE_SOURCE_MODE")
-        or env.get("MN_MEMBRANE_SOURCE_MODE")
-        or ""
-    ).strip().lower()
+    mode = (
+        str(
+            os.getenv("MN_MEMBRANE_SOURCE_MODE")
+            or env.get("MN_MEMBRANE_SOURCE_MODE")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     return mode in {"source", "git", "checkout", "local"}
 
 
@@ -5224,7 +5196,9 @@ def _ensure_compose_native_port_settings(env: dict[str, str]) -> dict[str, str]:
         DEFAULT_ARTIFACT_PORT,
     )
     openshell_port = _valid_port_text(
-        _env_or_default(adjusted, "OPENSHELL_GATEWAY_PORT", DEFAULT_OPENSHELL_GATEWAY_PORT),
+        _env_or_default(
+            adjusted, "OPENSHELL_GATEWAY_PORT", DEFAULT_OPENSHELL_GATEWAY_PORT
+        ),
         DEFAULT_OPENSHELL_GATEWAY_PORT,
     )
     openshell_bind_host = adjusted.get("OPENSHELL_GATEWAY_BIND_HOST") or "127.0.0.1"
@@ -6882,10 +6856,18 @@ def _start_server(
     docker_network_name: Optional[str] = None,
 ):
     from mn_cli.runtime.lifecycle import runtime_start_guard
+
     with runtime_start_guard(DIR):
-        return _start_server_unlocked(ip, token=token, host=host, grpc_port=grpc_port,
-            dist_port=dist_port, redis_port=redis_port, docker_network_mode=docker_network_mode,
-            docker_network_name=docker_network_name)
+        return _start_server_unlocked(
+            ip,
+            token=token,
+            host=host,
+            grpc_port=grpc_port,
+            dist_port=dist_port,
+            redis_port=redis_port,
+            docker_network_mode=docker_network_mode,
+            docker_network_name=docker_network_name,
+        )
 
 
 def _start_server_unlocked(
@@ -6901,7 +6883,9 @@ def _start_server_unlocked(
 ):
     # Both the warm-API and cold-start paths must establish identity first.
     initial_env = _runtime_base_env(runtime_compose_available())
-    if not ip and not _docker_network_uses_internal_identity(docker_network_mode or "disabled"):
+    if not ip and not _docker_network_uses_internal_identity(
+        docker_network_mode or "disabled"
+    ):
         initial_env = _ensure_desktop_identity(initial_env)
     if check_status(API_PID_FILE) == 0:
         if ip:
@@ -6915,7 +6899,9 @@ def _start_server_unlocked(
         if compose_runtime:
             _reconcile_compose_core_container()
         env = dict(initial_env)
-        env["MN_COOKIE"] = os.getenv("MN_COOKIE") or _derive_network_secret(_resolve_network_token(), "cookie")
+        env["MN_COOKIE"] = os.getenv("MN_COOKIE") or _derive_network_secret(
+            _resolve_network_token(), "cookie"
+        )
         _write_env_file_values(RUNTIME_COMPOSE_ENV, {"MN_COOKIE": env["MN_COOKIE"]})
         for key, value in _runtime_grpc_tokens_from_running_container().items():
             if value:
@@ -7083,8 +7069,11 @@ def _start_server_unlocked(
     local_node_name = (
         _docker_node_name(node_alias)
         if use_internal_identity
-        else (_network_node_name(advertised_host) if ip or _persisted_join_profile(env)
-              else env.get("MN_NODE_NAME") or _network_node_name(advertised_host))
+        else (
+            _network_node_name(advertised_host)
+            if ip or _persisted_join_profile(env)
+            else env.get("MN_NODE_NAME") or _network_node_name(advertised_host)
+        )
     )
     env = _ensure_syncthing_for_runtime(env, advertised_host=advertised_host)
     join_handshake = (

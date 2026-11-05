@@ -1005,7 +1005,7 @@ def run_local_blueprint_folder(
                 detached=detached,
                 web_ui=web_ui,
                 auto_schedule=auto_schedule,
-        queue=queue,
+                queue=queue,
                 schedule=schedule,
                 fake_llm=fake_llm,
                 fake_skills=fake_skills,
@@ -1096,7 +1096,7 @@ def _run_local_folder(
                 detached=detached,
                 web_ui=web_ui,
                 auto_schedule=auto_schedule,
-        queue=queue,
+                queue=queue,
                 schedule=schedule,
                 fake_llm=fake_llm,
                 fake_skills=fake_skills,
@@ -1117,7 +1117,7 @@ def _run_local_folder(
             detached=detached,
             web_ui=web_ui,
             auto_schedule=auto_schedule,
-        queue=queue,
+            queue=queue,
             schedule=schedule,
             fake_llm=fake_llm,
             fake_skills=fake_skills,
@@ -1636,7 +1636,9 @@ def blueprint_run(
             help="Override the blueprint Web UI listener port for this run.",
         ),
     ] = None,
-    queue: Annotated[bool, typer.Option("--queue", help="Queue this run when resources are busy.")] = False,
+    queue: Annotated[
+        bool, typer.Option("--queue", help="Queue this run when resources are busy.")
+    ] = False,
     auto_schedule: Annotated[
         bool,
         typer.Option(
@@ -1700,7 +1702,9 @@ def blueprint_run(
 
     queue = queue is True
     if queue and (auto_schedule or schedule):
-        print_error(console, "Pass --queue on its own, without --auto-schedule or --schedule.")
+        print_error(
+            console, "Pass --queue on its own, without --auto-schedule or --schedule."
+        )
         raise typer.Exit(2)
     if auto_schedule and schedule:
         print_error(console, "Pass either --auto-schedule or --schedule, not both.")
@@ -1737,7 +1741,7 @@ def blueprint_run(
             detached=detached,
             web_ui=web_ui,
             auto_schedule=auto_schedule,
-        queue=queue,
+            queue=queue,
             schedule=schedule,
             fake_llm=fake_llm,
             fake_skills=fake_skills,
@@ -1886,7 +1890,11 @@ def _install_catalog_blueprint_with_models(
     if not model_summary.get("ok", True):
         _print_model_install_summary(model_summary)
         raise typer.Exit(1)
-    from mn_sdk.blueprint_install import prepare_blueprint_install_skills, SkillInstallError
+    from mn_sdk.blueprint_install import (
+        prepare_blueprint_install_skills,
+        SkillInstallError,
+    )
+
     try:
         prepare_blueprint_install_skills(bundle_root, config_overrides=config)
     except SkillInstallError as exc:
@@ -1913,7 +1921,9 @@ def _install_catalog_blueprint_with_models(
         next_steps=f"mn blueprint run {blueprint_id}",
     )
     _print_model_install_summary(model_summary)
-    console.print("Runtime models will be selected and installed if missing on first use.")
+    console.print(
+        "Runtime models will be selected and installed if missing on first use."
+    )
 
 
 def _install_blueprint_model_dependencies(

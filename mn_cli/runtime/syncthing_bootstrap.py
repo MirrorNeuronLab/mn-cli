@@ -8,7 +8,10 @@ PGID="${shared_owner#*:}"
 export PUID PGID
 """
 
-SYNCTHING_LAN_ONLY_ENTRYPOINT_SCRIPT = "set -eu\n" + SHARED_STORAGE_OWNER_SCRIPT + """config_dir="${STHOMEDIR:-/var/syncthing/config}"
+SYNCTHING_LAN_ONLY_ENTRYPOINT_SCRIPT = (
+    "set -eu\n"
+    + SHARED_STORAGE_OWNER_SCRIPT
+    + """config_dir="${STHOMEDIR:-/var/syncthing/config}"
 config_file="$config_dir/config.xml"
 mkdir -p "$config_dir"
 
@@ -33,3 +36,4 @@ sed -i \\
 chown -R "$PUID:$PGID" "$config_dir"
 
 exec /bin/entrypoint.sh /bin/syncthing serve"""
+)

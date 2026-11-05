@@ -23,7 +23,9 @@ def _is_workflow_manifest(manifest: dict[str, Any]) -> bool:
 
 
 def _manifest_workflow_id(manifest: dict[str, Any]) -> str | None:
-    workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
+    workflow = (
+        manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
+    )
     workflow_id = workflow.get("workflow_id") if isinstance(workflow, dict) else None
     return (
         str(workflow_id)
@@ -103,7 +105,9 @@ def _workflow_schema_message(error: ValidationError, path: str) -> str:
     return str(error.message)
 
 
-def _validate_workflow_manifest_issues(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+def _validate_workflow_manifest_issues(
+    manifest: dict[str, Any],
+) -> list[dict[str, Any]]:
     workflow = manifest.get("workflow")
     if not isinstance(workflow, dict):
         return [_workflow_validation_issue("workflow", "workflow must be an object")]
@@ -115,15 +119,15 @@ def _validate_workflow_manifest_issues(manifest: dict[str, Any]) -> list[dict[st
     if not isinstance(agents, dict):
         issues.append(_workflow_validation_issue("agents", "agents must be an object"))
     if not isinstance(runtime, dict):
-        issues.append(_workflow_validation_issue("runtime", "runtime must be an object"))
+        issues.append(
+            _workflow_validation_issue("runtime", "runtime must be an object")
+        )
 
     issues.extend(_validate_workflow_id_issues(workflow))
     step_issues, step_ids = _validate_workflow_steps(workflow)
     issues.extend(step_issues)
     issues.extend(_validate_workflow_graph_issues(workflow, step_ids))
-    dynamic_issues, template_ids = _validate_dynamic_workflow_issues(
-        workflow, step_ids
-    )
+    dynamic_issues, template_ids = _validate_dynamic_workflow_issues(workflow, step_ids)
     issues.extend(dynamic_issues)
     # SDK compilation admits child templates separately from the fixed DAG.
     # Their runtime bindings are valid without making them fixed workflow steps.
@@ -131,10 +135,12 @@ def _validate_workflow_manifest_issues(manifest: dict[str, Any]) -> list[dict[st
     if isinstance(children, dict):
         for parent, child in children.items():
             if parent not in step_ids or not isinstance(child, dict):
-                issues.append(_workflow_validation_issue(
-                    f"workflow.child_workflows.{parent}",
-                    "child workflow must belong to a fixed workflow step",
-                ))
+                issues.append(
+                    _workflow_validation_issue(
+                        f"workflow.child_workflows.{parent}",
+                        "child workflow must belong to a fixed workflow step",
+                    )
+                )
                 continue
             templates = child.get("templates", {})
             if isinstance(templates, dict):
@@ -278,7 +284,9 @@ def _validate_workflow_graph_issues(
     edges = workflow.get("edges") or []
     if not isinstance(edges, list):
         return [
-            _workflow_validation_issue("workflow.edges", "workflow.edges must be a list")
+            _workflow_validation_issue(
+                "workflow.edges", "workflow.edges must be a list"
+            )
         ]
     if not edges and not _dynamic_checkpoint_only(workflow):
         issues.append(
@@ -295,7 +303,9 @@ def _validate_workflow_graph_issues(
     source = workflow.get("source")
     sink = workflow.get("sink")
     if isinstance(source, str) and isinstance(sink, str):
-        issues.extend(_validate_workflow_reachability(adjacency, source, sink, step_ids))
+        issues.extend(
+            _validate_workflow_reachability(adjacency, source, sink, step_ids)
+        )
     return issues
 
 
@@ -410,7 +420,9 @@ def _validate_dynamic_workflow_issues(
                 )
             if not isinstance(template, dict):
                 issues.append(
-                    _workflow_validation_issue(path, "dynamic template must be an object")
+                    _workflow_validation_issue(
+                        path, "dynamic template must be an object"
+                    )
                 )
                 continue
             run = template.get("run")
@@ -467,7 +479,9 @@ def _validate_dynamic_workflow_issues(
             mutable_edges = region.get("mutable_edges") or []
             if not isinstance(region_id, str) or not region_id.strip():
                 issues.append(
-                    _workflow_validation_issue(f"{path}.id", "dynamic region id is required")
+                    _workflow_validation_issue(
+                        f"{path}.id", "dynamic region id is required"
+                    )
                 )
             elif region_id in seen_regions:
                 issues.append(
@@ -532,12 +546,9 @@ def _validate_dynamic_workflow_issues(
                             f"unknown mutable workflow edge: {edge_id}",
                         )
                     )
-                elif (
-                    strategy == "replace_path"
-                    and (
-                        edges_by_id[edge_id].get("from") != controller
-                        or edges_by_id[edge_id].get("to") != region.get("exit")
-                    )
+                elif strategy == "replace_path" and (
+                    edges_by_id[edge_id].get("from") != controller
+                    or edges_by_id[edge_id].get("to") != region.get("exit")
                 ):
                     issues.append(
                         _workflow_validation_issue(
@@ -612,8 +623,7 @@ def _dynamic_checkpoint_only(workflow: dict[str, Any]) -> bool:
         isinstance(regions, list)
         and bool(regions)
         and all(
-            isinstance(region, dict)
-            and region.get("strategy") == "checkpoint_fanout"
+            isinstance(region, dict) and region.get("strategy") == "checkpoint_fanout"
             for region in regions
         )
     )
@@ -774,11 +784,15 @@ def _validate_agent_nodes(
 ) -> tuple[list[dict[str, Any]], set[str], bool]:
     nodes = agents.get("nodes")
     if not isinstance(nodes, list) or not nodes:
-        return [
-            _workflow_validation_issue(
-                "agents.nodes", "agents.nodes must be a non-empty list"
-            )
-        ], set(), False
+        return (
+            [
+                _workflow_validation_issue(
+                    "agents.nodes", "agents.nodes must be a non-empty list"
+                )
+            ],
+            set(),
+            False,
+        )
 
     issues: list[dict[str, Any]] = []
     node_ids: set[str] = set()
@@ -960,7 +974,9 @@ def _workflow_validation_issue(
     *,
     code: str = "workflow_manifest.validation_failed",
 ) -> dict[str, Any]:
-    pointer = "/manifest" if path == "manifest" else "/manifest/" + path.replace(".", "/")
+    pointer = (
+        "/manifest" if path == "manifest" else "/manifest/" + path.replace(".", "/")
+    )
     return {
         "code": code,
         "message": message,

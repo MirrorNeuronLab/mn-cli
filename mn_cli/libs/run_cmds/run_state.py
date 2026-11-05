@@ -25,6 +25,7 @@ from .openshell import (
     _openshell_env,
 )
 
+
 def _ensure_local_run_store_identity(
     bundle_dir: Path,
     manifest_dict: dict[str, Any],
@@ -56,6 +57,7 @@ def _ensure_local_run_store_identity(
     env_overrides["MN_RUN_ID"] = str(run_id)
     submission_metadata.setdefault("blueprint_id", str(blueprint_id))
     submission_metadata["blueprint_run_id"] = str(run_id)
+
 
 def _write_blueprint_job_mapping(
     blueprint_run_id: str,
@@ -91,6 +93,7 @@ def _blueprint_run_dir(blueprint_run_id: str, env_overrides: dict[str, str]) -> 
     runs_root = Path(configured).expanduser() if configured else default_runs_root()
     return runs_root / blueprint_run_id
 
+
 def _register_post_launch_hook(
     bundle_dir: Path,
     blueprint_run_id: str,
@@ -122,6 +125,7 @@ def _register_post_launch_hook(
         json.dumps(hook_info, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
 
 def _start_pre_launch_hook(
     bundle_dir: Path,
@@ -218,6 +222,7 @@ def _start_pre_launch_hook(
     )
     return process
 
+
 def _wait_for_pre_launch_ready(
     run_dir: Path, process: subprocess.Popen[Any], ready_file: Path
 ) -> None:
@@ -238,6 +243,7 @@ def _wait_for_pre_launch_ready(
     raise RuntimeError(
         f"Blueprint pre-launch hook timed out after {timeout:g}s. See {run_dir / 'pre_launch.log'}."
     )
+
 
 def _apply_pre_launch_ready_metadata(
     ready_file: Path,
@@ -272,6 +278,7 @@ def _apply_pre_launch_ready_metadata(
         config_overrides.clear()
         config_overrides.update(merged)
 
+
 def _terminate_pre_launch_process(
     process: subprocess.Popen[Any] | None, *, reason: str
 ) -> None:
@@ -305,6 +312,7 @@ def _terminate_pre_launch_process(
             except OSError:
                 pass
     logger.info("Stopped blueprint pre-launch hook pid=%s reason=%s", pid, reason)
+
 
 def _cleanup_pre_launch_artifacts(
     process: subprocess.Popen[Any] | None,

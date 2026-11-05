@@ -40,9 +40,7 @@ def cleanup_cancelled_job_resources(
     original_job_id = job_id
     job_id = _validated_resource_id(job_id)
     if job_id is None:
-        log.warning(
-            "Refusing local cleanup for invalid job ID: %r", original_job_id
-        )
+        log.warning("Refusing local cleanup for invalid job ID: %r", original_job_id)
         summary["errors"].append(f"invalid job ID: {original_job_id!r}")
         return summary
 
@@ -63,9 +61,7 @@ def cleanup_cancelled_job_resources(
     return summary
 
 
-def cleanup_job_resources(
-    job_id: str, *, runtime_client: Any, log: Any
-) -> None:
+def cleanup_job_resources(job_id: str, *, runtime_client: Any, log: Any) -> None:
     original_job_id = job_id
     job_id = _validated_resource_id(job_id)
     if job_id is None:
@@ -77,9 +73,7 @@ def cleanup_job_resources(
 
     run_id = blueprint_run_id_for_job(job_id, runtime_client=runtime_client)
     cancelled_summary = (
-        cleanup_cancelled_job_resources(
-            job_id, runtime_client=runtime_client, log=log
-        )
+        cleanup_cancelled_job_resources(job_id, runtime_client=runtime_client, log=log)
         or {}
     )
     errors = list(cancelled_summary.get("errors") or [])

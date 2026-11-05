@@ -26,8 +26,7 @@ def command_tree_summary(typer_app: Any) -> str:
                 rows.append((f"{group_name} {child_name}", list(grandchildren)))
     width = max(len(label) for label, _commands in rows)
     return "\n".join(
-        f"{label:<{width}}  {' '.join(commands)}".rstrip()
-        for label, commands in rows
+        f"{label:<{width}}  {' '.join(commands)}".rstrip() for label, commands in rows
     )
 
 
@@ -35,9 +34,11 @@ def generated_command_tree_block(typer_app: Any) -> str:
     return "\n".join(
         (
             COMMAND_TREE_START,
+            "",
             "```text",
             command_tree_summary(typer_app),
             "```",
+            "",
             COMMAND_TREE_END,
         )
     )

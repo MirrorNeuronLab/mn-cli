@@ -40,7 +40,8 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_RUNTIME_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_CONTAINER_SHARED_STORAGE_ROOT", raising=False)
-    monkeypatch.setattr('mn_cli.libs.run_cmds.handlers.run.sync_litellm_gateway',
+    monkeypatch.setattr(
+        "mn_cli.libs.run_cmds.handlers.run.sync_litellm_gateway",
         lambda **_kwargs: {
             "status": "running",
             "api_base": "http://mn-litellm-proxy:4000/v1",
@@ -468,7 +469,11 @@ def test_service_monitor_joins_saved_shape_with_empty_runtime_progress():
         "kind": "service",
         "workflow_id": "microduck_controller_v1",
         "steps": [
-            {"id": "run", "label": "Run Service", "agents": [{"id": "service-agent", "role": "controller"}]},
+            {
+                "id": "run",
+                "label": "Run Service",
+                "agents": [{"id": "service-agent", "role": "controller"}],
+            },
             {"id": "finish", "label": "Finalize", "agents": [{"id": "finalizer"}]},
         ],
     }
@@ -477,7 +482,11 @@ def test_service_monitor_joins_saved_shape_with_empty_runtime_progress():
     assert [step["status"] for step in progress["steps"]] == ["running", "pending"]
     assert progress["current_step"]["agents"][0]["id"] == "service-agent"
     console = Console(record=True, width=140)
-    console.print(generate_live_layout("run-1", {"workflow_progress": progress}, JobMonitorState()))
+    console.print(
+        generate_live_layout(
+            "run-1", {"workflow_progress": progress}, JobMonitorState()
+        )
+    )
     rendered = console.export_text()
     assert "Run Service (live)" in rendered
     assert "Finalize (waiting)" in rendered
@@ -491,12 +500,17 @@ def test_service_monitor_fetches_definition_when_latest_run_has_no_steps(monkeyp
 
     monitor_module = import_module("mn_cli.libs.run_cmds.handlers.monitor")
 
-    monkeypatch.setattr(monitor_module, "config", SimpleNamespace(api_base_url="http://local/api/v1", api_token=""))
+    monkeypatch.setattr(
+        monitor_module,
+        "config",
+        SimpleNamespace(api_base_url="http://local/api/v1", api_token=""),
+    )
     responses = {
         "/jobs/job-1": {"type": "service"},
         "/jobs/job-1/workflow/latest-run/steps": {"run_id": "run-1", "steps": []},
         "/jobs/job-1/workflow/definition/steps": {
-            "workflow_id": "service-flow", "steps": [{"id": "run", "agents": [{"id": "agent"}]}]
+            "workflow_id": "service-flow",
+            "steps": [{"id": "run", "agents": [{"id": "agent"}]}],
         },
     }
 
@@ -508,7 +522,8 @@ def test_service_monitor_fetches_definition_when_latest_run_has_no_steps(monkeyp
     monkeypatch.setattr("urllib.request.urlopen", open_request)
     shape = monitor_module._monitor_workflow_shape("job-1", "run-1")
     assert shape == {
-        "kind": "service", "workflow_id": "service-flow",
+        "kind": "service",
+        "workflow_id": "service-flow",
         "steps": [{"id": "run", "agents": [{"id": "agent"}]}],
     }
 
@@ -867,8 +882,18 @@ def test_workflow_monitor_state_controls_with_shared_renderer():
 
 def test_activity_survives_more_noise_than_the_raw_tail_limit():
     from mn_cli.libs.workflow_progress import BlueprintWorkflowProgress
-    view = BlueprintWorkflowProgress({'workflow': {'steps': [{'id': 'detect'}]}})
-    view.update({'type': 'agent_activity', 'payload': {'step_id': 'detect', 'message': 'Checking frames for people'}})
+
+    view = BlueprintWorkflowProgress({"workflow": {"steps": [{"id": "detect"}]}})
+    view.update(
+        {
+            "type": "agent_activity",
+            "payload": {"step_id": "detect", "message": "Checking frames for people"},
+        }
+    )
     for _ in range(250):
-        view.update({'type': 'docker_worker_command_started', 'payload': {'step_id': 'detect'}})
-    assert view.snapshot()['recent_events'][-1]['message'] == 'Checking frames for people'
+        view.update(
+            {"type": "docker_worker_command_started", "payload": {"step_id": "detect"}}
+        )
+    assert (
+        view.snapshot()["recent_events"][-1]["message"] == "Checking frames for people"
+    )

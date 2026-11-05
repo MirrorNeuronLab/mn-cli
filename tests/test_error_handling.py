@@ -31,12 +31,18 @@ def _console_stream():
     return Console(file=stream, force_terminal=False, no_color=True, width=140), stream
 
 
-@pytest.mark.parametrize("arguments", [["node", "join", "192.168.4.34", "--token", "secret-token"],
-                                        ["node", "join", "--token", "secret-token"],
-                                        ["node", "--token", "secret-token", "join"]])
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["node", "join", "192.168.4.34", "--token", "secret-token"],
+        ["node", "join", "--token", "secret-token"],
+        ["node", "--token", "secret-token", "join"],
+    ],
+)
 def test_cli_error_output_is_user_safe_and_preserves_code(arguments):
     console, stream = _console_stream()
     from mn_cli.error_handler import logger
+
     rendered = StringIO()
     handler = logging.StreamHandler(rendered)
     logger.addHandler(handler)
@@ -46,7 +52,9 @@ def test_cli_error_output_is_user_safe_and_preserves_code(arguments):
         except RuntimeError:
             with pytest.raises(typer.Exit) as raised:
                 handle_cli_error(
-                    TimeoutRpcError(), console, "node add",
+                    TimeoutRpcError(),
+                    console,
+                    "node add",
                     command_context={"argv": arguments},
                 )
     finally:
@@ -62,7 +70,16 @@ def test_cli_error_output_is_user_safe_and_preserves_code(arguments):
     assert "/Users/homer" not in output
     line = rendered.getvalue()
     assert "MN_RUNTIME_TIMEOUT" in line and "operation=node add" in line
-    assert not any(value in line for value in ("Traceback", "private-trace-secret", "secret-token", "--token", "/Users/homer"))
+    assert not any(
+        value in line
+        for value in (
+            "Traceback",
+            "private-trace-secret",
+            "secret-token",
+            "--token",
+            "/Users/homer",
+        )
+    )
 
 
 def test_cli_debug_output_is_sanitized(mocker):
@@ -92,7 +109,10 @@ def test_execution_failure_hint_places_global_debug_option_before_command():
         command_context={"job_id": "job-1"},
     )
 
-    assert error.hint == "Run again with the global option before the command: mn --debug …"
+    assert (
+        error.hint
+        == "Run again with the global option before the command: mn --debug …"
+    )
 
 
 def test_job_delete_names_a_missing_job_and_points_to_job_list(mocker):
@@ -197,7 +217,9 @@ def test_cli_wrapper_catches_unhandled_command_errors(monkeypatch, capsys, mocke
 
 @pytest.mark.parametrize("width", [50, 140])
 @pytest.mark.parametrize("plain", [False, True])
-def test_memory_failure_explains_requirements_without_debug(mocker, monkeypatch, width, plain):
+def test_memory_failure_explains_requirements_without_debug(
+    mocker, monkeypatch, width, plain
+):
     from mn_sdk.admission_errors import placement_error
     from mn_cli.output import _error_payload
     from mn_sdk.errors import normalize_exception
@@ -207,7 +229,9 @@ def test_memory_failure_explains_requirements_without_debug(mocker, monkeypatch,
     console, stream = _console_stream()
     console.width = width
     mocker.patch("mn_cli.error_handler.logger.error")
-    error = placement_error({"node": ["host_memory_total_mb=24576 < required=49152"]}, "private")
+    error = placement_error(
+        {"node": ["host_memory_total_mb=24576 < required=49152"]}, "private"
+    )
     with pytest.raises(typer.Exit):
         handle_cli_error(error, console, "blueprint run", debug=False)
     output = " ".join(stream.getvalue().split())
@@ -224,7 +248,9 @@ def test_memory_failure_explains_requirements_without_debug(mocker, monkeypatch,
 
 
 @pytest.mark.parametrize("plain", [False, True])
-def test_cli_explains_core_gpu_memory_shortage_with_shared_problem_code(mocker, monkeypatch, plain):
+def test_cli_explains_core_gpu_memory_shortage_with_shared_problem_code(
+    mocker, monkeypatch, plain
+):
     import grpc
     import json
     from mn_cli.output import _error_payload
@@ -235,10 +261,24 @@ def test_cli_explains_core_gpu_memory_shortage_with_shared_problem_code(mocker, 
             return grpc.StatusCode.INTERNAL
 
         def details(self):
-            return "placement_failed: private node token=secret\nmn_admission_v1:" + json.dumps({"blockers": [{
-                "code": "MN_GPU_MEMORY_UNAVAILABLE", "node_index": 1, "node_label": "spark",
-                "resource": "gpu_memory_free_mb", "available": 8.17, "required": 48, "unit": "GiB",
-            }]})
+            return (
+                "placement_failed: private node token=secret\nmn_admission_v1:"
+                + json.dumps(
+                    {
+                        "blockers": [
+                            {
+                                "code": "MN_GPU_MEMORY_UNAVAILABLE",
+                                "node_index": 1,
+                                "node_label": "spark",
+                                "resource": "gpu_memory_free_mb",
+                                "available": 8.17,
+                                "required": 48,
+                                "unit": "GiB",
+                            }
+                        ]
+                    }
+                )
+            )
 
     if plain:
         monkeypatch.setenv("MN_CLI_OUTPUT", "plain")

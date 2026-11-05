@@ -51,7 +51,11 @@ def _merge_runtime_model_config_overrides(
     config_overrides: dict[str, Any],
     model_install_summary: Optional[dict[str, Any]],
 ) -> None:
-    patch = model_install_summary.get("config_overrides") if isinstance(model_install_summary, dict) else None
+    patch = (
+        model_install_summary.get("config_overrides")
+        if isinstance(model_install_summary, dict)
+        else None
+    )
     if not isinstance(patch, dict) or not patch:
         return
     merged = _deep_merge_dict(config_overrides, patch)
@@ -68,7 +72,9 @@ _config_with_runtime_model_profile = config_with_runtime_model_profile
 _config_with_auto_runtime_model_profile = config_with_auto_runtime_model_profile
 _config_with_runtime_model_endpoints = config_with_runtime_model_endpoints
 _runtime_model_fallback_llm_env = runtime_model_llm_environment
-_model_validation_inputs_with_prepared_models = model_validation_inputs_with_prepared_models
+_model_validation_inputs_with_prepared_models = (
+    model_validation_inputs_with_prepared_models
+)
 _manifest_for_model_validation = manifest_for_model_validation
 
 

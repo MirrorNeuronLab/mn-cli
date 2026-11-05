@@ -56,7 +56,9 @@ class JobMonitorState:
             else:
                 delta = PAGE_SIZE if key == "]" else -PAGE_SIZE
                 last_page = max((self.child_count - 1) // PAGE_SIZE, 0) * PAGE_SIZE
-                self.child_offset = min(max(self.child_page_start + delta, 0), last_page)
+                self.child_offset = min(
+                    max(self.child_page_start + delta, 0), last_page
+                )
             return True
         if key == "\x1b[B":
             self.selected_index = min(self.selected_index + 1, max(agent_count - 1, 0))
@@ -77,7 +79,9 @@ class JobMonitorState:
 
 
 def _monitor_footer_text(state: Optional[JobMonitorState] = None) -> str:
-    return "keys: ↑/↓ select agent, Enter details, Backspace overview, q or Ctrl+C detach"
+    return (
+        "keys: ↑/↓ select agent, Enter details, Backspace overview, q or Ctrl+C detach"
+    )
 
 
 def print_success_confirmation(
@@ -138,7 +142,14 @@ def print_confirmation(
     if json_enabled():
         return
     if _is_plain_confirmation_mode():
-        _print_confirmation_plain(console, action, verb=verb, status=status, details=details, next_steps=next_steps)
+        _print_confirmation_plain(
+            console,
+            action,
+            verb=verb,
+            status=status,
+            details=details,
+            next_steps=next_steps,
+        )
         return
 
     rows: list[tuple[str, Any]] = []
@@ -217,7 +228,9 @@ def print_error(console, message: Any, *, code: str | None = None) -> None:
     if json_enabled():
         return
     code_text = f" [dim]({code})[/dim]" if code else ""
-    _status_console(console).print(f"× [bold red]Error:[/bold red]{code_text} {message}")
+    _status_console(console).print(
+        f"× [bold red]Error:[/bold red]{code_text} {message}"
+    )
 
 
 def require_confirmation(console, *, action: str, prompt: str, yes: bool) -> None:
@@ -235,7 +248,9 @@ def require_confirmation(console, *, action: str, prompt: str, yes: bool) -> Non
         )
         raise typer.Exit(2)
     if not typer.confirm(prompt, default=False):
-        print_error(console, f"{action} was not confirmed.", code="MN_CONFIRMATION_REQUIRED")
+        print_error(
+            console, f"{action} was not confirmed.", code="MN_CONFIRMATION_REQUIRED"
+        )
         raise typer.Exit(2)
 
 
@@ -249,7 +264,14 @@ def print_detail(console, title: str, data: Mapping[str, Any]) -> None:
         console.print(f"[bold]{title}[/bold]\nNo details available.")
         return
     console.print(f"[bold]{title}[/bold]")
-    console.print(_detail_table([(str(key).replace("_", " ").title(), value) for key, value in payload.items()]))
+    console.print(
+        _detail_table(
+            [
+                (str(key).replace("_", " ").title(), value)
+                for key, value in payload.items()
+            ]
+        )
+    )
 
 
 def print_collection(
@@ -270,7 +292,9 @@ def print_collection(
 
     if isinstance(records, Mapping):
         values = list(records.values())
-        records = values if all(isinstance(value, Mapping) for value in values) else [records]
+        records = (
+            values if all(isinstance(value, Mapping) for value in values) else [records]
+        )
     items = [dict(record) for record in records if isinstance(record, Mapping)]
     record_result({"items": items, "count": len(items)})
     if not items:
@@ -286,7 +310,12 @@ def print_collection(
     for label, _key in selected_columns:
         table.add_column(label, overflow="fold")
     for item in items:
-        table.add_row(*[str(item.get(key) if item.get(key) is not None else "") for _label, key in selected_columns])
+        table.add_row(
+            *[
+                str(item.get(key) if item.get(key) is not None else "")
+                for _label, key in selected_columns
+            ]
+        )
     console.print(table)
 
 
@@ -344,7 +373,9 @@ def print_validation_issues(
         table.add_column("Rule", ratio=1, overflow="fold")
 
     for item in items:
-        location = item.get("location") if isinstance(item.get("location"), Mapping) else {}
+        location = (
+            item.get("location") if isinstance(item.get("location"), Mapping) else {}
+        )
         rule = item.get("rule") if isinstance(item.get("rule"), Mapping) else {}
         values = [
             str(location.get("path") or location.get("pointer") or "-"),
@@ -403,9 +434,13 @@ def _print_confirmation_plain(
 
 
 def _detail_table(rows: list[tuple[str, Any]]) -> Table:
-    label_width = min(max(len(str(label)) + 1 for label, _ in rows), max(12, ui_width() // 3))
+    label_width = min(
+        max(len(str(label)) + 1 for label, _ in rows), max(12, ui_width() // 3)
+    )
     table = Table.grid(padding=(0, 1), expand=False)
-    table.add_column("Field", min_width=label_width, no_wrap=True, overflow="ellipsis", style="bold")
+    table.add_column(
+        "Field", min_width=label_width, no_wrap=True, overflow="ellipsis", style="bold"
+    )
     table.add_column("Value", overflow="fold", ratio=1, no_wrap=False)
     for label, value in rows:
         table.add_row(f"{label}:", _confirmation_value(value))
@@ -416,7 +451,9 @@ def _confirmation_value(value: Any) -> str:
     return truncate_for_width(value, ui_width() - 12)
 
 
-def _confirmation_detail_items(details: ConfirmationDetails | None) -> list[tuple[str, Any]]:
+def _confirmation_detail_items(
+    details: ConfirmationDetails | None,
+) -> list[tuple[str, Any]]:
     if not details:
         return []
     raw_items = details.items() if isinstance(details, Mapping) else details
@@ -442,7 +479,9 @@ def _present(value: Any) -> bool:
     return value is not None and str(value).strip() != ""
 
 
-def generate_live_layout(job_id: str, data: Dict[str, Any], state: Optional[JobMonitorState] = None) -> Panel:
+def generate_live_layout(
+    job_id: str, data: Dict[str, Any], state: Optional[JobMonitorState] = None
+) -> Panel:
     workflow_progress = data.get("workflow_progress")
     if isinstance(workflow_progress, dict):
         monitor_warning = data.get("monitor_warning")
@@ -461,14 +500,18 @@ def generate_live_layout(job_id: str, data: Dict[str, Any], state: Optional[JobM
     color = _status_color(status)
     selected_agent = agents[state.selected_index] if agents else None
     total_agents = len(agents)
-    completed_agents = sum(1 for agent in agents if _is_terminal_status(agent.get("status")))
+    completed_agents = sum(
+        1 for agent in agents if _is_terminal_status(agent.get("status"))
+    )
     elapsed_label = _elapsed_label(summary, job)
     spinner = _spinner(status)
 
     header = Table.grid(expand=True)
     header.add_column(ratio=2)
     header.add_column(justify="right")
-    title = Text(str(job.get("job_name") or job.get("name") or job_id), style="bold bright_blue")
+    title = Text(
+        str(job.get("job_name") or job.get("name") or job_id), style="bold bright_blue"
+    )
     meta = Text(
         f"{completed_agents}/{total_agents} agents  |  {elapsed_label}  |  {status}",
         style=f"bold {color}",
@@ -485,12 +528,16 @@ def generate_live_layout(job_id: str, data: Dict[str, Any], state: Optional[JobM
     body.add_column(ratio=3)
     body.add_row(
         _job_phase_table(summary, job, agents),
-        _agent_detail_panel(selected_agent) if state.detail_mode else _agent_table(agents, state.selected_index),
+        _agent_detail_panel(selected_agent)
+        if state.detail_mode
+        else _agent_table(agents, state.selected_index),
     )
 
     footer = Text(_monitor_footer_text(state), style="dim")
     if status in {"failed", "completed", "cancelled"}:
-        footer.append("\nRun finished · inspection remains open until q or Ctrl+C", style=color)
+        footer.append(
+            "\nRun finished · inspection remains open until q or Ctrl+C", style=color
+        )
     last_event = summary.get("last_event")
     if last_event:
         footer.append(f"\nlatest event: {last_event}", style="dim")
@@ -523,11 +570,19 @@ def generate_workflow_progress_layout(
         for step_id in progress.get("current_step_ids", [])
         if step_id not in (None, "")
     ]
-    current_step = progress.get("current_step") if isinstance(progress.get("current_step"), dict) else None
+    current_step = (
+        progress.get("current_step")
+        if isinstance(progress.get("current_step"), dict)
+        else None
+    )
     if current_step is None:
-        current_step = next((step for step in steps if step.get("current")), steps[0] if steps else {})
+        current_step = next(
+            (step for step in steps if step.get("current")), steps[0] if steps else {}
+        )
     if current_step_ids:
-        active_steps = [step for step in steps if str(step.get("id")) in set(current_step_ids)]
+        active_steps = [
+            step for step in steps if str(step.get("id")) in set(current_step_ids)
+        ]
         if not active_steps and current_step:
             active_steps = [current_step]
     else:
@@ -547,11 +602,18 @@ def generate_workflow_progress_layout(
         agents = [{**agent, "workflow_kind": "service"} for agent in agents]
     parent_steps = [dict(step) for step in steps if not step.get("parent_step_id")]
     for parent in parent_steps:
-        child_steps = [step for step in steps if step.get("parent_step_id") == parent.get("id")]
+        child_steps = [
+            step for step in steps if step.get("parent_step_id") == parent.get("id")
+        ]
         if child_steps:
             parent["child_step_total"] = len(child_steps)
-            parent["child_step_done"] = sum(step.get("status") in {"done", "completed", "skipped"} for step in child_steps)
-    shown_steps, total_steps = _workflow_summary_step_counts(parent_steps, workflow_kind=workflow_kind)
+            parent["child_step_done"] = sum(
+                step.get("status") in {"done", "completed", "skipped"}
+                for step in child_steps
+            )
+    shown_steps, total_steps = _workflow_summary_step_counts(
+        parent_steps, workflow_kind=workflow_kind
+    )
     elapsed_label = _format_elapsed(progress.get("elapsed_seconds"))
 
     header = Table.grid(expand=True)
@@ -563,7 +625,10 @@ def generate_workflow_progress_layout(
         else f"{shown_steps}/{total_steps} steps"
     )
     header.add_row(
-        Text(str(progress.get("workflow_id") or progress.get("name") or job_id), style="bold bright_blue"),
+        Text(
+            str(progress.get("workflow_id") or progress.get("name") or job_id),
+            style="bold bright_blue",
+        ),
         Text(f"{step_summary}  |  {elapsed_label}  |  {status}", style=f"bold {color}"),
     )
 
@@ -586,13 +651,20 @@ def generate_workflow_progress_layout(
     if active_steps:
         first_step = active_steps[0]
         if isinstance(first_step, dict):
-            agent_title = str(first_step.get("label") or first_step.get("id") or "Agents")
+            agent_title = str(
+                first_step.get("label") or first_step.get("id") or "Agents"
+            )
     body.add_row(
         _workflow_phase_table(parent_steps, workflow_kind=workflow_kind),
-        _agent_detail_panel(agents[state.selected_index] if agents and state.detail_mode else None)
+        _agent_detail_panel(
+            agents[state.selected_index] if agents and state.detail_mode else None
+        )
         if state.detail_mode
-        else children if children is not None
-        else _workflow_agent_table(agents, state.selected_index, title_prefix=agent_title),
+        else children
+        if children is not None
+        else _workflow_agent_table(
+            agents, state.selected_index, title_prefix=agent_title
+        ),
     )
 
     preparations = [
@@ -604,7 +676,9 @@ def generate_workflow_progress_layout(
 
     footer = Text(_monitor_footer_text(state), style="dim")
     if status in {"failed", "completed", "cancelled"}:
-        footer.append("\nRun finished · inspection remains open until q or Ctrl+C", style=color)
+        footer.append(
+            "\nRun finished · inspection remains open until q or Ctrl+C", style=color
+        )
     messages = [str(message) for message in progress.get("messages", []) if message]
     if messages:
         footer.append(f"\nlatest event: {messages[-1]}", style="dim")
@@ -648,7 +722,9 @@ def _staged_input_wait_status(progress: Mapping[str, Any]) -> str | None:
         if not isinstance(event, Mapping):
             continue
         event_type = str(event.get("type") or "")
-        payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else event
+        payload = (
+            event.get("payload") if isinstance(event.get("payload"), Mapping) else event
+        )
         node = str(payload.get("node") or event.get("node") or "owner node").strip()
 
         if event_type == "submission_storage_waiting":
@@ -659,7 +735,9 @@ def _staged_input_wait_status(progress: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _generate_workflow_progress_layout(job_id: str, progress: dict[str, Any], state: Optional[JobMonitorState] = None) -> Panel:
+def _generate_workflow_progress_layout(
+    job_id: str, progress: dict[str, Any], state: Optional[JobMonitorState] = None
+) -> Panel:
     # Backward-compatible wrapper for existing callsites.
     return generate_workflow_progress_layout(job_id, progress, state=state)
 
@@ -686,7 +764,9 @@ def _runtime_model_display_name(value: str) -> str:
     return value.replace("-", " ").replace(":latest", "").title()
 
 
-def _event_feed_panel(events: Any, *, fallback_message: Any = None, rows: int = _EVENT_FEED_ROWS) -> Panel:
+def _event_feed_panel(
+    events: Any, *, fallback_message: Any = None, rows: int = _EVENT_FEED_ROWS
+) -> Panel:
     """Render the newest event records in a fixed-height monitor panel.
 
     The source event stream is append-only. Selecting its tail on every live
@@ -817,7 +897,8 @@ def _workflow_summary_step_counts(
         shown_steps = sum(
             1
             for step in steps
-            if str(step.get("status") or "").lower() in {"done", "completed", "running", "idle"}
+            if str(step.get("status") or "").lower()
+            in {"done", "completed", "running", "idle"}
             or int(step.get("ready_count") or 0) > 0
         )
     else:
@@ -829,7 +910,9 @@ def _workflow_summary_step_counts(
     return shown_steps, total_steps
 
 
-def _workflow_phase_table(steps: list[dict[str, Any]], *, workflow_kind: str = "batch") -> Table:
+def _workflow_phase_table(
+    steps: list[dict[str, Any]], *, workflow_kind: str = "batch"
+) -> Table:
     table = Table(title="Workflow", box=box.SIMPLE, show_header=False, expand=True)
     table.add_column("step")
     table.add_column("agents", justify="right", no_wrap=True)
@@ -843,7 +926,11 @@ def _workflow_phase_table(steps: list[dict[str, Any]], *, workflow_kind: str = "
             elif status == "pending" and not current:
                 display_status = "waiting"
         icon_status = "running" if display_status == "live" else display_status
-        icon = _status_icon("running" if current and status not in {"done", "completed"} else icon_status)
+        icon = _status_icon(
+            "running"
+            if current and status not in {"done", "completed"}
+            else icon_status
+        )
         label = f"{icon} {step.get('label') or step.get('id') or 'Step'}"
         if workflow_kind == "service" and status not in {"done", "completed"}:
             label = f"{label} ({display_status})"
@@ -851,11 +938,21 @@ def _workflow_phase_table(steps: list[dict[str, Any]], *, workflow_kind: str = "
         done_count = int(step.get("done_count") or 0)
         count_value = ready_count if workflow_kind == "service" else done_count
         count = (
-            "∞ live" if status in {"running", "idle"} else "waiting" if status == "pending" else status
-        ) if workflow_kind == "service" else f"{count_value}/{int(step.get('total_count') or 0)}"
+            (
+                "∞ live"
+                if status in {"running", "idle"}
+                else "waiting"
+                if status == "pending"
+                else status
+            )
+            if workflow_kind == "service"
+            else f"{count_value}/{int(step.get('total_count') or 0)}"
+        )
         if step.get("child_step_total"):
             count = f"{step['child_step_done']}/{step['child_step_total']}"
-        table.add_row(label, count, style="bright_blue" if current else _status_color(icon_status))
+        table.add_row(
+            label, count, style="bright_blue" if current else _status_color(icon_status)
+        )
     if not steps:
         table.add_row(". Runtime", "0/0", style="cyan")
     return table
@@ -866,7 +963,9 @@ def _workflow_agent_table(
     selected_index: int,
     title_prefix: str = "Agents",
 ) -> Table:
-    table = Table(title=f"{title_prefix}  |  {len(agents)} agents", box=box.SIMPLE, expand=True)
+    table = Table(
+        title=f"{title_prefix}  |  {len(agents)} agents", box=box.SIMPLE, expand=True
+    )
     table.add_column("#", justify="right", no_wrap=True)
     table.add_column("agent", no_wrap=True)
     table.add_column("working on")
@@ -882,12 +981,22 @@ def _workflow_agent_table(
         marker = ">" if index == selected_index else " "
         # Keep selection visible through the marker and weight, without
         # painting the whole row white in terminals with a dark background.
-        row_style = f"bold {_status_color(status)}" if index == selected_index else _status_color(status)
+        row_style = (
+            f"bold {_status_color(status)}"
+            if index == selected_index
+            else _status_color(status)
+        )
         display_progress = (
-            Text("∞ live", style="cyan") if status in {"running", "idle"}
-            else Text("waiting", style="dim") if status == "pending"
-            else Text(status, style=_status_color(status))
-        ) if str(agent.get("workflow_kind") or "") == "service" else _progress_renderable(agent)
+            (
+                Text("∞ live", style="cyan")
+                if status in {"running", "idle"}
+                else Text("waiting", style="dim")
+                if status == "pending"
+                else Text(status, style=_status_color(status))
+            )
+            if str(agent.get("workflow_kind") or "") == "service"
+            else _progress_renderable(agent)
+        )
         table.add_row(
             f"{marker}{index + 1}",
             _agent_id(agent),
@@ -903,7 +1012,11 @@ def _workflow_agent_summary(agent: dict[str, Any]) -> str:
 
 
 def _sorted_agents(raw_agents: Any) -> list[dict[str, Any]]:
-    agents = [agent for agent in raw_agents if isinstance(agent, dict)] if isinstance(raw_agents, list) else []
+    agents = (
+        [agent for agent in raw_agents if isinstance(agent, dict)]
+        if isinstance(raw_agents, list)
+        else []
+    )
     return sorted(
         agents,
         key=lambda agent: (
@@ -914,7 +1027,9 @@ def _sorted_agents(raw_agents: Any) -> list[dict[str, Any]]:
     )
 
 
-def _job_phase_table(summary: dict[str, Any], job: dict[str, Any], agents: list[dict[str, Any]]) -> Table:
+def _job_phase_table(
+    summary: dict[str, Any], job: dict[str, Any], agents: list[dict[str, Any]]
+) -> Table:
     table = Table(title="Phases", box=box.SIMPLE, show_header=False, expand=True)
     table.add_column("phase")
     table.add_column("agents", justify="right", no_wrap=True)
@@ -924,23 +1039,53 @@ def _job_phase_table(summary: dict[str, Any], job: dict[str, Any], agents: list[
     if isinstance(nodes, list) and nodes:
         for index, node in enumerate(nodes, start=1):
             if isinstance(node, dict):
-                node_id = str(node.get("node_id") or node.get("id") or node.get("name") or f"node_{index}")
+                node_id = str(
+                    node.get("node_id")
+                    or node.get("id")
+                    or node.get("name")
+                    or f"node_{index}"
+                )
                 status = str(node.get("status") or "unknown")
             else:
                 node_id = str(node)
                 status = "unknown"
-            matching = [agent for agent in agents if str(agent.get("node_id") or agent.get("node") or agent.get("agent_id") or "").startswith(node_id)]
+            matching = [
+                agent
+                for agent in agents
+                if str(
+                    agent.get("node_id")
+                    or agent.get("node")
+                    or agent.get("agent_id")
+                    or ""
+                ).startswith(node_id)
+            ]
             total = len(matching)
-            done = sum(1 for agent in matching if _is_terminal_status(agent.get("status")))
-            rows.append((f"{_status_icon(status)} {index} {node_id}", f"{done}/{total}" if total else "-", status))
+            done = sum(
+                1 for agent in matching if _is_terminal_status(agent.get("status"))
+            )
+            rows.append(
+                (
+                    f"{_status_icon(status)} {index} {node_id}",
+                    f"{done}/{total}" if total else "-",
+                    status,
+                )
+            )
     elif agents:
         groups: dict[str, list[dict[str, Any]]] = {}
         for agent in agents:
-            groups.setdefault(str(agent.get("agent_type") or agent.get("type") or "worker"), []).append(agent)
+            groups.setdefault(
+                str(agent.get("agent_type") or agent.get("type") or "worker"), []
+            ).append(agent)
         for index, (label, group) in enumerate(sorted(groups.items()), start=1):
             done = sum(1 for agent in group if _is_terminal_status(agent.get("status")))
             status = _group_status(group)
-            rows.append((f"{_status_icon(status)} {index} {label}", f"{done}/{len(group)}", status))
+            rows.append(
+                (
+                    f"{_status_icon(status)} {index} {label}",
+                    f"{done}/{len(group)}",
+                    status,
+                )
+            )
     else:
         rows.append((". 1 Runtime", "0/0", "unknown"))
 
@@ -950,7 +1095,9 @@ def _job_phase_table(summary: dict[str, Any], job: dict[str, Any], agents: list[
 
 
 def _agent_table(agents: list[dict[str, Any]], selected_index: int) -> Table:
-    table = Table(title=f"Agents  |  {len(agents)} workers", box=box.SIMPLE, expand=True)
+    table = Table(
+        title=f"Agents  |  {len(agents)} workers", box=box.SIMPLE, expand=True
+    )
     table.add_column("#", justify="right", no_wrap=True)
     table.add_column("agent", no_wrap=True)
     table.add_column("status", no_wrap=True)
@@ -958,7 +1105,9 @@ def _agent_table(agents: list[dict[str, Any]], selected_index: int) -> Table:
     table.add_column("progress", justify="right", no_wrap=True, width=26)
 
     if not agents:
-        table.add_row("-", "none", "unknown", "No agents reported by the runtime yet.", "-")
+        table.add_row(
+            "-", "none", "unknown", "No agents reported by the runtime yet.", "-"
+        )
         return table
 
     start = 0 if selected_index < 20 else selected_index - 19
@@ -971,7 +1120,9 @@ def _agent_table(agents: list[dict[str, Any]], selected_index: int) -> Table:
             status,
             _working_on(agent),
             _progress_renderable(agent),
-            style=f"bold {_status_color(status)}" if index == selected_index else _status_color(status),
+            style=f"bold {_status_color(status)}"
+            if index == selected_index
+            else _status_color(status),
         )
     return table
 
@@ -990,7 +1141,14 @@ def _agent_detail_panel(agent: dict[str, Any] | None) -> Panel:
         ("Node", str(agent.get("node_id") or agent.get("node") or "-")),
         ("Working On", _working_on(agent)),
         ("Progress", _progress_text(agent)),
-        ("Processed", str(_int_value(agent, "processed_messages", "messages_processed", "processed"))),
+        (
+            "Processed",
+            str(
+                _int_value(
+                    agent, "processed_messages", "messages_processed", "processed"
+                )
+            ),
+        ),
         ("Mailbox", str(_int_value(agent, "mailbox_depth", "queue_depth", "mailbox"))),
         ("Parent Job", str(agent.get("parent_job_id") or agent.get("job_id") or "-")),
         ("Started", str(agent.get("started_at") or agent.get("created_at") or "-")),
@@ -999,17 +1157,26 @@ def _agent_detail_panel(agent: dict[str, Any] | None) -> Panel:
     error = agent.get("error") or agent.get("last_error")
     if error:
         rows.append(("Error", _fit_text(str(error), 120)))
-    resources = agent.get("resources") or agent.get("resource_usage") or agent.get("stats")
+    resources = (
+        agent.get("resources") or agent.get("resource_usage") or agent.get("stats")
+    )
     if isinstance(resources, dict):
         rows.append(
             (
                 "Resources",
-                _fit_text(json.dumps(_without_token_metrics(resources), sort_keys=True), 120),
+                _fit_text(
+                    json.dumps(_without_token_metrics(resources), sort_keys=True), 120
+                ),
             )
         )
     for label, value in rows:
         table.add_row(label, _fit_text(value, 160))
-    return Panel(table, title=f"Agent Detail  {_agent_id(agent)}", border_style=_status_color(str(agent.get("status") or "")), box=box.ROUNDED)
+    return Panel(
+        table,
+        title=f"Agent Detail  {_agent_id(agent)}",
+        border_style=_status_color(str(agent.get("status") or "")),
+        box=box.ROUNDED,
+    )
 
 
 def _without_token_metrics(value: Any) -> Any:
@@ -1027,17 +1194,29 @@ def _without_token_metrics(value: Any) -> Any:
 
 
 def _agent_id(agent: dict[str, Any]) -> str:
-    return str(agent.get("agent_id") or agent.get("id") or agent.get("node_id") or "agent")
+    return str(
+        agent.get("agent_id") or agent.get("id") or agent.get("node_id") or "agent"
+    )
 
 
 def _working_on(agent: dict[str, Any]) -> str:
-    for key in ("working_on", "current_task", "task", "role", "status_detail", "last_event", "last_message"):
+    for key in (
+        "working_on",
+        "current_task",
+        "task",
+        "role",
+        "status_detail",
+        "last_event",
+        "last_message",
+    ):
         value = agent.get(key)
         if isinstance(value, str) and value.strip():
             return _fit_text(value.strip(), 90)
     current_message = agent.get("current_message")
     if isinstance(current_message, dict):
-        message_type = current_message.get("type") or current_message.get("message_type")
+        message_type = current_message.get("type") or current_message.get(
+            "message_type"
+        )
         content = current_message.get("content") or current_message.get("body")
         if message_type or content:
             return _fit_text(f"{message_type or 'message'}: {content or ''}", 90)
@@ -1090,7 +1269,16 @@ def _agent_progress(agent: dict[str, Any]) -> float:
         except (TypeError, ValueError):
             pass
     status = str(agent.get("status") or "").lower()
-    if status in {"completed", "done", "finished", "succeeded", "failed", "cancelled", "partial", "skipped"}:
+    if status in {
+        "completed",
+        "done",
+        "finished",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "partial",
+        "skipped",
+    }:
         return 1.0
     if status in {"running", "busy", "active", "processing"}:
         return 0.5
@@ -1116,7 +1304,16 @@ def _int_value(mapping: dict[str, Any], *keys: str) -> int:
 
 
 def _is_terminal_status(status: Any) -> bool:
-    return str(status or "").lower() in {"completed", "done", "finished", "succeeded", "failed", "cancelled", "partial", "skipped"}
+    return str(status or "").lower() in {
+        "completed",
+        "done",
+        "finished",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "partial",
+        "skipped",
+    }
 
 
 def _group_status(agents: list[dict[str, Any]]) -> str:
@@ -1138,7 +1335,14 @@ def _group_status(agents: list[dict[str, Any]]) -> str:
 
 def _status_color(status: Any) -> str:
     normalized = str(status or "").lower()
-    if normalized in {"completed", "done", "finished", "succeeded", "running", "active"}:
+    if normalized in {
+        "completed",
+        "done",
+        "finished",
+        "succeeded",
+        "running",
+        "active",
+    }:
         return "green"
     if normalized in {"partial", "skipped"}:
         return "yellow"
@@ -1169,7 +1373,11 @@ def _status_icon(status: Any) -> str:
 
 
 def _elapsed_label(summary: dict[str, Any], job: dict[str, Any]) -> str:
-    raw = summary.get("elapsed_seconds") or job.get("elapsed_seconds") or job.get("duration_seconds")
+    raw = (
+        summary.get("elapsed_seconds")
+        or job.get("elapsed_seconds")
+        or job.get("duration_seconds")
+    )
     try:
         elapsed = float(raw)
         return f"{elapsed:.0f}s" if elapsed < 60 else f"{elapsed / 60:.1f}m"
@@ -1285,10 +1493,20 @@ def generate_run_submitted_panel(
             ("Payloads", str(payload_count)),
             ("Logs", log_dir / "events.log"),
             ("Snapshot", log_dir / "job_snapshot.json"),
-            ("Follow", "Detached immediately" if detached else f"{follow_seconds:g}s event tail, then detach"),
+            (
+                "Follow",
+                "Detached immediately"
+                if detached
+                else f"{follow_seconds:g}s event tail, then detach",
+            ),
         ]
     )
-    return _result_panel("Job submitted", rows, status_color="cyan", message="Job accepted by the runtime.")
+    return _result_panel(
+        "Job submitted",
+        rows,
+        status_color="cyan",
+        message="Job accepted by the runtime.",
+    )
 
 
 def generate_detached_panel(
@@ -1326,7 +1544,11 @@ def generate_detached_panel(
         rows.append(("Web UI", f"[bold green]{web_ui_url}[/bold green]"))
     rows.append(("Watch", f"mn run watch {run_id}"))
 
-    message = "Final job state reached." if status in {"completed", "failed", "cancelled"} else "Detached while job is still scheduled or running."
+    message = (
+        "Final job state reached."
+        if status in {"completed", "failed", "cancelled"}
+        else "Detached while job is still scheduled or running."
+    )
     return _result_panel(
         "Run detached",
         rows,

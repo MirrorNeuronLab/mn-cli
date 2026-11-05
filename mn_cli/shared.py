@@ -35,7 +35,9 @@ def _ensure_client_compat(instance: Client) -> None:
         setattr(
             instance,
             "remove_node",
-            lambda node_name: (_ for _ in ()).throw(AttributeError("remove_node is unavailable in this SDK")),
+            lambda node_name: (_ for _ in ()).throw(
+                AttributeError("remove_node is unavailable in this SDK")
+            ),
         )
 
 

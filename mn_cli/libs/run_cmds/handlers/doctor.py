@@ -74,11 +74,20 @@ from ..runtime_dependencies import (
     Any,
 )
 import re
-from ..model_cluster import _cluster_node_endpoint, _local_runtime_node_name, _prepare_runtime_model_with_retry, _runtime_model_prepare_client
+from ..model_cluster import (
+    _cluster_node_endpoint,
+    _local_runtime_node_name,
+    _prepare_runtime_model_with_retry,
+    _runtime_model_prepare_client,
+)
 from mn_cli.output import record_result
-from mn_sdk.native_host_submission import NATIVE_ENVIRONMENT_KEY, native_host_python_required
+from mn_sdk.native_host_submission import (
+    NATIVE_ENVIRONMENT_KEY,
+    native_host_python_required,
+)
 from mn_sdk.runner_types import RUNNERS, runner_nodes
 from mn_cli.runtime.hostlocal_python_bridge import prepare_hostlocal_python_bridge
+
 
 def doctor_bundle(
     bundle_path: str,
@@ -95,7 +104,9 @@ def doctor_bundle(
     debug: bool = False,
 ) -> dict[str, Any]:
     """Prepare and smoke-check a blueprint without submitting a runtime job."""
-    report = _doctor_base_report(bundle_path, check_only=check_only, no_llm_call=no_llm_call)
+    report = _doctor_base_report(
+        bundle_path, check_only=check_only, no_llm_call=no_llm_call
+    )
     env_overrides = dict(env_overrides or {})
     config_overrides = dict(config_overrides or {})
     submission_metadata = dict(submission_metadata or {})
@@ -108,7 +119,9 @@ def doctor_bundle(
         bundle_dir, manifest_file, manifest_dict = _load_bundle_manifest(
             bundle_path, config_overrides=config_overrides
         )
-        manifest_dict = _configure_bundle_if_required(bundle_dir, manifest_file, manifest_dict)
+        manifest_dict = _configure_bundle_if_required(
+            bundle_dir, manifest_file, manifest_dict
+        )
         blueprint_id = _doctor_blueprint_id(bundle_dir, manifest_dict, config_overrides)
         report["blueprint"].update(
             {
@@ -176,8 +189,12 @@ def doctor_bundle(
                 ),
             )
         else:
-            report["inputs"] = _doctor_component("inputs", "skipped", "Skipped because --force was provided.")
-            report["services"] = _doctor_component("services", "skipped", "Skipped because --force was provided.")
+            report["inputs"] = _doctor_component(
+                "inputs", "skipped", "Skipped because --force was provided."
+            )
+            report["services"] = _doctor_component(
+                "services", "skipped", "Skipped because --force was provided."
+            )
 
         model_install_summary: dict[str, Any] | None = None
         if check_only:
@@ -200,7 +217,9 @@ def doctor_bundle(
                 force=force,
                 quiet=json_output,
             )
-            _merge_runtime_model_config_overrides(config_overrides, model_install_summary)
+            _merge_runtime_model_config_overrides(
+                config_overrides, model_install_summary
+            )
             _doctor_record_validation(
                 report,
                 "models",
@@ -231,10 +250,19 @@ def doctor_bundle(
         )
         payloads = _stage_bundle_payloads(bundle_dir, manifest_dict)
 
-        context_report = _doctor_component("context_memory", "skipped", "Blueprint does not require context memory.")
-        if blueprint_requires_context_engine(manifest_dict, load_blueprint_config(bundle_dir, config_overrides=config_overrides) or {}):
+        context_report = _doctor_component(
+            "context_memory", "skipped", "Blueprint does not require context memory."
+        )
+        if blueprint_requires_context_engine(
+            manifest_dict,
+            load_blueprint_config(bundle_dir, config_overrides=config_overrides) or {},
+        ):
             if check_only:
-                context_report = _doctor_component("context_memory", "warning", "Context memory is required but was not started in --check-only mode.")
+                context_report = _doctor_component(
+                    "context_memory",
+                    "warning",
+                    "Context memory is required but was not started in --check-only mode.",
+                )
             else:
                 _ensure_context_engine_for_run_if_needed(
                     bundle_dir,
@@ -243,7 +271,9 @@ def doctor_bundle(
                     config_overrides=config_overrides,
                     force=force,
                 )
-                context_report = _doctor_component("context_memory", "passing", "Context engine is ready.")
+                context_report = _doctor_component(
+                    "context_memory", "passing", "Context engine is ready."
+                )
 
         if not check_only:
             prepared = prepare_job_submission(
@@ -257,13 +287,23 @@ def doctor_bundle(
             )
             prepared_manifest = json.loads(prepared.manifest_json)
 
-        inspected = prepared_manifest if prepared_manifest is not None else manifest_dict
-        docker_report = _doctor_component("docker_worker", "skipped", "No DockerWorker nodes declared.")
+        inspected = (
+            prepared_manifest if prepared_manifest is not None else manifest_dict
+        )
+        docker_report = _doctor_component(
+            "docker_worker", "skipped", "No DockerWorker nodes declared."
+        )
         if _doctor_has_runner(inspected, RUNNERS["docker_worker"]):
             if check_only:
-                docker_report = _doctor_component("docker_worker", "warning", "DockerWorker nodes declared but not prepared in --check-only mode.")
+                docker_report = _doctor_component(
+                    "docker_worker",
+                    "warning",
+                    "DockerWorker nodes declared but not prepared in --check-only mode.",
+                )
             else:
-                docker_report = _doctor_docker_worker_report(inspected.get("metadata", {}).get("mn_docker_workers"))
+                docker_report = _doctor_docker_worker_report(
+                    inspected.get("metadata", {}).get("mn_docker_workers")
+                )
 
         report["environments"] = {
             "docker_worker": docker_report,
@@ -271,7 +311,9 @@ def doctor_bundle(
             "host_local_python": host_env_report,
         }
         report["context_memory"] = context_report
-        report["skills"] = _doctor_skill_report(bundle_dir, config_overrides, manifest_dict)
+        report["skills"] = _doctor_skill_report(
+            bundle_dir, config_overrides, manifest_dict
+        )
         report["llm_smoke"] = (
             _doctor_component("llm_smoke", "skipped", "Disabled by --no-llm-call.")
             if no_llm_call
@@ -289,7 +331,9 @@ def doctor_bundle(
         logger.exception("Blueprint doctor failed")
         report.setdefault("errors", []).append(str(exc))
         if "preparation" not in report:
-            report["preparation"] = _doctor_component("preparation", "critical", str(exc))
+            report["preparation"] = _doctor_component(
+                "preparation", "critical", str(exc)
+            )
         failure = exc
     finally:
         if cleanup:
@@ -305,7 +349,10 @@ def doctor_bundle(
         raise typer.Exit(1)
     return report
 
-def _doctor_base_report(bundle_path: str, *, check_only: bool, no_llm_call: bool) -> dict[str, Any]:
+
+def _doctor_base_report(
+    bundle_path: str, *, check_only: bool, no_llm_call: bool
+) -> dict[str, Any]:
     return {
         "doctor_version": 1,
         "blueprint": {"bundle": str(bundle_path)},
@@ -316,15 +363,22 @@ def _doctor_base_report(bundle_path: str, *, check_only: bool, no_llm_call: bool
         "errors": [],
     }
 
+
 def _doctor_blueprint_id(
     bundle_dir: Path,
     manifest: dict[str, Any],
     config_overrides: dict[str, Any],
 ) -> str:
     config = load_blueprint_config(bundle_dir, config_overrides=config_overrides) or {}
-    identity = config.get("identity") if isinstance(config.get("identity"), dict) else {}
-    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
-    workflow = manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
+    identity = (
+        config.get("identity") if isinstance(config.get("identity"), dict) else {}
+    )
+    metadata = (
+        manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    )
+    workflow = (
+        manifest.get("workflow") if isinstance(manifest.get("workflow"), dict) else {}
+    )
     return str(
         identity.get("blueprint_id")
         or metadata.get("blueprint_id")
@@ -334,12 +388,20 @@ def _doctor_blueprint_id(
         or bundle_dir.name
     )
 
+
 def _doctor_submission_id(blueprint_id: str, manifest: dict[str, Any]) -> str:
-    digest = hashlib.sha256(json.dumps(manifest, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:12]
+    digest = hashlib.sha256(
+        json.dumps(manifest, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()[:12]
     return f"doctor-{_safe_doctor_name(blueprint_id)}-{digest}"
 
+
 def _safe_doctor_name(value: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_.-]+", "-", str(value or "blueprint")).strip("-")[:48] or "blueprint"
+    return (
+        re.sub(r"[^a-zA-Z0-9_.-]+", "-", str(value or "blueprint")).strip("-")[:48]
+        or "blueprint"
+    )
+
 
 def _doctor_runtime_foundation(timeout: float) -> dict[str, Any]:
     try:
@@ -355,6 +417,7 @@ def _doctor_runtime_foundation(timeout: float) -> dict[str, Any]:
     except Exception as exc:
         return _doctor_component("runtime", "critical", str(exc))
 
+
 def _doctor_validate_hardware(
     manifest: dict[str, Any],
     *,
@@ -363,9 +426,12 @@ def _doctor_validate_hardware(
 ) -> dict[str, Any]:
     return run_hardware_requirements_validation(
         manifest,
-        resource_report=lambda: _runtime_resource_report(allow_local_fallback=allow_local_fallback),
+        resource_report=lambda: _runtime_resource_report(
+            allow_local_fallback=allow_local_fallback
+        ),
         force=force,
     )
+
 
 def _doctor_validate_services(
     bundle_dir: Path,
@@ -406,6 +472,7 @@ def _doctor_validate_services(
         resolver=resolver,
     )
 
+
 def _doctor_validate_inputs(
     bundle_dir: Path,
     manifest: dict[str, Any],
@@ -428,6 +495,7 @@ def _doctor_validate_inputs(
     )
     return run_input_validation(bundle_dir, manifest, config=config, env=env)
 
+
 def _doctor_validate_models(
     bundle_dir: Path,
     manifest: dict[str, Any],
@@ -449,7 +517,10 @@ def _doctor_validate_models(
             if value is not None
         }
     )
-    if env_overrides and str(env_overrides.get("MN_BLUEPRINT_CONFIG_JSON") or "").strip():
+    if (
+        env_overrides
+        and str(env_overrides.get("MN_BLUEPRINT_CONFIG_JSON") or "").strip()
+    ):
         try:
             decoded_config = json.loads(str(env_overrides["MN_BLUEPRINT_CONFIG_JSON"]))
         except json.JSONDecodeError:
@@ -459,10 +530,12 @@ def _doctor_validate_models(
     validation_manifest = _manifest_for_model_validation(manifest, config)
     validation_config = config
     if model_install_summary:
-        validation_manifest, validation_config = _model_validation_inputs_with_prepared_models(
-            validation_manifest,
-            config,
-            model_install_summary,
+        validation_manifest, validation_config = (
+            _model_validation_inputs_with_prepared_models(
+                validation_manifest,
+                config,
+                model_install_summary,
+            )
         )
     return run_model_validation(
         bundle_dir,
@@ -471,6 +544,7 @@ def _doctor_validate_models(
         env=env,
         installed_resolver=_prepared_model_installed_resolver(model_install_summary),
     )
+
 
 def _doctor_record_validation(
     report: dict[str, Any],
@@ -492,12 +566,16 @@ def _doctor_record_validation(
     except Exception as exc:
         report[key] = _doctor_component(key, "critical", str(exc))
 
-def _doctor_component(name: str, status: str, detail: str = "", **extra: Any) -> dict[str, Any]:
+
+def _doctor_component(
+    name: str, status: str, detail: str = "", **extra: Any
+) -> dict[str, Any]:
     result = {"name": name, "status": status}
     if detail:
         result["detail"] = detail
     result.update(extra)
     return result
+
 
 def _doctor_has_runner(manifest: dict[str, Any], runner_module: str) -> bool:
     return any(
@@ -506,10 +584,15 @@ def _doctor_has_runner(manifest: dict[str, Any], runner_module: str) -> bool:
         for node in manifest_nodes(manifest)
     )
 
+
 def _doctor_docker_worker_report(summary: Any) -> dict[str, Any]:
     if not isinstance(summary, dict) or not summary.get("prepared"):
-        return _doctor_component("docker_worker", "critical", "DockerWorker nodes were not prepared.")
-    services = summary.get("services") if isinstance(summary.get("services"), list) else []
+        return _doctor_component(
+            "docker_worker", "critical", "DockerWorker nodes were not prepared."
+        )
+    services = (
+        summary.get("services") if isinstance(summary.get("services"), list) else []
+    )
     return _doctor_component(
         "docker_worker",
         "passing",
@@ -526,9 +609,16 @@ def _doctor_docker_worker_report(summary: Any) -> dict[str, Any]:
         ],
     )
 
-def _doctor_openshell_report(manifest: dict[str, Any], *, prepared: bool = True) -> dict[str, Any]:
-    nodes = list(dict.fromkeys(str(node.get("node_id") or node.get("id") or "openshell")
-                               for node in runner_nodes(manifest, RUNNERS["openshell"])))
+
+def _doctor_openshell_report(
+    manifest: dict[str, Any], *, prepared: bool = True
+) -> dict[str, Any]:
+    nodes = list(
+        dict.fromkeys(
+            str(node.get("node_id") or node.get("id") or "openshell")
+            for node in runner_nodes(manifest, RUNNERS["openshell"])
+        )
+    )
     if not nodes:
         return _doctor_component("openshell", "skipped", "No OpenShell nodes declared.")
     if not prepared:
@@ -545,6 +635,7 @@ def _doctor_openshell_report(manifest: dict[str, Any], *, prepared: bool = True)
         nodes=nodes,
     )
 
+
 def _doctor_prepare_hostlocal_python_envs(
     bundle_dir: Path,
     manifest: dict[str, Any],
@@ -556,8 +647,14 @@ def _doctor_prepare_hostlocal_python_envs(
     prepared: list[dict[str, Any]] = []
     skipped = 0
     failures: list[dict[str, Any]] = []
-    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
-    placement = metadata.get("mn_workflow_placement") if isinstance(metadata.get("mn_workflow_placement"), dict) else {}
+    metadata = (
+        manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    )
+    placement = (
+        metadata.get("mn_workflow_placement")
+        if isinstance(metadata.get("mn_workflow_placement"), dict)
+        else {}
+    )
     selected_node = str(
         placement.get("selected_node") or selected_runtime_node or ""
     ).strip()
@@ -567,7 +664,11 @@ def _doctor_prepare_hostlocal_python_envs(
         config = node.get("config") if isinstance(node.get("config"), dict) else {}
         if config.get("runner_module") != "MirrorNeuron.Runner.HostLocal":
             continue
-        python_env = config.get("python_environment") if isinstance(config.get("python_environment"), dict) else {}
+        python_env = (
+            config.get("python_environment")
+            if isinstance(config.get("python_environment"), dict)
+            else {}
+        )
         packages = [
             str(package).strip()
             for package in python_env.get("packages", [])
@@ -583,11 +684,19 @@ def _doctor_prepare_hostlocal_python_envs(
             continue
         node_id = str(node.get("node_id") or node.get("id") or "host_local")
         if check_only:
-            failures.append({"node_id": node_id, "status": "skipped", "detail": "Not prepared in --check-only mode."})
+            failures.append(
+                {
+                    "node_id": node_id,
+                    "status": "skipped",
+                    "detail": "Not prepared in --check-only mode.",
+                }
+            )
             continue
         try:
             if native_host and remote_selected_node:
-                raise RuntimeError("A local host-OS workflow cannot prepare Python on a remote runtime node")
+                raise RuntimeError(
+                    "A local host-OS workflow cannot prepare Python on a remote runtime node"
+                )
             if remote_selected_node:
                 requirements_content = _doctor_requirements_content(
                     bundle_dir,
@@ -625,21 +734,32 @@ def _doctor_prepare_hostlocal_python_envs(
                     local_source_versions=local_source_versions,
                     **({"native_host": True} if native_host else {}),
                 )
-                runtime_env_dir = env_dir if native_host else _doctor_runtime_python_env_path(
-                    env_dir,
-                    core_container=_doctor_running_core_container(timeout),
+                runtime_env_dir = (
+                    env_dir
+                    if native_host
+                    else _doctor_runtime_python_env_path(
+                        env_dir,
+                        core_container=_doctor_running_core_container(timeout),
+                    )
                 )
             python_env["path"] = str(runtime_env_dir)
             config["python_environment"] = python_env
             if native_host:
                 bridge = prepare_hostlocal_python_bridge(timeout=timeout)
-                config[NATIVE_ENVIRONMENT_KEY] = {"python": str(env_dir / "bin" / "python"),
-                                                "environment": dict(python_env)}
+                config[NATIVE_ENVIRONMENT_KEY] = {
+                    "python": str(env_dir / "bin" / "python"),
+                    "environment": dict(python_env),
+                }
                 config["python_environment"] = {
                     "packages": ["mirrorneuron-python-sdk>1.3,<2"],
-                    "path": str(_doctor_runtime_python_env_path(
-                        bridge, core_container=_doctor_running_core_container(timeout, allow_remote_target=True),
-                    )),
+                    "path": str(
+                        _doctor_runtime_python_env_path(
+                            bridge,
+                            core_container=_doctor_running_core_container(
+                                timeout, allow_remote_target=True
+                            ),
+                        )
+                    ),
                 }
             prepared.append(
                 {
@@ -649,7 +769,9 @@ def _doctor_prepare_hostlocal_python_envs(
                 }
             )
         except Exception as exc:
-            failures.append({"node_id": node_id, "status": "critical", "detail": str(exc)})
+            failures.append(
+                {"node_id": node_id, "status": "critical", "detail": str(exc)}
+            )
 
     if failures:
         hard_failures = [item for item in failures if item.get("status") == "critical"]
@@ -674,7 +796,13 @@ def _doctor_prepare_hostlocal_python_envs(
             prepared=prepared,
             cache_warning=cache_warning or None,
         )
-    return _doctor_component("host_local_python", "skipped", "No HostLocal Python environments declared.", skipped=skipped)
+    return _doctor_component(
+        "host_local_python",
+        "skipped",
+        "No HostLocal Python environments declared.",
+        skipped=skipped,
+    )
+
 
 def _doctor_prepare_python_env(
     bundle_dir: Path,
@@ -725,7 +853,9 @@ def _doctor_requirements_content(
     if not requirements_path:
         return ""
     if not _is_safe_payload_relative_path(requirements_path):
-        raise RuntimeError(f"{node_id}: python_environment.requirements must be relative inside payloads/")
+        raise RuntimeError(
+            f"{node_id}: python_environment.requirements must be relative inside payloads/"
+        )
     return (bundle_dir / "payloads" / requirements_path).read_text(encoding="utf-8")
 
 
@@ -737,15 +867,30 @@ def _doctor_skill_report(
     config = load_blueprint_config(bundle_dir, config_overrides=config_overrides) or {}
     entries: list[dict[str, Any]] = []
     for section_name in ("input_skills", "output_skills"):
-        section = config.get(section_name) if isinstance(config.get(section_name), dict) else {}
+        section = (
+            config.get(section_name)
+            if isinstance(config.get(section_name), dict)
+            else {}
+        )
         for name, raw in section.items():
             if not isinstance(raw, dict):
                 continue
             entries.append(_doctor_skill_config_entry(section_name, str(name), raw))
-    python_dependencies = config.get("python_dependencies") if isinstance(config.get("python_dependencies"), dict) else {}
+    python_dependencies = (
+        config.get("python_dependencies")
+        if isinstance(config.get("python_dependencies"), dict)
+        else {}
+    )
     for package in python_dependencies.get("packages") or []:
         if isinstance(package, str) and package.strip():
-            entries.append({"name": package.strip(), "section": "python_dependencies", "status": "passing", "detail": "declared for runtime install"})
+            entries.append(
+                {
+                    "name": package.strip(),
+                    "section": "python_dependencies",
+                    "status": "passing",
+                    "detail": "declared for runtime install",
+                }
+            )
     try:
         for record in skill_dependency_records(manifest):
             entries.append(
@@ -770,16 +915,26 @@ def _doctor_skill_report(
         )
 
     if not entries:
-        return _doctor_component("skills", "skipped", "No blueprint skill dependencies declared.", entries=[])
+        return _doctor_component(
+            "skills", "skipped", "No blueprint skill dependencies declared.", entries=[]
+        )
     if any(entry.get("status") == "critical" for entry in entries):
         status = "critical"
     elif any(entry.get("status") == "warning" for entry in entries):
         status = "warning"
     else:
         status = "passing"
-    return _doctor_component("skills", status, f"Found {len(entries)} declared skill/dependency item(s).", entries=entries)
+    return _doctor_component(
+        "skills",
+        status,
+        f"Found {len(entries)} declared skill/dependency item(s).",
+        entries=entries,
+    )
 
-def _doctor_skill_config_entry(section_name: str, name: str, raw: dict[str, Any]) -> dict[str, Any]:
+
+def _doctor_skill_config_entry(
+    section_name: str, name: str, raw: dict[str, Any]
+) -> dict[str, Any]:
     if raw.get("enabled") is False:
         return {
             "name": name,
@@ -799,7 +954,9 @@ def _doctor_skill_config_entry(section_name: str, name: str, raw: dict[str, Any]
                 "name": "import",
                 "target": import_name,
                 "status": "passing" if found else "warning",
-                "detail": "import is available" if found else "import is not available in the current CLI Python environment",
+                "detail": "import is available"
+                if found
+                else "import is not available in the current CLI Python environment",
             }
         )
     executable = str(raw.get("executable") or raw.get("command") or "").strip()
@@ -813,7 +970,11 @@ def _doctor_skill_config_entry(section_name: str, name: str, raw: dict[str, Any]
                 "detail": found_path or "executable is not available on PATH",
             }
         )
-    status = "warning" if any(check.get("status") == "warning" for check in checks) else "passing"
+    status = (
+        "warning"
+        if any(check.get("status") == "warning" for check in checks)
+        else "passing"
+    )
     return {
         "name": name,
         "section": section_name,
@@ -826,6 +987,7 @@ def _doctor_skill_config_entry(section_name: str, name: str, raw: dict[str, Any]
         "checks": checks,
     }
 
+
 def _doctor_llm_smoke_report(
     bundle_dir: Path,
     config_overrides: dict[str, Any],
@@ -837,14 +999,28 @@ def _doctor_llm_smoke_report(
     config = _doctor_effective_config(bundle_dir, config_overrides, env_overrides)
     checks: list[dict[str, Any]] = []
     llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
-    manifest_llm = manifest.get("llm") if isinstance(manifest, dict) and isinstance(manifest.get("llm"), dict) else {}
+    manifest_llm = (
+        manifest.get("llm")
+        if isinstance(manifest, dict) and isinstance(manifest.get("llm"), dict)
+        else {}
+    )
     if manifest_llm:
-        config_entries = llm.get("configs") if isinstance(llm.get("configs"), dict) else {}
-        manifest_entries = manifest_llm.get("configs") if isinstance(manifest_llm.get("configs"), dict) else {}
+        config_entries = (
+            llm.get("configs") if isinstance(llm.get("configs"), dict) else {}
+        )
+        manifest_entries = (
+            manifest_llm.get("configs")
+            if isinstance(manifest_llm.get("configs"), dict)
+            else {}
+        )
         merged_entries = {
             name: {
                 **(entry if isinstance(entry, dict) else {}),
-                **(config_entries.get(name) if isinstance(config_entries.get(name), dict) else {}),
+                **(
+                    config_entries.get(name)
+                    if isinstance(config_entries.get(name), dict)
+                    else {}
+                ),
             }
             for name, entry in manifest_entries.items()
         }
@@ -853,24 +1029,51 @@ def _doctor_llm_smoke_report(
                 merged_entries[name] = entry
         llm = {**manifest_llm, **llm, "configs": merged_entries}
     env_model = str(env_overrides.get("MN_LLM_MODEL") or "").strip()
-    if env_model and not str(llm.get("model") or llm.get("runtime_model") or "").strip():
+    if (
+        env_model
+        and not str(llm.get("model") or llm.get("runtime_model") or "").strip()
+    ):
         llm = {**llm, "model": env_model}
     configs = llm.get("configs") if isinstance(llm.get("configs"), dict) else {}
     if configs:
         for name, entry in configs.items():
             if isinstance(entry, dict):
-                checks.append(_doctor_chat_smoke(str(name), entry, llm, timeout=timeout))
+                checks.append(
+                    _doctor_chat_smoke(str(name), entry, llm, timeout=timeout)
+                )
     elif llm:
-        checks.append(_doctor_chat_smoke(str(llm.get("default_config") or "primary"), llm, {}, timeout=timeout))
+        checks.append(
+            _doctor_chat_smoke(
+                str(llm.get("default_config") or "primary"), llm, {}, timeout=timeout
+            )
+        )
 
-    rag = config.get("knowledge_rag") if isinstance(config.get("knowledge_rag"), dict) else {}
-    if rag.get("enabled") is not False and str(rag.get("embedding_provider") or "").strip().lower() in {"docker_model_runner", "docker-model-runner", "dmr"}:
+    rag = (
+        config.get("knowledge_rag")
+        if isinstance(config.get("knowledge_rag"), dict)
+        else {}
+    )
+    if rag.get("enabled") is not False and str(
+        rag.get("embedding_provider") or ""
+    ).strip().lower() in {"docker_model_runner", "docker-model-runner", "dmr"}:
         checks.append(_doctor_embedding_smoke(rag, timeout=timeout))
 
     if not checks:
-        return _doctor_component("llm_smoke", "skipped", "No live LLM or embedding checks declared.", checks=[])
-    status = "critical" if any(check.get("status") == "critical" for check in checks) else "passing"
-    return _doctor_component("llm_smoke", status, f"Ran {len(checks)} LLM smoke check(s).", checks=checks)
+        return _doctor_component(
+            "llm_smoke",
+            "skipped",
+            "No live LLM or embedding checks declared.",
+            checks=[],
+        )
+    status = (
+        "critical"
+        if any(check.get("status") == "critical" for check in checks)
+        else "passing"
+    )
+    return _doctor_component(
+        "llm_smoke", status, f"Ran {len(checks)} LLM smoke check(s).", checks=checks
+    )
+
 
 def _doctor_effective_config(
     bundle_dir: Path,
@@ -887,38 +1090,77 @@ def _doctor_effective_config(
             pass
     return load_blueprint_config(bundle_dir, config_overrides=config_overrides) or {}
 
-def _doctor_chat_smoke(name: str, entry: dict[str, Any], llm: dict[str, Any], *, timeout: float) -> dict[str, Any]:
-    provider = str(entry.get("provider") or llm.get("provider") or "docker_model_runner").strip().lower()
-    if provider in {"fake", "mock"} or str(entry.get("mode") or llm.get("mode") or "").strip().lower() in {"fake", "mock"}:
+
+def _doctor_chat_smoke(
+    name: str, entry: dict[str, Any], llm: dict[str, Any], *, timeout: float
+) -> dict[str, Any]:
+    provider = (
+        str(entry.get("provider") or llm.get("provider") or "docker_model_runner")
+        .strip()
+        .lower()
+    )
+    if provider in {"fake", "mock"} or str(
+        entry.get("mode") or llm.get("mode") or ""
+    ).strip().lower() in {"fake", "mock"}:
         return {"name": name, "status": "skipped", "detail": "fake LLM config"}
-    model = str(entry.get("model") or entry.get("runtime_model") or llm.get("model") or llm.get("runtime_model") or "").strip()
-    api_base = _doctor_host_api_base(str(entry.get("api_base") or llm.get("api_base") or "").strip())
-    if model and (not api_base or api_base == "auto") and provider in {
-        "docker_model_runner",
-        "docker-model-runner",
-        "dmr",
-        "litellm",
-        "litellm_proxy",
-        "openai-compatible",
-    }:
+    model = str(
+        entry.get("model")
+        or entry.get("runtime_model")
+        or llm.get("model")
+        or llm.get("runtime_model")
+        or ""
+    ).strip()
+    api_base = _doctor_host_api_base(
+        str(entry.get("api_base") or llm.get("api_base") or "").strip()
+    )
+    if (
+        model
+        and (not api_base or api_base == "auto")
+        and provider
+        in {
+            "docker_model_runner",
+            "docker-model-runner",
+            "dmr",
+            "litellm",
+            "litellm_proxy",
+            "openai-compatible",
+        }
+    ):
         api_base = LITELLM_GATEWAY_HOST_API_BASE
     if not model or not api_base or api_base == "auto":
-        return {"name": name, "status": "warning", "detail": "model or api_base is not resolved"}
+        return {
+            "name": name,
+            "status": "warning",
+            "detail": "model or api_base is not resolved",
+        }
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": "Reply with the word ok."}],
         "max_tokens": 8,
         "temperature": 0,
     }
-    return _doctor_post_openai_payload(name, api_base.rstrip("/") + "/chat/completions", payload, timeout=timeout)
+    return _doctor_post_openai_payload(
+        name, api_base.rstrip("/") + "/chat/completions", payload, timeout=timeout
+    )
+
 
 def _doctor_embedding_smoke(rag: dict[str, Any], *, timeout: float) -> dict[str, Any]:
     model = str(rag.get("embedding_model") or "").strip()
     api_base = _doctor_host_api_base(str(rag.get("embedding_api_base") or "").strip())
     if not model or not api_base:
-        return {"name": "knowledge_rag_embedding", "status": "warning", "detail": "embedding model or api_base is not resolved"}
+        return {
+            "name": "knowledge_rag_embedding",
+            "status": "warning",
+            "detail": "embedding model or api_base is not resolved",
+        }
     payload = {"model": model, "input": "ok"}
-    return _doctor_post_openai_payload("knowledge_rag_embedding", api_base.rstrip("/") + "/embeddings", payload, timeout=timeout)
+    return _doctor_post_openai_payload(
+        "knowledge_rag_embedding",
+        api_base.rstrip("/") + "/embeddings",
+        payload,
+        timeout=timeout,
+    )
+
 
 def _doctor_host_api_base(api_base: str) -> str:
     if not api_base:
@@ -933,7 +1175,10 @@ def _doctor_host_api_base(api_base: str) -> str:
         return urllib.parse.urlunparse(parsed._replace(netloc=netloc))
     return api_base
 
-def _doctor_post_openai_payload(name: str, url: str, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+
+def _doctor_post_openai_payload(
+    name: str, url: str, payload: dict[str, Any], *, timeout: float
+) -> dict[str, Any]:
     try:
         request = urllib.request.Request(
             url,
@@ -948,21 +1193,39 @@ def _doctor_post_openai_payload(name: str, url: str, payload: dict[str, Any], *,
             "name": name,
             "status": "passing" if ok else "warning",
             "url": url,
-            "detail": "smoke request completed" if ok else "smoke request returned an unexpected response shape",
+            "detail": "smoke request completed"
+            if ok
+            else "smoke request returned an unexpected response shape",
         }
     except Exception as exc:
-        return {"name": name, "status": "critical", "url": url, "detail": _truncate_doctor_detail(str(exc))}
+        return {
+            "name": name,
+            "status": "critical",
+            "url": url,
+            "detail": _truncate_doctor_detail(str(exc)),
+        }
+
 
 def _doctor_cleanup(manifest: dict[str, Any] | None) -> dict[str, Any]:
     if manifest is None:
-        return _doctor_component("cleanup", "skipped", "No doctor submission resources were created.")
+        return _doctor_component(
+            "cleanup", "skipped", "No doctor submission resources were created."
+        )
     try:
         result = cleanup_job_definition_resources(manifest)
-        return _doctor_component("cleanup", "passing", "Retired the prepared diagnostic resources.", report=result)
+        return _doctor_component(
+            "cleanup",
+            "passing",
+            "Retired the prepared diagnostic resources.",
+            report=result,
+        )
     except Exception as exc:
         return _doctor_component("cleanup", "warning", str(exc))
 
-def _doctor_summary(report: dict[str, Any], *, extra_status: str | None = None) -> dict[str, Any]:
+
+def _doctor_summary(
+    report: dict[str, Any], *, extra_status: str | None = None
+) -> dict[str, Any]:
     statuses = _doctor_statuses(report)
     if extra_status:
         statuses.append(extra_status)
@@ -980,11 +1243,17 @@ def _doctor_summary(report: dict[str, Any], *, extra_status: str | None = None) 
         "skipped": statuses.count("skipped"),
     }
 
+
 def _doctor_statuses(value: Any) -> list[str]:
     statuses: list[str] = []
     if isinstance(value, dict):
         status = value.get("status")
-        if isinstance(status, str) and status in {"passing", "warning", "critical", "skipped"}:
+        if isinstance(status, str) and status in {
+            "passing",
+            "warning",
+            "critical",
+            "skipped",
+        }:
             statuses.append(status)
         for key, child in value.items():
             if key == "summary":
@@ -995,6 +1264,7 @@ def _doctor_statuses(value: Any) -> list[str]:
             statuses.extend(_doctor_statuses(child))
     return statuses
 
+
 def _doctor_print_report(report: dict[str, Any], *, json_output: bool) -> None:
     redacted = _doctor_redact(report)
     if json_output:
@@ -1002,26 +1272,61 @@ def _doctor_print_report(report: dict[str, Any], *, json_output: bool) -> None:
         return
 
     summary = redacted.get("summary", {})
-    table = Table(title=f"Blueprint doctor: {summary.get('status', 'unknown')}", show_header=True, header_style="bold")
+    table = Table(
+        title=f"Blueprint doctor: {summary.get('status', 'unknown')}",
+        show_header=True,
+        header_style="bold",
+    )
     table.add_column("Section")
     table.add_column("Status")
     table.add_column("Detail")
-    for section in ("runtime", "resources", "services", "inputs", "models", "context_memory", "skills", "llm_smoke", "cleanup"):
+    for section in (
+        "runtime",
+        "resources",
+        "services",
+        "inputs",
+        "models",
+        "context_memory",
+        "skills",
+        "llm_smoke",
+        "cleanup",
+    ):
         item = redacted.get(section)
         if isinstance(item, dict):
-            table.add_row(section, str(item.get("status") or "-"), str(item.get("detail") or ""))
-    envs = redacted.get("environments") if isinstance(redacted.get("environments"), dict) else {}
+            table.add_row(
+                section, str(item.get("status") or "-"), str(item.get("detail") or "")
+            )
+    envs = (
+        redacted.get("environments")
+        if isinstance(redacted.get("environments"), dict)
+        else {}
+    )
     for name, item in envs.items():
         if isinstance(item, dict):
-            table.add_row(f"environment.{name}", str(item.get("status") or "-"), str(item.get("detail") or ""))
+            table.add_row(
+                f"environment.{name}",
+                str(item.get("status") or "-"),
+                str(item.get("detail") or ""),
+            )
     console.print(table)
+
 
 def _doctor_redact(value: Any) -> Any:
     if isinstance(value, dict):
         result = {}
         for key, child in value.items():
             key_text = str(key).lower()
-            if any(secret in key_text for secret in ("api_key", "token", "authorization", "cookie", "password", "secret")):
+            if any(
+                secret in key_text
+                for secret in (
+                    "api_key",
+                    "token",
+                    "authorization",
+                    "cookie",
+                    "password",
+                    "secret",
+                )
+            ):
                 result[key] = "[redacted]"
             else:
                 result[key] = _doctor_redact(child)
@@ -1030,9 +1335,27 @@ def _doctor_redact(value: Any) -> Any:
         return [_doctor_redact(item) for item in value]
     return value
 
+
 def _truncate_doctor_detail(value: str, limit: int = 600) -> str:
     text = str(value or "").strip()
     return text if len(text) <= limit else text[:limit].rstrip() + "..."
 
 
-__all__ = ['_doctor_prepare_python_env_from_content', '_doctor_rebase_missing_local_sources', '_doctor_rebase_missing_local_source', '_doctor_source_checkout_roots', '_doctor_local_source_version', '_doctor_preserve_staged_local_source_version', '_doctor_local_source_digest', '_doctor_workspace_local_source', '_doctor_local_source_roots', '_doctor_path_is_within', '_doctor_remove_shared_cache_path', '_doctor_running_core_container', '_doctor_path_is_in_core_mount', '_doctor_shared_python_env_cache_warning', '_doctor_configured_python_envs_dir', '_doctor_runtime_python_env_path'] + [name for name in globals() if not name.startswith("__")]
+__all__ = [
+    "_doctor_prepare_python_env_from_content",
+    "_doctor_rebase_missing_local_sources",
+    "_doctor_rebase_missing_local_source",
+    "_doctor_source_checkout_roots",
+    "_doctor_local_source_version",
+    "_doctor_preserve_staged_local_source_version",
+    "_doctor_local_source_digest",
+    "_doctor_workspace_local_source",
+    "_doctor_local_source_roots",
+    "_doctor_path_is_within",
+    "_doctor_remove_shared_cache_path",
+    "_doctor_running_core_container",
+    "_doctor_path_is_in_core_mount",
+    "_doctor_shared_python_env_cache_warning",
+    "_doctor_configured_python_envs_dir",
+    "_doctor_runtime_python_env_path",
+] + [name for name in globals() if not name.startswith("__")]

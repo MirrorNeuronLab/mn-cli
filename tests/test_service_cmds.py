@@ -10,7 +10,9 @@ runner = CliRunner()
 def test_service_list_prints_registry_json(mocker):
     mock_list = mocker.patch(
         "mn_cli.libs.service_cmds.client.list_services",
-        return_value=json.dumps({"services": [{"name": "ollama", "status": "passing"}]}),
+        return_value=json.dumps(
+            {"services": [{"name": "ollama", "status": "passing"}]}
+        ),
     )
 
     result = runner.invoke(app, ["service", "list", "--name", "ollama"])

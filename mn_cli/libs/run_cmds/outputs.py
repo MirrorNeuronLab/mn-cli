@@ -22,8 +22,14 @@ from .common import (
 )
 
 
-def fetch_and_save_results(job_id: str, data: dict = None, output_dir: Path | str | None = None):
-    log_dir = Path(output_dir).expanduser() if output_dir is not None else Path(f"/tmp/mn_{job_id}")
+def fetch_and_save_results(
+    job_id: str, data: dict = None, output_dir: Path | str | None = None
+):
+    log_dir = (
+        Path(output_dir).expanduser()
+        if output_dir is not None
+        else Path(f"/tmp/mn_{job_id}")
+    )
     log_dir.mkdir(parents=True, exist_ok=True)
 
     if data is None:
@@ -99,8 +105,12 @@ def _copy_shared_submission_outputs(job: dict[str, Any], target_dir: Path) -> bo
     submission_id = str(reference.get("submission_id") or "").strip()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", submission_id):
         return False
-    shared_root = Path(RuntimeConfig.from_env().shared_storage_root).expanduser().resolve()
-    source = (shared_root / "submissions" / submission_id / "outputs" / "user").resolve()
+    shared_root = (
+        Path(RuntimeConfig.from_env().shared_storage_root).expanduser().resolve()
+    )
+    source = (
+        shared_root / "submissions" / submission_id / "outputs" / "user"
+    ).resolve()
     try:
         source.relative_to(shared_root)
     except ValueError:
@@ -420,50 +430,74 @@ def _materialize_completed_blueprint_outputs(
         logger.exception("Failed to materialize blueprint outputs to %s", output_folder)
 
 
-def _materialize_terminal_run_outputs(storage, execution_id, status, snapshot_path=None):
-    if status != 'completed' or not storage.get('output_copy'):
+def _materialize_terminal_run_outputs(
+    storage, execution_id, status, snapshot_path=None
+):
+    if status != "completed" or not storage.get("output_copy"):
         return False
     try:
         from mn_sdk.output_delivery import completed_output_run_id
-        snapshot = json.loads(Path(snapshot_path).read_text()) if snapshot_path and Path(snapshot_path).is_file() else None
-        if not isinstance(snapshot, dict) or snapshot.get('status') != 'completed':
+
+        snapshot = (
+            json.loads(Path(snapshot_path).read_text())
+            if snapshot_path and Path(snapshot_path).is_file()
+            else None
+        )
+        if not isinstance(snapshot, dict) or snapshot.get("status") != "completed":
             snapshot = json.loads(client.get_run(execution_id))
         physical_id = completed_output_run_id(snapshot, storage, execution_id)
     except Exception:
-        logger.exception('Could not resolve completed output run')
-        print_warning(console, 'Analysis completed, but output delivery could not resolve the completed run. The analysis is preserved; retry delivery without rerunning it.')
+        logger.exception("Could not resolve completed output run")
+        print_warning(
+            console,
+            "Analysis completed, but output delivery could not resolve the completed run. The analysis is preserved; retry delivery without rerunning it.",
+        )
         return False
     try:
         return _materialize_shared_storage_outputs(storage, execution_id=physical_id)
     except Exception:
-        logger.exception('Completed analysis output delivery failed')
-        print_warning(console, 'Analysis completed, but output delivery did not finish. The analysis is preserved; retry the copy after resolving delivery diagnostics.')
+        logger.exception("Completed analysis output delivery failed")
+        print_warning(
+            console,
+            "Analysis completed, but output delivery did not finish. The analysis is preserved; retry the copy after resolving delivery diagnostics.",
+        )
         return False
 
 
-def _materialize_shared_storage_outputs(storage: dict[str, Any], *, execution_id: str | None = None) -> bool:
+def _materialize_shared_storage_outputs(
+    storage: dict[str, Any], *, execution_id: str | None = None
+) -> bool:
     if not isinstance(storage, dict):
         return False
     output_copy = storage.get("output_copy")
     if isinstance(output_copy, list) and len(output_copy) > 1:
-        result = _sdk_materialize_shared_storage_outputs_until_stable(
-            storage,
-            poll_seconds=0.25,
-            timeout_seconds=_shared_output_copy_timeout_seconds(),
-            result_run_id=execution_id,
-        ) or {}
+        result = (
+            _sdk_materialize_shared_storage_outputs_until_stable(
+                storage,
+                poll_seconds=0.25,
+                timeout_seconds=_shared_output_copy_timeout_seconds(),
+                result_run_id=execution_id,
+            )
+            or {}
+        )
     else:
-        result = _sdk_materialize_shared_storage_outputs(storage, result_run_id=execution_id) or {}
+        result = (
+            _sdk_materialize_shared_storage_outputs(storage, result_run_id=execution_id)
+            or {}
+        )
     for warning in result.get("warnings") or []:
         logger.warning("Shared output materialization warning: %s", warning)
     for error in result.get("errors") or []:
         logger.error("Shared output materialization error: %s", error)
-    if result.get('errors'):
-        print_warning(console, 'Analysis completed, but output delivery failed. Completed analysis is preserved; inspect delivery diagnostics before retrying the copy.')
+    if result.get("errors"):
+        print_warning(
+            console,
+            "Analysis completed, but output delivery failed. Completed analysis is preserved; inspect delivery diagnostics before retrying the copy.",
+        )
     targets = result.get("target_paths") or []
-    if targets and not result.get('errors'):
+    if targets and not result.get("errors"):
         console.print(f"[green]Materialized shared outputs:[/green] {targets[-1]}")
-    return bool(result.get("copied")) and not result.get('errors')
+    return bool(result.get("copied")) and not result.get("errors")
 
 
 def _shared_output_copy_timeout_seconds() -> float:

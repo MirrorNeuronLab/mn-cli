@@ -139,8 +139,17 @@ def collect_runtime_status(
     except RuntimeError:
         saved = "invalid"
     nodes = report.get("nodes", {}).get("items", [])
-    local = [node for node in nodes if isinstance(node, dict) and (node.get("self") is True or node.get("self?") is True)]
-    actual = str(local[0].get("name") or local[0].get("node") or "") if len(local) == 1 else ""
+    local = [
+        node
+        for node in nodes
+        if isinstance(node, dict)
+        and (node.get("self") is True or node.get("self?") is True)
+    ]
+    actual = (
+        str(local[0].get("name") or local[0].get("node") or "")
+        if len(local) == 1
+        else ""
+    )
     identity = identity_health(saved or expected, actual)
     if saved and expected and expected != saved:
         identity["valid"] = False
@@ -149,9 +158,12 @@ def collect_runtime_status(
         report["overall"] = "critical"
         for component in report["components"]:
             if component["name"] == "core_grpc":
-                component.update(status="critical", code="MN_NODE_IDENTITY_INVALID",
-                                 identity=identity,
-                                 error="Core identity is missing or mismatched. Run mn runtime start; restore the original identity if configuration conflicts. Records owned by nonode@nohost require explicit repair.")
+                component.update(
+                    status="critical",
+                    code="MN_NODE_IDENTITY_INVALID",
+                    identity=identity,
+                    error="Core identity is missing or mismatched. Run mn runtime start; restore the original identity if configuration conflicts. Records owned by nonode@nohost require explicit repair.",
+                )
     return report
 
 
@@ -581,12 +593,8 @@ def _repair_runtime_sidecars(report: dict[str, Any]) -> bool:
 
 def _compose_native_port_env(env: dict[str, str]) -> dict[str, str]:
     adjusted = dict(env)
-    adjusted["MN_GRPC_PORT"] = _port_value(
-        adjusted, "MN_GRPC_PORT", DEFAULT_GRPC_PORT
-    )
-    adjusted["MN_API_PORT"] = _port_value(
-        adjusted, "MN_API_PORT", DEFAULT_API_PORT
-    )
+    adjusted["MN_GRPC_PORT"] = _port_value(adjusted, "MN_GRPC_PORT", DEFAULT_GRPC_PORT)
+    adjusted["MN_API_PORT"] = _port_value(adjusted, "MN_API_PORT", DEFAULT_API_PORT)
     adjusted["MN_WEB_UI_PORT"] = _port_value(
         adjusted, "MN_WEB_UI_PORT", DEFAULT_WEB_UI_PORT
     )

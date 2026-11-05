@@ -35,22 +35,37 @@ runner = CliRunner()
 
 def test_source_package_entrypoint_receives_launch_config_before_staging(tmp_path):
     from mn_sdk.blueprints.authoring import write_blueprint_definition
-    from mn_sdk.submission_preparation import lower_manifest_topology_for_runtime_submission
+    from mn_sdk.submission_preparation import (
+        lower_manifest_topology_for_runtime_submission,
+    )
     from mn_cli.libs.run_cmds.common import _load_bundle_manifest
 
     package = tmp_path / "scan"
     write_blueprint_definition(
         package,
         {
-            "kind": "WorkflowSource", "id": "scan",
+            "kind": "WorkflowSource",
+            "id": "scan",
             "defaults": {"worker": {"with": {"image": "fixture:test"}}},
-            "workflow": {"steps": [{"id": "inspect", "needs": [], "run": {"handler": "scan.steps.inspect"}}]},
-            "contracts": {"inputs": {"task": {"type": "string"}, "ct_file": {"type": "string"}}},
+            "workflow": {
+                "steps": [
+                    {
+                        "id": "inspect",
+                        "needs": [],
+                        "run": {"handler": "scan.steps.inspect"},
+                    }
+                ]
+            },
+            "contracts": {
+                "inputs": {"task": {"type": "string"}, "ct_file": {"type": "string"}}
+            },
         },
         config={"inputs": {"payload": {"task": "", "ct_file": ""}}},
     )
     inputs = {"task": "Read the heading.", "ct_file": str(tmp_path / "example.nii")}
-    _, _, manifest = _load_bundle_manifest(str(package), config_overrides={"inputs": {"payload": inputs}})
+    _, _, manifest = _load_bundle_manifest(
+        str(package), config_overrides={"inputs": {"payload": inputs}}
+    )
     lower_manifest_topology_for_runtime_submission(manifest)
     assert manifest["initial_inputs"]["inspect"] == [{"args": [], "kwargs": inputs}]
 
@@ -84,7 +99,8 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_RUNTIME_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_CONTAINER_SHARED_STORAGE_ROOT", raising=False)
-    monkeypatch.setattr('mn_cli.libs.run_cmds.handlers.run.sync_litellm_gateway',
+    monkeypatch.setattr(
+        "mn_cli.libs.run_cmds.handlers.run.sync_litellm_gateway",
         lambda **_kwargs: {
             "status": "running",
             "api_base": "http://mn-litellm-proxy:4000/v1",
@@ -129,7 +145,8 @@ def test_runtime_model_progress_event_reports_dmr_bytes_and_elapsed_time():
 def test_run_success(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch(
-        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id", return_value="run-bundle-auto"
+        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id",
+        return_value="run-bundle-auto",
     )
     mock_submit = mocker.patch(
         "mn_cli.libs.run_cmds.client.create_job",
@@ -276,7 +293,8 @@ def test_run_validates_inputs_before_runtime_dependencies(
 ):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch(
-        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id", return_value="run-order"
+        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id",
+        return_value="run-order",
     )
     mocker.patch(
         "mn_cli.libs.run_cmds.client.create_job",
@@ -361,19 +379,33 @@ def test_run_does_not_submit_when_a_required_input_is_missing(
 
 @pytest.mark.parametrize("force", [False, True])
 @pytest.mark.parametrize("already_installed", [False, True])
-@pytest.mark.parametrize("include_spark, model, expected_node", [
-    (False, "default", "mirror_neuron@mac"),
-    (True, "default", "mirror_neuron@spark"),
-    (True, "nemotron-3.5-lightning:latest", "mirror_neuron@spark"),
-])
+@pytest.mark.parametrize(
+    "include_spark, model, expected_node",
+    [
+        (False, "default", "mirror_neuron@mac"),
+        (True, "default", "mirror_neuron@spark"),
+        (True, "nemotron-3.5-lightning:latest", "mirror_neuron@spark"),
+    ],
+)
 def test_injected_cluster_run_defers_models_until_first_use(
-    mocker, tmp_path, monkeypatch, fake_runtime_model_cluster_factory,
-    force, already_installed, include_spark, model, expected_node,
+    mocker,
+    tmp_path,
+    monkeypatch,
+    fake_runtime_model_cluster_factory,
+    force,
+    already_installed,
+    include_spark,
+    model,
+    expected_node,
 ):
     """Real launch preserves placement and model intent without DMR side effects."""
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     cluster = fake_runtime_model_cluster_factory(include_spark=include_spark)
-    installed = {"nemotron-3.5-lightning:latest"} if include_spark else {"nemotron-3.5-bolt-e4b:q4_k_m"}
+    installed = (
+        {"nemotron-3.5-lightning:latest"}
+        if include_spark
+        else {"nemotron-3.5-bolt-e4b:q4_k_m"}
+    )
     if already_installed:
         cluster.installed_by_node[expected_node] = installed
 
@@ -383,25 +415,56 @@ def test_injected_cluster_run_defers_models_until_first_use(
         assert cluster.remote_reconciliations == []
         return json.dumps({"job_id": "job-injected-models"})
 
-    submit = mocker.patch("mn_cli.libs.run_cmds.client.create_job",
-                         side_effect=create_without_model_preparation)
-    mocker.patch("mn_cli.libs.run_cmds.client.stream_events",
-                 return_value=[json.dumps({"type": "job_completed"})])
+    submit = mocker.patch(
+        "mn_cli.libs.run_cmds.client.create_job",
+        side_effect=create_without_model_preparation,
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.stream_events",
+        return_value=[json.dumps({"type": "job_completed"})],
+    )
     bundle_dir = tmp_path / "injected-model-run"
     bundle_dir.mkdir()
-    write_package_manifest(bundle_dir / "manifest.json", json.dumps(_workflow_manifest({
-        "nodes": [{"node_id": "assistant", "config": {
-            "runner_module": "MirrorNeuron.Runner.HostLocal"}}],
-    })))
+    write_package_manifest(
+        bundle_dir / "manifest.json",
+        json.dumps(
+            _workflow_manifest(
+                {
+                    "nodes": [
+                        {
+                            "node_id": "assistant",
+                            "config": {
+                                "runner_module": "MirrorNeuron.Runner.HostLocal"
+                            },
+                        }
+                    ],
+                }
+            )
+        ),
+    )
     config_dir = bundle_dir / "config"
     config_dir.mkdir(exist_ok=True)
-    (config_dir / "default.json").write_text(json.dumps({"llm": {
-        "enabled": True, "model": model, "default_config": "primary",
-        "configs": {"primary": {"provider": "docker_model_runner", "model": model}},
-    }}))
+    (config_dir / "default.json").write_text(
+        json.dumps(
+            {
+                "llm": {
+                    "enabled": True,
+                    "model": model,
+                    "default_config": "primary",
+                    "configs": {
+                        "primary": {"provider": "docker_model_runner", "model": model}
+                    },
+                }
+            }
+        )
+    )
 
-    run_cmds.run_bundle(str(bundle_dir), follow_seconds=0, force=force,
-                        runtime_model_dependencies=cluster.dependencies())
+    run_cmds.run_bundle(
+        str(bundle_dir),
+        follow_seconds=0,
+        force=force,
+        runtime_model_dependencies=cluster.dependencies(),
+    )
 
     submitted_manifest = json.loads(submit.call_args.args[0])
     environment = submitted_manifest["agents"]["nodes"][0]["config"]["environment"]
@@ -419,7 +482,8 @@ def test_run_auto_schedule_creates_resource_wait_schedule(
 ):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch(
-        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id", return_value="run-scheduled"
+        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id",
+        return_value="run-scheduled",
     )
     mock_submit = mocker.patch(
         "mn_cli.libs.run_cmds.client.create_job",
@@ -453,7 +517,8 @@ def test_run_auto_schedule_creates_resource_wait_schedule(
 def test_run_force_skips_input_validation(mocker, tmp_path, monkeypatch):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch(
-        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id", return_value="forced-run"
+        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id",
+        return_value="forced-run",
     )
     mock_submit = mocker.patch(
         "mn_cli.libs.run_cmds.client.create_job",
@@ -510,7 +575,8 @@ def test_run_prevalidates_command_rules_before_core_submission(
 ):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch(
-        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id", return_value="prevalidated-run"
+        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id",
+        return_value="prevalidated-run",
     )
     mock_submit = mocker.patch(
         "mn_cli.libs.run_cmds.client.create_job",
@@ -644,7 +710,8 @@ def test_run_submits_python_environment_requirements_payload(
 ):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch(
-        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id", return_value="python-env-run"
+        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id",
+        return_value="python-env-run",
     )
     mock_submit = mocker.patch(
         "mn_cli.libs.run_cmds.client.create_job",
@@ -676,7 +743,8 @@ def test_run_submits_python_environment_requirements_payload(
     )
     env_dir = tmp_path / "prepared-python"
     mocker.patch(
-        "mn_cli.libs.run_cmds.handlers.doctor._doctor_prepare_python_env", return_value=env_dir
+        "mn_cli.libs.run_cmds.handlers.doctor._doctor_prepare_python_env",
+        return_value=env_dir,
     )
 
     bundle_dir = tmp_path / "run_bundle"
@@ -823,7 +891,8 @@ def test_run_auto_creates_run_store_identity_for_local_blueprint(
         return_value=[json.dumps({"type": "job_completed"})],
     )
     mocker.patch(
-        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id", return_value="bp-1-auto-run"
+        "mn_cli.libs.run_cmds.run_state._make_blueprint_run_id",
+        return_value="bp-1-auto-run",
     )
 
     bundle_dir = tmp_path / "run_bundle"
@@ -988,8 +1057,10 @@ def test_run_starts_pre_launch_hook_before_submit(mocker, tmp_path, monkeypatch)
         return process
 
     popen = mocker.Mock(side_effect=fake_popen)
-    mocker.patch("mn_cli.libs.run_cmds.run_state.subprocess",
-                 SimpleNamespace(**{**vars(subprocess), "Popen": popen}))
+    mocker.patch(
+        "mn_cli.libs.run_cmds.run_state.subprocess",
+        SimpleNamespace(**{**vars(subprocess), "Popen": popen}),
+    )
 
     run_cmds.run_bundle(str(bundle_dir), follow_seconds=0)
 
@@ -1139,8 +1210,12 @@ def test_run_executes_post_launch_hook_after_terminal_status(
         )
         return process
 
-    mocker.patch("mn_cli.libs.run_cmds.run_state.subprocess",
-                 SimpleNamespace(**{**vars(subprocess), "Popen": mocker.Mock(side_effect=fake_popen)}))
+    mocker.patch(
+        "mn_cli.libs.run_cmds.run_state.subprocess",
+        SimpleNamespace(
+            **{**vars(subprocess), "Popen": mocker.Mock(side_effect=fake_popen)}
+        ),
+    )
 
     run_cmds.run_bundle(
         str(bundle_dir),
@@ -1383,7 +1458,9 @@ def test_run_uncertain_submission_preserves_resources(mocker, tmp_path):
             metadata={"submission_id": "submission-that-failed"},
         ),
     )
-    cleanup = mocker.patch("mn_cli.libs.run_cmds.handlers.run.cleanup_job_definition_resources")
+    cleanup = mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.run.cleanup_job_definition_resources"
+    )
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
@@ -1505,7 +1582,9 @@ def test_run_existing_job_preserves_definition_when_update_outcome_is_uncertain(
             metadata={"submission_id": "job-existing-def-fresh"},
         ),
     )
-    cleanup = mocker.patch("mn_cli.libs.run_cmds.handlers.run.cleanup_job_definition_resources")
+    cleanup = mocker.patch(
+        "mn_cli.libs.run_cmds.handlers.run.cleanup_job_definition_resources"
+    )
 
     bundle_dir = tmp_path / "run_bundle"
     bundle_dir.mkdir()
@@ -1643,43 +1722,104 @@ def test_run_reports_remote_docker_worker_preparation(mocker, tmp_path):
     assert "build" not in submitted["metadata"]["mn_docker_workers"]["services"][0]
 
 
-def test_blueprint_run_prepares_openshell_only_on_the_selected_owner(tmp_path, mocker, monkeypatch):
+def test_blueprint_run_prepares_openshell_only_on_the_selected_owner(
+    tmp_path, mocker, monkeypatch
+):
     from mn_sdk.openshell_native import CAPABILITY, PROTOCOL, sandbox_name
 
     monkeypatch.setenv("MN_NODE_NAME", "mini")
     monkeypatch.setenv("MN_SYNCTHING_ENABLED", "0")
-    node = {"node_id": "review", "agent_type": "executor", "type": "generic",
-            "config": {"runner_module": "MirrorNeuron.Runner.OpenShell", "from": "base",
-                       "reuse_shared_sandbox": True}}
-    write_package_manifest(tmp_path / "manifest.json", json.dumps(_workflow_manifest({"nodes": [node]})))
-    mocker.patch("mn_cli.libs.run_cmds.model_cluster._resolve_and_apply_workflow_placement",
-                 return_value={"mode": "single_node", "selected_node": "spark", "selection": "configured"})
-    summary = json.dumps({"nodes": [{"name": "spark", "status": "healthy", "native_sdk_grpc": {
-        "enabled": True, "target": "spark:55052", "capabilities": [CAPABILITY]}}]})
+    node = {
+        "node_id": "review",
+        "agent_type": "executor",
+        "type": "generic",
+        "config": {
+            "runner_module": "MirrorNeuron.Runner.OpenShell",
+            "from": "base",
+            "reuse_shared_sandbox": True,
+        },
+    }
+    write_package_manifest(
+        tmp_path / "manifest.json", json.dumps(_workflow_manifest({"nodes": [node]}))
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.model_cluster._resolve_and_apply_workflow_placement",
+        return_value={
+            "mode": "single_node",
+            "selected_node": "spark",
+            "selection": "configured",
+        },
+    )
+    summary = json.dumps(
+        {
+            "nodes": [
+                {
+                    "name": "spark",
+                    "status": "healthy",
+                    "native_sdk_grpc": {
+                        "enabled": True,
+                        "target": "spark:55052",
+                        "capabilities": [CAPABILITY],
+                    },
+                }
+            ]
+        }
+    )
     mocker.patch("mn_cli.libs.run_cmds.client.get_resource", return_value=summary)
     mocker.patch("mn_cli.libs.run_cmds.client.get_system_summary", return_value=summary)
-    mocker.patch("mn_cli.libs.run_cmds.openshell._openshell_executable", side_effect=AssertionError("local CLI"))
-    mocker.patch("mn_sdk.openshell_preparation.prepare_openshell", side_effect=AssertionError("local SDK"))
+    mocker.patch(
+        "mn_cli.libs.run_cmds.openshell._openshell_executable",
+        side_effect=AssertionError("local CLI"),
+    )
+    mocker.patch(
+        "mn_sdk.openshell_preparation.prepare_openshell",
+        side_effect=AssertionError("local SDK"),
+    )
 
     def prepare(request):
         if request.get("operation") == "commit":
             return {"updated": 1}
         name = sandbox_name(request["submission_id"], request["node_id"])
-        return {**request, "protocol": PROTOCOL, "prepared": True, "from": "base",
-                "sandbox_name": name, "ssh_host": "openshell-" + name}
+        return {
+            **request,
+            "protocol": PROTOCOL,
+            "prepared": True,
+            "from": "base",
+            "sandbox_name": name,
+            "ssh_host": "openshell-" + name,
+        }
 
     remote = mocker.Mock()
     remote.set_resource.side_effect = prepare
     factory = mocker.patch("mn_sdk.client.Client", return_value=remote)
-    submit = mocker.patch("mn_cli.libs.run_cmds.client.create_job", return_value='{"job_id":"job-test"}')
-    mocker.patch("mn_cli.libs.run_cmds.client.stream_events", return_value=[json.dumps({"type": "job_completed"})])
+    submit = mocker.patch(
+        "mn_cli.libs.run_cmds.client.create_job", return_value='{"job_id":"job-test"}'
+    )
+    mocker.patch(
+        "mn_cli.libs.run_cmds.client.stream_events",
+        return_value=[json.dumps({"type": "job_completed"})],
+    )
     result = runner.invoke(app, ["blueprint", "run", str(tmp_path)])
     assert result.exit_code == 0, result.stdout
     factory.assert_any_call(target="spark:55052", timeout=1800)
-    assert len([c for c in remote.set_resource.call_args_list if c.args[0].get("node_id") == "review"]) == 1
-    assert any(c.args[0].get("operation") == "commit" for c in remote.set_resource.call_args_list)
+    assert (
+        len(
+            [
+                c
+                for c in remote.set_resource.call_args_list
+                if c.args[0].get("node_id") == "review"
+            ]
+        )
+        == 1
+    )
+    assert any(
+        c.args[0].get("operation") == "commit"
+        for c in remote.set_resource.call_args_list
+    )
     sent = json.loads(submit.call_args.args[0])
-    assert sent["metadata"]["mn_native_resources"]["resources"][0]["owner_node"] == "spark"
+    assert (
+        sent["metadata"]["mn_native_resources"]["resources"][0]["owner_node"] == "spark"
+    )
 
 
 def test_run_keyboard_interrupt(mocker, tmp_path):

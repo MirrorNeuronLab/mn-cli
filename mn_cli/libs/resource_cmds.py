@@ -9,12 +9,17 @@ from mn_cli.libs.ui import print_detail, print_success_confirmation
 from mn_cli.output import record_result
 from mn_cli.shared import client, console
 
+
 def list_resources():
     """Show CPU, GPU, memory, and disk resources reported by the core"""
     try:
         resource = json.loads(client.get_resource())
         enriched = ensure_combined_resource_totals(resource)
-        print_detail(console, "Resources", enriched if isinstance(enriched, dict) else {"resources": enriched})
+        print_detail(
+            console,
+            "Resources",
+            enriched if isinstance(enriched, dict) else {"resources": enriched},
+        )
     except Exception as e:
         handle_cli_error(e, console, "resource show")
 
@@ -52,10 +57,17 @@ def set_resources(
     try:
         payload = {
             key: value
-            for key, value in {"cpu": cpu, "gpu": gpu, "memory": memory, "disk": disk}.items()
+            for key, value in {
+                "cpu": cpu,
+                "gpu": gpu,
+                "memory": memory,
+                "disk": disk,
+            }.items()
             if value is not None
         }
-        resource = ensure_combined_resource_totals(json.loads(client.set_resource(payload)))
+        resource = ensure_combined_resource_totals(
+            json.loads(client.set_resource(payload))
+        )
         print_success_confirmation(
             console,
             "Resource set",

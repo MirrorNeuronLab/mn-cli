@@ -77,7 +77,8 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_RUNTIME_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_CONTAINER_SHARED_STORAGE_ROOT", raising=False)
-    monkeypatch.setattr('mn_cli.libs.run_cmds.context.sync_litellm_gateway',
+    monkeypatch.setattr(
+        "mn_cli.libs.run_cmds.context.sync_litellm_gateway",
         lambda **_kwargs: {
             "status": "running",
             "api_base": "http://mn-litellm-proxy:4000/v1",
@@ -90,7 +91,8 @@ def test_run_ensures_context_engine_when_blueprint_memory_enabled(
 ):
     monkeypatch.setenv("MN_RUNS_ROOT", str(tmp_path / "runs"))
     mocker.patch(
-        "mn_cli.libs.run_cmds.context._make_blueprint_run_id", return_value="context-run"
+        "mn_cli.libs.run_cmds.context._make_blueprint_run_id",
+        return_value="context-run",
     )
     mock_submit = mocker.patch(
         "mn_cli.libs.run_cmds.client.create_job",
@@ -305,7 +307,9 @@ def test_run_does_not_ensure_context_engine_when_memory_disabled_by_env(
         "mn_cli.libs.run_cmds.client.stream_events",
         return_value=[json.dumps({"type": "job_completed"})],
     )
-    mock_ensure = mocker.patch("mn_cli.libs.run_cmds.context.ensure_context_engine_runtime")
+    mock_ensure = mocker.patch(
+        "mn_cli.libs.run_cmds.context.ensure_context_engine_runtime"
+    )
 
     bundle_dir = tmp_path / "context_disabled_bundle"
     bundle_dir.mkdir()

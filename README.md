@@ -11,7 +11,6 @@ Core credentials are generated per installation and shared with API/native/SDK
 clients through private files; installer reset rotates them. Concurrent startup
 is rejected while another start or reset owns the lifecycle lock.
 
-
 The CLI requires Python 3.12 or newer. The managed runtime and contributor/CI toolchains use Python 3.12, matching Core HostLocal, the SDK, and the API.
 
 OpenShell worker policies may declare `policy_config_bindings: true` and bind
@@ -109,6 +108,12 @@ With the default Syncthing shared storage enabled, `mn node add` configures and
 verifies both sidecars before registering the Core federation pair. A failed
 shared-storage connection creates no new Core federation pair and tells the
 operator to correct the sidecars before retrying.
+
+Handshake identities, endpoints and credentials are validated before that
+storage prerequisite. A failed rejoin preserves existing registrations and
+reports any uncertain cleanup. Successful federation remains successful when
+model synchronization is pending: the confirmation says the model monitor will
+retry instead of claiming models are already shared.
 
 Runtime startup readies the host-native SDK service before Core. Calling
 `mn runtime start` again reuses a healthy native service when its effective
@@ -589,8 +594,15 @@ snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
   snapshots retain the last safe routes until departure is confirmed.
   The steady-state inventory check runs once per minute by default. If a
   federated Core's shared snapshot omits a peer or remains stale, the monitor
-  reads that peer's authoritative Core snapshot directly instead of increasing
-  poll frequency.
+  requests that peer's authoritative snapshot through local Core's authenticated
+  federation transport, retaining the five-second read budget and poll timing.
+  A failed refresh produces one warning, retains existing routes, and defers
+  event acknowledgment. Only a successful read without a model publication is
+  reported as not yet published. Empty published inventories are valid.
+  Status reads, remote model preparation and gateway commands require matching
+  Core/SDK/CLI builds; older Cores report an upgrade requirement. Peer credentials
+  stay in Core.
+  Peer routes preserve the gateway URL and port advertised by Core.
   Gateway route names and `fallback_model` are read from the SDK's merged model
   catalog, including `~/.mn/models/catalog.json` (or `$MN_HOME`) and the
   highest-priority `MN_MODEL_CATALOG_PATH` override. When a local runtime's DHCP
@@ -639,8 +651,7 @@ The installed API, native SDK, and Web UI executables are resolved under
 ## Automatic federation storage recovery
 
 Syncthing runs as the owner of its shared mount, detected inside Docker. Private
-outputs and token ledgers therefore replicate when the host user is not UID
-1000. Startup preserves shared-file permissions and adjusts only Syncthing's
+outputs and token ledgers therefore replicate when the host user is not UID 1000. Startup preserves shared-file permissions and adjusts only Syncthing's
 own configuration directory.
 
 The supervised native runtime checks shared-storage pairing every 30 seconds,
@@ -657,6 +668,7 @@ Install the updated CLI and SDK and restart the native runtime service to enable
 the monitor. No runtime reset or blueprint modification is required. Registration
 is distinct from completed file transfer; DockerWorker preparation still verifies
 the staged context and its readiness marker before building.
+
 # Persistent desktop node identity
 
 `mn runtime start` persists a private, versioned `MN_HOME/node-identity.json`
@@ -744,7 +756,6 @@ Standard `--json` output includes structured planning/submission results and
 error context. Truly unknown IDs remain not found; an unavailable Core is reported
 separately from stored history without its control record.
 
-
 Managed Markdown context turns may bind a trusted serving-tokenizer integration
 with `MN_CONTEXT_TOKEN_COUNTER_FACTORY=package.module:create_counter`. The factory
 receives `request`, `scope` and `principal` keyword arguments and returns a
@@ -824,7 +835,6 @@ including level, blueprint owner, UTC timestamp and actor attribution.
 The SDK selects meaningful activity for the CLI, API, desktop and web monitors;
 raw events remain available for diagnostics.
 
-
 ## Completed analysis and host delivery
 
 The attached run command and background relay resolve host output sources using
@@ -834,7 +844,6 @@ all declared files must still be ready before the configured host copy is delive
 A copy failure is reported separately: completed analysis is retained and does
 not require repeating model calls. Delivery uses the SDK's UTC run archives and
 latest.html entry point, with host receipts outside frozen analysis artifacts.
-
 
 ## Automatic waiting and queue inspection
 
@@ -865,7 +874,6 @@ Move an idle Job and its data with `mn job relocate JOB --node NODE`. Pause its
 schedules and wait for cleanup first. Retrying resumes a durable transfer; add
 `--abort` to cancel before ownership commits. After commit, retry finishes activation
 on the destination. No running execution is silently migrated or replayed.
-
 
 ## Native tools on co-worker addition
 

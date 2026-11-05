@@ -21,9 +21,7 @@ def configure_logging(
     if logger.handlers:
         return logger
 
-    formatter = logging.Formatter(
-        "%(asctime)s %(levelname)s [%(name)s] %(message)s"
-    )
+    formatter = logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
 
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)

@@ -54,7 +54,8 @@ def isolated_mn_home(tmp_path, monkeypatch):
     monkeypatch.delenv("MN_HOST_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_RUNTIME_SHARED_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MN_CONTAINER_SHARED_STORAGE_ROOT", raising=False)
-    monkeypatch.setattr('mn_cli.libs.run_cmds.handlers.monitor.sync_litellm_gateway',
+    monkeypatch.setattr(
+        "mn_cli.libs.run_cmds.handlers.monitor.sync_litellm_gateway",
         lambda **_kwargs: {
             "status": "running",
             "api_base": "http://mn-litellm-proxy:4000/v1",
@@ -871,9 +872,17 @@ def test_monitor_keeps_api_step_state_when_local_event_replay_lags(mocker):
             {"id": "build", "status": "done"},
             {"id": "assess", "status": "done"},
             {"id": "plan", "status": "done"},
-            {"id": "develop", "status": "running", "agents": [
-                {"id": "researcher", "progress": 0.55, "working_on": "DockerWorker command started"}
-            ]},
+            {
+                "id": "develop",
+                "status": "running",
+                "agents": [
+                    {
+                        "id": "researcher",
+                        "progress": 0.55,
+                        "working_on": "DockerWorker command started",
+                    }
+                ],
+            },
             {"id": "publish", "status": "pending"},
         ],
     }
@@ -1055,18 +1064,27 @@ def test_result_error(mocker):
 
 @pytest.mark.parametrize("transport", ["stream", "poll"])
 @pytest.mark.parametrize("status", ["failed", "completed", "cancelled"])
-def test_terminal_monitor_remains_interactive_until_detach(mocker, monkeypatch, transport, status):
+def test_terminal_monitor_remains_interactive_until_detach(
+    mocker, monkeypatch, transport, status
+):
     import importlib
+
     module = importlib.import_module("mn_cli.libs.run_cmds.handlers.monitor")
+
     class StaticLive:
         def __init__(self, *args, **kwargs):
             pass
+
         def __enter__(self):
             return self
+
         def __exit__(self, *args):
             return False
+
     snapshot = {"schema_version": "1", "status": status, "steps": [{"id": "review"}]}
-    mocker.patch.object(module, "config", SimpleNamespace(api_base_url="http://unused", api_token=""))
+    mocker.patch.object(
+        module, "config", SimpleNamespace(api_base_url="http://unused", api_token="")
+    )
     mocker.patch.object(module, "_local_progress_from_run_store", return_value=None)
     mocker.patch.object(module, "_monitor_workflow_shape", return_value=None)
     mocker.patch.object(module, "_interactive_live_output", return_value=True)
@@ -1078,19 +1096,29 @@ def test_terminal_monitor_remains_interactive_until_detach(mocker, monkeypatch, 
     mocker.patch("rich.live.Live", StaticLive)
     mocker.patch.object(module, "fetch_and_save_results")
     seen = []
+
     def keys(state, data, **kwargs):
         if data and data.get("workflow_progress", {}).get("status") == status:
             seen.append(data)
         return len(seen) < 3
+
     mocker.patch.object(module, "_handle_live_workflow_key", side_effect=keys)
     monkeypatch.delenv("MN_JOB_MONITOR_DISABLE_API_STREAM", raising=False)
     if transport == "stream":
-        mocker.patch.object(module, "watch_api_workflow_progress", return_value=_progress_snapshots(snapshot))
+        mocker.patch.object(
+            module,
+            "watch_api_workflow_progress",
+            return_value=_progress_snapshots(snapshot),
+        )
         assert module._live_monitor_api_stream("run") is True
     else:
         mocker.patch.object(module, "_live_monitor_api_stream", return_value=False)
-        fetch = mocker.patch.object(module, "_get_run_for_monitor", return_value=json.dumps({"status": status}))
-        mocker.patch.object(module, "_workflow_progress_for_monitor", return_value=snapshot)
+        fetch = mocker.patch.object(
+            module, "_get_run_for_monitor", return_value=json.dumps({"status": status})
+        )
+        mocker.patch.object(
+            module, "_workflow_progress_for_monitor", return_value=snapshot
+        )
         module._live_monitor("run")
         assert fetch.call_count == 1
     assert len(seen) == 3
@@ -1102,6 +1130,7 @@ def test_detach_cancels_the_pending_sse_read_before_returning(mocker, monkeypatc
     from mn_cli.libs.run_cmds.handlers import monitor as module
 
     observing, closed = [], []
+
     async def blocked(*args, **kwargs):
         try:
             observing.append(True)
@@ -1110,13 +1139,19 @@ def test_detach_cancels_the_pending_sse_read_before_returning(mocker, monkeypatc
         finally:
             closed.append(True)
 
-    mocker.patch.object(module, "config", SimpleNamespace(api_base_url="http://owner", api_token=""))
+    mocker.patch.object(
+        module, "config", SimpleNamespace(api_base_url="http://owner", api_token="")
+    )
     mocker.patch.object(module, "_local_progress_from_run_store", return_value=None)
     mocker.patch.object(module, "_monitor_workflow_shape", return_value=None)
     mocker.patch.object(module, "_interactive_live_output", return_value=False)
     mocker.patch.object(module, "watch_api_workflow_progress", blocked)
     mocker.patch.object(module, "Live")
-    mocker.patch.object(module, "_handle_live_workflow_key", side_effect=lambda *args, **kwargs: not observing)
+    mocker.patch.object(
+        module,
+        "_handle_live_workflow_key",
+        side_effect=lambda *args, **kwargs: not observing,
+    )
     control = mocker.patch.object(module.client, "cancel_run")
     assert module._live_monitor_api_stream("r")
     assert observing == [True] and closed == [True]
@@ -1138,8 +1173,10 @@ def test_monitor_deadline_is_local_to_the_rpc_context(mocker, monkeypatch):
     mocker.patch.object(module, "client", proxy)
     monkeypatch.setenv("MN_JOB_MONITOR_GRPC_TIMEOUT_SECONDS", "45")
     stub = SimpleNamespace(Observe=lambda _, **kwargs: kwargs["timeout"])
+
     def deadline():
         return client._rpc_call(stub, "Observe", None)
+
     try:
         with module._temporary_monitor_rpc_timeout(), ThreadPoolExecutor(1) as pool:
             assert deadline() == 45

@@ -15,10 +15,14 @@ class NodeTopology:
     @classmethod
     def from_summary_node(cls, node: dict[str, Any]) -> "NodeTopology":
         return cls(
-            name=str(node.get("name") or node.get("node") or node.get("node_name") or ""),
+            name=str(
+                node.get("name") or node.get("node") or node.get("node_name") or ""
+            ),
             status=str(node.get("status") or ""),
             self_node=node.get("self?") is True,
-            connected_nodes=frozenset(str(item) for item in node.get("connected_nodes") or []),
+            connected_nodes=frozenset(
+                str(item) for item in node.get("connected_nodes") or []
+            ),
             scheduling_eligible=node.get("scheduling_eligible") is not False,
         )
 

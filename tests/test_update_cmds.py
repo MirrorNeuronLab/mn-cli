@@ -208,9 +208,7 @@ def test_available_updates_does_not_offer_stale_web_ui_downgrade(mocker, tmp_pat
     metadata_file = tmp_path / "install_metadata.json"
     metadata_file.write_text(json.dumps({"core_release_tag": "v1.2.31"}))
     mocker.patch("mn_cli.update_cmds.INSTALL_METADATA_FILE", metadata_file)
-    mocker.patch(
-        "mn_cli.update_cmds._installed_python_version", return_value="1.2.31"
-    )
+    mocker.patch("mn_cli.update_cmds._installed_python_version", return_value="1.2.31")
     mocker.patch(
         "mn_cli.update_cmds._release_plan",
         return_value={
