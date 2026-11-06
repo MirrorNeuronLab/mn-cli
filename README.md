@@ -73,6 +73,10 @@ progress remains available. `--json` output stays unchanged.
 inspecting runtime state, managing jobs, exporting artifacts, and starting local
 services installed by `mn-deploy`.
 
+`mn blueprint list` shows each blueprint's concise `tagline` (up to 80 characters),
+using its description when no tagline is declared. `mn blueprint show <ID>` and
+JSON output retain both the tagline and full description.
+
 ## Quick Start
 
 Requires `mirrorneuron-python-sdk>1.3,<2.0`.

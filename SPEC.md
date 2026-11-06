@@ -637,6 +637,11 @@ primary gate for command and presentation behavior.
 
 ## Canonical blueprint packages
 
+`mn blueprint list` uses the canonical manifest's optional `tagline` in its
+Tagline column, or `description` when no tagline is available. Taglines are
+single-line purpose statements limited by the SDK schema to 1–80 characters.
+Detail and JSON output preserve both `tagline` and `description`.
+
 All blueprint folders and ZIPs use the blueprint/v1 manifest schema and role
 documents owned by `mn_sdk.blueprints`. Catalog indexes contain ordered package
 paths only. Catalog reads are data-only; explicit compilation produces Core's

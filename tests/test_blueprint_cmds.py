@@ -482,6 +482,77 @@ def test_blueprint_list_success(monkeypatch, tmp_path):
     assert "Blueprint 1" in result.stdout
 
 
+@pytest.mark.parametrize("mode", ["auto", "plain"])
+@pytest.mark.parametrize("width", [60, 140])
+def test_blueprint_list_shows_tagline_instead_of_full_description(
+    monkeypatch, tmp_path, mode, width
+):
+    _write_catalog(
+        tmp_path / "index.json",
+        [
+            {
+                "id": "bp-1",
+                "name": "Blueprint 1",
+                "tagline": "Operate Mac apps",
+                "description": "A detailed explanation reserved for the blueprint detail view.",
+            }
+        ],
+    )
+    _use_local_blueprint_source(monkeypatch, tmp_path)
+    monkeypatch.setenv("MN_CLI_OUTPUT", mode)
+    monkeypatch.setenv("NO_COLOR", "1")
+    stream = StringIO()
+    monkeypatch.setattr(
+        blueprint_cmds,
+        "console",
+        Console(file=stream, width=width, force_terminal=False),
+    )
+    result = runner.invoke(app, ["blueprint", "list"])
+    assert result.exit_code == 0, result.output
+    rendered = stream.getvalue()
+    assert "Tagline" in rendered
+    assert "OperateMacapps" in "".join(rendered.split())
+    assert "detailed" not in rendered
+
+
+def test_blueprint_list_uses_description_when_tagline_is_absent(monkeypatch, tmp_path):
+    _write_catalog(
+        tmp_path / "index.json",
+        [{"id": "bp-1", "name": "Blueprint 1", "description": "Review evidence"}],
+    )
+    _use_local_blueprint_source(monkeypatch, tmp_path)
+    result = runner.invoke(app, ["blueprint", "list"])
+    assert result.exit_code == 0
+    assert "Review evidence" in result.stdout
+
+
+@pytest.mark.parametrize("command", [["list"], ["show", "bp-1"]])
+def test_blueprint_json_preserves_tagline_and_description(
+    monkeypatch, tmp_path, command
+):
+    tagline = "Operate Mac apps"
+    description = "Operate apps and websites on your Mac from a general prompt."
+    _write_catalog(
+        tmp_path / "index.json",
+        [
+            {
+                "id": "bp-1",
+                "name": "Blueprint 1",
+                "tagline": tagline,
+                "description": description,
+            }
+        ],
+    )
+    _use_local_blueprint_source(monkeypatch, tmp_path)
+    source_args = ["--source", str(tmp_path)] if command[0] == "show" else []
+    result = runner.invoke(app, ["blueprint", *command, *source_args, "--json"])
+    assert result.exit_code == 0, result.output
+    payload = cli_data(result)
+    record = payload["items"][0] if command == ["list"] else payload
+    assert record["tagline"] == tagline
+    assert record["description"] == description
+
+
 def test_blueprint_list_uses_persisted_local_source(monkeypatch, tmp_path):
     catalog = tmp_path / "catalog"
     catalog.mkdir(exist_ok=True)

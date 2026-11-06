@@ -721,13 +721,13 @@ def blueprint_list(ctx: typer.Context):
     index_path = storage_dir / "index.json"
     try:
         blueprints = _load_blueprint_index(index_path)
-        table = Table("ID", "Name", "Job Name", "Description")
+        table = Table("ID", "Name", "Job Name", "Tagline")
         for bp in blueprints:
             table.add_row(
                 bp.get("id", "N/A"),
                 bp.get("name", "N/A"),
                 bp.get("job_name", "N/A"),
-                bp.get("description", ""),
+                bp.get("tagline") or bp.get("description", ""),
             )
         from mn_cli.output import record_result
 
