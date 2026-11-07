@@ -668,9 +668,7 @@ def generate_workflow_progress_layout(
     )
 
     preparations = [
-        item
-        for item in progress.get("runtime_model_preparations", [])
-        if isinstance(item, dict)
+        item for item in progress.get("preparations", []) if isinstance(item, dict)
     ]
     staged_input_wait = _staged_input_wait_status(progress)
 
@@ -740,16 +738,11 @@ def _runtime_model_preparation_status(
 ) -> Text:
     """Keep lazy model preparation visible without displacing agent progress."""
 
-    targets = [
-        f"{_runtime_model_display_name(str(item.get('model') or 'runtime model'))} "
-        f"on {item.get('node') or 'the selected node'}"
-        for item in preparations
-    ]
+    from mn_sdk_common.preparation_progress import preparation_view
+
     return Text(
-        f"Preparing {'; '.join(targets)}…",
+        "\n".join(preparation_view(item)["message"] for item in preparations),
         style="dim cyan",
-        overflow="ellipsis",
-        no_wrap=True,
     )
 
 
@@ -847,6 +840,11 @@ def _event_summary_text(event: Mapping[str, Any]) -> Text:
 
 
 def _event_detail_text(event: Mapping[str, Any]) -> str:
+    from mn_sdk_common.preparation_progress import preparation_event_message
+
+    preparation = preparation_event_message(event)
+    if preparation:
+        return preparation
     payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
     for mapping in (event, payload):
         direct = mapping.get("detail") or mapping.get("message")
@@ -988,6 +986,7 @@ def _workflow_agent_table(
                 else Text(status, style=_status_color(status))
             )
             if str(agent.get("workflow_kind") or "") == "service"
+            and not agent.get("preparations")
             else _progress_renderable(agent)
         )
         table.add_row(
@@ -1193,6 +1192,11 @@ def _agent_id(agent: dict[str, Any]) -> str:
 
 
 def _working_on(agent: dict[str, Any]) -> str:
+    from mn_sdk_common.preparation_progress import preparation_view
+
+    preparations = agent.get("preparations") or []
+    if preparations:
+        return preparation_view(preparations[0])["message"]
     for key in (
         "working_on",
         "current_task",
@@ -1222,6 +1226,12 @@ def _progress_text(agent: dict[str, Any]) -> str:
 
 
 def _progress_renderable(agent: dict[str, Any]):
+    from mn_sdk_common.preparation_progress import preparation_view
+
+    preparations = agent.get("preparations") or []
+    if preparations:
+        percent = preparation_view(preparations[0])["percent"]
+        return Text("Preparing…" if percent is None else f"{percent:g}%", style="cyan")
     progress = _agent_progress(agent)
     grid = Table.grid(expand=False, padding=(0, 1))
     grid.add_column(width=16, no_wrap=True)

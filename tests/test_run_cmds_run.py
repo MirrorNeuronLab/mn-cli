@@ -108,7 +108,7 @@ def isolated_mn_home(tmp_path, monkeypatch):
     )
 
 
-def test_runtime_model_events_report_model_and_node_immediately():
+def test_runtime_model_events_report_safe_preparation_immediately():
     event = {
         "type": "runtime_model_install_started",
         "payload": {
@@ -118,12 +118,10 @@ def test_runtime_model_events_report_model_and_node_immediately():
         },
     }
 
-    assert run_cmds._runtime_model_event_message(event) == (
-        "Installing nemotron-3.5-bolt-e4b:q4_k_m on mirror_neuron@local."
-    )
+    assert run_cmds._runtime_model_event_message(event) == "Preparing the model"
 
 
-def test_runtime_model_progress_event_reports_dmr_bytes_and_elapsed_time():
+def test_runtime_model_progress_event_reports_measured_percent_without_identity():
     event = {
         "type": "runtime_model_install_progress",
         "payload": {
@@ -137,9 +135,7 @@ def test_runtime_model_progress_event_reports_dmr_bytes_and_elapsed_time():
         },
     }
 
-    assert run_cmds._runtime_model_event_message(event) == (
-        "Nemotron 3.5 Lightning on spark: downloading 12.0 GiB / 24.0 GiB (50%) (elapsed 1.2m)"
-    )
+    assert run_cmds._runtime_model_event_message(event) == "Downloading the model (50%)"
 
 
 def test_run_success(mocker, tmp_path, monkeypatch):

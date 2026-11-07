@@ -142,6 +142,11 @@ def _stream_and_format_events(
                         elif event_type in {
                             "runtime_model_selection_started",
                             "runtime_model_selected",
+                            "runtime_model_wait_started",
+                            "runtime_model_wait_finished",
+                            "runtime_preparation_started",
+                            "runtime_preparation_progress",
+                            "runtime_preparation_finished",
                             "runtime_model_install_started",
                             "runtime_model_install_progress",
                             "runtime_model_ready",
@@ -501,25 +506,9 @@ def _stream_and_format_workflow_events(
 
 
 def _runtime_model_event_message(event: dict[str, Any]) -> str:
-    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-    if str(event.get("type") or "") == "runtime_model_install_progress":
-        model = _runtime_model_display_name(
-            str(payload.get("model") or "runtime model")
-        )
-        node = str(payload.get("node") or "the selected node")
-        phase = str(payload.get("phase") or "resolving").replace("_", " ")
-        progress = _runtime_model_download_progress(payload)
-        detail = progress or str(payload.get("message") or phase)
-        if payload.get("stalled"):
-            detail = f"still preparing — {payload.get('message') or 'DMR has not supplied an update'}"
-        elapsed = _runtime_model_elapsed_label(payload.get("elapsed_ms"))
-        return f"{model} on {node}: {detail} (elapsed {elapsed})"
-    message = str(payload.get("message") or event.get("message") or "").strip()
-    if message:
-        return message
-    model = str(payload.get("model") or "runtime model").strip()
-    node = str(payload.get("node") or "the selected node").strip()
-    return f"{model} on {node}: {event.get('type') or 'update'!s}"
+    from mn_sdk_common.preparation_progress import preparation_event_message
+
+    return preparation_event_message(event) or "Preparing the model"
 
 
 def _runtime_model_download_progress(payload: dict[str, Any]) -> str:

@@ -212,7 +212,7 @@ def test_workflow_monitor_renders_minimal_runtime_model_status_below_agent_progr
                     "status": "running",
                     "elapsed_seconds": 72,
                     "steps": [],
-                    "runtime_model_preparations": [
+                    "preparations": [
                         {
                             "request_id": "nemotron-pull",
                             "model": "nemotron-3.5-lightning:latest",
@@ -233,10 +233,12 @@ def test_workflow_monitor_renders_minimal_runtime_model_status_below_agent_progr
         )
         rendered = console.export_text()
 
-        status = "Preparing Nemotron 3.5 Lightning on spark…"
+        status = "Downloading the model (50%)"
         assert status in rendered
         assert rendered.index("Agents  |  0 agents") < rendered.index(status)
-        assert sum("Preparing " in line for line in rendered.splitlines()) == 1
+        assert sum("Downloading " in line for line in rendered.splitlines()) == 1
+        assert "Nemotron" not in rendered
+        assert "spark" not in rendered
         assert "Runtime model preparation" not in rendered
         assert "12.0 GiB / 24.0 GiB (50%)" not in rendered
         assert "still preparing" not in rendered
@@ -480,3 +482,38 @@ def test_activity_feed_leads_with_domain_message_in_plain_output():
     )
     assert text.plain == "Person presence confirmed"
     assert "AGENT_ACTIVITY" not in text.plain
+
+
+def test_preparation_labels_and_percent_units_in_plain_and_rich_output(monkeypatch):
+    from mn_cli.libs.ui import _progress_renderable, _working_on
+
+    for mode in ("plain", "rich"):
+        monkeypatch.setenv("MN_CLI_OUTPUT", mode)
+        for width in (60, 160):
+            for phase, percent, label in (
+                ("downloading", 1, "Downloading the OCR model (1%)"),
+                ("loading", None, "Loading the OCR model"),
+                ("waiting", None, "Waiting for the OCR model"),
+            ):
+                preparation = {
+                    "purpose": "ocr",
+                    "phase": phase,
+                    "percent": percent,
+                    "model": "PRIVATE",
+                    "message": "PRIVATE",
+                }
+                agent = {
+                    "status": "running",
+                    "progress": 0.6,
+                    "preparations": [preparation],
+                }
+                console, stream = _capture_console(
+                    width=width, no_color=(mode == "plain")
+                )
+                console.print(_working_on(agent))
+                console.print(_progress_renderable(agent))
+                output = stream.getvalue()
+                assert label in output
+                assert "PRIVATE" not in output
+                assert "60%" not in output
+                assert "100%" not in output
