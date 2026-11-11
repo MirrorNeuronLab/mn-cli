@@ -1,9 +1,10 @@
 """CLI parsing for remote catalog operations; never resolve local sources."""
 
 from uuid import uuid4
+from pathlib import Path
 
 import typer
-from mn_sdk.remote_api import resource_id
+from mn_sdk.runtime_resources import resource_id
 from mn_cli.client_commands import confirm, unsupported
 
 
@@ -22,13 +23,80 @@ def catalog_id(value):
 def execute(api, command, values):
     action = command[1]
     ctx = values.get("ctx")
-    if any(
+    local_source = any(
         values.get(key) for key in ("source", "blueprint_repo", "revision", "offline")
-    ) or (ctx is not None and (ctx.obj or {}).get("blueprint_repo")):
-        unsupported(
-            "Client mode uses the remote catalog; local source-selection options are unavailable."
+    ) or bool(ctx is not None and (ctx.obj or {}).get("blueprint_repo"))
+    target = str(
+        values.get("target")
+        or values.get("blueprint_id")
+        or values.get("bundle_path")
+        or ""
+    )
+    local_source = local_source or bool(
+        target
+        and (
+            target.startswith((".", "/", "~"))
+            or "/" in target
+            or "\\" in target
+            or Path(target).exists()
         )
+    )
     key = {"Idempotency-Key": str(uuid4())}
+    local_extended = (
+        action == "remove"
+        and values.get("all_")
+        or action == "cleanup"
+        and (
+            values.get("blueprint_id")
+            or any(
+                not values.get(k, True)
+                for k in ("include_files", "include_docker", "include_dead")
+            )
+        )
+    )
+    if local_source or local_extended:
+        from mn_sdk.runtime_connection import load_connection
+        from mn_sdk.runtime_control import RuntimeControlClient
+
+        connection = load_connection()
+        if not connection.runtime_home:
+            unsupported(
+                "Local sources require an attached local runtime. Use mn node add local --runtime-home <PATH>, or choose a remote catalog ID."
+            )
+        options = {
+            name: str(value) if isinstance(value, Path) else value
+            for name, value in values.items()
+            if name != "ctx"
+        }
+        if ctx is not None and (ctx.obj or {}).get("blueprint_repo"):
+            options["blueprint_repo"] = ctx.obj["blueprint_repo"]
+        for name in ("target", "bundle_path", "source", "blueprint_repo"):
+            value = options.get(name)
+            if value and "://" not in str(value) and not str(value).startswith("git@"):
+                path = Path(value).expanduser()
+                if (
+                    path.is_absolute()
+                    or str(value).startswith((".", "~"))
+                    or path.exists()
+                ):
+                    options[name] = str(path.resolve())
+        if action in {"remove", "cleanup"} and not values.get("dry_run"):
+            confirm(
+                "Remove blueprints"
+                if action == "remove"
+                else "Clean unused runtime resources",
+                values,
+            )
+        local = {
+            "runtime_home": connection.runtime_home,
+            "action": action,
+            "options": options,
+            "request_id": key["Idempotency-Key"],
+        }
+        if action == "run":
+            return run(api, None, values, key, local=local)
+        with RuntimeControlClient(connection, timeout=3600) as client:
+            return client.command("blueprint.local", local)
     if action == "list":
         return api.items("/blueprints")
     if action == "update":
@@ -89,9 +157,9 @@ def execute(api, command, values):
     return run(api, path, values, key)
 
 
-def run(api, path, values, headers):
-    from mn_cli.libs.blueprint_cmds import _parse_config_set_overrides
-    from mn_cli.libs.run_cmds.common import _run_schedule_attrs
+def run(api, path, values, headers, *, local=None):
+    from mn_cli.option_values import _parse_config_set_overrides
+    from mn_cli.option_values import _run_schedule_attrs
 
     if values.get("queue") and (values.get("schedule") or values.get("auto_schedule")):
         raise typer.BadParameter(
@@ -110,7 +178,7 @@ def run(api, path, values, headers):
             config.setdefault("web_ui", {}).setdefault("service", {})[field] = values[
                 flag
             ]
-    if values.get("update"):
+    if values.get("update") and local is None:
         operation = api.request(
             "POST",
             "/blueprint-catalog-refreshes",
@@ -140,7 +208,13 @@ def run(api, path, values, headers):
     )
     if schedule is not None:
         body["schedule"] = schedule
-    result = api.request("POST", path + "/runs", json=body, headers=headers)
+    if local is not None:
+        from mn_sdk.runtime_control import RuntimeControlClient
+
+        with RuntimeControlClient(timeout=3600) as client:
+            result = client.command("blueprint.local", {**local, "request": body})
+    else:
+        result = api.request("POST", path + "/runs", json=body, headers=headers)
     result["idempotency_key"] = headers["Idempotency-Key"]
     if values.get("web_ui") and result.get("job_id"):
         result["web_ui"] = api.request(

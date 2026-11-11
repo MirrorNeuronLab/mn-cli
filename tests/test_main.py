@@ -16,7 +16,7 @@ runner = CliRunner()
 
 @pytest.fixture(autouse=True)
 def no_local_runtime_mode(mocker):
-    return mocker.patch("mn_cli.main.local_runtime_mode", return_value=None)
+    return mocker.patch("mn_cli.main._runtime_mode_line", return_value=None)
 
 
 def test_version_prints_installed_package_version(mocker):
@@ -50,26 +50,26 @@ def test_short_version_flag_prints_banner(mocker):
 
 
 def test_version_prints_worker_mode(mocker, no_local_runtime_mode):
-    no_local_runtime_mode.return_value = "worker"
+    no_local_runtime_mode.return_value = "Client mode: connected runtime execution"
     mocker.patch("mn_cli.main.metadata.version", return_value="1.2.3")
 
     result = runner.invoke(app, ["--version"])
 
     assert result.exit_code == 0
     assert result.stdout == (
-        f"{format_banner('MirrorNeuron CLI')}\nversion 1.2.3\nruntime mode: worker\n"
+        f"{format_banner('MirrorNeuron CLI')}\nversion 1.2.3\nClient mode: connected runtime execution\n"
     )
 
 
 def test_short_version_prints_worker_mode(mocker, no_local_runtime_mode):
-    no_local_runtime_mode.return_value = "worker"
+    no_local_runtime_mode.return_value = "Client mode: connected runtime execution"
     mocker.patch("mn_cli.main.metadata.version", return_value="1.2.3")
 
     result = runner.invoke(app, ["-v"])
 
     assert result.exit_code == 0
     assert result.stdout == (
-        f"{format_banner('MirrorNeuron CLI')}\nversion 1.2.3\nruntime mode: worker\n"
+        f"{format_banner('MirrorNeuron CLI')}\nversion 1.2.3\nClient mode: connected runtime execution\n"
     )
 
 
@@ -81,7 +81,7 @@ def test_no_args_prints_banner_above_help(mocker):
     assert "Usage:" in result.stdout
     assert "Examples:" in result.stdout
     assert "mn blueprint list" in result.stdout
-    assert "MN_GRPC_TARGET" in result.stdout
+    assert "mn node add" in result.stdout
 
 
 def test_no_args_help_remains_readable_on_narrow_terminal(monkeypatch):
@@ -95,13 +95,13 @@ def test_no_args_help_remains_readable_on_narrow_terminal(monkeypatch):
 
 
 def test_no_args_prints_worker_mode_above_help(mocker, no_local_runtime_mode):
-    no_local_runtime_mode.return_value = "worker"
+    no_local_runtime_mode.return_value = "Client mode: connected runtime execution"
 
     result = runner.invoke(app, [])
 
     assert result.exit_code == 0
     assert result.stdout.startswith(
-        f"{format_banner('MirrorNeuron CLI')}\nRuntime mode: worker\n"
+        f"{format_banner('MirrorNeuron CLI')}\nClient mode: connected runtime execution\n"
     )
     assert "Usage:" in result.stdout
 
@@ -193,17 +193,14 @@ def test_runtime_help_includes_sidecar_restart_command():
     assert "restart-sidecars" in result.stdout
 
 
-def test_runtime_start_checks_for_available_upgrade(mocker):
-    start_server = mocker.patch("mn_cli.libs.sys_cmds._start_server")
-    notify = mocker.patch(
-        "mn_cli.libs.sys_cmds.update_cmds.notify_if_upgrade_available"
+def test_runtime_start_delegates_to_installed_lifecycle(mocker):
+    lifecycle = mocker.patch(
+        "mn_sdk.installed_lifecycle.run", return_value={"status": "ready"}
     )
-
     result = runner.invoke(app, ["runtime", "start"])
-
-    assert result.exit_code == 0
-    start_server.assert_called_once_with(host=None, grpc_port=55051)
-    notify.assert_called_once_with()
+    assert result.exit_code == 0, result.output
+    assert lifecycle.call_args.args[0] == "start"
+    assert lifecycle.call_args.args[1] == {"host": None, "grpc_port": 55051}
 
 
 def test_runtime_update_returns_upgrade_migration_hint():

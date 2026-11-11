@@ -5,7 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from mn_sdk.errors import AppError
-from mn_sdk.remote_api import resource_id
+from mn_sdk.runtime_resources import resource_id
 from mn_cli.client_commands import confirm, unsupported
 from mn_cli.client_runs import watch_operation
 
@@ -40,7 +40,17 @@ def execute(api, command, values):
         )
     if family == "resource":
         if action == "set":
-            unsupported("Configure runtime resource limits on the remote node.")
+            from mn_sdk.runtime_control import RuntimeControlClient
+
+            with RuntimeControlClient() as client:
+                return client.command(
+                    "resource.set",
+                    {
+                        key: value
+                        for key, value in values.items()
+                        if key in {"cpu", "gpu", "memory", "disk"} and value is not None
+                    },
+                )
         return api.request(
             "GET", "/metrics" if action == "usage" else "/runtime/resources"
         )
@@ -60,15 +70,19 @@ def execute(api, command, values):
             params={k: v for k, v in params.items() if k != "name"},
         )
     if family == "model":
-        if action == "list":
-            return api.items(
-                "/models", installed_only=not values.get("available", False)
+        if action == "remove" and not values.get("dry_run"):
+            confirm("Remove this runtime model", values)
+            values["yes"] = True
+        from mn_sdk.runtime_control import RuntimeControlClient
+
+        with RuntimeControlClient(timeout=3600) as client:
+            return client.command(
+                "model." + action,
+                {
+                    key: str(value) if isinstance(value, Path) else value
+                    for key, value in values.items()
+                },
             )
-        if action == "show":
-            return api.request("GET", "/models/" + resource_id(values["model"]))
-        unsupported(
-            "Run model setup and lifecycle commands on the remote runtime node."
-        )
     unsupported()
 
 
@@ -98,7 +112,6 @@ def job(api, action, values):
     if action == "create":
         from mn_cli.client_blueprints import catalog_id
 
-        catalog_id(values["bundle"])
         body = {
             "blueprint_id": values["bundle"],
             "resolved_configuration": read_json_option(values.get("config")),
@@ -106,11 +119,54 @@ def job(api, action, values):
         body.update({k: values[k] for k in ("job_id",) if values.get(k)})
         if values.get("node"):
             body["owner_node"] = values["node"]
+        target = values["bundle"]
+        if str(target).startswith((".", "/", "~")) or Path(target).exists():
+            from mn_sdk.runtime_connection import load_connection
+            from mn_sdk.runtime_control import RuntimeControlClient
+
+            connection = load_connection()
+            if not connection.runtime_home:
+                unsupported(
+                    "Local job sources require an attached local runtime. Use mn node add local --runtime-home <PATH>."
+                )
+            with RuntimeControlClient(connection, timeout=3600) as client:
+                operation = client.command(
+                    "blueprint.local",
+                    {
+                        "runtime_home": connection.runtime_home,
+                        "action": "create-job",
+                        "options": {"target": str(Path(target).expanduser().resolve())},
+                        "request": body,
+                        "request_id": key["Idempotency-Key"],
+                    },
+                )
+            if isinstance(operation, dict) and operation.get("operation_id"):
+                operation = watch_operation(api, operation)
+                return operation.get("result") or operation
+            return operation
+        catalog_id(target)
         return api.request("POST", "/job-preparations", json=body, headers=key)
     if action == "restore":
-        unsupported(
-            "Restore backup archives on the remote node; client mode uses remote catalog sources."
-        )
+        source = Path(values["input_path"]).expanduser()
+        try:
+            with source.open("rb") as stream:
+                from mn_sdk.runtime_control import RuntimeControlClient
+
+                with RuntimeControlClient(timeout=3600) as client:
+                    return client.upload(
+                        "restore_job_backup",
+                        {
+                            "start": values.get("start", False),
+                            "job_id": values.get("job_id"),
+                        },
+                        iter(lambda: stream.read(65536), b""),
+                    )
+        except OSError as exc:
+            raise AppError(
+                "MN_BACKUP_UNREADABLE",
+                "Cannot read the requested backup ZIP.",
+                http_status=422,
+            ) from exc
     path = "/jobs/" + resource_id(values["job_id"])
     if action == "show":
         return api.request("GET", path)
@@ -141,7 +197,13 @@ def job(api, action, values):
         return api.request("POST", path + "/data-resets", headers=key)
     if action == "relocate":
         if values.get("abort"):
-            unsupported("Abort relocation on the remote node.")
+            from mn_sdk.runtime_control import RuntimeControlClient
+
+            with RuntimeControlClient() as client:
+                return client.command(
+                    "job.abort-relocation",
+                    {"job_id": values["job_id"], "target_node": values["node"]},
+                )
         return api.request(
             "POST",
             path + "/relocations",
@@ -169,7 +231,7 @@ def node(api, action, values):
         )
     if action == "refresh-token":
         unsupported(
-            "Client mode uses a remote API token; it has no federation join token."
+            "Runtime connection credentials are separate from federation tokens. Manage the runtime credential at its installation, then reconnect with mn node add."
         )
     path = "/nodes/" + resource_id(values["node_name"])
     if action == "drain":
@@ -183,11 +245,20 @@ def node(api, action, values):
         )
         return watch_operation(api, result) if values.get("wait") else result
     if action == "undrain":
-        if values.get("mark_eligible") or values.get("reason"):
-            unsupported(
-                "Set node eligibility and annotated undrain on the remote node."
+        from mn_sdk.runtime_control import RuntimeControlClient
+
+        with RuntimeControlClient() as client:
+            return client.command(
+                "node.undrain",
+                {
+                    "node_name": values["node_name"],
+                    "options": {
+                        key: values[key]
+                        for key in ("mark_eligible", "reason")
+                        if key in values
+                    },
+                },
             )
-        return api.request("DELETE", path + "/drain")
     if action == "maintenance":
         return api.request(
             "PATCH",

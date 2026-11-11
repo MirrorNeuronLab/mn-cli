@@ -7,7 +7,6 @@ import inspect
 
 import click
 import typer
-from mn_sdk.client_install import is_client_install
 from mn_sdk.errors import AppError
 
 
@@ -39,6 +38,25 @@ def display(command: tuple[str, ...], result):
         result = {"status": "complete"}
     if isinstance(result, list):
         result = {"items": result}
+    title = " ".join(command).title()
+    details = result
+    if isinstance(result, dict):
+        from mn_cli.output import json_enabled
+
+        admission = result.get("admission") or {}
+        if (
+            not json_enabled()
+            and isinstance(admission, dict)
+            and admission.get("message")
+        ):
+            console.print(str(admission["message"]), markup=False)
+        if isinstance(admission, dict) and admission.get("state") == "queued":
+            title = "Run queued"
+            details = {
+                key: value
+                for key, value in result.items()
+                if key in {"job_id", "run_id", "status"}
+            }
     if isinstance(result, dict) and isinstance(result.get("items"), list):
         items = result["items"]
         fields = (
@@ -67,33 +85,51 @@ def display(command: tuple[str, ...], result):
             columns=tuple(columns or [("ID", "id")]),
         )
     else:
-        print_detail(console, " ".join(command).title(), result)
+        print_detail(console, title, details)
     record_result(result)
     return result
 
 
 def dispatch(command: tuple[str, ...], values: dict):
-    from mn_sdk.client_install import disconnect, load_connection
-    from mn_sdk.remote_api import RemoteApiClient, connect
+    from mn_sdk.runtime_connection import (
+        connect,
+        load_connection,
+        remove_node,
+        installation_role,
+    )
+    from mn_sdk.runtime_resources import RuntimeResources
 
     family, action = command[:2]
     if family == "node" and action == "add":
-        context = click.get_current_context(silent=True)
-        for key in ("grpc_port", "docker_network_mode", "docker_network_name"):
-            if (
-                context
-                and context.get_parameter_source(key)
-                == click.core.ParameterSource.COMMANDLINE
-            ):
-                unsupported(
-                    "Client node add accepts the remote API URL and API token; omit runtime network options."
-                )
-        return connect(values["host"], values["token"])
+        return connect(
+            values["host"],
+            values.get("token"),
+            grpc_port=values.get("grpc_port"),
+            runtime_home=values.get("runtime_home"),
+        )
     if family == "node" and action == "remove":
-        confirm("Disconnect the client from the remote node", values)
-        return disconnect(values["node_name"])
+        confirm("Remove this runtime from the shared cluster", values)
+        return remove_node(values["node_name"])
     if family == "runtime":
-        if action == "status":
+        if action in {
+            "start",
+            "stop",
+            "restart-sidecars",
+            "ensure-context-engine",
+            "reconnect",
+            "cleanup",
+            "upgrade",
+            "doctor",
+        }:
+            if action == "cleanup" and not values.get("dry_run"):
+                confirm("Clean unused runtime resources", values)
+            if action == "upgrade" and not values.get("check_only"):
+                confirm("Upgrade the installed runtime", values)
+                values["yes"] = True
+            from mn_sdk.installed_lifecycle import run
+
+            return run(action, values)
+        if action == "status" and installation_role() == "client":
             try:
                 connection = load_connection().public()
             except AppError as exc:
@@ -105,21 +141,11 @@ def dispatch(command: tuple[str, ...], values: dict):
                 "runtime_installed": False,
                 "connection": connection,
             }
-        if action != "doctor":
-            unsupported("No local runtime is installed in client mode.")
-    # Local path overrides never reach remote workers as implicit local reads.
-    for key in (
-        "runs_root",
-        "python_envs_dir",
-        "generated_bundles_dir",
-        "bundle_cache_dir",
-        "local",
-    ):
-        if values.get(key):
-            unsupported(
-                "Local runtime and filesystem overrides are unavailable in client mode."
-            )
-    api = RemoteApiClient()
+        if action == "status":
+            from mn_sdk.installed_lifecycle import run
+
+            return run("status", values)
+    api = RuntimeResources()
     if family == "blueprint":
         from mn_cli.client_blueprints import execute
     elif family == "run":
@@ -134,8 +160,6 @@ def _wrap(callback, command):
 
     @functools.wraps(callback)
     def wrapped(*args, **kwargs):
-        if not is_client_install():
-            return callback(*args, **kwargs)
         values = dict(signature.bind(*args, **kwargs).arguments)
         try:
             return display(command, dispatch(command, values))

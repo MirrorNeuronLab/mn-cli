@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from mn_sdk.client_install import installation_home
 from mn_sdk.errors import AppError
-from mn_sdk.remote_api import resource_id
+from mn_sdk.runtime_resources import resource_id
 from mn_cli.client_commands import confirm, unsupported
 
 TERMINAL = {

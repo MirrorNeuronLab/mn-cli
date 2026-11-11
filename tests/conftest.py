@@ -1,8 +1,6 @@
-import json
 from unittest.mock import Mock, patch
 
 import pytest
-from runtime_model_fakes import FakeRuntimeModelCluster
 
 
 class PatchProxy:
@@ -44,58 +42,7 @@ def mocker():
         helper.stopall()
 
 
-@pytest.fixture
-def fake_runtime_model_cluster_factory():
-    """Build a deterministic local-only or Mac-plus-Spark model cluster."""
-
-    return FakeRuntimeModelCluster
-
-
 @pytest.fixture(autouse=True)
-def use_cli_model_pull_for_legacy_install_tests(request, monkeypatch):
-    name = request.node.name
-    if name.startswith("test_model_install_") and "gateway" not in name:
-        from mn_cli.libs import model_cmds
-
-        monkeypatch.setattr(model_cmds, "_endpoint_responds", lambda: False)
-        monkeypatch.setattr(model_cmds, "_model_installed", lambda _model: False)
-        monkeypatch.setattr(
-            model_cmds,
-            "_installed_cluster_model_node",
-            lambda _model: None,
-        )
-        monkeypatch.setattr(
-            model_cmds,
-            "_automatic_model_install_node",
-            lambda _entry: None,
-        )
-        monkeypatch.setattr("mn_sdk.model_service.endpoint_responds", lambda: False)
-
-
-@pytest.fixture(autouse=True)
-def current_job_run_contract(monkeypatch):
-    """Provide a deterministic v1 StartRun response for command-focused tests."""
-    from mn_cli.libs import run_cmds
-
-    monkeypatch.setenv("MN_OUTPUT_COPY_TIMEOUT_SECONDS", "0.1")
-
-    monkeypatch.setattr(
-        run_cmds.client,
-        "get_run",
-        lambda run_id: json.dumps({"run_id": run_id, "status": "completed"}),
-    )
-
-    monkeypatch.setattr(
-        run_cmds.client,
-        "start_run",
-        lambda job_id, *, run_id, inputs: json.dumps(
-            {"job_id": job_id, "run_id": run_id or f"{job_id}-run", "inputs": inputs}
-        ),
-    )
-
-
-@pytest.fixture(autouse=True)
-def disable_background_event_relay_in_tests(monkeypatch):
-    """Keep command tests from leaving detached relays behind after pytest exits."""
-
-    monkeypatch.setenv("MN_RUN_BACKGROUND_EVENT_RELAY", "0")
+def isolated_surface(monkeypatch, tmp_path):
+    monkeypatch.setenv("MN_HOME", str(tmp_path / "surface"))
+    monkeypatch.setenv("MN_ENV", "test")

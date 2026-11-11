@@ -4,8 +4,7 @@ from mn_cli.sdk_path import add_local_sdk_path
 
 add_local_sdk_path("client.py")
 
-from mn_sdk import Client
-from mn_sdk.runtime_client import runtime_client_kwargs
+from mn_sdk.surface_client import SurfaceRuntimeClient
 from rich.console import Console
 from mn_cli.config import CliConfig
 from mn_cli.logging_config import configure_logging
@@ -19,13 +18,8 @@ setattr(console, "_mn_shared_console", True)
 setattr(error_console, "_mn_shared_error_console", True)
 
 
-def _client_kwargs(cli_config: CliConfig | None = None) -> dict:
-    cli_config = cli_config or config
-    return runtime_client_kwargs(cli_config)
-
-
-def build_client(cli_config: CliConfig | None = None) -> Client:
-    return Client(**_client_kwargs(cli_config))
+def build_client(cli_config: CliConfig | None = None) -> SurfaceRuntimeClient:
+    return SurfaceRuntimeClient()
 
 
 class LazyClient:
@@ -34,7 +28,7 @@ class LazyClient:
     def __init__(self) -> None:
         object.__setattr__(self, "_instance", None)
 
-    def _get(self) -> Client:
+    def _get(self) -> SurfaceRuntimeClient:
         instance = object.__getattribute__(self, "_instance")
         if instance is None:
             instance = build_client(config)

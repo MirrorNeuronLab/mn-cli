@@ -1,41 +1,37 @@
 # MirrorNeuron CLI
 
-## Client mode (`--no-runtime`)
+## Connect to a runtime
 
-Install using `mn-deploy/install.sh --no-runtime` for a production client without
-Docker, Redis or a local compute node. Both CLI and optional API relay are installed;
-no services start automatically. The CLI needs no local API process:
+`install.sh --no-runtime` installs CLI/API and their Python libraries without
+Docker, Redis or a compute node. No services start automatically. Default installs
+include a runtime and configure the same native connection automatically.
 
 ```bash
-mn node add https://node.example:54001 --token "$REMOTE_API_TOKEN"
+mn node add runtime.example --grpc-port 55051 --token "$RUNTIME_NODE_TOKEN"
 mn blueprint list
-mn blueprint run <blueprint-id> --node <remote-worker> --set input.path=/remote/data.csv
+mn blueprint run <blueprint-id> --node <worker> --set input.path=/remote/data.csv
 mn run logs <run-id>
-mn run cancel <run-id>
 mn run result <run-id> --output ./results
+# Attach a separately installed runtime on this computer:
+mn node add local --runtime-home ~/.mn-runtime
 ```
 
-The token belongs to the remote REST API, not runtime federation. `node add`
-validates the API contract and runtime identity, then atomically replaces one
-private connection in `MN_HOME/client.json`. Failed reconnections keep the prior
-connection. `node list/show` read the remote cluster; `node remove` disconnects
-this client without removing a cluster member. `runtime status` reports client
-mode; local runtime lifecycle commands fail without starting anything.
+Use the runtime control credential, not an API or federation token. The first
+addition attaches this surface; subsequent additions join peers to its runtime's
+cluster. Removal requires a completed drain and removes cluster membership without
+stopping or uninstalling the node. Removing the entry node disconnects the surface.
 
-Blueprint IDs resolve in the remote catalog. Validation, dependency/model setup,
-preparation and execution happen remotely. `--job-id`, `--run-id`, `--set`,
-`--node`, `--queue`, scheduling and observation retain their command shape.
-Local blueprint paths and source/repository/revision/offline overrides are
-rejected. Configured input paths must exist remotely. `job create` accepts a
-remote catalog ID in its existing bundle argument. Local archive restore/upload,
-model provisioning and runtime resource-limit changes should be run on the node.
+Both CLI and foreground `mn-api` read the private atomic `MN_HOME/client.json`
+profile. Failed reconnections preserve it. Legacy HTTP API profiles require explicit
+native reconnection. The local API has its own bearer token in `api.token`.
 
-The optional foreground `mn-api` relay uses a separate local bearer token from
-`MN_HOME/api.token` (or `MN_API_TOKEN`), and shares the same connection file.
-The installer defaults to `~/.mn-client` and binds its commands to the selected
-home. Client role is persisted in `install_metadata.json`, not enabled by an
-ad hoc environment flag. Remote failures never fall back locally or automatically
-resubmit a launch; inspect the remote job/run before retrying an uncertain result.
+Catalog discovery, validation, model/dependency setup, preparation and execution
+belong to runtime nodes. Local source paths, revisions and offline options require
+an attached local runtime. Remote input paths refer to its filesystem. Existing
+queue/schedule options, IDs, node selection, results and backup restore are retained.
+A failed connection never triggers local startup or automatic resubmission.
+
+See [installation roles and lifecycle](../mn-deploy/docs/installation-roles.md).
 
 ## Workflow preparation progress
 
@@ -58,7 +54,7 @@ SDK/common, API, CLI and desktop together to consume this contract.
 
 ## Current contracts
 
-The CLI requires the current SDK, including its admin-token constructor argument. Import runtime helpers from `mn_cli.runtime.server` and shared submission/model policies from the SDK. Retired forwarding modules and private helper aliases are removed; native cleanup only reconciles registered ownership records. API monitoring requires the current versioned public progress snapshot; retired runtime-node projections are no longer reconstructed.
+The CLI requires the current SDK, including its admin-token constructor argument. Runtime host helpers live in the separately installed `mn_runtime` package; surface adapters use SDK clients. Retired forwarding modules and private helper aliases are removed; native cleanup only reconciles registered ownership records. API monitoring requires the current versioned public progress snapshot; retired runtime-node projections are no longer reconstructed.
 
 Backward compatibility and automatic migration of obsolete state are unsupported.
 
@@ -159,18 +155,16 @@ After a completed blueprint run copies both its internal run store and a
 configured user output folder, the human-readable summary prints only the
 user-facing output destination.
 
-`mn runtime start` starts a normal, federation-capable Core. There is no
-separate worker mode: every Core owns its Redis state, can own jobs, and runs
-all agents for those jobs locally. The successful start output includes the
-advertised host, gRPC port, node identity, a join token, and the exact
-`mn node add` command to run from another Core. Treat the displayed token as a
-credential, keep terminal output private, and use `mn node refresh-token` when
-it must be rotated.
+`mn runtime start` delegates to the installed `mn-runtime` lifecycle. Every
+runtime owns its Redis state and execution resources. Successful startup reports
+the verified endpoint, an add-node command with a token placeholder, and the
+private credential file location. It never prints the credential. A full install
+attaches its local surface automatically after readiness succeeds.
 
-The command omits `--grpc-port` when the advertised endpoint uses the default
-port (`55051`); it includes the option when a non-default port is required.
+The first `mn node add` attaches this surface. Subsequent additions ask its entry
+runtime to federate with another runtime; the surface never registers as a node.
 
-With the default Syncthing shared storage enabled, `mn node add` configures and
+For subsequent peer additions with Syncthing shared storage enabled, the runtime configures and
 verifies both sidecars before registering the Core federation pair. A failed
 shared-storage connection creates no new Core federation pair and tells the
 operator to correct the sidecars before retrying.
@@ -624,8 +618,8 @@ snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
 - A running MirrorNeuron core is required for live runtime commands.
 - Validation failures render in wrapped terminal tables, so long requirements
   and recommended fixes remain readable in narrow terminals.
-- The default gRPC target comes from `MN_GRPC_TARGET`, then local deployment
-  settings, then `localhost:55051`.
+- Runtime commands use the shared private connection in `MN_HOME/client.json`.
+  Connect with `mn node add HOST --token TOKEN` or attach a local runtime.
 - Use `mn blueprint validate` before `mn blueprint run ./folder` when checking a local bundle.
 - Validation honors first-use runtime-model preparation, so a compatible
   declared model need not already be installed.

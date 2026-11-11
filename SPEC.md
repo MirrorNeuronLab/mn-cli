@@ -21,7 +21,7 @@ SDK/common, API, CLI and desktop together to consume this contract.
 
 ## Current contracts
 
-The CLI requires the current SDK, including its admin-token constructor argument. Import runtime helpers from `mn_cli.runtime.server` and shared submission/model policies from the SDK. Retired forwarding modules and private helper aliases are removed; native cleanup only reconciles registered ownership records. API monitoring requires the current versioned public progress snapshot; retired runtime-node projections are no longer reconstructed.
+The CLI requires the current SDK runtime client and shared connection profile. Host helpers live in `mn_runtime.host.server`; CLI modules never import the runtime package. Explicit lifecycle commands delegate through `mn_sdk.installed_lifecycle`. Retired forwarding modules and private helper aliases are removed; native cleanup only reconciles registered ownership records. API monitoring requires the current versioned public progress snapshot; retired runtime-node projections are no longer reconstructed.
 
 Backward compatibility and automatic migration of obsolete state are unsupported.
 
@@ -133,8 +133,8 @@ Obsolete deployment, global-schedule, event, backup, inline-job, and
 
 `mn runtime start` has one federation-capable mode. It starts an independent
 Core with its own writable coordination store and prints the advertised host,
-gRPC endpoint, node identity, active federation join token, and an exact
-`mn node add` command. The former `--worker` option is removed and must fail as
+gRPC endpoint, node identity, private runtime credential location, and a
+`mn node add` command with a token placeholder. The former `--worker` option is removed and must fail as
 a usage error with a migration hint to use `mn runtime start`.
 When the advertised gRPC port is the default (`55051`), the add-node command
 omits `--grpc-port`; a non-default advertised port is included explicitly.
@@ -312,10 +312,9 @@ Only measured upstream progress may be presented as a percentage.
 - Values from manifests, catalogs, the filesystem, environment, SDK, gRPC, and
   subprocesses are untrusted and must be validated or safely rendered.
 - Secrets, bearer tokens, passwords, and unredacted environment values must not
-  be printed or logged, except that a successful `mn runtime start`
-  intentionally displays its active federation join token and exact add-node
-  command to the invoking operator. Structured diagnostics and unrelated
-  commands continue to redact that credential.
+  be printed or logged. Startup reports the credential file location and a
+  token placeholder. The runtime control credential is distinct from surface
+  API and internal federation credentials.
 - Unit tests use fakes and temporary paths; normal tests do not mutate the real
   `~/.mn`, start services, or access the network.
 - Durable-job archive retains shared data. Job-data reset and run delete,
@@ -996,20 +995,29 @@ listing blueprints, and installing or starting the runtime do not run these hook
 Computer Use downloads its signed, notarized `mn computer use.app` from public
 GAR at this point; the end user needs neither Xcode nor gcloud.
 
-## Production client role
+## Native runtime connection contract
 
-`install_metadata.json.install_role=client` selects REST command adapters before
-any local command callback, validation hook, preparation or runtime bootstrap.
-The installed wrapper fixes `MN_HOME`; deleting/changing configuration is not a
-supported way to convert roles. CLI and API share private `client.json` with one
-`api_url` normalized to `/api/v1`, remote `token`, and validated `node_name`.
-`node add` uses the remote API token and atomic validation-before-replacement;
-`node remove` only disconnects that name. `node list/show` observe remote members.
+All installations use the SDK `RuntimeControlClient` over Core's exposed gRPC
+runtime-control service. `RuntimeResources` supplies resource-shaped reads,
+mutations, conditional operations, streams and downloads for CLI adapters. The
+shared private atomic `client.json` stores schema version, target, token, node and
+installation identity; local attachments also store their runtime home. Required
+capabilities and identity are checked before connection persistence. Old `api_url`
+profiles are retained and rejected with explicit reconnection guidance.
 
-Blueprint runs use the remote catalog. Source overrides and local paths fail
-with `MN_CLIENT_UNSUPPORTED`. Job/run CRUD, queueing, schedules, observation and
-result download use REST; fenced operations preserve ETag/idempotency semantics.
-Result writes are explicit downloads and cannot follow remote filenames outside
-the chosen directory. Runtime lifecycle actions fail without local execution.
-The CLI works without the optional local API. Reconnection affects subsequent
-requests; transport failure never triggers fallback or automatic resubmission.
+The first node addition attaches a surface; later additions ask the entry runtime
+to federate peers. Surfaces never register as compute nodes. Removing a node uses
+its authoritative completed-drain and idle-admission checks; removing the entry
+also disconnects the surface. Runtime control, surface API and federation tokens
+are distinct. No anonymous remote connection, HTTP fallback, automatic mutation
+retry or local runtime bootstrap is permitted.
+
+Catalog, preparation, durable operations and execution belong to runtime nodes.
+The independently installed `mirrorneuron-runtime` package owns host lifecycle,
+monitors and observers. Its modules never import CLI/API; neither surface's
+package closure requires it. Local-source workflows require an attached local
+runtime. Remote paths resolve on the runtime. Core routes owner file/UI streams
+using membership, identity/generation fences and registered UI port allowlists.
+
+See [the installation contract](../mn-deploy/docs/installation-roles.md) for all
+three roles, startup, reinstall, reset, uninstall and release gates.

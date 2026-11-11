@@ -1,13 +1,24 @@
+"""Every installation role uses the same native SDK boundary."""
+
 import json
 import subprocess
+from contextlib import contextmanager
+from pathlib import Path
+from types import SimpleNamespace
 
-import httpx
 import pytest
 from typer.testing import CliRunner
 
 from mn_cli.main import app
-from mn_sdk.client_install import RemoteConnection, save_connection
-from mn_sdk.remote_api import RemoteApiClient
+from mn_sdk.errors import AppError
+from mn_sdk.proto import runtime_control_pb2 as wire
+from mn_sdk.runtime_connection import (
+    REQUIRED_CAPABILITIES,
+    RuntimeConnection,
+    load_connection,
+    save_connection,
+)
+from mn_sdk.runtime_control import RuntimeControlClient
 
 runner = CliRunner()
 
@@ -19,86 +30,99 @@ def remote(tmp_path, monkeypatch):
     calls = []
     run_reads = []
 
-    def handler(request):
-        calls.append(request)
-        path = request.url.path.removeprefix("/api/v1")
-        assert request.headers["authorization"] == "Bearer remote-secret"
-        if path == "/health":
-            payload = {"api_contract": "mirrorneuron.rest.v1"}
-        elif path == "/system/summary":
-            payload = {"identity": {"actual": "node@remote", "valid": True}}
-        elif path == "/nodes":
-            payload = {"items": [{"node_name": "node@remote"}]}
-        elif path == "/blueprints":
-            payload = {"items": [{"blueprint_id": "remote-bp"}]}
-        elif path.endswith("/validations"):
-            payload = {"valid": True}
-        elif path == "/blueprints/remote-bp/runs":
-            body = json.loads(request.content)
-            payload = {
-                "job_id": body.get("job_id") or "job-1",
+    def capabilities(self):
+        if self.connection.token != "remote-secret":
+            raise AppError(
+                "MN_RUNTIME_UNAUTHENTICATED",
+                "Runtime credential rejected.",
+                http_status=401,
+            )
+        return {
+            "runtime_control_version": 1,
+            "runtime_id": "runtime-one",
+            "node_name": "node@remote",
+            "capabilities": sorted(REQUIRED_CAPABILITIES),
+        }
+
+    def init(self, connection=None, **kwargs):
+        self.connection = connection or load_connection()
+        self.channel = SimpleNamespace(close=lambda: None)
+
+    def call(self, method, action, arguments=None, **kwargs):
+        calls.append((method, action, arguments or {}, kwargs, self.connection))
+        capabilities(self)
+        data = {"status": "completed"}
+        if action == "runtime.capabilities":
+            data = capabilities(self)
+        elif action == "list_blueprints":
+            data = {"items": [{"blueprint_id": "remote-bp"}]}
+        elif action == "list_nodes":
+            data = {"items": [{"node_name": "node@remote"}]}
+        elif action == "get_node":
+            data = {"node_name": "node@remote"}
+        elif action == "create_blueprint_run":
+            data = {
+                "job_id": arguments["request"].get("job_id") or "job-1",
                 "run_id": "run-1",
-                "status": "running",
+                "status": "completed",
             }
-            if body.get("schedule"):
-                payload = {
+            if arguments["request"].get("schedule"):
+                data = {
                     "job_id": "job-1",
                     "schedule_id": "schedule-1",
                     "status": "scheduled",
                 }
-        elif path == "/runs/run-1/workflow-progress":
-            payload = {"status": "running", "progress": 0.5}
-        elif path == "/runs/run-1":
-            run_reads.append(request)
-            payload = {
+        elif action in {"get_run", "get_run_workflow_progress"}:
+            run_reads.append(action)
+            data = {
                 "run_id": "run-1",
                 "status": "completed" if len(run_reads) > 1 else "running",
+                "progress": 100,
             }
-        elif path == "/runs/run-1/logs":
-            payload = {"items": [{"message": "remote log"}]}
-        elif path == "/runs/run-1/artifacts/final":
-            payload = {"answer": 42}
-        elif path == "/runs/run-1/outputs":
-            payload = {"items": [{"index": 0, "name": "../../escape"}]}
-        elif path == "/runs/run-1/outputs/0":
-            return httpx.Response(200, content=b"remote output")
-        elif path == "/jobs/job-1":
-            payload = {"job_id": "job-1", "status": "ready"}
-        elif path == "/schedules/schedule-1":
-            payload = {"schedule_id": "schedule-1", "status": "scheduled"}
-        else:
-            raise AssertionError(
-                f"Unexpected remote request: {request.method} {request.url}"
-            )
-        return httpx.Response(200, json=payload, headers={"ETag": '"rev-1"'})
+        elif action == "list_run_logs":
+            data = {"items": [{"message": "remote log"}]}
+        elif action == "get_run_final_artifact":
+            data = {"answer": 42}
+        elif action == "list_run_outputs":
+            data = {"items": [{"index": 0, "name": "../../escape"}]}
+        elif action == "get_job":
+            data = {"job_id": "job-1", "status": "ready"}
+        elif action == "get_schedule":
+            data = {"schedule_id": "schedule-1", "status": "scheduled"}
+        elif action == "node.remove":
+            data = {"status": "removed", "node_name": arguments["node_name"]}
+        return wire.RuntimeReply(
+            version=1,
+            status=200,
+            value_json=json.dumps(data),
+            metadata={"etag": '"rev-1"'},
+        )
 
-    transport = httpx.MockTransport(handler)
-    monkeypatch.setattr(
-        RemoteApiClient,
-        "_client",
-        lambda self: httpx.Client(
-            transport=transport,
-            base_url=self.connection.api_url + "/",
-            headers={"Authorization": "Bearer " + self.connection.token},
-        ),
-    )
+    @contextmanager
+    def stream(self, method, action, arguments):
+        calls.append((method, action, arguments, {}, self.connection))
+        data = b'{"answer":42}' if "artifact" in action else b"remote output"
+        yield iter(
+            [
+                wire.RuntimeFrame(
+                    version=1,
+                    kind="headers",
+                    reply=wire.RuntimeReply(version=1, status=200),
+                ),
+                wire.RuntimeFrame(version=1, kind="data", data=data),
+            ]
+        )
+
+    monkeypatch.setattr(RuntimeControlClient, "__init__", init)
+    monkeypatch.setattr(RuntimeControlClient, "call", call)
+    monkeypatch.setattr(RuntimeControlClient, "stream", stream)
+    monkeypatch.setattr("mn_cli.client_runs.time.sleep", lambda _: None)
 
     def forbidden(*args, **kwargs):
-        raise AssertionError("Client reached local preparation or runtime bootstrap")
+        raise AssertionError("Surface invoked a local host process")
 
-    from mn_cli.libs import blueprint_cmds
-
-    for name in (
-        "run_catalog_blueprint",
-        "run_local_blueprint_folder",
-        "_install_blueprint_model_dependencies",
-        "_prepare_blueprint_bundle_for_run",
-    ):
-        monkeypatch.setattr(blueprint_cmds, name, forbidden)
-    monkeypatch.setattr("grpc.insecure_channel", forbidden)
     monkeypatch.setattr(subprocess, "run", forbidden)
     monkeypatch.setattr(subprocess, "Popen", forbidden)
-    monkeypatch.setattr("mn_cli.client_runs.time.sleep", lambda _: None)
     return calls, tmp_path
 
 
@@ -109,10 +133,10 @@ def invoke(*args):
 
 
 def connect():
-    invoke("node", "add", "https://remote", "--token", "remote-secret", "--json")
+    invoke("node", "add", "remote", "--token", "remote-secret", "--json")
 
 
-def test_cli_connection_catalog_launch_monitor_cancel_results_and_disconnect(remote):
+def test_catalog_launch_monitor_cancel_results_and_remove(remote):
     calls, home = remote
     connect()
     assert "remote-bp" in invoke("blueprint", "list", "--json")
@@ -133,34 +157,29 @@ def test_cli_connection_catalog_launch_monitor_cancel_results_and_disconnect(rem
         "input.path=/remote/data.csv",
         "--json",
     )
-    submission = next(
-        r for r in calls if r.url.path.endswith("/blueprints/remote-bp/runs")
+    submission = next(call for call in calls if call[1] == "create_blueprint_run")
+    body = submission[2]["request"]
+    assert body["job_id"] == "existing-job" and body["run_id"] == "run-1"
+    assert (
+        body["owner_node"] == "worker@remote"
+        and body["admission_policy"] == "enqueue_if_busy"
     )
-    body = json.loads(submission.content)
-    assert body["job_id"] == "existing-job"
-    assert body["run_id"] == "run-1"
-    assert body["owner_node"] == "worker@remote"
-    assert body["admission_policy"] == "enqueue_if_busy"
     assert body["config_overrides"] == {"input": {"path": "/remote/data.csv"}}
-    assert submission.headers["idempotency-key"]
-    assert any(r.url.path.endswith("/workflow-progress") for r in calls)
+    assert submission[3]["request_id"]
+    assert any(call[1] == "get_run_workflow_progress" for call in calls)
     assert "remote log" in invoke("run", "logs", "run-1", "--json")
     invoke("run", "cancel", "run-1", "--json")
-    patch = next(r for r in calls if r.method == "PATCH")
-    assert json.loads(patch.content)["desired_state"] == "cancelled"
+    cancellation = next(call for call in calls if call[1] == "update_run")
+    assert cancellation[2]["request"]["desired_state"] == "cancelled"
     output = home / "download"
     invoke("run", "result", "run-1", "--output", str(output), "--json")
     assert (output / "output-0").read_bytes() == b"remote output"
     assert json.loads((output / "final_artifact.json").read_text()) == {"answer": 42}
     assert not (home / "escape").exists()
     invoke("node", "remove", "node@remote", "--yes", "--json")
+    assert any(call[1] == "node.remove" for call in calls)
     assert not (home / "client.json").exists()
-    assert not any(
-        r.method in {"POST", "DELETE"} and r.url.path.startswith("/api/v1/nodes")
-        for r in calls
-    )
-    assert not (home / "grpc_auth.token").exists()
-    assert not (home / "runs").exists()
+    assert not (home / "grpc_auth.token").exists() and not (home / "runs").exists()
 
 
 @pytest.mark.parametrize(
@@ -174,82 +193,117 @@ def test_cli_connection_catalog_launch_monitor_cancel_results_and_disconnect(rem
         ("blueprint", "--blueprint-repo", "./repo", "run", "remote-bp"),
         ("runtime", "start"),
         ("runtime", "stop"),
-        ("runtime", "upgrade"),
+        ("runtime", "upgrade", "--yes"),
         ("node", "refresh-token"),
     ],
 )
-def test_client_rejects_local_paths_and_runtime_actions_without_http(remote, args):
+def test_client_rejects_local_actions_without_remote_or_host_side_effects(remote, args):
     calls, _ = remote
     save_connection(
-        RemoteConnection("https://remote/api/v1", "remote-secret", "node@remote")
+        RuntimeConnection("remote:55051", "remote-secret", "node@remote", "runtime-one")
     )
     result = runner.invoke(app, [*args, "--json"])
     assert result.exit_code != 0
-    assert "MN_CLIENT_UNSUPPORTED" in result.output
-    assert calls == []
+    assert any(
+        code in result.output
+        for code in ("MN_CLIENT_UNSUPPORTED", "MN_RUNTIME_NOT_INSTALLED")
+    )
+    assert not calls
 
 
 def test_schedule_and_conditional_job_management(remote):
     calls, _ = remote
     connect()
     invoke("blueprint", "run", "remote-bp", "--auto-schedule", "--json")
-    body = json.loads(calls[-1].content)
-    assert body["schedule"]["kind"] == "resource_wait"
+    assert calls[-1][2]["request"]["schedule"]["kind"] == "resource_wait"
     invoke("job", "archive", "job-1", "--json")
-    assert calls[-1].headers["if-match"] == '"rev-1"'
-    assert json.loads(calls[-1].content) == {"status": "archived"}
+    assert calls[-1][2]["if_match"] == '"rev-1"'
+    assert calls[-1][2]["request"] == {"status": "archived"}
     invoke("schedule", "cancel", "schedule-1", "--node", "worker", "--json")
-    assert calls[-1].method == "DELETE"
-    assert calls[-1].url.params["owner_node"] == "worker"
-    assert calls[-1].headers["if-match"] == '"rev-1"'
+    assert calls[-1][2]["owner_node"] == "worker"
+    assert calls[-1][2]["if_match"] == '"rev-1"'
 
 
-def test_disconnected_status_help_and_failures_never_bootstrap(remote):
+def test_disconnected_status_and_help_do_not_bootstrap(remote):
     calls, _ = remote
     assert "Client mode" in invoke("--version")
     assert "client" in invoke("runtime", "status", "--json")
     invoke("blueprint", "run", "--help")
     result = runner.invoke(app, ["blueprint", "run", "remote-bp", "--json"])
-    assert result.exit_code != 0
-    assert "MN_CLIENT_NOT_CONNECTED" in result.output
+    assert result.exit_code != 0 and "MN_CLIENT_NOT_CONNECTED" in result.output
     assert not calls
 
 
-def test_wrapping_preserves_normal_runtime_callback(tmp_path, monkeypatch):
-    from mn_cli.client_commands import _wrap
-
-    monkeypatch.setenv("MN_HOME", str(tmp_path))
-    calls = []
-    callback = _wrap(lambda target: calls.append(target), ("blueprint", "run"))
-    callback("local-bp")
-    assert calls == ["local-bp"]
-
-
-def test_auth_failure_and_failed_reconnect_preserve_cli_connection(remote, monkeypatch):
-    _calls, home = remote
+def test_full_role_uses_identical_transport_and_never_local_callback(remote):
+    calls, home = remote
+    (home / "install_metadata.json").write_text('{"install_role":"full"}')
     connect()
-    previous = (home / "client.json").read_bytes()
-    requests = []
+    invoke("blueprint", "run", "remote-bp", "--detached", "--json")
+    assert any(call[1] == "create_blueprint_run" for call in calls)
 
-    def rejected(request):
-        requests.append(request)
-        return httpx.Response(401, json={"detail": "Unauthorized"})
 
-    monkeypatch.setattr(
-        RemoteApiClient,
-        "_client",
-        lambda self: httpx.Client(
-            transport=httpx.MockTransport(rejected),
-            base_url=self.connection.api_url + "/",
-        ),
+def test_bad_credential_preserves_existing_profile(remote):
+    calls, home = remote
+    connect()
+    before = (home / "client.json").read_bytes()
+    result = runner.invoke(
+        app, ["node", "add", "replacement", "--token", "invalid", "--json"]
     )
-    for args in (
-        ["blueprint", "run", "remote-bp", "--detached"],
-        ["node", "add", "https://replacement", "--token", "invalid"],
-    ):
-        result = runner.invoke(app, [*args, "--json"])
-        assert result.exit_code != 0
-        assert "MN_REMOTE_API_ERROR" in result.output
-        assert "API token" in result.output
-        assert (home / "client.json").read_bytes() == previous
-    assert len(requests) == 2
+    assert result.exit_code != 0 and "MN_RUNTIME_UNAUTHENTICATED" in result.output
+    assert (home / "client.json").read_bytes() == before
+    assert not any(call[1] == "node.add" for call in calls)
+
+
+def test_legacy_url_requires_explicit_native_reconnection(remote):
+    calls, home = remote
+    old = '{"api_url":"https://old/api/v1","token":"old-token"}'
+    (home / "client.json").write_text(old)
+    result = runner.invoke(app, ["blueprint", "list", "--json"])
+    assert (
+        result.exit_code != 0
+        and "MN_RUNTIME_CONNECTION_UPGRADE_REQUIRED" in result.output
+    )
+    assert (home / "client.json").read_text() == old and not calls
+    connect()
+    assert load_connection().target == "remote:55051"
+
+
+@pytest.mark.parametrize("role", ["client", "full"])
+@pytest.mark.parametrize("action", ["start", "stop", "unload", "probe", "doctor"])
+def test_model_actions_use_runtime_native_control_in_every_role(remote, role, action):
+    calls, home = remote
+    (home / "install_metadata.json").write_text(json.dumps({"install_role": role}))
+    connect()
+    invoke("model", action, "small", "--json")
+    assert calls[-1][1] == "model." + action
+    assert calls[-1][2]["model"] == "small"
+
+
+def test_attached_local_runtime_resolves_local_source_without_surface_preparation(
+    remote,
+):
+    calls, home = remote
+    save_connection(
+        RuntimeConnection(
+            "localhost:55051",
+            "remote-secret",
+            "node@remote",
+            "runtime-one",
+            str(home / "runtime"),
+        )
+    )
+    invoke(
+        "blueprint",
+        "run",
+        "./blueprint",
+        "--offline",
+        "--revision",
+        "v1",
+        "--detached",
+        "--json",
+    )
+    method, action, args, kw, connection = calls[-1]
+    assert method == "Execute" and action == "blueprint.local"
+    assert args["runtime_home"] == str(home / "runtime")
+    assert args["options"]["target"] == str(Path("./blueprint").resolve())
+    assert args["options"]["offline"] is True and args["options"]["revision"] == "v1"
