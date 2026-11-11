@@ -141,7 +141,7 @@ def job(api, action, values):
                     },
                 )
             if isinstance(operation, dict) and operation.get("operation_id"):
-                operation = watch_operation(api, operation)
+                operation = watch_operation(api, operation, stream_progress=False)
                 return operation.get("result") or operation
             return operation
         catalog_id(target)

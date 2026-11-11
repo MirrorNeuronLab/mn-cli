@@ -55,11 +55,15 @@ def watch(api, run_id, *, seconds=None):
         return {"run_id": run_id, "detached": True}
 
 
-def watch_operation(api, operation):
+def watch_operation(api, operation, *, stream_progress=True):
+    from mn_cli.output import json_enabled
+
+    report_progress = stream_progress or not json_enabled()
     if isinstance(operation, str):
         operation = api.request("GET", "/operations/" + resource_id(operation))
     while str(operation.get("status", "")).lower() not in TERMINAL:
-        _emit(operation, "progress")
+        if report_progress:
+            _emit(operation, "progress")
         time.sleep(1)
         operation = api.request(
             "GET", "/operations/" + resource_id(operation["operation_id"])

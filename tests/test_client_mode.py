@@ -87,6 +87,14 @@ def remote(tmp_path, monkeypatch):
             data = {"items": [{"index": 0, "name": "../../escape"}]}
         elif action == "get_job":
             data = {"job_id": "job-1", "status": "ready"}
+        elif action == "blueprint.local":
+            data = {"operation_id": "prepare-1", "status": "running"}
+        elif action == "get_operation":
+            data = {
+                "operation_id": "prepare-1",
+                "status": "completed",
+                "result": {"job_id": "job-1", "status": "active"},
+            }
         elif action == "get_schedule":
             data = {"schedule_id": "schedule-1", "status": "scheduled"}
         elif action == "node.remove":
@@ -134,6 +142,26 @@ def invoke(*args):
 
 def connect():
     invoke("node", "add", "remote", "--token", "remote-secret", "--json")
+
+
+def test_local_job_create_waits_and_returns_one_json_envelope(remote):
+    calls, home = remote
+    bundle = home / "blueprint"
+    bundle.mkdir()
+    save_connection(
+        RuntimeConnection(
+            "remote:55051", "remote-secret", "node@remote", "runtime-one", str(home)
+        )
+    )
+
+    result = json.loads(
+        invoke("job", "create", str(bundle), "--job-id", "job-1", "--json")
+    )
+
+    assert result["schema"] == "mn.cli/v1"
+    assert result["ok"] is True
+    assert result["data"] == {"job_id": "job-1", "status": "active"}
+    assert [call[1] for call in calls] == ["blueprint.local", "get_operation"]
 
 
 def test_catalog_launch_monitor_cancel_results_and_remove(remote):
