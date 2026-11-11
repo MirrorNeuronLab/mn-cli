@@ -1,5 +1,42 @@
 # MirrorNeuron CLI
 
+## Client mode (`--no-runtime`)
+
+Install using `mn-deploy/install.sh --no-runtime` for a production client without
+Docker, Redis or a local compute node. Both CLI and optional API relay are installed;
+no services start automatically. The CLI needs no local API process:
+
+```bash
+mn node add https://node.example:54001 --token "$REMOTE_API_TOKEN"
+mn blueprint list
+mn blueprint run <blueprint-id> --node <remote-worker> --set input.path=/remote/data.csv
+mn run logs <run-id>
+mn run cancel <run-id>
+mn run result <run-id> --output ./results
+```
+
+The token belongs to the remote REST API, not runtime federation. `node add`
+validates the API contract and runtime identity, then atomically replaces one
+private connection in `MN_HOME/client.json`. Failed reconnections keep the prior
+connection. `node list/show` read the remote cluster; `node remove` disconnects
+this client without removing a cluster member. `runtime status` reports client
+mode; local runtime lifecycle commands fail without starting anything.
+
+Blueprint IDs resolve in the remote catalog. Validation, dependency/model setup,
+preparation and execution happen remotely. `--job-id`, `--run-id`, `--set`,
+`--node`, `--queue`, scheduling and observation retain their command shape.
+Local blueprint paths and source/repository/revision/offline overrides are
+rejected. Configured input paths must exist remotely. `job create` accepts a
+remote catalog ID in its existing bundle argument. Local archive restore/upload,
+model provisioning and runtime resource-limit changes should be run on the node.
+
+The optional foreground `mn-api` relay uses a separate local bearer token from
+`MN_HOME/api.token` (or `MN_API_TOKEN`), and shares the same connection file.
+The installer defaults to `~/.mn-client` and binds its commands to the selected
+home. Client role is persisted in `install_metadata.json`, not enabled by an
+ad hoc environment flag. Remote failures never fall back locally or automatically
+resubmit a launch; inspect the remote job/run before retrying an uncertain result.
+
 ## Workflow preparation progress
 
 Active preparation is reported as `mn.preparation.v1` receipts in

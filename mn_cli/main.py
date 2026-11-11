@@ -201,6 +201,10 @@ def main(
 
 
 def _runtime_mode_line(*, capitalize: bool = True) -> str | None:
+    from mn_sdk.client_install import is_client_install
+
+    if is_client_install():
+        return "Client mode: remote execution; no local runtime"
     if local_runtime_mode() != "worker":
         return None
     prefix = "Runtime mode" if capitalize else "runtime mode"
@@ -302,6 +306,9 @@ app.add_typer(operation_app, name="operation")
 app.add_typer(resource_app, name="resource")
 app.add_typer(service_app, name="service")
 
+from mn_cli.client_commands import bind_client_commands
+
+bind_client_commands(app)
 instrument_typer(app)
 
 

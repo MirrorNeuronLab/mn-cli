@@ -995,3 +995,21 @@ exits unsuccessfully and leaves the co-worker unadded. Adding the catalog librar
 listing blueprints, and installing or starting the runtime do not run these hooks.
 Computer Use downloads its signed, notarized `mn computer use.app` from public
 GAR at this point; the end user needs neither Xcode nor gcloud.
+
+## Production client role
+
+`install_metadata.json.install_role=client` selects REST command adapters before
+any local command callback, validation hook, preparation or runtime bootstrap.
+The installed wrapper fixes `MN_HOME`; deleting/changing configuration is not a
+supported way to convert roles. CLI and API share private `client.json` with one
+`api_url` normalized to `/api/v1`, remote `token`, and validated `node_name`.
+`node add` uses the remote API token and atomic validation-before-replacement;
+`node remove` only disconnects that name. `node list/show` observe remote members.
+
+Blueprint runs use the remote catalog. Source overrides and local paths fail
+with `MN_CLIENT_UNSUPPORTED`. Job/run CRUD, queueing, schedules, observation and
+result download use REST; fenced operations preserve ETag/idempotency semantics.
+Result writes are explicit downloads and cannot follow remote filenames outside
+the chosen directory. Runtime lifecycle actions fail without local execution.
+The CLI works without the optional local API. Reconnection affects subsequent
+requests; transport failure never triggers fallback or automatic resubmission.

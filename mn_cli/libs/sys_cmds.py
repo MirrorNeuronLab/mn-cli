@@ -79,7 +79,7 @@ def join(
     token: str = typer.Option(
         ...,
         "--token",
-        help="Join token printed by mn runtime start on the remote node.",
+        help="Remote API token in client mode; otherwise the runtime join token.",
     ),
     grpc_port: int = typer.Option(
         int(DEFAULT_GRPC_PORT), "--grpc-port", help="Remote node gRPC port."
