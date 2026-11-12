@@ -1012,7 +1012,9 @@ also disconnects the surface. Runtime control, surface API and federation tokens
 are distinct. No anonymous remote connection, HTTP fallback, automatic mutation
 retry or local runtime bootstrap is permitted.
 
-Catalog, preparation, durable operations and execution belong to runtime nodes.
+`mn blueprint list` reads the configured catalog through the surface's SDK
+without a runtime connection. Blueprint detail for execution, preparation,
+durable operations, and execution belong to runtime nodes.
 The independently installed `mirrorneuron-runtime` package owns host lifecycle,
 monitors and observers. Its modules never import CLI/API; neither surface's
 package closure requires it. Local-source workflows require an attached local

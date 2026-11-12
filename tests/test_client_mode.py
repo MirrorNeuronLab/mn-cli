@@ -10,6 +10,7 @@ import pytest
 from typer.testing import CliRunner
 
 from mn_cli.main import app
+from mn_sdk.blueprints.authoring import write_blueprint_definition
 from mn_sdk.errors import AppError
 from mn_sdk.proto import runtime_control_pb2 as wire
 from mn_sdk.runtime_connection import (
@@ -54,8 +55,6 @@ def remote(tmp_path, monkeypatch):
         data = {"status": "completed"}
         if action == "runtime.capabilities":
             data = capabilities(self)
-        elif action == "list_blueprints":
-            data = {"items": [{"blueprint_id": "remote-bp"}]}
         elif action == "list_nodes":
             data = {"items": [{"node_name": "node@remote"}]}
         elif action == "get_node":
@@ -167,7 +166,6 @@ def test_local_job_create_waits_and_returns_one_json_envelope(remote):
 def test_catalog_launch_monitor_cancel_results_and_remove(remote):
     calls, home = remote
     connect()
-    assert "remote-bp" in invoke("blueprint", "list", "--json")
     assert "node@remote" in invoke("node", "list", "--json")
     assert "node@remote" in invoke("node", "show", "node@remote", "--json")
     invoke(
@@ -262,6 +260,36 @@ def test_disconnected_status_and_help_do_not_bootstrap(remote):
     assert not calls
 
 
+def test_catalog_listing_is_a_surface_command(remote, monkeypatch):
+    calls, home = remote
+    catalog = home / "catalog"
+    catalog.mkdir()
+    write_blueprint_definition(
+        catalog / "example",
+        {
+            "apiVersion": "mn.workflow/v1",
+            "kind": "Workflow",
+            "id": "example",
+            "name": "Surface example",
+            "workflow": {"steps": [{"id": "finish"}]},
+            "agents": {},
+            "runtime": {},
+            "contract": {},
+        },
+    )
+    (catalog / "index.json").write_text('["example"]')
+    monkeypatch.setenv("MN_BLUEPRINT_SOURCE", "local")
+    monkeypatch.setenv("MN_BLUEPRINT_LOCAL", str(catalog))
+    monkeypatch.setenv("MN_CLI_OUTPUT", "plain")
+    assert "Surface example" in invoke("blueprint", "list")
+    data = json.loads(
+        invoke("blueprint", "--blueprint-repo", str(catalog), "list", "--json")
+    )
+    assert data["schema"] == "mn.cli/v1" and data["ok"]
+    assert [item["id"] for item in data["data"]["items"]] == ["example"]
+    assert not calls and not (home / "client.json").exists()
+
+
 def test_full_role_uses_identical_transport_and_never_local_callback(remote):
     calls, home = remote
     (home / "install_metadata.json").write_text('{"install_role":"full"}')
@@ -286,7 +314,7 @@ def test_legacy_url_requires_explicit_native_reconnection(remote):
     calls, home = remote
     old = '{"api_url":"https://old/api/v1","token":"old-token"}'
     (home / "client.json").write_text(old)
-    result = runner.invoke(app, ["blueprint", "list", "--json"])
+    result = runner.invoke(app, ["node", "list", "--json"])
     assert (
         result.exit_code != 0
         and "MN_RUNTIME_CONNECTION_UPGRADE_REQUIRED" in result.output

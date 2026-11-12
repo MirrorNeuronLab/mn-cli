@@ -97,8 +97,6 @@ def execute(api, command, values):
             return run(api, None, values, key, local=local)
         with RuntimeControlClient(connection, timeout=3600) as client:
             return client.command("blueprint.local", local)
-    if action == "list":
-        return api.items("/blueprints")
     if action == "update":
         if not values.get("blueprint_id") and not values.get("all_"):
             raise typer.BadParameter("Supply a blueprint ID or --all.")

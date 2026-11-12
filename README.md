@@ -7,8 +7,8 @@ Docker, Redis or a compute node. No services start automatically. Default instal
 include a runtime and configure the same native connection automatically.
 
 ```bash
-mn node add runtime.example --grpc-port 55051 --token "$RUNTIME_NODE_TOKEN"
 mn blueprint list
+mn node add runtime.example --grpc-port 55051 --token "$RUNTIME_NODE_TOKEN"
 mn blueprint run <blueprint-id> --node <worker> --set input.path=/remote/data.csv
 mn run logs <run-id>
 mn run result <run-id> --output ./results
@@ -25,9 +25,12 @@ Both CLI and foreground `mn-api` read the private atomic `MN_HOME/client.json`
 profile. Failed reconnections preserve it. Legacy HTTP API profiles require explicit
 native reconnection. The local API has its own bearer token in `api.token`.
 
-Catalog discovery, validation, model/dependency setup, preparation and execution
-belong to runtime nodes. Local source paths, revisions and offline options require
-an attached local runtime. Remote input paths refer to its filesystem. Existing
+`mn blueprint list` reads the catalog configured on the CLI computer through
+the SDK and works before node attachment. Git catalogs require Git.
+`mn blueprint --blueprint-repo <url-or-folder> list` selects another source for
+that listing. Validation, model/dependency setup, preparation, and execution use
+the execution node's catalog. Local source paths, revisions, and offline options
+for execution require an attached local runtime. Remote input paths refer to its filesystem. Existing
 queue/schedule options, IDs, node selection, results and backup restore are retained.
 A failed connection never triggers local startup or automatic resubmission.
 

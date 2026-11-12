@@ -14,7 +14,7 @@ def unsupported(message: str = "This command manages local runtime state."):
     raise AppError(
         "MN_CLIENT_UNSUPPORTED",
         message,
-        hint="Client mode uses the remote catalog and runtime. Run host setup on the runtime node.",
+        hint="Run host setup on the execution node.",
         exit_code=2,
         http_status=422,
     )
@@ -73,6 +73,8 @@ def display(command: tuple[str, ...], result):
             "message",
             "type",
         )
+        if command == ("blueprint", "list"):
+            fields = ("id", "name", "tagline", "type")
         columns = [
             (key.replace("_", " ").title(), key)
             for key in fields
@@ -91,6 +93,13 @@ def display(command: tuple[str, ...], result):
 
 
 def dispatch(command: tuple[str, ...], values: dict):
+    if command == ("blueprint", "list"):
+        from mn_sdk.blueprint_catalog import list_catalog_blueprints
+
+        ctx = values.get("ctx")
+        repository = (ctx.obj or {}).get("blueprint_repo") if ctx is not None else None
+        return list_catalog_blueprints(repository=repository)
+
     from mn_sdk.runtime_connection import (
         connect,
         load_connection,

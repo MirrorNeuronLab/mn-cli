@@ -8,7 +8,7 @@ from mn_cli.output import RemediatingTyperGroup
 
 
 def blueprint_list(ctx: typer.models.Context):
-    "List all available blueprints from the local storage shared with mn staff"
+    "List blueprints from this surface's catalog without connecting a runtime."
     return display(("blueprint", "list"), dispatch(("blueprint", "list"), locals()))
 
 
@@ -1294,7 +1294,7 @@ def service_show(
 def blueprint_options(
     ctx: typer.Context,
     blueprint_repo: Optional[str] = typer.Option(
-        None, "--blueprint-repo", help="Blueprint source for an attached local runtime."
+        None, "--blueprint-repo", help="Catalog source for list or an attached local runtime."
     ),
 ):
     ctx.ensure_object(dict)
