@@ -1294,7 +1294,9 @@ def service_show(
 def blueprint_options(
     ctx: typer.Context,
     blueprint_repo: Optional[str] = typer.Option(
-        None, "--blueprint-repo", help="Catalog source for list or an attached local runtime."
+        None,
+        "--blueprint-repo",
+        help="Catalog source for list or an attached local runtime.",
     ),
 ):
     ctx.ensure_object(dict)
