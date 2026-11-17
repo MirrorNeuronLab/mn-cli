@@ -18,8 +18,10 @@ mn node add local --runtime-home ~/.mn-runtime
 
 Use the runtime control credential, not an API or federation token. The first
 addition attaches this surface; subsequent additions join peers to its runtime's
-cluster. Removal requires a completed drain and removes cluster membership without
-stopping or uninstalling the node. Removing the entry node disconnects the surface.
+cluster. Idle nodes can be removed directly. Active or paused work, admission
+queues and native requests block removal until they are explicitly finished or
+cancelled. Removal preserves the runtime, Job data and Run history. Removing
+the entry node disconnects the surface.
 
 Both CLI and foreground `mn-api` read the private atomic `MN_HOME/client.json`
 profile. Failed reconnections preserve it. Legacy HTTP API profiles require explicit
