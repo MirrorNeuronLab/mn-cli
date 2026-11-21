@@ -12,6 +12,46 @@ from mn_cli.client_runs import watch_operation
 
 def execute(api, command, values):
     family, action = command[:2]
+    if command[:2] == ("job", "mailbox"):
+        path = "/jobs/" + resource_id(values["job_id"]) + "/mailbox"
+        if command[2] == "list":
+            return api.request(
+                "GET",
+                path,
+                params={
+                    k: values[k]
+                    for k in (
+                        "after",
+                        "limit",
+                        "include_acknowledged",
+                        "kind",
+                        "reply_to",
+                    )
+                    if values.get(k) is not None
+                },
+            )
+        if command[2] == "ack":
+            return api.request(
+                "PUT",
+                path + "/" + resource_id(values["message_id"]) + "/acknowledgement",
+            )
+        return api.request(
+            "POST",
+            path,
+            json={
+                "recipient_job_id": values["recipient"],
+                "subject": values["subject"],
+                "text": values["text"],
+                "kind": values["kind"],
+                **({"reply_to": values["reply_to"]} if values.get("reply_to") else {}),
+                **(
+                    {"attachment": read_json_option(values["attachment"])}
+                    if values.get("attachment")
+                    else {}
+                ),
+                "request_id": values.get("request_id") or str(uuid4()),
+            },
+        )
     if family == "job":
         return job(api, action, values)
     if family == "node":

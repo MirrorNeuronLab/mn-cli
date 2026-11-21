@@ -250,6 +250,63 @@ def test_schedule_and_conditional_job_management(remote):
     assert calls[-1][2]["if_match"] == '"rev-1"'
 
 
+def test_stopped_job_mailbox_uses_the_same_native_resources(remote):
+    calls, _ = remote
+    connect()
+    invoke(
+        "job",
+        "mailbox",
+        "send",
+        "manager",
+        "--to",
+        "peer",
+        "--subject",
+        "Check one file",
+        "--request-id",
+        "note-1",
+        "--json",
+    )
+    assert calls[-1][1] == "send_job_mail"
+    assert calls[-1][2]["request"]["request_id"] == "note-1"
+    invoke("job", "mailbox", "list", "peer", "--all", "--limit", "3", "--json")
+    assert calls[-1][1] == "list_job_mailbox"
+    assert calls[-1][2]["include_acknowledged"] is True
+    invoke(
+        "job",
+        "mailbox",
+        "list",
+        "manager",
+        "--kind",
+        "result",
+        "--reply-to",
+        "b" * 64,
+        "--json",
+    )
+    assert calls[-1][2]["kind"] == "result" and calls[-1][2]["reply_to"] == "b" * 64
+    attachment = remote[1] / "reference.json"
+    reference = {"run_id": "manager-run", "sha256": "d" * 64, "size_bytes": 12}
+    attachment.write_text(json.dumps(reference))
+    invoke(
+        "job",
+        "mailbox",
+        "send",
+        "manager",
+        "--to",
+        "peer",
+        "--subject",
+        "Check",
+        "--kind",
+        "assignment",
+        "--attachment",
+        str(attachment),
+        "--json",
+    )
+    assert calls[-1][2]["request"]["attachment"] == reference
+    invoke("job", "mailbox", "ack", "peer", "a" * 64, "--json")
+    assert calls[-1][1] == "acknowledge_job_mail"
+    assert calls[-1][2]["job_id"] == "peer"
+
+
 def test_disconnected_status_and_help_do_not_bootstrap(remote):
     calls, _ = remote
     assert "Client mode" in invoke("--version")

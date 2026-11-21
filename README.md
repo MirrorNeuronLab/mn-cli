@@ -948,3 +948,16 @@ exits unsuccessfully and leaves the co-worker unadded. Adding the catalog librar
 listing blueprints, and installing or starting the runtime do not run these hooks.
 Computer Use downloads its signed, notarized `mn computer use.app` from public
 GAR at this point; the end user needs neither Xcode nor gcloud.
+
+## Co-worker mailboxes
+
+For a manager assignment or a specialist result, pass `--kind` and `--attachment` with a JSON file containing the committed `run_id`, `sha256` and `size_bytes`. A result also takes `--reply-to` with its assignment message ID. `list` accepts both filters.
+
+Use stable Job IDs from `mn job list`. A note can wait in the recipient's
+inbox between runs. Reuse the request ID if delivery needs to be retried.
+
+```sh
+mn job mailbox send manager-job --to specialist-job --subject "Review the release evidence" --request-id review-note-1
+mn job mailbox list specialist-job --all --json
+mn job mailbox ack specialist-job MESSAGE_ID
+```

@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Annotated, Optional
 import typer
+from mn_sdk.runtime_contract.mailbox import Kind
 from mn_cli.client_commands import dispatch, display
 from mn_cli.output import RemediatingTyperGroup
 
@@ -473,6 +474,51 @@ def job_restore(
 def job_show(job_id: str = typer.Argument(..., help="Durable job ID.")):
     "Inspect a durable job definition."
     return display(("job", "show"), dispatch(("job", "show"), locals()))
+
+
+def mailbox_list(
+    job_id: str = typer.Argument(...),
+    after: int = typer.Option(0, min=0),
+    limit: int = typer.Option(25, min=1, max=50),
+    include_acknowledged: bool = typer.Option(False, "--all"),
+    kind: Kind | None = typer.Option(None, help="Filter by message kind."),
+    reply_to: str | None = typer.Option(
+        None, help="Filter results for this assignment ID."
+    ),
+):
+    """Read queued messages for this co-worker."""
+    return display(
+        ("job", "mailbox", "list"), dispatch(("job", "mailbox", "list"), locals())
+    )
+
+
+def mailbox_send(
+    job_id: str = typer.Argument(..., help="Sender's stable Job ID."),
+    recipient: str = typer.Option(..., "--to"),
+    subject: str = typer.Option(...),
+    text: str = typer.Option("", "--text"),
+    kind: Kind = typer.Option("note", help="Type of message to queue."),
+    reply_to: str | None = typer.Option(
+        None, help="Original assignment ID for a result."
+    ),
+    attachment: Path | None = typer.Option(
+        None, help="JSON reference with run_id, sha256 and size_bytes."
+    ),
+    request_id: str | None = typer.Option(None, help="Reuse this ID on retry."),
+):
+    """Queue a note, manager assignment, or specialist result for a group member."""
+    return display(
+        ("job", "mailbox", "send"), dispatch(("job", "mailbox", "send"), locals())
+    )
+
+
+def mailbox_ack(
+    job_id: str = typer.Argument(...), message_id: str = typer.Argument(...)
+):
+    """Acknowledge a message in this co-worker's inbox."""
+    return display(
+        ("job", "mailbox", "ack"), dispatch(("job", "mailbox", "ack"), locals())
+    )
 
 
 def job_relocate(
@@ -1335,6 +1381,13 @@ def register_commands(app):
     job_app.command("archive", hidden=False)(job_archive)
     job_app.command("reset-data", hidden=False)(job_reset_data)
     job_app.command("delete", hidden=False)(job_delete)
+    mailbox_app = typer.Typer(
+        help="Exchange durable messages with configured co-workers."
+    )
+    mailbox_app.command("list")(mailbox_list)
+    mailbox_app.command("send")(mailbox_send)
+    mailbox_app.command("ack")(mailbox_ack)
+    job_app.add_typer(mailbox_app, name="mailbox")
     app.add_typer(job_app, name="job")
     schedule_app = typer.Typer(
         help="Inspect schedules and automatically queued starts.",
