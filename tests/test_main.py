@@ -158,6 +158,12 @@ def test_job_and_run_commands_have_distinct_resource_semantics():
         "archive",
         "reset-data",
         "delete",
+        "mailbox",
+    ]
+    assert list(command.commands["job"].commands["mailbox"].commands) == [
+        "list",
+        "send",
+        "ack",
     ]
     assert list(command.commands["run"].commands) == [
         "list",

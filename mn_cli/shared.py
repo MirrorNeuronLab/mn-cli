@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from mn_cli.sdk_path import add_local_sdk_path
-
-add_local_sdk_path("client.py")
-
 from mn_sdk.surface_client import SurfaceRuntimeClient
 from rich.console import Console
+
 from mn_cli.config import CliConfig
 from mn_cli.logging_config import configure_logging
 from mn_cli.terminal import color_disabled

@@ -1,19 +1,13 @@
-# ruff: noqa: I001
 """CLI configuration facade backed by the canonical SDK loader and schema."""
 
 from __future__ import annotations
 
-import importlib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from mn_cli.sdk_path import add_local_sdk_path
-
-add_local_sdk_path("runtime_config.py")
-
-from mn_sdk.config import (  # noqa: E402 - local SDK bootstrap above
+from mn_sdk.config import (
     SUPPORTED_CONFIG_KEYS as SDK_CONFIG_KEYS,
     ConfigError,
     bootstrap_environment as sdk_bootstrap_environment,
@@ -30,9 +24,8 @@ from mn_sdk.config import (  # noqa: E402 - local SDK bootstrap above
     parse_url,
     parse_url_or_auto,
 )
-from mn_sdk.config.types import MISSING  # noqa: E402
-from mn_sdk.runtime_config import RuntimeConfig, default_logs_root  # noqa: E402
-
+from mn_sdk.config.types import MISSING
+from mn_sdk.runtime_config import RuntimeConfig, default_logs_root
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
@@ -272,11 +265,6 @@ def _build_runtime_config(
 ) -> RuntimeConfig:
     del resolve_tokens
     return RuntimeConfig.from_env(env=env)
-
-
-def _runtime_config_module() -> Any:
-    add_local_sdk_path("runtime_config.py")
-    return importlib.import_module("mn_sdk.runtime_config")
 
 
 def _default_logs_root(env: Mapping[str, str] | None = None) -> Path:

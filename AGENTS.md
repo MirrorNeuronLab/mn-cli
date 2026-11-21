@@ -16,12 +16,9 @@ terminal interaction, local service orchestration, and presentation here.
 ## Repository Map
 
 - `mn_cli/main.py`: Typer root app and command registration.
-- `mn_cli/libs/`: command families and shared CLI helpers.
-- `mn_cli/libs/run_cmds/`: split implementation of blueprint run/monitor/result
-  behavior; preserve the established import facade.
-- `mn_cli/libs/ui.py`: shared status, summary, and result presentation.
-- `mn_cli/runtime/`: local Redis, Docker, cluster, server, sidecar, path, and
-  storage orchestration.
+- `mn_cli/commands/` owns the Typer declarations and registration for each command family.
+- `mn_cli/client_*.py` adapts CLI values to SDK requests.
+- `mn_cli/libs/` owns terminal UI and launch-progress rendering.
 - `mn_cli/config.py`: environment loading and precedence.
 - `mn_cli/error_handler.py`: stable user-facing error conversion.
 - `mn_cli/schemas/`: packaged schemas.

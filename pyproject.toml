@@ -38,11 +38,8 @@ include = ["mn_cli", "mn_cli.*"]
 mn_cli = ["schemas/*.json"]
 
 [tool.ruff.lint.per-file-ignores]
-# Shared dependencies also support the established run-command import facade.
-"mn_cli/libs/run_cmds/common.py" = ["F401"]
-# The CLI bootstraps environment and the local SDK path before these imports.
+# The CLI bootstraps the environment before importing its command surface.
 "mn_cli/main.py" = ["E402"]
-"mn_cli/shared.py" = ["E402"]
 # These legacy test modules share fixture-import headers across split files.
 "tests/**/*.py" = ["F401"]
 "tests/test_shared.py" = ["E402"]
