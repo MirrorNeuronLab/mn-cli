@@ -541,10 +541,10 @@ The blueprint run adapter validates model declarations and feasible workflow
 placement before submission without pulling model artifacts, including with
 `--force`. Workers prepare each managed model on its first actual call. A logical
 `default` remains blueprint-owned intent; the runtime uses the operator-selected
-registry default, otherwise traversing medium → small → nano: Nemotron on a
-healthy 48 GB-or-above accelerator, Bonsai2 PTQ1_0 on a 24 GB-or-above
-accelerator, then Nemotron 3.5 Bolt E4B Q4_K_M. Integrated/shared GPU memory counts toward the same
-tier; CPU-only host RAM does not. Explicit catalog declarations
+registry default, otherwise trying Nemotron 3.5 Lightning (`medium`) at 48 GB
+accelerator memory and then MirrorNeuronLab's Bolt E4B Q4_K_M (`nano`). The
+`small` alias also selects Bolt. Integrated/shared GPU memory counts toward
+accelerator capacity. Explicit catalog declarations
 keep their exact artifact identity. Debug launch output reports deferred model
 policies, selected workflow placement, and complete DockerWorker build details;
 first-use events report the actual model, node, and install/reuse result.
@@ -566,12 +566,11 @@ model credential environment. CLI command arguments contain only the override
 path; credential values are neither read nor printed. Missing managed-model
 state does not add a Compose file.
 
-`default` is a logical LiteLLM model group. Its available routes are ordered
-medium → small → nano, with the largest available route as its alias and the
-remaining routes as ordered fallbacks. Catalog `preparation` recipes are executed
-by the SDK on the selected owner during installation or first use. Bonsai2's
-recipe prepares/reuses a native Prism-backed DMR and routes model control and
-owner LiteLLM upstreams there. Static catalog commands do not prepare a backend.
+`default` is a logical LiteLLM model group. Its built-in order is `medium` then
+`nano`, with the first available group selected. The SDK executes catalog
+`preparation` recipes, including Inkling's, on the selected owner during
+installation or first use and directs the model's control and inference
+requests to the prepared runner.
 `run_cluster_model_monitor` remains the single dynamic route
 lifecycle: complete joined-node inventories add routes, complete membership
 after departure removes routes, and incomplete snapshots do not destructively

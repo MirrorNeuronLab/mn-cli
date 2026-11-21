@@ -234,10 +234,11 @@ The default list is federation-wide: it merges each connected node's published
 Docker Model Runner inventory. A discovered artifact reports `ready` when its
 LiteLLM route is live and `installed` while route reconciliation is pending;
 registry ownership is not presented as a health state.
-Add `--default` with an explicit model or file to make that model the logical
-default ahead of the built-in medium → small → nano selection chain (Nemotron 3.5 Lightning at
-48 GB+, Bonsai2 PTQ1_0 at 24 GB+, and Nemotron 3.5 Bolt E4B below that). Provider files
-used with `--default` must contain exactly one model.
+Add `--default` with an explicit model or file to set the logical default.
+Automatic selection tries Nemotron 3.5 Lightning (`medium`, 48 GB+ accelerator
+memory) and then MirrorNeuronLab's Bolt E4B (`nano`, 8 GB VRAM or 16 GB unified
+memory). The `small` alias also selects Bolt. Provider files used with
+`--default` must contain exactly one model.
 
 Remote provider fixtures and default-override tests live in
 [mn-system-tests](../mn-system-tests/README.md#remote-provider-default-overrides),
@@ -329,7 +330,7 @@ Run the focused gate from this workspace:
 The runtime-selection scenarios are:
 
 - a local-only 16 GB Apple node validates the portable Bolt E4B fallback policy;
-- a 24–47 GB VRAM or integrated-memory node selects Bonsai2 through Prism-backed DMR;
+- a 24–47 GB VRAM or integrated-memory node also selects Bolt E4B;
 - adding a healthy 128 GB CUDA node validates that Nemotron is feasible;
 - already-installed remote models remain usable without a second install;
 - blueprint launch selects and prepares the owner node before job submission,
@@ -888,10 +889,9 @@ working directory, including source-checkout launches.
 for both Docker Compose and native installations. An API-only restart does not
 restart the Web UI or remove its proxy address from `runtime-endpoints.json`.
 
-Bonsai2's catalog preparation recipe automatically prepares Prism-backed DMR
-when adding `small` or on first use. The SDK downloads checksum-pinned prepared
-native runners from public GAR; users need no Go, Git, compiler or Google Cloud
-credentials. Later uses reuse the SDK cache. See [catalog DMR preparation](../mn-docs/model-runtime.md#bonsai2-on-docker-model-runner).
+The SDK prepares Inkling's pinned native DMR backend when adding
+`inkling-2-mini` or on its first use. Later calls reuse the downloaded and
+verified runner archives. See [catalog DMR preparation](../mn-docs/model-runtime.md#inkling-2-mini-on-docker-model-runner).
 
 ## Standard runtime activity
 
@@ -953,7 +953,7 @@ GAR at this point; the end user needs neither Xcode nor gcloud.
 
 For a manager assignment or a specialist result, pass `--kind` and `--attachment` with a JSON file containing the committed `run_id`, `sha256` and `size_bytes`. A result also takes `--reply-to` with its assignment message ID. `list` accepts both filters.
 
-Use stable Job IDs from `mn job list`. A note can wait in the recipient's
+Use stable Job IDs from `mn job list` for co-workers on any connected computer. A note can wait in the recipient's
 inbox between runs. Reuse the request ID if delivery needs to be retried.
 
 ```sh
