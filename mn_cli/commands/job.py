@@ -193,6 +193,7 @@ def register(app: typer.Typer) -> None:
     job_app.command("reset-data", hidden=False)(job_reset_data)
     job_app.command("delete", hidden=False)(job_delete)
     from .job_integrations import register as register_integrations
+
     register_integrations(job_app)
     mailbox_app = typer.Typer(
         help="Exchange durable messages with configured co-workers."

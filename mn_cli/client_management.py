@@ -14,6 +14,7 @@ def execute(api, command, values):
     family, action = command[:2]
     if family == "job" and action in {"skills", "integrations", "connect"}:
         from mn_cli.commands.job_integrations import execute
+
         return execute(api, command, values)
     if command[:2] == ("job", "mailbox"):
         path = "/jobs/" + resource_id(values["job_id"]) + "/mailbox"
