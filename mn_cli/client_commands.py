@@ -73,6 +73,10 @@ def display(command: tuple[str, ...], result):
             "message",
             "type",
         )
+        if command == ("job", "integrations", "list"):
+            fields = ("provider", "authorization", "delivery", "channel_name")
+        if command == ("job", "skills", "list"):
+            fields = ("name", "type", "source", "version", "ref", "enabled")
         if command == ("job", "mailbox", "list"):
             fields = ("sequence", "id", "sender_job_id", "subject", "status")
         if command == ("blueprint", "list"):
