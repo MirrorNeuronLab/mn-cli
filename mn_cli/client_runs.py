@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from uuid import uuid4
 
-from mn_sdk_shared.runtime.installation import installation_home
+from mn_sdk_shared.runtime.connection import installation_home
 from mn_sdk_shared.errors import AppError
 from mn_surface.resources import resource_id
 from mn_cli.client_commands import confirm, unsupported

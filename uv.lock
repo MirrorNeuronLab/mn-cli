@@ -385,7 +385,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "jsonschema", specifier = ">=4.25" },
     { name = "mirrorneuron-sdk-contracts", extras = ["api"], directory = "../mn-python-sdk/packages/contracts" },
-    { name = "mirrorneuron-surface", directory = "../mn-python-sdk/packages/surface" },
+    { name = "mirrorneuron-surface", directory = "../mn-surface" },
     { name = "mn-python-sdk-web-ui", directory = "../mn-python-sdk/packages/web-ui" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "typer", specifier = ">=0.9.0" },
@@ -424,13 +424,18 @@ provides-extras = ["api"]
 
 [[package]]
 name = "mirrorneuron-surface"
-source = { directory = "../mn-python-sdk/packages/surface" }
+version = "1.4.23"
+source = { directory = "../mn-surface" }
 dependencies = [
     { name = "mirrorneuron-sdk-contracts" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "mirrorneuron-sdk-contracts", directory = "../mn-python-sdk/packages/contracts" }]
+requires-dist = [
+    { name = "httpx", marker = "extra == 'http'", specifier = ">=0.27,<1" },
+    { name = "mirrorneuron-sdk-contracts", specifier = ">=1.4.1.dev108,<2" },
+]
+provides-extras = ["http"]
 
 [[package]]
 name = "mn-python-sdk-common"

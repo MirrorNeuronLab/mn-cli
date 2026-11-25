@@ -47,5 +47,5 @@ mn_cli = ["schemas/*.json"]
 
 [tool.uv.sources]
 mirrorneuron-sdk-contracts = { path = "../mn-python-sdk/packages/contracts" }
-mirrorneuron-surface = { path = "../mn-python-sdk/packages/surface" }
+mirrorneuron-surface = { path = "../mn-surface" }
 mn-python-sdk-web-ui = { path = "../mn-python-sdk/packages/web-ui" }
