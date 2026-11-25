@@ -381,7 +381,7 @@ operator deletes the run.
 ## Runtime-Model Launch Contract
 
 The public `mn model` command surface is exactly `list`, `add`, `show`, `probe`,
-`start`, `stop`, `unload`, `update`, `remove`, and `doctor`. `add` accepts either one catalog/arbitrary DMR
+`start`, `stop`, `unload`, `update`, `remove`, and `doctor`. `add` accepts either one catalog model ID, GGUF
 reference or one canonical provider JSON file. DMR placement chooses the best
 eligible cluster node unless `--local` or one or more repeatable `--node`
 targets are supplied. `--local` and `--node` may be combined to install one
@@ -393,15 +393,16 @@ SDK registry changes. If the requested DMR artifact is already installed on an
 eligible local or cluster node, `add` adopts that artifact and registers it
 without reinstalling it.
 
-Catalog `source: "docker"` selects the SDK's NVIDIA Docker delivery; explicit
-`source: "dmr"` and omitted source use Docker Model Runner. Both sources use
+Catalog `source: "docker"` selects a blueprint-specified OCI server on Podman.
+The packaged catalog uses `source: "llama_cpp"` for native GGUF servers using Metal on macOS or CUDA/Vulkan on Linux.
+Saved DMR definitions resolve to this backend. Both sources use
 the managed placement, registration, owner-gateway, and run residency contracts.
 Docker recipes and credential resolution remain SDK-owned; NGC environment
 references resolve on the native owner rather than the submitter.
 `add`, `update`, and preparation cache/configure models without starting
 inference. Adopting an installed local Docker model does not start it.
 Owner inference admission starts stopped Docker containers or recreates missing
-containers from owned cache/images; DMR loads on inference. The last run/request
+containers from owned cache/images. Native llama.cpp loads GGUFs from the owner cache on inference. The last run/request
 reference releases model memory. Docker models use restart policy `no`.
 Diagnostics treat confirmed cached/stopped Docker installations as `idle` and
 usable for on-demand inference, without starting them; uncertain state remains
@@ -434,7 +435,7 @@ against the model's managed LiteLLM route, then stores the effective matrix in
 the SDK model-catalog overlay. `--capabilities` accepts a comma-separated subset
 using the SDK's canonical names or aliases and applies it to every selected
 model. For a DMR artifact selected on the local node, the command first runs the
-same contract directly against Docker Model Runner and fails if LiteLLM changes
+same contract directly against the owner’s model server and fails if LiteLLM changes
 any result. For provider or remote-owner routes, the direct path is reported as
 not run; the command does not bypass a remote owner's loopback-only DMR
 endpoint.

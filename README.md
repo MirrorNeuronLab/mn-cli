@@ -231,11 +231,11 @@ Run `mn model add --default` to prepare the first hardware-compatible default
 on the selected local or cluster node. It honors catalog overrides and reuses
 registrations; choosing a fallback does not replace the logical default policy.
 The default list is federation-wide: it merges each connected node's published
-Docker Model Runner inventory. A discovered artifact reports `ready` when its
+native model and custom OCI inventory. A discovered artifact reports `ready` when its
 LiteLLM route is live and `installed` while route reconciliation is pending;
 registry ownership is not presented as a health state.
 Add `--default` with an explicit model or file to set the logical default.
-Automatic selection tries Nemotron 3.5 Lightning (`medium`, 48 GB+ accelerator
+Automatic selection tries Inkling 2 Mini (`medium`, 32 GiB accelerator
 memory) and then MirrorNeuronLab's Bolt E4B (`nano`, 8 GB VRAM or 16 GB unified
 memory). The `small` alias also selects Bolt. Provider files used with
 `--default` must contain exactly one model.
@@ -248,33 +248,12 @@ When the requested DMR artifact is already installed locally or on a cluster
 node, `mn model add` reuses it and creates the same managed registry record
 without pulling a second copy.
 
-The SDK catalog now identifies delivery with `source: "dmr"` or
-`source: "docker"`. NVIDIA Docker models follow the same placement, registry,
-gateway, and run cleanup contracts. The first entry is Cosmos3 Nano Reasoner,
-using the VSS NIM 1.7 Docker recipe from DGX Spark. Set `NGC_API_KEY` or
-`NGC_CLI_API_KEY` in the native runtime service environment on its Linux NVIDIA
-owner, then use:
-
-```bash
-mn model add cosmos3 --node spark
-mn model stop cosmos3 --node spark
-mn model start cosmos3 --node spark
-mn model unload cosmos3 --node spark
-mn model update cosmos3 --node spark
-mn model remove cosmos3 --node spark --yes
-```
-
-`add`, `update`, and preparation cache/configure models without starting
-inference. `stop` and `unload` retain images and cache; explicit `start` waits
-for readiness. An owner-gateway request starts an idle NIM before inference,
-recreating a deleted managed container from its image/cache when necessary.
-The last run/request owner releases model memory. Docker model containers use
-`restart=no`; `doctor` reports a cached/stopped installation as `idle` without
-loading it. Lifecycle commands infer a single registered
-owner; select `--node` or `--local` for replicas. Preparing Cosmos does not
-reinstall Nemotron. See the SDK's
-[Docker model setup and settings](../mn-python-sdk/docs/docker-models.md),
-including NGC authentication and a shared-GPU Spark override.
+All six catalog models use native llama.cpp on their Linux or macOS owner.
+Prepare a model with `mn model add small`, start it with `mn model start small`,
+and inspect it with `mn model doctor small`. The first request can also start an
+idle model. `mn model stop small` releases GPU memory and retains downloaded
+weights. Select `--node` or `--local` for replicas. User-declared OCI servers
+use Podman. [SDK model guide](../mn-python-sdk/docs/docker-models.md)
 
 A managed model may be installed on more than one eligible node. Repeat `--node`
 and combine it with `--local` to add all requested replicas in one operation:
@@ -306,7 +285,7 @@ after individual failures, reports every result, and exits unsuccessfully when
 one or more probes fail. Supplying a model keeps the single-model behavior. The
 default probe covers embeddings, image input, strict JSON Schema output, SSE
 streaming, and thinking. When the selected DMR artifact is local, the CLI runs
-the identical probe directly against Docker Model Runner and fails if the
+the identical probe directly against the owner's model server and fails if the
 LiteLLM result differs. Remote-owner and provider models are tested through the
 managed LiteLLM route without exposing or bypassing the owner's direct endpoint.
 

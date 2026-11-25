@@ -27,7 +27,9 @@ def model_list(
 def model_add(
     model: Annotated[
         str | None,
-        typer.Argument(..., help="Catalog id or Docker Model Runner model reference."),
+        typer.Argument(
+            ..., help="Catalog ID or Hugging Face or Docker Hub GGUF model reference."
+        ),
     ] = None,
     definition_file: Annotated[
         Path | None, typer.Option("--file", help="Provider model definition JSON file.")
@@ -40,7 +42,10 @@ def model_add(
     ] = None,
     force: Annotated[
         bool,
-        typer.Option("--force", help="Add even when hardware compatibility fails."),
+        typer.Option(
+            "--force",
+            help="Override advisory capacity checks. GPU models still require a hardware GPU.",
+        ),
     ] = False,
     node: Annotated[
         list[str] | None,
@@ -240,7 +245,7 @@ def model_unload(
 
 def register(app: typer.Typer) -> None:
     model_app = typer.Typer(
-        help="Manage Docker Model Runner, NVIDIA Docker, and provider-backed runtime models",
+        help="Manage native llama.cpp and provider-backed models",
         cls=RemediatingTyperGroup,
     )
     model_app.command("list", hidden=False)(model_list)
