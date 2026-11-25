@@ -4,7 +4,7 @@ from uuid import uuid4
 from pathlib import Path
 
 import typer
-from mn_sdk.runtime_resources import resource_id
+from mn_surface.resources import resource_id
 from mn_cli.client_commands import confirm, unsupported
 
 
@@ -55,8 +55,8 @@ def execute(api, command, values):
         )
     )
     if local_source or local_extended:
-        from mn_sdk.runtime_connection import load_connection
-        from mn_sdk.runtime_control import RuntimeControlClient
+        from mn_sdk_shared.runtime.connection import load_connection
+        from mn_surface import RuntimeControlClient
 
         connection = load_connection()
         if not connection.runtime_home:
@@ -207,7 +207,7 @@ def run(api, path, values, headers, *, local=None):
     if schedule is not None:
         body["schedule"] = schedule
     if local is not None:
-        from mn_sdk.runtime_control import RuntimeControlClient
+        from mn_surface import RuntimeControlClient
 
         with RuntimeControlClient(timeout=3600) as client:
             result = client.command("blueprint.local", {**local, "request": body})

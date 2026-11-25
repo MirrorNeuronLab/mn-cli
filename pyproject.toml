@@ -10,7 +10,8 @@ classifiers = [
 ]
 dependencies = [
     # Source checkouts use SCM versions; binary versions are pinned by the installer index.
-    "mirrorneuron-python-sdk[client]>=1.4.1.dev65,<2.0",
+    "mirrorneuron-surface>=1.4.1.dev108,<2.0",
+    "mirrorneuron-sdk-contracts[api]>=1.4.1.dev108,<2.0",
     "click>=8.1.0",
     "httpx>=0.27,<1",
     "jsonschema>=4.25",
@@ -43,3 +44,8 @@ mn_cli = ["schemas/*.json"]
 # These legacy test modules share fixture-import headers across split files.
 "tests/**/*.py" = ["F401"]
 "tests/test_shared.py" = ["E402"]
+
+[tool.uv.sources]
+mirrorneuron-sdk-contracts = { path = "../mn-python-sdk/packages/contracts" }
+mirrorneuron-surface = { path = "../mn-python-sdk/packages/surface" }
+mn-python-sdk-web-ui = { path = "../mn-python-sdk/packages/web-ui" }

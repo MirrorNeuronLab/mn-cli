@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
-from mn_sdk.errors import AppError
-from mn_sdk.runtime_resources import resource_id
+from mn_sdk_shared.errors import AppError
+from mn_surface.resources import resource_id
 from mn_cli.client_commands import confirm, unsupported
 from mn_cli.client_runs import watch_operation
 
@@ -84,7 +84,7 @@ def execute(api, command, values):
         )
     if family == "resource":
         if action == "set":
-            from mn_sdk.runtime_control import RuntimeControlClient
+            from mn_surface import RuntimeControlClient
 
             with RuntimeControlClient() as client:
                 return client.command(
@@ -117,7 +117,7 @@ def execute(api, command, values):
         if action == "remove" and not values.get("dry_run"):
             confirm("Remove this runtime model", values)
             values["yes"] = True
-        from mn_sdk.runtime_control import RuntimeControlClient
+        from mn_surface import RuntimeControlClient
 
         with RuntimeControlClient(timeout=3600) as client:
             return client.command(
@@ -165,8 +165,8 @@ def job(api, action, values):
             body["owner_node"] = values["node"]
         target = values["bundle"]
         if str(target).startswith((".", "/", "~")) or Path(target).exists():
-            from mn_sdk.runtime_connection import load_connection
-            from mn_sdk.runtime_control import RuntimeControlClient
+            from mn_sdk_shared.runtime.connection import load_connection
+            from mn_surface import RuntimeControlClient
 
             connection = load_connection()
             if not connection.runtime_home:
@@ -194,7 +194,7 @@ def job(api, action, values):
         source = Path(values["input_path"]).expanduser()
         try:
             with source.open("rb") as stream:
-                from mn_sdk.runtime_control import RuntimeControlClient
+                from mn_surface import RuntimeControlClient
 
                 with RuntimeControlClient(timeout=3600) as client:
                     return client.upload(
@@ -241,7 +241,7 @@ def job(api, action, values):
         return api.request("POST", path + "/data-resets", headers=key)
     if action == "relocate":
         if values.get("abort"):
-            from mn_sdk.runtime_control import RuntimeControlClient
+            from mn_surface import RuntimeControlClient
 
             with RuntimeControlClient() as client:
                 return client.command(
@@ -289,7 +289,7 @@ def node(api, action, values):
         )
         return watch_operation(api, result) if values.get("wait") else result
     if action == "undrain":
-        from mn_sdk.runtime_control import RuntimeControlClient
+        from mn_surface import RuntimeControlClient
 
         with RuntimeControlClient() as client:
             return client.command(

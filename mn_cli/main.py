@@ -132,7 +132,7 @@ def main(
 
 
 def _runtime_mode_line(*, capitalize: bool = True) -> str:
-    from mn_sdk.runtime_connection import installation_role
+    from mn_sdk_shared.runtime.connection import installation_role
 
     role = installation_role()
     return (

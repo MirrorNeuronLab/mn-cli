@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import typer
-from mn_sdk.runtime_contract.mailbox import Kind
+from mn_sdk_shared.runtime_contract.mailbox import Kind
 
 from mn_cli.client_commands import dispatch, display
 from mn_cli.output import RemediatingTyperGroup

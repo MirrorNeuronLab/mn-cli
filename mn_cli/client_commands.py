@@ -7,7 +7,7 @@ import inspect
 
 import click
 import typer
-from mn_sdk.errors import AppError
+from mn_sdk_shared.errors import AppError
 
 
 def unsupported(message: str = "This command manages local runtime state."):
@@ -100,19 +100,19 @@ def display(command: tuple[str, ...], result):
 
 def dispatch(command: tuple[str, ...], values: dict):
     if command == ("blueprint", "list"):
-        from mn_sdk.blueprint_catalog import list_catalog_blueprints
+        from mn_surface.catalog import list_catalog_blueprints
 
         ctx = values.get("ctx")
         repository = (ctx.obj or {}).get("blueprint_repo") if ctx is not None else None
         return list_catalog_blueprints(repository=repository)
 
-    from mn_sdk.runtime_connection import (
+    from mn_sdk_shared.runtime.connection import (
         connect,
         load_connection,
         remove_node,
         installation_role,
     )
-    from mn_sdk.runtime_resources import RuntimeResources
+    from mn_surface.resources import RuntimeResources
 
     family, action = command[:2]
     if family == "node" and action == "add":
@@ -141,7 +141,7 @@ def dispatch(command: tuple[str, ...], values: dict):
             if action == "upgrade" and not values.get("check_only"):
                 confirm("Upgrade the installed runtime", values)
                 values["yes"] = True
-            from mn_sdk.installed_lifecycle import run
+            from mn_surface.lifecycle import run
 
             return run(action, values)
         if action == "status" and installation_role() == "client":
@@ -157,7 +157,7 @@ def dispatch(command: tuple[str, ...], values: dict):
                 "connection": connection,
             }
         if action == "status":
-            from mn_sdk.installed_lifecycle import run
+            from mn_surface.lifecycle import run
 
             return run("status", values)
     api = RuntimeResources()

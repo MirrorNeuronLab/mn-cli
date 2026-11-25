@@ -16,7 +16,7 @@ from typing import Any
 
 import click
 import typer
-from mn_sdk.errors import AppError, normalize_exception
+from mn_sdk_shared.errors import AppError, normalize_exception
 from typer.core import TyperGroup
 
 CLI_SCHEMA = "mn.cli/v1"

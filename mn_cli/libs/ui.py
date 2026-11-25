@@ -222,7 +222,7 @@ def print_warning(console, message: Any) -> None:
 def print_error(console, message: Any, *, code: str | None = None) -> None:
     """Print a concise, actionable error without a decorative panel."""
     from mn_cli.output import json_enabled, record_error
-    from mn_sdk.errors import AppError
+    from mn_sdk_shared.errors import AppError
 
     record_error(AppError(code or "MN_COMMAND_FAILED", str(message)))
     if json_enabled():

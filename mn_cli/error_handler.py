@@ -7,7 +7,7 @@ from dataclasses import replace
 from typing import Any
 
 import typer
-from mn_sdk.errors import AppError, normalize_exception
+from mn_sdk_shared.errors import AppError, normalize_exception
 from rich.console import Console
 from rich.markup import escape
 

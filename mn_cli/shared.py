@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mn_sdk.surface_client import SurfaceRuntimeClient
+from mn_surface.client import SurfaceRuntimeClient
 from rich.console import Console
 
 from mn_cli.config import CliConfig

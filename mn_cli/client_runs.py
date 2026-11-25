@@ -5,9 +5,9 @@ import time
 from pathlib import Path
 from uuid import uuid4
 
-from mn_sdk.client_install import installation_home
-from mn_sdk.errors import AppError
-from mn_sdk.runtime_resources import resource_id
+from mn_sdk_shared.runtime.installation import installation_home
+from mn_sdk_shared.errors import AppError
+from mn_surface.resources import resource_id
 from mn_cli.client_commands import confirm, unsupported
 
 TERMINAL = {
@@ -174,7 +174,7 @@ def execute(api, command, values):
 
 
 def retry(api, path, values):
-    from mn_sdk.run_retry import parse_retry_settings
+    from mn_sdk_shared.runs.retry import parse_retry_settings
 
     overrides = parse_retry_settings(values.get("settings", []))
     attempt, revision = (

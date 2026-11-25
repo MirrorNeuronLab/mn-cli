@@ -5,7 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import typer
-from mn_sdk.runtime_resources import resource_id
+from mn_surface.resources import resource_id
 
 from mn_cli.client_commands import dispatch, display
 from mn_cli.client_management import read_json_option

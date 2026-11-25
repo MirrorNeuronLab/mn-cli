@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from mn_sdk.config import (
+from mn_sdk_shared.config import (
     SUPPORTED_CONFIG_KEYS as SDK_CONFIG_KEYS,
     ConfigError,
     bootstrap_environment as sdk_bootstrap_environment,
@@ -24,8 +24,8 @@ from mn_sdk.config import (
     parse_url,
     parse_url_or_auto,
 )
-from mn_sdk.config.types import MISSING
-from mn_sdk.runtime_config import RuntimeConfig, default_logs_root
+from mn_sdk_shared.config.types import MISSING
+from mn_sdk_shared.runtime_config import RuntimeConfig, default_logs_root
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
