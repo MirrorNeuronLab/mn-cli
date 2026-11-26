@@ -1,0 +1,25 @@
+[package]
+name = "mn-cli"
+version = "2.0.0"
+edition = "2024"
+license = "MIT"
+
+[[bin]]
+name = "mn"
+path = "src/main.rs"
+
+[dependencies]
+mn-client-support = { path = "../mn-client-support", version = "=2.0.0" }
+clap = { version = "4", features = ["string"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures-util = "0.3"
+uuid = { version = "1", features = ["v4"] }
+tempfile = "3"
+chrono = "0.4"
+regex = "1"
+crossterm = "0.28"
+unicode-width = "0.2"
+async-stream = "0.3"
