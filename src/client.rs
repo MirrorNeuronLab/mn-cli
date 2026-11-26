@@ -1,3 +1,4 @@
+pub(crate) mod events;
 use futures_util::StreamExt;
 use mn_client_support::{
     Error, Result,
@@ -32,7 +33,7 @@ impl App {
         }
     }
     pub fn emit(&self, kind: &str, mut data: Value) {
-        super::redact(&mut data);
+        crate::output::redact(&mut data);
         if self.json {
             self.streaming.set(true);
             self.sequence.set(self.sequence.get() + 1);
@@ -86,6 +87,27 @@ impl App {
             json!({"path":path,"method":ep.method,"query":query,"headers":headers});
         Ok((ep.rpc(), v, deadline))
     }
+    async fn events(
+        &self,
+        feed: events::Feed,
+        id: &str,
+        cursor: Option<&str>,
+    ) -> Result<mn_client_support::control::Chunks> {
+        let (action, query) = match feed {
+            events::Feed::Run => (
+                "stream_run_events",
+                json!({"run_id":id,"interval":0.25,"last_event_id":cursor}),
+            ),
+            events::Feed::Operation => (
+                "stream_operation_events",
+                json!({"operation_id":id,"last_event_id":cursor}),
+            ),
+        };
+        let (method, args, _) = self.prepare(action, query, true)?;
+        let (reply, chunks) = self.ipc.download(method, action, args).await?;
+        reply.checked()?;
+        Ok(chunks)
+    }
     pub async fn raw(&self, action: &str, v: Value) -> Result<Reply> {
         let (rpc, v, deadline) = self.prepare(action, v, false)?;
         let id = v["idempotency_key"].as_str().unwrap_or_default().to_owned();
@@ -129,7 +151,8 @@ impl App {
             .headers
             .iter()
             .find(|(k, _)| k.eq_ignore_ascii_case("etag"))
-            .map(|(_, v)| v.clone());
+            .map(|(_, v)| v.clone())
+            .filter(|v| !v.is_empty());
         r.checked()?;
         v["if_match"] = json!(tag.ok_or_else(Error::protocol)?);
         a.get(action, v).await

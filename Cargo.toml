@@ -20,3 +20,6 @@ uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
 chrono = "0.4"
 regex = "1"
+crossterm = "0.28"
+unicode-width = "0.2"
+async-stream = "0.3"

@@ -1,6 +1,15 @@
-use super::*;
-use std::{collections::HashSet, time::Duration};
-fn terminal(v: &Value) -> bool {
+mod monitor;
+mod retry;
+use crate::{
+    client::App,
+    input::{confirm, pick, s},
+};
+use mn_client_support::{Error, Result, connection};
+pub(crate) use monitor::watch;
+use serde_json::{Value, json};
+use std::{collections::HashSet, path::Path, time::Duration};
+
+pub(crate) fn terminal(v: &Value) -> bool {
     matches!(
         s(v, "status").to_ascii_lowercase().as_str(),
         "complete"
@@ -13,56 +22,13 @@ fn terminal(v: &Value) -> bool {
             | "dry_run"
     )
 }
-pub async fn operation(a: &App, mut r: Value) -> Result<Value> {
-    while !terminal(&r) {
-        let id = r["operation_id"]
-            .as_str()
-            .ok_or_else(Error::protocol)?
-            .to_owned();
-        a.emit("progress", r);
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        r = a.get("get_operation", json!({"operation_id":id})).await?;
-    }
-    if matches!(s(&r, "status"), "cancelled" | "failed") {
-        return Err(Error::new(
-            409,
-            "MN_REMOTE_OPERATION_FAILED",
-            "The remote operation did not complete successfully.",
-        ));
-    }
-    Ok(r)
-}
-pub async fn watch(a: &App, id: &str, seconds: Option<f64>) -> Result<Value> {
-    let start = Instant::now();
-    let q = json!({"run_id":id});
-    let mut last = Value::Null;
-    loop {
-        let r = a.get("get_run", q.clone()).await?;
-        if r != last {
-            a.emit("snapshot", r.clone());
-            last = r.clone();
-        }
-        if terminal(&r) {
-            return Ok(r);
-        }
-        if seconds.is_some_and(|s| start.elapsed().as_secs_f64() >= s) {
-            break;
-        }
-        a.emit(
-            "progress",
-            a.get("get_run_workflow_progress", q.clone()).await?,
-        );
-        tokio::select! {_=tokio::signal::ctrl_c()=>break,_=tokio::time::sleep(Duration::from_secs_f64(seconds.map_or(1.0,|s|(s-start.elapsed().as_secs_f64()).clamp(0.0,1.0))))=>{}}
-    }
-    Ok(json!({"run_id":id,"detached":true}))
-}
 pub async fn execute(a: &App, c: &[&str], v: &Value) -> Result<Value> {
     let action = c[1];
     let mut q = pick(v, &["run_id"]);
     if c[0] == "operation" {
         let r = a.get("get_operation", pick(v, &["operation_id"])).await?;
         return if action == "watch" {
-            operation(a, r).await
+            crate::operations::watch(a, r, true).await
         } else {
             Ok(r)
         };
@@ -88,7 +54,7 @@ pub async fn execute(a: &App, c: &[&str], v: &Value) -> Result<Value> {
             }
             Ok(r)
         }
-        "retry" => retry(a, q, v).await,
+        "retry" => retry::execute(a, q, v).await,
         "result" => {
             let id = s(v, "run_id");
             let dir = if let Some(dest) = v["output"].as_str() {
@@ -209,60 +175,16 @@ async fn observe(a: &App, action: &str, v: &Value) -> Result<Value> {
         } else {
             a.emit("snapshot", value);
         }
-        tokio::select! {_=tokio::signal::ctrl_c()=>return Ok(json!({"detached":true})),_=tokio::time::sleep(Duration::from_secs_f64(v["interval"].as_f64().unwrap_or(1.0).clamp(0.1,86400.0)))=>{}}
-    }
-}
-async fn retry(a: &App, mut q: Value, v: &Value) -> Result<Value> {
-    let mut overrides = json!({});
-    for item in v["settings"].as_array().into_iter().flatten() {
-        let (k, text) = item
-            .as_str()
-            .and_then(|s| s.split_once('='))
-            .ok_or_else(|| Error::invalid("Retry settings must use path=value."))?;
-        let val = serde_json::from_str(text).unwrap_or_else(|_| json!(text));
-        if k.split('.')
-            .any(|s| s.is_empty() || !s.chars().all(|c| c.is_alphanumeric() || c == '_'))
-            || overrides.get(k).is_some()
-            || !(val.is_string() || val.is_i64() || val.is_u64())
-        {
-            return Err(Error::invalid("Invalid or duplicate retry setting."));
+        let delay = v["interval"].as_f64().unwrap_or(1.0).clamp(0.1, 86400.0);
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                let mut result = json!({"detached": true});
+                if action == "resources" {
+                    result["run_id"] = v["run_id"].clone();
+                }
+                return Ok(result);
+            }
+            _ = tokio::time::sleep(Duration::from_secs_f64(delay)) => {}
         }
-        overrides[k] = val;
     }
-    let mut body = pick(v, &["expected_attempt", "checkpoint_revision"]);
-    if v["expected_attempt"].is_null() != v["checkpoint_revision"].is_null()
-        || (!v["expected_attempt"].is_null()
-            && (v["idempotency_key"].is_null() || v["dry_run"] == true))
-    {
-        return Err(Error::invalid(
-            "Supply the expected attempt, checkpoint revision and idempotency key together.",
-        ));
-    }
-    if body == json!({}) {
-        q["request"] = json!({"configuration_overrides":overrides});
-        let plan = a.get("plan_run_retry", q.clone()).await?;
-        if v["dry_run"] == true {
-            return Ok(plan);
-        }
-        if plan["eligible"] != true {
-            return Err(Error::new(
-                409,
-                "MN_REMOTE_RETRY_UNAVAILABLE",
-                "This run is ineligible for retry.",
-            ));
-        }
-        body = pick(&plan, &["expected_attempt", "checkpoint_revision"]);
-    }
-    body["configuration_overrides"] = overrides;
-    body["admission_policy"] = blueprints::policy(v).into();
-    q["request"] = body;
-    let id = v["idempotency_key"]
-        .as_str()
-        .map(str::to_owned)
-        .unwrap_or_else(key);
-    q["idempotency_key"] = json!(id);
-    a.emit("retry_selection", pick(&q, &["idempotency_key", "request"]));
-    let mut r = a.get("retry_run", q).await?;
-    r["idempotency_key"] = id.into();
-    Ok(r)
 }

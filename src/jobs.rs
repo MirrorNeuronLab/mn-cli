@@ -1,226 +1,32 @@
-use super::*;
+use crate::{
+    blueprints,
+    client::App,
+    error::unsupported,
+    input::{confirm, key, pick, read_object, s},
+    runs,
+};
 use futures_util::TryStreamExt;
-use std::time::Duration;
+use mn_client_support::{Error, Result, connection};
+use serde_json::{Value, json};
+use std::io::{self, IsTerminal};
+use std::path::Path;
+use std::time::{Duration, Instant};
 use tokio_util::io::ReaderStream;
-
-pub async fn execute(a: &App, c: &[&str], v: &Value) -> Result<Value> {
-    let action = c[1];
-    match c[0] {
-        "node" => node(a, action, v).await,
-        "runtime" => lifecycle(a, action, v).await,
-        "job" => job(a, &c[1..], v).await,
-        "model" => {
-            let mut opts = v.clone();
-            if let Some(options) = opts.as_object_mut() {
-                options.remove("debug");
-                options.remove("json_output");
-            }
-            if action == "remove" && v["dry_run"] != true {
-                confirm(v, "Remove this runtime model")?;
-                opts["yes"] = true.into();
-            }
-            a.ipc.command(&format!("model.{action}"), opts, 3600).await
-        }
-        "resource" => match action {
-            "show" => a.get("get_runtime_resources", json!({})).await,
-            "usage" => a.get("get_metrics", json!({})).await,
-            _ => {
-                a.ipc
-                    .command(
-                        "resource.set",
-                        pick(v, &["cpu", "gpu", "memory", "disk"]),
-                        30,
-                    )
-                    .await
-            }
-        },
-        "schedule" => {
-            let mut q = pick(v, &["schedule_id"]);
-            q["owner_node"] = v["node"].clone();
-            match action {
-                "list" => a.items("list_schedules", q).await,
-                "show" => a.get("get_schedule", q).await,
-                "cancel" => a.conditional("get_schedule", "delete_schedule", q).await,
-                _ => {
-                    q["request"] = json!({"schedule":{"run_at":v["at"]}});
-                    a.conditional("get_schedule", "update_schedule", q).await
-                }
-            }
-        }
-        "service" => {
-            let mut q = pick(v, &["name", "node", "job_id", "tag"]);
-            if !v["status"].is_null() {
-                q["service_status"] = v["status"].clone();
-            }
-            q["passing_only"] = json!(v["all_statuses"] != true);
-            if action == "list" {
-                a.items("list_services", q).await
-            } else {
-                a.get("get_service_resolution", q).await
-            }
-        }
-        _ => Err(Error::invalid("Unknown command.")),
-    }
-}
-async fn node(a: &App, action: &str, v: &Value) -> Result<Value> {
-    let name = s(v, "node_name");
-    let mut q = json!({"node_id":name});
-    match action {
-        "add" => {
-            a.ipc
-                .connect(
-                    s(v, "host"),
-                    v["token"].as_str(),
-                    v["grpc_port"]
-                        .as_u64()
-                        .map(|n| u16::try_from(n).map_err(|_| Error::invalid("Invalid port.")))
-                        .transpose()?,
-                    v["runtime_home"].as_str(),
-                )
-                .await
-        }
-        "remove" => {
-            confirm(v, "Remove this runtime from the shared cluster")?;
-            a.ipc.remove(name).await
-        }
-        "list" => a.items("list_nodes", json!({})).await,
-        "show" => a
-            .items("list_nodes", json!({}))
-            .await?
-            .as_array()
-            .and_then(|items| {
-                items
-                    .iter()
-                    .find(|i| {
-                        ["node_id", "node_name", "node", "name", "id"]
-                            .iter()
-                            .any(|k| i[k] == name)
-                    })
-                    .cloned()
-            })
-            .ok_or_else(|| {
-                Error::new(
-                    404,
-                    "MN_REMOTE_NODE_NOT_FOUND",
-                    "The remote node was not found.",
-                )
-            }),
-        "refresh-token" => Err(unsupported(
-            "Manage the runtime credential on its node and reconnect with mn node add.",
-        )),
-        "drain" => {
-            q["request"] = pick(
-                v,
-                &[
-                    "reason",
-                    "deadline",
-                    "dry_run",
-                    "wait",
-                    "ignore_system_jobs",
-                ],
-            );
-            let r = a.get("create_node_drain", q).await?;
-            if v["wait"] == true {
-                runs::operation(a, r).await
-            } else {
-                Ok(r)
-            }
-        }
-        "undrain" => {
-            a.ipc
-                .command(
-                    "node.undrain",
-                    json!({"node_name":name,"options":pick(v, &["reason", "mark_eligible"])}),
-                    30,
-                )
-                .await
-        }
-        "maintenance" => {
-            q["request"] = json!({"maintenance":v["enable"],"reason":v["reason"]});
-            a.get("update_node", q).await
-        }
-        _ => {
-            q["request"] = pick(v, &["reason", "dry_run"]);
-            a.get("create_node_reconciliation", q).await
-        }
-    }
-}
-async fn lifecycle(a: &App, action: &str, v: &Value) -> Result<Value> {
-    if connection::role(&a.home)? == "client" {
-        if action == "status" {
-            return a.ipc.status().await;
-        }
-        return Err(Error::new(
-            422,
-            "MN_RUNTIME_NOT_INSTALLED",
-            "No runtime is installed in client mode.",
-        )
-        .hint("Connect with mn node add. Start the optional API with mn-api."));
-    }
-    let exe = a.home.join("bin/mn-runtime");
-    if !exe.is_file() {
-        return Err(Error::new(
-            503,
-            "MN_RUNTIME_NOT_INSTALLED",
-            "The installed runtime lifecycle executable is missing.",
-        ));
-    }
-    if (action == "cleanup" && v["dry_run"] != true)
-        || (action == "upgrade" && v["check_only"] != true)
-    {
-        confirm(v, "Apply runtime changes")?;
-    }
-    let mut cmd = tokio::process::Command::new(exe);
-    cmd.env("MN_HOME", &a.home).arg(action).arg("--json");
-    for name in ["host", "grpc_port", "timeout"] {
-        if !v[name].is_null() {
-            cmd.arg(format!("--{}", name.replace('_', "-"))).arg(
-                v[name]
-                    .as_str()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| v[name].to_string()),
-            );
-        }
-    }
-    for name in [
-        "api",
-        "web_ui",
-        "dry_run",
-        "include_cache",
-        "force",
-        "yes",
-        "check_only",
-        "repair",
-    ] {
-        if v[name] == true || (name == "yes" && action == "upgrade" && v["check_only"] != true) {
-            cmd.arg(format!("--{}", name.replace('_', "-")));
-        }
-    }
-    let res = cmd.output().await.map_err(|_| Error::storage())?;
-    let body: Value = res
-        .stdout
-        .split(|b| *b == b'\n')
-        .rev()
-        .find(|l| !l.is_empty())
-        .and_then(|l| serde_json::from_slice(l).ok())
-        .ok_or_else(Error::protocol)?;
-    if !res.status.success() {
-        return Err(Error::new(
-            503,
-            body["code"]
-                .as_str()
-                .unwrap_or("MN_RUNTIME_LIFECYCLE_FAILED"),
-            body["message"]
-                .as_str()
-                .unwrap_or("The runtime command failed."),
-        ));
-    }
-    Ok(body)
-}
-async fn job(a: &App, c: &[&str], v: &Value) -> Result<Value> {
+pub(crate) async fn execute(a: &App, c: &[&str], v: &Value) -> Result<Value> {
     let mut q = pick(v, &["job_id"]);
     let action = c[0];
     match action {
+        "monitor" => {
+            let (pinned, _) = a.pin().await?;
+            let runs = pinned
+                .items(
+                    "list_job_runs",
+                    json!({"job_id":v["job_id"],"include_terminal":true}),
+                )
+                .await?;
+            let id = monitor_run(&runs, v["run_id"].as_str())?;
+            runs::watch(&pinned, id, None).await
+        }
         "list" => a.items("list_jobs", pick(v, &["include_archived"])).await,
         "show" | "analysis" => {
             a.get(
@@ -250,7 +56,7 @@ async fn job(a: &App, c: &[&str], v: &Value) -> Result<Value> {
                 )
                 .await?;
                 if res["operation_id"].is_string() {
-                    let finished = runs::operation(a, res).await?;
+                    let finished = crate::operations::watch(a, res, false).await?;
                     return Ok(finished.get("result").cloned().unwrap_or(finished));
                 }
                 return Ok(res);
@@ -365,7 +171,7 @@ async fn job(a: &App, c: &[&str], v: &Value) -> Result<Value> {
                 q["idempotency_key"] = key().into();
                 let r = a.get("add_job_skill", q).await?;
                 if r["operation_id"].is_string() {
-                    runs::operation(a, r).await
+                    crate::operations::watch(a, r, true).await
                 } else {
                     Ok(r)
                 }
@@ -400,7 +206,7 @@ async fn connect_job(a: &App, mut q: Value, v: &Value) -> Result<Value> {
     q["value"] = pick(v, &["name", "session"]);
     let mut r = a.get("connect_job_slack", q.clone()).await?;
     if r["operation_id"].is_string() {
-        runs::operation(a, r).await?;
+        crate::operations::watch(a, r, true).await?;
         r = a.get("connect_job_slack", q.clone()).await?;
     }
     if r["delivery"] == "enabled" || (a.json && v["channel"].is_null()) {
@@ -436,4 +242,36 @@ async fn connect_job(a: &App, mut q: Value, v: &Value) -> Result<Value> {
     }
     q["value"]["channel"] = channel.trim().into();
     a.get("connect_job_slack", q).await
+}
+
+fn monitor_run<'a>(runs: &'a Value, selected: Option<&str>) -> Result<&'a str> {
+    let rows = runs.as_array().ok_or_else(Error::protocol)?;
+    let row = rows
+        .iter()
+        .filter(|r| r["run_id"].is_string() || r["id"].is_string())
+        .filter(|r| selected.is_none_or(|id| r["run_id"] == id || r["id"] == id))
+        .max_by_key(|r| {
+            (
+                !runs::terminal(r),
+                r["created_at"].as_str(),
+                r["run_id"].as_str().or(r["id"].as_str()),
+            )
+        });
+    row.and_then(|r| r["run_id"].as_str().or(r["id"].as_str()))
+        .ok_or_else(|| Error::new(404, "MN_NOT_FOUND", "No matching run exists for this job."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn monitor_selects_the_latest_active_run_or_the_requested_job_run() {
+        let rows = json!([{"id":"older","status":"running","created_at":"2025-01-01"},
+            {"run_id":"done","status":"completed","created_at":"2025-01-04"},
+            {"run_id":"new","status":"running","created_at":"2025-01-02"}]);
+        assert_eq!(monitor_run(&rows, None).unwrap(), "new");
+        assert_eq!(monitor_run(&rows, Some("done")).unwrap(), "done");
+        assert!(monitor_run(&rows, Some("foreign")).is_err());
+        assert!(monitor_run(&json!([]), None).is_err());
+    }
 }

@@ -926,6 +926,37 @@
           ]
         },
         {
+          "name": "monitor",
+          "about": "Watch the latest active run for a job, or its most recent finished run.",
+          "args": [
+            {
+              "name": "job_id",
+              "flags": [
+                "job_id"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Durable job ID."
+            },
+            {
+              "name": "run_id",
+              "flags": [
+                "--run-id"
+              ],
+              "kind": "str",
+              "help": "Watch this execution of the job."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
           "name": "relocate",
           "about": "Move an idle job and its data to another PC. Pause its schedules first.",
           "args": [

@@ -1,4 +1,13 @@
-use super::*;
+use crate::{
+    client::App,
+    error::unsupported,
+    input::{confirm, key, pick},
+    runs,
+};
+use mn_client_support::{Error, Result, connection};
+use serde_json::{Value, json};
+use std::path::Path;
+
 pub fn policy(v: &Value) -> &'static str {
     if v["queue"] == true {
         "enqueue_if_busy"
@@ -231,7 +240,7 @@ pub async fn execute(a: &App, c: &[&str], v: &Value) -> Result<Value> {
                             json!({"idempotency_key":key()}),
                         )
                         .await?;
-                    runs::operation(a, r).await?;
+                    crate::operations::watch(a, r, true).await?;
                 }
                 q["request"] = body;
                 "create_blueprint_run"
