@@ -1,0 +1,961 @@
+Metadata-Version: 2.4
+Name: mirrorneuron-cli
+Version: 1.4.1.dev35
+Summary: MirrorNeuron CLI
+License-Expression: MIT
+Classifier: Programming Language :: Python :: 3
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: mirrorneuron-surface<2.0,>=1.4.1.dev108
+Requires-Dist: mirrorneuron-sdk-contracts[api]<2.0,>=1.4.1.dev108
+Requires-Dist: click>=8.1.0
+Requires-Dist: httpx<1,>=0.27
+Requires-Dist: jsonschema>=4.25
+Requires-Dist: typer>=0.9.0
+Requires-Dist: mn-python-sdk-web-ui<2.0,>=1.2
+Requires-Dist: rich>=13.0.0
+Dynamic: license-file
+
+# MirrorNeuron CLI
+
+## Connect to a runtime
+
+`install.sh --no-runtime` installs CLI/API and their Python libraries without
+Docker, Redis or a compute node. No services start automatically. Default installs
+include a runtime and configure the same native connection automatically.
+
+```bash
+mn blueprint list
+mn node add runtime.example --grpc-port 55051 --token "$RUNTIME_NODE_TOKEN"
+mn blueprint run <blueprint-id> --node <worker> --set input.path=/remote/data.csv
+mn run logs <run-id>
+mn run result <run-id> --output ./results
+# Attach a separately installed runtime on this computer:
+mn node add local --runtime-home ~/.mn-runtime
+```
+
+Use the runtime control credential, not an API or federation token. The first
+addition attaches this surface; subsequent additions join peers to its runtime's
+cluster. Idle nodes can be removed directly. Active or paused work, admission
+queues and native requests block removal until they are explicitly finished or
+cancelled. Removal preserves the runtime, Job data and Run history. Removing
+the entry node disconnects the surface.
+
+Both CLI and foreground `mn-api` read the private atomic `MN_HOME/client.json`
+profile. Failed reconnections preserve it. Legacy HTTP API profiles require explicit
+native reconnection. The local API has its own bearer token in `api.token`.
+
+`mn blueprint list` reads the catalog configured on the CLI computer through
+the SDK and works before node attachment. Git catalogs require Git.
+`mn blueprint --blueprint-repo <url-or-folder> list` selects another source for
+that listing. Validation, model/dependency setup, preparation, and execution use
+the execution node's catalog. Local source paths, revisions, and offline options
+for execution require an attached local runtime. Remote input paths refer to its filesystem. Existing
+queue/schedule options, IDs, node selection, results and backup restore are retained.
+A failed connection never triggers local startup or automatic resubmission.
+
+See [installation roles and lifecycle](../mn-deploy/docs/installation-roles.md).
+
+## Workflow preparation progress
+
+Active preparation is reported as `mn.preparation.v1` receipts in
+`preparations` on workflow snapshots, public steps and agents. Receipts contain
+an opaque ID, step/agent/attempt identity, kind, generic purpose, phase, status,
+nullable percent (0–100) and safe message. Model names, repositories, artifacts,
+endpoints and raw backend messages are excluded from preparation presentation.
+Download percentages reflect measurements; unknown loading progress remains
+indeterminate and is separate from workflow completion.
+
+`runtime_preparation_started`, `runtime_preparation_progress` and
+`runtime_preparation_finished` share one identity and fixed timeout. Progress
+never renews that timeout. The owner ledger retains safe progress for reconnects;
+completion, cancellation and retries retire the active preparation.
+`runtime_model_wait_started` and `runtime_model_wait_finished` describe gateway
+requests whose loading and inference cannot be separated. Their durable wait
+receipts never extend execution budgets and have no percentage. Upgrade Core,
+SDK/common, API, CLI and desktop together to consume this contract.
+
+## Current contracts
+
+The CLI requires the current SDK, including its admin-token constructor argument. Runtime host helpers live in the separately installed `mn_runtime` package; surface adapters use SDK clients. Retired forwarding modules and private helper aliases are removed; native cleanup only reconciles registered ownership records. API monitoring requires the current versioned public progress snapshot; retired runtime-node projections are no longer reconstructed.
+
+Backward compatibility and automatic migration of obsolete state are unsupported.
+
+## Starting after a full reset
+
+Close OtterDesk, run `install.sh --reset` and confirm `YES`, then launch OtterDesk
+with `--reset`. Runtime and desktop resets remain separate. Runtime reset removes
+managed state, downloads and owned host processes; desktop reset removes its own
+state and conversation-model assets. Source checkouts and external documents and
+outputs remain intact. Normal `mn runtime start` preserves state and credentials.
+Core credentials are generated per installation and shared with API/native/SDK
+clients through private files; installer reset rotates them. Concurrent startup
+is rejected while another start or reset owns the lifecycle lock.
+
+The CLI requires Python 3.12 or newer. The managed runtime and contributor/CI toolchains use Python 3.12, matching Core HostLocal, the SDK, and the API.
+
+OpenShell worker policies may declare `policy_config_bindings: true` and bind
+unquoted `${config.path.to.scalar}` values from their SDK-resolved configuration.
+The SDK renders bounded JSON-quoted scalars before native provisioning and
+payload staging, preserving source policy files and existing network rules.
+Missing bindings fail before image preparation. This requires SDK
+`>=1.3.58.dev63,<2`; workers without the declaration retain their policy behavior.
+
+Blueprint `execution.json` can set `runtime.placement.must_run_local: true` to
+pin its Job owner and all workers to the submitting computer. `mn blueprint run`
+honors that requirement before resource/model preparation, rejects a remote
+`--node`, and cannot disable it through the single-node environment opt-out.
+`requirements.os: "darwin"` additionally requires a Mac, including sample runs.
+Install the matching updated SDK and CLI to use this contract.
+
+`mn runtime ensure-context-engine` prepares the authenticated CPU Membrane package.
+Blueprints declare Markdown memory with `mn.context` / `text_memory.enabled`.
+Preparation uses Markdown storage and one DuckDB index per job; it does not
+prepare a GPU compressor. The private `context_auth.token` is reused across
+starts and forwarded through runtime settings. `text_memory.enabled=false`
+disables blueprint preparation, including when its source descriptor is enabled.
+The matching v2 service, SDK and persistent Compose template must be installed
+before a live run. Optional detailed logs use `MN_CONTEXT_OBSERVABILITY=true`.
+Preparation checks the authenticated v2 protocol even when the container is
+already running. An older image fails before submission with a matching-image
+instruction. Local development can prepare the current engine with
+`mn-deploy/install.sh --mode local --build-membrane`; a data reset is unnecessary.
+
+`mn model list` shows every discovered installation of a DMR model, including
+local and multiple remote owners of the same unregistered artifact.
+
+Interactive `mn run watch` keeps completed, failed, and cancelled runs open for inspection until `q` or Ctrl+C. Terminal snapshots stop polling; redirected output still finishes automatically. Child tasks appear beneath their parent sub-workflow with descriptive labels, stable instance IDs, round, status and elapsed time; `[` / `]` page tasks and `f` follows the active or failed task.
+
+Completed cross-node blueprint runs wait up to 120 seconds by default for the
+replicated final result and declared output files before completing the local
+output copy. Set `MN_OUTPUT_COPY_TIMEOUT_SECONDS` to adjust this deadline.
+
+Long blueprint launches and `mn job create` report the current preparation stage,
+including dependencies, payload staging, Docker workers, and runtime submission.
+`mn blueprint run` applies the same shared input validator as
+`mn blueprint validate` before checking runtime resources, installing models, or
+submitting a job, so missing required inputs fail immediately with the relevant
+`--set` hint.
+Validation also accepts runtime bindings for SDK-admitted child-workflow
+templates while rejecting unknown step bindings.
+Interactive terminals show a spinner with elapsed time. Plain and redirected
+human output receive a concise “still waiting” line every ten seconds on stderr.
+First-time image builds may take several minutes; an elapsed timer indicates a
+pending call, not a measured completion percentage. Existing model-download
+progress remains available. `--json` output stays unchanged.
+
+`mn-cli` provides the `mn` command for validating and running blueprints,
+inspecting runtime state, managing jobs, exporting artifacts, and starting local
+services installed by `mn-deploy`.
+
+`mn blueprint list` shows each blueprint's concise `tagline` (up to 80 characters),
+using its description when no tagline is declared. `mn blueprint show <ID>` and
+JSON output retain both the tagline and full description.
+
+## Quick Start
+
+Requires `mirrorneuron-python-sdk>1.3,<2.0`.
+
+Install locally and run tests:
+
+```bash
+python3.12 -m venv .venv
+. .venv/bin/activate
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m pytest -q
+```
+
+Try the CLI:
+
+```bash
+mn --version
+mn runtime start
+mn node list
+mn blueprint run message_routing_trace
+```
+
+After a completed blueprint run copies both its internal run store and a
+configured user output folder, the human-readable summary prints only the
+user-facing output destination.
+
+`mn runtime start` delegates to the installed `mn-runtime` lifecycle. Every
+runtime owns its Redis state and execution resources. Successful startup reports
+the verified endpoint, an add-node command with a token placeholder, and the
+private credential file location. It never prints the credential. A full install
+attaches its local surface automatically after readiness succeeds.
+
+The first `mn node add` attaches this surface. Subsequent additions ask its entry
+runtime to federate with another runtime; the surface never registers as a node.
+
+For subsequent peer additions with Syncthing shared storage enabled, the runtime configures and
+verifies both sidecars before registering the Core federation pair. A failed
+shared-storage connection creates no new Core federation pair and tells the
+operator to correct the sidecars before retrying.
+
+Handshake identities, endpoints and credentials are validated before that
+storage prerequisite. A failed rejoin preserves existing registrations and
+reports any uncertain cleanup. Successful federation remains successful when
+model synchronization is pending: the confirmation says the model monitor will
+retry instead of claiming models are already shared.
+
+Runtime startup readies the host-native SDK service before Core. Calling
+`mn runtime start` again reuses a healthy native service when its effective
+OpenShell gateway configuration matches its watchdog launch receipt, preserving
+warm definition-scoped response engines. Changed or missing configuration
+receipts refresh only the native SDK service and watchdog with resolved settings.
+The private `MN_HOME/pids/native-sdk-grpc-watchdog.config.json` receipt binds a
+configuration fingerprint to its watchdog PID; it stores no environment dump or
+credentials. Existing services without a receipt refresh once at startup.
+Schedule startup/repair after active native work finishes when configuration
+needs refreshing; hiring itself never restarts the service.
+If reconciliation recreates Core, the CLI also restarts the local API so its
+gRPC client identity matches the recreated runtime.
+
+Runtime Compose commands also load the SDK-generated managed-model override
+when present. This keeps the owner gateway connected to its existing private
+model credentials when startup or a sidecar restart recreates LiteLLM. The CLI
+passes the credential file reference to Compose without reading or printing
+secret values.
+
+`mn node list` shows each node's hostname, health, and role (connection mode
+plus job-ownership eligibility) without artifact-only fields such as kind,
+owner, or update time. Use `mn node show <node>` for the complete endpoint and
+capability record.
+
+Remove a reciprocal federation registration with explicit confirmation:
+
+```bash
+mn node remove mirror_neuron@spark --yes
+```
+
+This detaches the peer from the current Core only; it does not delete the
+peer's owner-local jobs or data.
+
+The CLI uses `mn-python-sdk-web-ui` for static HTML exports and for the
+job-scoped iframe handle that forwards a blueprint-owned web service.
+
+## Model operations
+
+`mn model` exposes one type-aware workflow: `list`, `add`, `show`, `probe`,
+`start`, `stop`, `unload`, `update`, `remove`, and `doctor`. Add a catalog or arbitrary DMR reference with
+`mn model add <MODEL>`, or register canonical provider JSON with
+`mn model add --file <definition.json>`. Registrations are stored in
+`$MN_HOME/models/registry.json`; provider secrets remain environment-variable
+references. Use `mn model list --available` to include catalog-only choices.
+Use `mn model show` to display the full merged catalog with `default` markers
+for the configured default and its fallbacks; `mn model show <MODEL>` keeps
+the single-model detail view. Both forms show stored facts without live probes.
+Run `mn model add --default` to prepare the first hardware-compatible default
+on the selected local or cluster node. It honors catalog overrides and reuses
+registrations; choosing a fallback does not replace the logical default policy.
+The default list is federation-wide: it merges each connected node's published
+native model and custom OCI inventory. A discovered artifact reports `ready` when its
+LiteLLM route is live and `installed` while route reconciliation is pending;
+registry ownership is not presented as a health state.
+Add `--default` with an explicit model or file to set the logical default.
+Automatic selection tries Inkling 2 Mini (`medium`, 32 GiB accelerator
+memory) and then MirrorNeuronLab's Bolt E4B (`nano`, 8 GB VRAM or 16 GB unified
+memory). The `small` alias also selects Bolt. Provider files used with
+`--default` must contain exactly one model.
+
+Remote provider fixtures and default-override tests live in
+[mn-system-tests](../mn-system-tests/README.md#remote-provider-default-overrides),
+including OpenRouter Nemotron 3 Ultra.
+
+When the requested DMR artifact is already installed locally or on a cluster
+node, `mn model add` reuses it and creates the same managed registry record
+without pulling a second copy.
+
+All six catalog models use native llama.cpp on their Linux or macOS owner.
+Prepare a model with `mn model add small`, start it with `mn model start small`,
+and inspect it with `mn model doctor small`. The first request can also start an
+idle model. `mn model stop small` releases GPU memory and retains downloaded
+weights. Select `--node` or `--local` for replicas. User-declared OCI servers
+use Podman. [SDK model guide](../mn-python-sdk/docs/docker-models.md)
+
+A managed model may be installed on more than one eligible node. Repeat `--node`
+and combine it with `--local` to add all requested replicas in one operation:
+
+```bash
+mn model add small --local --node spark
+mn model add medium --node spark --node gpu-2
+```
+
+The CLI preflights every target before installation, records successful
+replicas if a later target fails, and makes retries idempotent. `mn model list
+--json` and `mn model doctor` report each installation separately. An
+untargeted `model update` updates all recorded replicas. Removing a replicated
+model requires `--local`, one or more `--node` values, or `--all-nodes`.
+
+Force a live capability evaluation and save the effective LiteLLM-facing
+matrix in the SDK model-catalog overlay:
+
+```bash
+mn model probe
+mn model probe nano
+mn model probe nemotron-3.5-lightning:latest --json
+mn model probe nano --capabilities json-schema,stream,thinking
+```
+
+With no model argument, `probe` evaluates every model in the same
+federation-wide runtime inventory returned by `mn model list`. It continues
+after individual failures, reports every result, and exits unsuccessfully when
+one or more probes fail. Supplying a model keeps the single-model behavior. The
+default probe covers embeddings, image input, strict JSON Schema output, SSE
+streaming, and thinking. When the selected DMR artifact is local, the CLI runs
+the identical probe directly against the owner's model server and fails if the
+LiteLLM result differs. Remote-owner and provider models are tested through the
+managed LiteLLM route without exposing or bypassing the owner's direct endpoint.
+
+## Fast runtime-model orchestration tests
+
+Model-aware blueprint launch logic is testable without Core, Docker, DMR,
+LiteLLM, SSH, or a network. `RuntimeModelDependencies` supplies the model
+catalog, resource report, system summary, `BlueprintModelOps`, and gateway
+effects used by the real `run_bundle` handler. The reusable
+`tests/runtime_model_fakes.py` cluster records model preparation, remote-route
+reconciliation, and LiteLLM synchronization in memory.
+
+Run the focused gate from this workspace:
+
+```bash
+../mn-system-tests/.venv/bin/python -m pytest -q \
+  tests/test_run_cmds_models.py tests/test_run_cmds_run.py \
+  -k "adaptive_model_placement or injected_remote_installed_state or injected_cluster"
+```
+
+The runtime-selection scenarios are:
+
+- a local-only 16 GB Apple node validates the portable Bolt E4B fallback policy;
+- a 24–47 GB VRAM or integrated-memory node also selects Bolt E4B;
+- adding a healthy 128 GB CUDA node validates that Nemotron is feasible;
+- already-installed remote models remain usable without a second install;
+- blueprint launch selects and prepares the owner node before job submission,
+  then workers use that node's reachable LiteLLM gateway route.
+
+`mn blueprint run --debug` prints the selected model and preparation result for
+blueprint-declared foundational LLMs. RAG and OCR model details are owned by
+their skills and appear only in runtime events when those skills first call the
+SDK wrapper. Those events report the selected model/node, fallback reason, and
+install/reuse state. Debug mode
+also prints DockerWorker build commands and complete captured build output,
+including builds performed through a remote node's native SDK service.
+
+The run monitor header keeps the workflow, run, and job identity but omits the
+blueprint description so progress begins immediately below it.
+Its lower section includes a fixed-height, timestamped event tail that follows
+the newest workflow events without growing the monitor.
+Reattachment uses the manifest projection saved for that exact run; it never
+guesses an unrelated catalog blueprint when older run metadata lacks a
+`blueprint_id`.
+While the API progress stream is available, `mn run watch` displays its public
+step snapshot directly. The phase counters, current step, worker activity, and
+percentages therefore match the API for the same run.
+When a remote owner is verifying SDK-staged local inputs, the same monitor
+shows `Waiting for staged inputs on <node>` until Core dispatches the workflow.
+The interactive monitor intentionally omits LLM token totals and budgets because
+runtime event counters are not authoritative; resource telemetry remains
+available to its dedicated commands and structured consumers.
+
+While a model is prepared at launch, the run monitor keeps preparation to a
+single compact `Preparing <model> on <node>…` status below the workflow and
+agent progress grid. Model events still carry detailed phase, timing, and byte
+telemetry for logs and structured consumers; a lack of byte progress does not
+itself fail the job.
+
+Live Spark checks are a separate, opt-in boundary smoke after this injected
+gate passes; they are not the development loop for placement policy.
+
+CPU-only HostLocal workflows stay on the submitting runtime node by default.
+When the local Core runs in Docker, prepared HostLocal Python environments are
+reported to submissions through the Core-visible cache mount rather than the
+host filesystem path.
+Local source requirements such as `/workspace/mn-python-sdk[context]` are
+staged into that cache with their extras and declared source version preserved.
+The extras are separate from the source path when checking trusted roots or
+rebasing a checkout path for a selected runtime node.
+Cross-machine preparation accepts POSIX paths and Windows drive/UNC paths,
+resolving a unique Python project or wheel inside the execution node's checkout.
+Repository names and submitter home directories are not fixed; Membrane context
+SDK sources follow the same staging path as other blueprint dependencies.
+Ambiguous matches, traversal and symlinks outside that checkout are not rebased.
+When a local-only workflow also requires a host OS, HostLocal Python workers run
+on the native host through the SDK service. Core uses a separate prepared SDK
+proxy environment for supervision and cancellation. Source skills retain their
+own SCM versions; CLI installation includes the SDK's `local-source` extra.
+The CLI requires SDK `>=1.3.58.dev46,<2` for this native execution contract.
+Automatic HostLocal service ports use `MN_AUTO_PORT_START` through
+`MN_AUTO_PORT_END` (62000-62049 by default in the local Docker runtime). That
+range is published only on host loopback; the runtime's internal proxy marker
+allows the service process to accept Docker forwarding without advertising a
+non-loopback endpoint.
+Detached runs keep their output relay alive until terminal state unless
+`MN_RUN_EVENT_RELAY_MAX_SECONDS` is explicitly set.
+
+Override blueprint config for one run without changing `config/overwrite.json`:
+
+```bash
+mn blueprint run ./vc_assistant \
+  --set document_sources.folder_path=/path/to/documents \
+  --set execution.debug=true
+```
+
+Repeat `--set` for multiple values. Values use JSON types when possible and
+otherwise remain strings.
+
+Normal `mn blueprint run` commands validate declared required inputs from the
+merged configuration before submitting a job. For
+`input_validation.required: ["input_folder"]`, supply
+`--set inputs.payload.input_folder=/path/to/source` or configure a non-empty
+default. `--force` intentionally bypasses input validation.
+
+For a blueprint-owned web service, override the listener without editing its
+checked-in config:
+
+```bash
+mn blueprint run ./cctv_operator --web-ui \
+  --web-ui-host 0.0.0.0 \
+  --web-ui-port 61017
+```
+
+`--web-ui-host` and `--web-ui-port` set `web_ui.service.host` and
+`web_ui.service.port` for that run. A wildcard host exposes the service to
+reachable peers; the blueprint is responsible for its authentication and
+network-safety contract.
+
+When a blueprint declares a `web_ui` service or a deferred job-scoped Web UI,
+`--web-ui` reports the local `/jobs/<job_id>/ui` dashboard route. Deferred
+handles may appear after job submission, but the reported route is stable.
+Docker Compose service handles include an allowlist for the dashboard's
+declared video and WebSocket companions, so the local Web UI server can proxy
+a selected remote node without sending the browser directly to that node's LAN
+IP.
+
+## Stable jobs and execution runs
+
+`mn run info <run-id>` (also `mn run show <run-id>`) displays the assigned node
+and reserved CPU, RAM, disk, GPU count and GPU memory first. It uses Core's
+current `placement` projection, separate from measured `mn run resources` usage.
+Paused work and terminal cleanup may retain reservations; queued, released,
+and unavailable reservations are labeled explicitly. `--json` preserves the
+complete placement object. Upgrade Core with the CLI to receive these fields.
+
+`mn job create` selects an eligible runtime from hardware and workflow
+requirements before preparing workers. That selected node owns the submitted
+definition. `--node` explicitly constrains this selection. The blueprint source
+is unchanged; `mn job start` reuses the stored placement and resources.
+Preparation respects `MN_HOME` and configured host/runtime shared-storage and
+job-data paths, just like `mn blueprint run`.
+
+Create a reusable job once, then start independent runs that share its declared
+job data:
+
+```bash
+mn job create ./vc_assistant --job-id vc-diligence
+mn job show vc-diligence
+mn job start vc-diligence --inputs run-input.json
+mn run list --job vc-diligence
+
+mn run show <run-id>
+mn run pause <run-id>
+mn run resume <run-id>
+mn run cancel <run-id>
+```
+
+When an older run is no longer visible to Core, `run list` and `run show`
+recover verified terminal status from its replicated submission. A stored
+`running` marker without a live Core record is shown as `unknown`.
+
+In an interactive terminal, run pause, resume, and cancel display a spinner
+while Core processes the request. JSON and `MN_CLI_OUTPUT=plain` output remain
+free of transient progress so they are safe for automation.
+
+`job_id` is the durable configuration and data owner. `run_id` is one
+execution and the identity used for control, logs, output, retention, and run
+deletion. Starting the same job again creates another run; retrying a run does
+not. Use `mn blueprint run --job-id <job-id>` to run an existing definition.
+Without that option, blueprint run creates a durable job and starts
+its first run. Human-readable submission, detach, summary, and watch output
+labels the durable Job ID and execution Run ID separately.
+
+`mn job list` shows each definition's canonical Type (`service` or `batch`) and
+its Node. Node is the Core runtime (`owner_node`, such as
+`mirror_neuron@spark`) that durably owns the definition and its job data; it is
+not a human or account owner.
+
+With `--job-id`, the CLI prepares the currently installed blueprint revision
+and atomically replaces the inactive job's executable bundle before starting
+the run. Job data, schedules, and earlier run history are preserved. In
+contrast, `mn job start` and scheduled dispatches are source independent and
+reuse the stored definition-scoped submission and Docker services.
+
+Lifecycle commands are deliberately separate:
+
+```bash
+mn job archive vc-diligence            # retains shared data
+mn job reset-data vc-diligence         # confirms; clears/reseeds and advances generation
+mn run delete <run-id>                  # confirms; cancels an active run, then removes it; never deletes shared data
+mn job delete vc-diligence              # confirms; deletes all runs, runtime resources, definition, and data
+```
+
+Permanent job deletion automatically cancels and clears attached active runs
+before removing the definition and shared data. Run deletion does the same for
+an active run before detaching it. If an archive must wait for an
+unavailable owner runtime, the command and `mn job list` report
+`archive_pending` until federation replay settles it.
+If a confirmed deletion must wait for an unavailable owner, `mn job delete`
+reports `delete_pending` and skips submitter-local cleanup; the stale job is
+hidden from normal lists while Core replays the owner cleanup on reconnect.
+
+Job and run deletion allow up to five minutes for Core cleanup (with a small
+client-side forwarding margin), including when the definition belongs to a
+federated owner node. If any mutating command still times out, the CLI warns
+that the owner may still be processing it; inspect the current job or run state
+before retrying. Missing identifiers are reported directly, with the relevant
+list command instead of a generic execution failure.
+
+Execution status and controls use `mn run ...`; attached blueprint progress
+uses the canonical workflow-progress stream and the same public-step contract as the
+launch-time monitor.
+
+## Durable operations
+
+`mn node reconcile` and `mn node drain` start durable Core operations and
+render item updates in completion order. `MN_CLI_OUTPUT=plain` emits stable
+`→`, `✓`, and `! Warning:` progress lines; the rich terminal shows live
+counters and recent results.
+
+If the owner of a cancelled job is offline, `cancellation_pending` means the
+request was accepted and cleanup is queued for that node's rejoin. It is not a
+command failure. Ctrl+C detaches without aborting the operation; reattach with:
+
+```bash
+mn operation show op-…
+mn operation watch op-…
+```
+
+## Configuration
+
+Configuration is loaded by `mn_cli.config`. `.env` files provide defaults, and
+real environment variables always override them. `MN_ENV` selects the
+environment-specific defaults file and defaults to `dev` when unset.
+
+Precedence:
+
+```text
+real environment variables
+> .env.${MN_ENV}
+> .env
+> built-in safe defaults
+```
+
+Development:
+
+```bash
+export MN_ENV=dev
+cp .env.example .env.dev
+mn --version
+```
+
+Tests:
+
+```bash
+export MN_ENV=test
+mn --version
+```
+
+Production does not require any `.env` file. Provide deployment-specific values
+through the real environment:
+
+```bash
+export MN_ENV=production
+export MN_HOME=/var/lib/mirrorneuron
+export MN_LOG_LEVEL=info
+export MN_API_HOST=0.0.0.0
+export MN_API_PORT=8080
+mn runtime status
+```
+
+`mn runtime start --host <LAN-IP>` persists the local runtime identity in
+`$MN_HOME/docker-compose.env`. Blueprint launches automatically use that
+identity for Compose placement, so `MN_NETWORK_ADVERTISE_HOST` does not need to
+be exported for ordinary local submissions. An explicitly exported value still
+overrides the persisted identity.
+
+Keep secrets, credentials, production hostnames, production database URLs, cloud
+credentials, and user-specific local paths out of source files. Use
+environment variables or uncommitted `.env` files instead.
+
+## Details
+
+- [MirrorNeuron Component Guide](../mn-docs/component-guide.md#cli)
+- [CLI Reference](../mn-docs/cli.md)
+- [Environment Variables](../mn-docs/env_variables.md)
+- [Monitor Guide](../mn-docs/monitor.md)
+
+## Release Updates
+
+After a successful interactive `mn runtime start`, the CLI checks the newest
+stable `install_support/v*` snapshot in `MirrorNeuronLab/mn-deploy`. If a newer
+release is available, it only prints a reminder to run `mn runtime upgrade`; it
+never prompts for or installs an upgrade during startup or any other command.
+
+`mn runtime upgrade` is the explicit, confirmation-protected installation
+command. Its release plan pins the Core release tag, the SDK/CLI/API Python
+package versions, and the Web UI npm version. The upgrader installs the exact
+Python package versions from the public GAR `agent-skills` index and configures
+the exact Web UI npm version for Docker Compose; it does not follow a source
+branch, package-manager `latest` tag, or the Core repository's latest-release
+endpoint. A component is shown as an upgrade only when the snapshot version is
+strictly newer than the installed stable version, so a stale snapshot cannot
+offer a downgrade. The former `mn runtime update` command now points to
+`mn runtime upgrade`.
+
+The Core remains a versioned GitHub Release binary because it is not a Python
+or npm package. Its release asset URL is constructed from the same support
+snapshot tag. For private mirrors, set `MN_DEPLOY_REPO`, `MN_DEPLOY_REF`,
+`MN_PIP_INDEX_URL`, or `MN_PIP_EXTRA_INDEX_URL` before running the command.
+
+## Notes
+
+- A running MirrorNeuron core is required for live runtime commands.
+- Validation failures render in wrapped terminal tables, so long requirements
+  and recommended fixes remain readable in narrow terminals.
+- Runtime commands use the shared private connection in `MN_HOME/client.json`.
+  Connect with `mn node add HOST --token TOKEN` or attach a local runtime.
+- Use `mn blueprint validate` before `mn blueprint run ./folder` when checking a local bundle.
+- Validation honors first-use runtime-model preparation, so a compatible
+  declared model need not already be installed.
+- Blueprint add and update validate lazy model policies without pulling model artifacts.
+- `mn blueprint run` validates model declarations but does not install models.
+  Workers select, install, and route each managed model on its first actual use.
+- Docker workers receive a worker-reachable model-control target and use the
+  SDK to select the best cluster node independently for LLM and for model
+  specifications supplied at runtime by RAG and OCR skills.
+- Node-local workflows are hard-pinned as a whole after topology lowering.
+  Runtime health rejects nodes whose coordination-store identity differs from
+  the submitting Core or whose Redis endpoint is read-only.
+- OpenShell sandbox ownership uses the durable job ID and definition submission
+  ID. Each definition revision gets a separate sandbox, and submission commits
+  its preparation record so resource cleanup preserves active work.
+- OpenShell workers that reuse a job-scoped sandbox are prepared before
+  submission; the submitted node receives the concrete sandbox name and SSH
+  host instead of asking Core to create host resources.
+  The SDK prepares the sandbox once on the selected execution node for both
+  `mn blueprint run` and `mn blueprint doctor`. That node needs an OpenShell
+  CLI matching its gateway and reports preparation failures. A remote worker
+  uses the selected node's native SDK. `doctor --check-only` skips preparation.
+  `doctor --cleanup` retires the resources owned by its diagnostic submission.
+  Local managed gateways build sandbox images through the Docker CLI, which
+  honors the active Docker context (including Docker Desktop on macOS).
+  OpenShell build contexts use SDK source staging to preserve local package
+  versions and requested extras when Git metadata is absent from the image.
+- `default` is a LiteLLM model group, not a concrete model. Its preferred and
+  fallback entries come from the SDK catalog's `defaults.llm.model` and
+  per-entry `fallback_model` links. The existing cluster model monitor
+  rebuilds these routes as nodes join, rejoin, or leave; incomplete peer
+  snapshots retain the last safe routes until departure is confirmed.
+  The steady-state inventory check runs once per minute by default. If a
+  federated Core's shared snapshot omits a peer or remains stale, the monitor
+  requests that peer's authoritative snapshot through local Core's authenticated
+  federation transport, retaining the five-second read budget and poll timing.
+  A failed refresh produces one warning, retains existing routes, and defers
+  event acknowledgment. Only a successful read without a model publication is
+  reported as not yet published. Empty published inventories are valid.
+  Status reads, remote model preparation and gateway commands require matching
+  Core/SDK/CLI builds; older Cores report an upgrade requirement. Peer credentials
+  stay in Core.
+  Peer routes preserve the gateway URL and port advertised by Core.
+  Gateway route names and `fallback_model` are read from the SDK's merged model
+  catalog, including `~/.mn/models/catalog.json` (or `$MN_HOME`) and the
+  highest-priority `MN_MODEL_CATALOG_PATH` override. When a local runtime's DHCP
+  address changes, the monitor rehomes only DMR registrations whose artifact is
+  confirmed on the local host and whose former owner is absent from live
+  membership. It then rebuilds gateway routes from the current live node
+  address; this avoids treating an unverified `.local` name as a cluster
+  endpoint.
+- See [Cross-node model routing through LiteLLM](docs/cross-node-litellm-routing.md)
+  for the complete proxy topology, node join/departure reconciliation,
+  replica load-balancing, admission limits, and operator diagnostics.
+- `--debug` retains complete Docker build diagnostics and prints model
+  preparation results, including selected node and install/reuse state.
+
+Shared configuration parsing and defaults are owned by `mn_sdk.config`.
+`mn_cli.config` remains a source-compatible facade that composes CLI-only keys
+with the SDK schema. Layering is `environment > .env.<profile> > .env >
+defaults`, and an explicitly blank environment value overrides dotenv. Set
+`MN_MODEL_CATALOG_PATH` in `.env` to select an operator catalog containing both
+semantic defaults and model entries; there are no separate preferred/fallback
+model-name environment variables.
+
+## Explicit skill dependency versions
+
+Skill dependencies must declare a version in the manifest or runtime package
+index, or carry an explicit version constraint in a configured requirement.
+An unversioned skill fails preparation before installation; no global skill
+version or SDK-version fallback is applied. References to skills already
+versioned in the manifest use that declaration. Development staging preserves
+the SDK's own static project version or, for the running SDK source checkout,
+its installed distribution version. Missing SDK version metadata is an error.
+
+Blueprint SDK capabilities use the canonical `dependencies.json.packages` list,
+with full distribution names, `type: pip`, `source: gar`, and exact versions.
+The SDK owns resolution: local development uses source projects and ignores
+package/skill release pins; binary mode retains GAR requirements. This applies
+to HostLocal and DockerWorker submissions, including blueprint-owned skills.
+
+The workflow monitor event feed prefers explicit activity messages over worker
+identifiers, including bounded tool-query previews and outcomes. Long entries
+are ellipsized; recorded events retain the bounded message.
+
+The installed API, native SDK, and Web UI executables are resolved under
+`$MN_HOME/venv/bin` (default `~/.mn/venv/bin`), alongside runtime state.
+
+## Automatic federation storage recovery
+
+Syncthing runs as the owner of its shared mount, detected inside Docker. Private
+outputs and token ledgers therefore replicate when the host user is not UID 1000. Startup preserves shared-file permissions and adjusts only Syncthing's
+own configuration directory.
+
+The supervised native runtime checks shared-storage pairing every 30 seconds,
+independently of model reconciliation. Incomplete pairing is retried every five
+seconds, including when an already-registered peer starts after the local runtime.
+Each pass reloads persisted sidecar settings and reads current authenticated
+Syncthing device identities before restoring reciprocal device and folder
+registration. Unchanged configurations are not rewritten. Disabled storage and
+unavailable peers never trigger resets, data deletion, or workflow restarts.
+The monitor uses existing federation authorization and never joins unknown nodes.
+Credential changes that invalidate existing federation access require node rejoin.
+
+Install the updated CLI and SDK and restart the native runtime service to enable
+the monitor. No runtime reset or blueprint modification is required. Registration
+is distinct from completed file transfer; DockerWorker preparation still verifies
+the staged context and its readiness marker before building.
+
+# Persistent desktop node identity
+
+`mn runtime start` persists a private, versioned `MN_HOME/node-identity.json`
+before starting an independently federated Core. Existing names are preserved;
+new names use `mirror_neuron_<uuid>@127.0.0.1` and do not depend on Wi-Fi or DNS.
+The name is an identity, not the remote connection address. Conflicting saved,
+configured, or container identities stop startup without changing job ownership.
+
+`mn runtime status --json` reports `identity.expected`, `identity.actual`, and
+`identity.valid`. An unnamed or mismatched Core is critical and exits nonzero.
+Use `mn runtime start` to restore missing startup configuration. Restore the
+original identity from backup when configuration conflicts; do not delete the
+identity file or reset job data to bypass the check. Existing records owned by
+`nonode@nohost` require explicit repair and are never reassigned automatically.
+
+After a network change, `mn runtime reconnect` refreshes desktop endpoint
+advertisements without restarting a healthy Core. Explicit DNS endpoints remain
+configured; automatically detected IPs are refreshed. Peers must resolve DNS
+from their containers. If all known endpoints are unreachable, use `mn node add`
+with the peer's current address and federation token. Direct Erlang clusters
+retain their existing naming and discovery contract.
+
+The workflow monitor separates fixed phases from runtime-created sub-workflow steps.
+The child panel shows task IDs, parent, round, phase, status, elapsed time and failure
+reason. It follows active work, with `[` / `]` paging and `f` to resume following;
+counts include newly discovered tasks. Four child rows and a three-event tail keep
+the child view compact. On macOS, attached runs and detached output
+relays hold an idle-sleep assertion for their lifetime. Display sleep remains allowed;
+explicit sleep is not prevented. An explicit relay time limit also ends its assertion.
+
+## Actionable launch errors
+
+Hardware and scheduling failures use shared SDK codes and explain the cause
+without requiring debug mode. For example, a 48 GiB memory requirement on a
+24 GiB node reports `MN_MEMORY_REQUIREMENT_UNMET`, the required and available
+amounts, and a hint to select a larger node or reduce the requirement.
+CLI JSON and API Problem Details include numeric `problem_code` (for example,
+1001 for memory requirements or 3001 for scheduling), `category`, `retryable`, and bounded
+structured placement `details.blockers`. See [SPEC.md](SPEC.md#shared-admission-error-contract)
+for codes and retry semantics.
+Measured admission blockers also identify a validated friendly PC name and the
+available/required resource amounts. GPU memory shortages use `2001` and suggest
+stopping other GPU workloads or unloading unused models before retrying. Updated
+Core and SDK services are required for measured run-start errors; admission
+requirements remain enforced.
+
+## Job performance
+
+Run `mn job analysis <job_id>` for all recorded execution statistics, or add
+`--json` for the shared SDK/API result in the standard CLI JSON `data` field. Counts distinguish successful, failed,
+cancelled, running, paused, and other unfinished runs. Duration excludes pauses;
+missing/partial measurements and estimated tokens are explicit. Plain mode and
+`NO_COLOR` remain supported. This read-only command does not start the job.
+
+## Retry failed work
+
+```bash
+mn run retry <run-id> --dry-run --json
+mn run retry <run-id> --set catalog_review.walltime_seconds=3600
+```
+
+Retry starts a new attempt of the same failed run from a verified durable
+checkpoint. Completed steps remain completed. `--set path=value` is repeatable
+and accepts only declared adjustable settings; omitted settings keep their prior
+values. Increasing a 20-minute total allowance to 60 minutes leaves 40 minutes
+when 20 minutes have already been consumed. Restoring an API or folder may allow
+retry without any settings change.
+
+`mn run resume` continues a paused run. Start a new run for changed inputs,
+workflow topology or result-defining configuration. List/show identify runtime
+records versus stored history; historical visibility alone does not guarantee
+recovery. `--dry-run` returns eligibility and blocked reasons without dispatch.
+
+The command prints the request key and selected attempt/checkpoint before
+submission. After a lost response, reuse those original values and identical
+settings:
+
+```bash
+mn run retry <run-id> --idempotency-key <key> \
+  --expected-attempt <attempt> --checkpoint-revision <revision> \
+  --set catalog_review.walltime_seconds=3600
+```
+
+Standard `--json` output includes structured planning/submission results and
+error context. Truly unknown IDs remain not found; an unavailable Core is reported
+separately from stored history without its control record.
+
+Managed Markdown context turns may bind a trusted serving-tokenizer integration
+with `MN_CONTEXT_TOKEN_COUNTER_FACTORY=package.module:create_counter`. The factory
+receives `request`, `scope` and `principal` keyword arguments and returns a
+Membrane `VerifiedCounter` calibrated against actual provider prompt usage for
+that request's serving route, including tools and schema framing. Workers receive
+the setting through native/runtime preparation. No factory means counting remains
+unavailable; errors or lexical/byte estimates never authorize dispatch. Install
+the serving integration in the worker environment before enabling live managed
+turns. Tokenization and context processing must remain on CPU.
+
+Context preparation needs no dedicated compression model. Full-runtime optional
+compaction uses the normal LiteLLM `default` route only after CPU preparation
+cannot fit a complete request.
+
+## Job backup and restore
+
+```bash
+# Pause active runs first; offline dependencies are included by default.
+mn job backup <job-id> --output /path/to/job-backup.zip
+# On the destination, create a new definition and start a fresh run.
+mn job restore --input /path/to/job-backup.zip --start
+# To restore without starting, omit --start; --job-id selects a new identity.
+mn job restore --input /path/to/job-backup.zip --job-id restored-job
+```
+
+These commands use `mn.backup.v3`. The ZIP contains the executable bundle,
+configuration, job data, available run history/events/artifacts, staged inputs and
+outputs, payload model files, transitive Python wheels, and declared Docker images.
+`--no-air-gapped` omits the offline wheel/image capsule. Missing model assets,
+unavailable images, unsupported remote service dependencies, or active runs fail
+backup instead of producing an incomplete offline capsule. Backup never replaces
+an existing destination file.
+
+Restore checks all ZIP paths and hashes, compatible OS/architecture/Python ABI,
+and destination CPU, RAM, disk, GPU and runner requirements before allocating
+resources. It creates independent storage and native resources without catalog
+access or blueprint hiring. Historical executions remain evidence under the new
+job data directory; schedules are recreated paused with new identities. Restore
+never replays source executions. A failed start keeps the new job ready for retry.
+
+HostLocal wheels are built for the actual execution Python, including Docker
+Core's Linux Python, and checked against the destination before installation.
+Captured dependencies retain the versions installed in the source environments.
+The native preparation service creates fresh environments from the complete
+wheel set with package indexes and dependency URL resolution disabled.
+
+The destination must already have compatible MirrorNeuron, Python and Docker /
+Docker Model Runner installations. The capsule supplies job dependencies, rather
+than operating-system or runtime installers. Keep it private: configuration and
+local data may contain sensitive values. Core, SDK, CLI and API must be upgraded
+together for the new streamed backup RPCs. `mn blueprint export <run-id>` remains
+a run report export (JSON/Markdown/HTML), with no job restore counterpart.
+
+### Stable sidecar working directories
+
+The REST API and native SDK gRPC helper start in the resolved MirrorNeuron
+runtime home (`MN_HOME`), with their prepared runtime environment preserved.
+Caller-relative configuration paths are resolved before changing directories.
+Their watchdogs use the configured service working directory. Installer and
+caller folders may therefore be removed after startup without breaking model
+or HostLocal Python preparation. Web UI services keep their selected application
+working directory, including source-checkout launches.
+
+`mn runtime restart-sidecars --api` republishes the configured Web UI endpoint
+for both Docker Compose and native installations. An API-only restart does not
+restart the Web UI or remove its proxy address from `runtime-endpoints.json`.
+
+The SDK prepares Inkling's pinned native DMR backend when adding
+`inkling-2-mini` or on its first use. Later calls reuse the downloaded and
+verified runner archives. See [catalog DMR preparation](../mn-docs/model-runtime.md#inkling-2-mini-on-docker-model-runner).
+
+## Standard runtime activity
+
+Runtime events use the shared [`mn.runtime.event.v1` contract](../mn-python-sdk/docs/runtime-activity.md),
+including level, blueprint owner, UTC timestamp and actor attribution.
+The SDK selects meaningful activity for the CLI, API, desktop and web monitors;
+raw events remain available for diagnostics.
+
+## Completed analysis and host delivery
+
+The attached run command and background relay resolve host output sources using
+Core's completed result reference, including its physical workflow run ID. The
+public CLI run label stays available for monitoring. Completion manifests and
+all declared files must still be ready before the configured host copy is delivered.
+A copy failure is reported separately: completed analysis is retained and does
+not require repeating model calls. Delivery uses the SDK's UTC run archives and
+latest.html entry point, with host receipts outside frozen analysis artifacts.
+
+## Automatic waiting and queue inspection
+
+`mn job start` and blueprint starts accept busy-PC work automatically and print
+its queued acknowledgement without asking for confirmation. A queued receipt is
+not a started execution. Each selected PC owns one run with its CPU, memory and
+all advertised GPUs; multiple models share it. Different PCs run independently.
+Pause retains ownership; terminal cleanup releases it before the next FIFO entry.
+
+Inspect admission with `mn run show <run-id>` or
+`mn schedule list --node <owner-node>`. `mn schedule show queue_<run-id>` displays
+the same durable scheduling record. `mn run cancel <run-id> --queued-only` and
+`mn schedule cancel queue_<run-id>` cannot stop an admitted run. Use
+`mn schedule set-time queue_<run-id> --at <future-ISO-timestamp>` to defer that
+same request. Schedule commands accept `--node` and use the current revision.
+Owner commands pass through authenticated Core federation, using existing runtime
+credentials. Queuing survives CLI exit/restart; stale inventory grants no claim.
+Core and native SDK must advertise `exclusive_run_v1`. Deployment is separate.
+
+## Busy resources and moving a Job
+
+Manual starts stop early when capacity is busy. Use `mn job start JOB --queue`,
+`mn blueprint run BLUEPRINT --queue`, or `mn run retry RUN --queue` to explicitly
+wait for compatible capacity. Scheduled work queues automatically. Paused work can
+still hold resources; stop/cancel it to make capacity reusable.
+
+Move an idle Job and its data with `mn job relocate JOB --node NODE`. Pause its
+schedules and wait for cleanup first. Retrying resumes a durable transfer; add
+`--abort` to cancel before ownership commits. After commit, retry finishes activation
+on the destination. No running execution is silently migrated or replayed.
+
+## Native tools on co-worker addition
+
+`mn blueprint add <id>` prepares declared `setup: on_install` skill dependencies
+through the matching SDK before writing the installation record. A failed setup
+exits unsuccessfully and leaves the co-worker unadded. Adding the catalog library,
+listing blueprints, and installing or starting the runtime do not run these hooks.
+Computer Use downloads its signed, notarized `mn computer use.app` from public
+GAR at this point; the end user needs neither Xcode nor gcloud.
+
+## Co-worker mailboxes
+
+For a manager assignment or a specialist result, pass `--kind` and `--attachment` with a JSON file containing the committed `run_id`, `sha256` and `size_bytes`. A result also takes `--reply-to` with its assignment message ID. `list` accepts both filters.
+
+Use stable Job IDs from `mn job list` for co-workers on any connected computer. A note can wait in the recipient's
+inbox between runs. Reuse the request ID if delivery needs to be retried.
+
+```sh
+mn job mailbox send manager-job --to specialist-job --subject "Review the release evidence" --request-id review-note-1
+mn job mailbox list specialist-job --all --json
+mn job mailbox ack specialist-job MESSAGE_ID
+```

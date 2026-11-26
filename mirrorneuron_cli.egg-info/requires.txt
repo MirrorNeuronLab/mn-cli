@@ -1,0 +1,8 @@
+mirrorneuron-surface<2.0,>=1.4.1.dev108
+mirrorneuron-sdk-contracts[api]<2.0,>=1.4.1.dev108
+click>=8.1.0
+httpx<1,>=0.27
+jsonschema>=4.25
+typer>=0.9.0
+mn-python-sdk-web-ui<2.0,>=1.2
+rich>=13.0.0
