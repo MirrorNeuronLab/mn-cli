@@ -5,13 +5,12 @@ use crate::{
     input::{confirm, key, pick, read_object, s},
     runs,
 };
-use futures_util::TryStreamExt;
 use mn_client_support::{Error, Result, connection};
 use serde_json::{Value, json};
 use std::io::{self, IsTerminal};
 use std::path::Path;
 use std::time::{Duration, Instant};
-use tokio_util::io::ReaderStream;
+
 pub(crate) async fn execute(a: &App, c: &[&str], v: &Value) -> Result<Value> {
     let mut q = pick(v, &["job_id"]);
     let action = c[0];
@@ -106,22 +105,29 @@ pub(crate) async fn execute(a: &App, c: &[&str], v: &Value) -> Result<Value> {
             a.get("relocate_job", q).await
         }
         "restore" => {
-            let file = tokio::fs::File::open(connection::expand(Path::new(s(v, "input_path"))))
-                .await
+            let mut file = std::fs::File::open(connection::expand(Path::new(s(v, "input_path"))))
                 .map_err(|_| Error::invalid("Cannot read the requested backup ZIP."))?;
             a.ipc
                 .upload(
                     "restore_job_backup",
                     pick(v, &["job_id", "start"]),
-                    Box::pin(
-                        ReaderStream::new(file)
-                            .map_err(|_| Error::invalid("Could not finish reading backup.")),
-                    ),
+                    Box::pin(async_stream::try_stream! {
+                        use std::io::Read;
+                        let mut buffer = vec![0; mn_client_support::control::FRAME_BYTES];
+                        loop {
+                            let n = file.read(&mut buffer).map_err(|_| Error::invalid("Could not finish reading backup."))?;
+                            if n == 0 { break; }
+                            yield mn_client_support::control::Bytes::copy_from_slice(&buffer[..n]);
+                        }
+                    })
                 )
                 .await?
                 .checked()
         }
         "backup" => {
+            if v["air_gapped"] == false {
+                q["air_gapped"] = false.into();
+            }
             a.download(
                 "create_job_backup",
                 q,

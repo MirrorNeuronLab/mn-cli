@@ -1,6 +1,6 @@
 [package]
 name = "mn-cli"
-version = "2.0.0"
+version = "2.0.1"
 edition = "2024"
 license = "MIT"
 
@@ -9,9 +9,8 @@ name = "mn"
 path = "src/main.rs"
 
 [dependencies]
-mn-client-support = { path = "../mn-client-support", version = "=2.0.0" }
+mn-client-support = { path = "../mn-client-support", version = "=2.0.1" }
 clap = { version = "4", features = ["string"] }
-tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -20,6 +19,13 @@ uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
 chrono = "0.4"
 regex = "1"
-crossterm = "0.28"
 unicode-width = "0.2"
 async-stream = "0.3"
+
+[target.'cfg(not(target_os = "wasi"))'.dependencies]
+tokio = { version = "1", features = ["full"] }
+crossterm = "0.28"
+
+[target.'cfg(target_os = "wasi")'.dependencies]
+tokio = { version = "1", features = ["rt", "io-util", "net", "time", "macros", "sync"] }
+wasip2 = "1"

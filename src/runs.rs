@@ -177,7 +177,7 @@ async fn observe(a: &App, action: &str, v: &Value) -> Result<Value> {
         }
         let delay = v["interval"].as_f64().unwrap_or(1.0).clamp(0.1, 86400.0);
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
+            _ = crate::interrupt() => {
                 let mut result = json!({"detached": true});
                 if action == "resources" {
                     result["run_id"] = v["run_id"].clone();

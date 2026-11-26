@@ -72,11 +72,18 @@ pub(crate) async fn watch(app: &App, initial: Value, stream_json: bool) -> Resul
         }
     };
     let events = events::follow(pinned, Feed::Operation, id).filter_map(|event| async move {
-        event
-            .data
-            .get("status")
-            .is_some()
-            .then_some(Ok::<Value, Error>(event.data))
+        event.data.get("status")?;
+        if runs::terminal(&event.data) {
+            // Item completion and whole-operation completion share the stream.
+            // Return the durable operation with its options, counters and results.
+            Some(
+                pinned
+                    .get("get_operation", json!({"operation_id": id}))
+                    .await,
+            )
+        } else {
+            Some(Ok::<Value, Error>(event.data))
+        }
     });
     let updates = stream::select(polls, events);
     futures_util::pin_mut!(updates);
@@ -104,7 +111,7 @@ pub(crate) async fn watch(app: &App, initial: Value, stream_json: bool) -> Resul
                     previous = operation;
                 }
             }
-            _ = tokio::signal::ctrl_c() => return Ok(json!({"operation_id": id, "detached": true})),
+            _ = crate::interrupt() => return Ok(json!({"operation_id": id, "detached": true})),
         }
     }
 }

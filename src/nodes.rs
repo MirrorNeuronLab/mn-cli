@@ -62,9 +62,10 @@ pub(crate) async fn execute(a: &App, action: &str, v: &Value) -> Result<Value> {
                     "ignore_system_jobs",
                 ],
             );
-            let r = a.get("create_node_drain", q).await?;
+            let (pinned, _) = a.pin().await?;
+            let r = pinned.get("create_node_drain", q).await?;
             if v["wait"] == true {
-                crate::operations::watch(a, r, true).await
+                crate::operations::watch(&pinned, r, true).await
             } else {
                 Ok(r)
             }

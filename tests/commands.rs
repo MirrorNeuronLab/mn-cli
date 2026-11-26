@@ -1,6 +1,21 @@
 use std::process::Command;
 
 #[test]
+fn version_aliases_print_the_installed_version() {
+    for option in ["--version", "-v", "-V"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_mn"))
+            .arg(option)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap().trim(),
+            concat!("mn ", env!("CARGO_PKG_VERSION"))
+        );
+    }
+}
+
+#[test]
 fn every_command_in_the_public_catalog_has_an_executable_help_path() {
     fn visit(group: &serde_json::Value, path: &mut Vec<String>) {
         if let Some(children) = group["commands"].as_array() {

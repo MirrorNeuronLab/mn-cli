@@ -78,7 +78,11 @@ impl Parameter {
         if self.kind == "boolean" {
             arg = arg.action(ArgAction::SetTrue);
         } else {
-            arg = arg.value_parser(ValueParser::string());
+            // Click consumes the next value of a named option even if it
+            // starts with a dash. URL-safe runtime tokens can begin with '-'.
+            arg = arg
+                .value_parser(ValueParser::string())
+                .allow_hyphen_values(long);
             if self.multiple {
                 arg = arg.action(ArgAction::Append);
             }
@@ -100,9 +104,12 @@ impl Group {
         serde_json::from_str(include_str!("commands.json")).expect("invalid command contract")
     }
     pub fn build(&self) -> Command {
-        let mut cmd = Command::new(self.name.clone()).about(self.about.clone());
+        let mut cmd = Command::new(self.name.clone())
+            .about(self.about.clone())
+            .args_override_self(true);
         if self.name == "mn" {
             cmd = cmd
+                .bin_name("mn")
                 .disable_version_flag(true)
                 .arg(
                     Arg::new("version")
@@ -111,7 +118,9 @@ impl Group {
                         .long("version")
                         .action(ArgAction::Version),
                 )
-                .version(env!("CARGO_PKG_VERSION"));
+                .version(mn_client_support::release_version(env!(
+                    "CARGO_PKG_VERSION"
+                )));
         }
         for p in &self.args {
             cmd = p.add(cmd);
@@ -136,7 +145,7 @@ impl Group {
                         m.get_flag(&p.name) || p.default == true
                     }
                 )
-            } else if p.multiple {
+            } else if p.multiple && m.contains_id(&p.name) {
                 Value::Array(
                     m.get_many::<String>(&p.name)
                         .into_iter()
@@ -168,6 +177,30 @@ impl Group {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_runtime_token_can_start_with_a_hyphen() {
+        let root = Group::root();
+        for token in ["-T-example", "--example"] {
+            let matches = root
+                .build()
+                .try_get_matches_from([
+                    "mn.wasm",
+                    "node",
+                    "add",
+                    "localhost",
+                    "--token",
+                    token,
+                    "--json",
+                ])
+                .unwrap();
+            let mut path = Vec::new();
+            let mut options = json!({});
+            root.values(&matches, &mut path, &mut options).unwrap();
+            assert_eq!(options["token"], token);
+            assert_eq!(options["json_output"], true);
+        }
+    }
 
     #[test]
     fn public_command_tree_and_option_aliases_are_consistent() {

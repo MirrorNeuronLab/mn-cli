@@ -10,6 +10,11 @@ use mn_client_support::{Error, Result, connection};
 use serde_json::{Value, json};
 use std::time::Instant;
 pub async fn run() {
+    #[cfg(target_os = "wasi")]
+    if let Err(e) = mn_client_support::wasi::enter_cwd() {
+        eprintln!("mn: {e}");
+        exit(1);
+    }
     let spec = config::Group::root();
     let mut cmd = spec.build();
     let argv: Vec<_> = std::env::args_os().collect();
@@ -26,16 +31,17 @@ pub async fn run() {
                 "{}",
                 json!({"schema":"mn.cli/v1","ok":false,"error":{"code":"MN_VALIDATION_FAILED","message":detail,"details":{}},"warnings":[],"meta":{"command":"mn","timestamp":Utc::now().to_rfc3339(),"duration_ms":0}})
             );
-            std::process::exit(error.exit_code());
+            exit(error.exit_code());
         }
         Err(error) => {
             if error.use_stderr()
                 && let Some(command) = replacement(&argv)
             {
                 eprintln!("This command was removed. Use {command}.");
-                std::process::exit(error.exit_code());
+                exit(error.exit_code());
             }
-            error.exit()
+            let _ = error.print();
+            exit(error.exit_code())
         }
     };
     let mut selected = &matches;
@@ -70,7 +76,7 @@ pub async fn run() {
                 }
                 Err(e) => {
                     a.emit("error", json!({"code":e.code,"message":e.message}));
-                    std::process::exit(e.exit_code);
+                    exit(e.exit_code);
                 }
             }
         }
@@ -98,21 +104,39 @@ pub async fn run() {
         }
         Ok(None) => {}
         Err(e) => {
+            let mut error =
+                json!({"code":e.code,"message":e.message,"hint":e.hint,"details":e.details});
+            redact(&mut error);
             if v["json_output"] == true {
-                let mut error =
-                    json!({"code":e.code,"message":e.message,"hint":e.hint,"details":e.details});
-                redact(&mut error);
                 println!(
                     "{}",
                     json!({"schema":"mn.cli/v1","ok":false,"error":error,"warnings":[],"meta":meta})
                 );
             } else {
-                eprintln!("× Error: {e}");
-                if let Some(h) = e.hint {
-                    eprintln!("{h}");
+                let message = error["message"].as_str().unwrap_or_default();
+                eprintln!("× Error: {}: {message}", e.code);
+                if let Some(hint) = error["hint"].as_str()
+                    && !message.ends_with(hint)
+                {
+                    eprintln!("{hint}");
+                }
+                let debug = matches.get_flag("debug")
+                    || v["debug"] == true
+                    || std::env::var("MN_DEBUG").is_ok_and(|value| {
+                        matches!(
+                            value.trim().to_ascii_lowercase().as_str(),
+                            "1" | "true" | "yes" | "on"
+                        )
+                    });
+                if debug
+                    && error["details"]
+                        .as_object()
+                        .is_some_and(|fields| !fields.is_empty())
+                {
+                    eprintln!("{}", error["details"]);
                 }
             }
-            std::process::exit(e.exit_code);
+            exit(e.exit_code);
         }
     }
 }
@@ -127,7 +151,6 @@ async fn execute(a: &App, c: &[&str], v: &Value) -> Result<Value> {
             let mut opts = v.clone();
             if let Some(options) = opts.as_object_mut() {
                 options.remove("debug");
-                options.remove("json_output");
             }
             if action == "remove" && v["dry_run"] != true {
                 confirm(v, "Remove this runtime model")?;
@@ -175,4 +198,17 @@ async fn execute(a: &App, c: &[&str], v: &Value) -> Result<Value> {
         }
         _ => Err(Error::invalid("Unknown command.")),
     }
+}
+
+fn exit(code: i32) -> ! {
+    #[cfg(target_os = "wasi")]
+    {
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+        wasip2::cli::exit::exit_with_code(code as u8);
+        unreachable!();
+    }
+    #[cfg(not(target_os = "wasi"))]
+    std::process::exit(code)
 }

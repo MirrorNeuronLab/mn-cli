@@ -1,5 +1,6 @@
 //! Follow one pinned run through push events, with periodic reconciliation and reconnect.
 mod preparation;
+#[cfg_attr(target_os = "wasi", path = "monitor/wasi_terminal.rs")]
 mod terminal;
 mod view;
 
@@ -132,6 +133,6 @@ pub(crate) async fn watch(app: &App, id: &str, seconds: Option<f64>) -> Result<V
     tokio::select! {
         result = follow => result,
         _ = deadline => Ok(json!({"run_id": id, "detached": true})),
-        _ = tokio::signal::ctrl_c() => Ok(json!({"run_id": id, "detached": true})),
+        _ = crate::interrupt() => Ok(json!({"run_id": id, "detached": true})),
     }
 }

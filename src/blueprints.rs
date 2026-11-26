@@ -23,7 +23,10 @@ pub fn local_source(target: &str) -> bool {
 }
 pub fn absolute(s: &str) -> Result<String> {
     let p = connection::expand(Path::new(s));
-    let p = std::path::absolute(p).map_err(|_| Error::invalid("Invalid local source path."))?;
+    let p = p
+        .canonicalize()
+        .or_else(|_| std::path::absolute(p))
+        .map_err(|_| Error::invalid("Invalid local source path."))?;
     Ok(p.to_string_lossy().into_owned())
 }
 pub async fn local(a: &App, action: &str, opts: Value, body: Value, id: &str) -> Result<Value> {
@@ -37,7 +40,48 @@ pub async fn local(a: &App, action: &str, opts: Value, body: Value, id: &str) ->
     if !body.is_null() {
         args["request"] = body;
     }
-    p.ipc.command("blueprint.local", args, 3600).await
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3600);
+    match p.ipc.command("blueprint.local", args, 3600).await {
+        Err(error)
+            if action == "run"
+                && error.code == "MN_RUNTIME_UNAVAILABLE"
+                && error.details.get("submission_id").is_none() =>
+        {
+            tokio::time::timeout_at(deadline, local_run_receipt(&p, &home, id))
+                .await
+                .ok()
+                .flatten()
+                .ok_or(error)
+        }
+        result => result,
+    }
+}
+
+async fn local_run_receipt(app: &App, home: &str, request_id: &str) -> Option<Value> {
+    use mn_client_support::control::Method;
+    use tokio::time::{Duration, Instant, sleep};
+
+    let args = json!({"runtime_home":home,"request_id":request_id});
+    let mut last_contact = Instant::now();
+    loop {
+        let read = app
+            .ipc
+            .call(Method::Read, "blueprint.local.receipt", args.clone(), "", 5)
+            .await;
+        match read.and_then(|reply| reply.checked()) {
+            Ok(value) if value["status"] == "completed" => {
+                return value.get("result").filter(|r| r.is_object()).cloned();
+            }
+            Ok(value) if value["status"] == "pending" => last_contact = Instant::now(),
+            Err(e)
+                if matches!(
+                    e.code.as_str(),
+                    "MN_RUNTIME_UNAVAILABLE" | "MN_RUNTIME_TIMEOUT"
+                ) && last_contact.elapsed() < Duration::from_secs(30) => {}
+            _ => return None,
+        }
+        sleep(Duration::from_secs(1)).await;
+    }
 }
 fn schedule(v: &Value) -> Result<Option<Value>> {
     let schedule = v["schedule"].as_str();
@@ -64,7 +108,11 @@ fn schedule(v: &Value) -> Result<Option<Value>> {
     } else {
         "mn run --schedule"
     };
-    if matches!(raw, "auto" | "resource" | "resource_wait" | "resource-wait") {
+    let lower = raw.to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "auto" | "resource" | "resource_wait" | "resource-wait"
+    ) {
         let ms = std::env::var("MN_RESOURCE_WAIT_RETRY_MS")
             .unwrap_or_else(|_| "30000".into())
             .parse::<u64>()
@@ -81,8 +129,8 @@ fn schedule(v: &Value) -> Result<Option<Value>> {
         ("d", 86400000.),
     ]
     .into_iter()
-    .find_map(|(s, m)| raw.strip_suffix(s).map(|n| (n, m)))
-    .unwrap_or((raw, 1000.));
+    .find_map(|(s, m)| lower.strip_suffix(s).map(|n| (n, m)))
+    .unwrap_or((&lower, 1000.));
     let mut result = json!({"kind":"delayed","metadata":{"requested_by":by}});
     if let Ok(n) = num.parse::<f64>()
         && n >= 0.
@@ -94,6 +142,19 @@ fn schedule(v: &Value) -> Result<Option<Value>> {
     }
     Ok(Some(result))
 }
+fn config_section<'a>(value: &'a mut Value, name: &str) -> Result<&'a mut Value> {
+    let section = &mut value[name];
+    if section.is_null() {
+        *section = json!({});
+    }
+    if !section.is_object() {
+        return Err(Error::invalid(&format!(
+            "The {name} configuration must be an object."
+        )));
+    }
+    Ok(section)
+}
+
 fn run_body(v: &Value) -> Result<Value> {
     let mut config = json!({});
     for value in v["set_values"].as_array().into_iter().flatten() {
@@ -115,12 +176,13 @@ fn run_body(v: &Value) -> Result<Value> {
     }
     for flag in ["benchmark", "debug", "fake_skills"] {
         if v[flag] == true {
-            config["execution"][flag] = true.into();
+            config_section(&mut config, "execution")?[flag] = true.into();
         }
     }
     for (flag, k) in [("web_ui_host", "host"), ("web_ui_port", "port")] {
         if !v[flag].is_null() {
-            config["web_ui"]["service"][k] = v[flag].clone();
+            let ui = config_section(&mut config, "web_ui")?;
+            config_section(ui, "service")?[k] = v[flag].clone();
         }
     }
     let mut body = pick(
@@ -195,6 +257,16 @@ pub async fn execute(a: &App, c: &[&str], v: &Value) -> Result<Value> {
     let scheduled = !body["schedule"].is_null();
     let mut result = if local_required {
         let mut opts = v.clone();
+        let opts_map = opts.as_object_mut().unwrap();
+        if action != "doctor" {
+            opts_map.remove("json_output");
+        }
+        if !matches!(action, "run" | "doctor") {
+            opts_map.remove("debug");
+            if opts_map.get("blueprint_repo").is_some_and(Value::is_null) {
+                opts_map.remove("blueprint_repo");
+            }
+        }
         for k in ["target", "bundle_path", "source", "blueprint_repo"] {
             if let Some(p) = opts[k].as_str()
                 && !p.contains("://")

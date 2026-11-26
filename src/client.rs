@@ -7,13 +7,13 @@ use mn_client_support::{
     resources::{endpoint, resource_id},
 };
 use serde_json::{Value, json};
+use std::io::Write;
 use std::{
     cell::Cell,
     collections::HashSet,
     path::{Path, PathBuf},
     rc::Rc,
 };
-use tokio::io::AsyncWriteExt;
 #[derive(Clone)]
 pub struct App {
     pub ipc: Adapter,
@@ -168,13 +168,11 @@ impl App {
                     .unwrap_or(Path::new(".")),
             )
             .map_err(|_| Error::invalid("Cannot create download file."))?;
-            let mut file = tokio::fs::File::from_std(tmp.reopen().map_err(|_| Error::storage())?);
+            let mut file = tmp.as_file();
             while let Some(chunk) = data.next().await {
-                file.write_all(&chunk?)
-                    .await
-                    .map_err(|_| Error::storage())?;
+                file.write_all(&chunk?).map_err(|_| Error::storage())?;
             }
-            file.flush().await.map_err(|_| Error::storage())?;
+            file.flush().map_err(|_| Error::storage())?;
             tmp.persist(path).map_err(|_| Error::storage())?;
             Ok(json!({"path":path}))
         } else {
