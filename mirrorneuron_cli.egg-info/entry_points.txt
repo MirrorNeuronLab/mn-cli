@@ -1,2 +1,0 @@
-[console_scripts]
-mn = mn_cli.main:cli
