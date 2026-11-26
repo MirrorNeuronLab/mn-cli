@@ -1,0 +1,3702 @@
+{
+  "name": "mn",
+  "about": "Run and operate MirrorNeuron workflows, blueprints, jobs, and local runtime services.",
+  "args": [
+    {
+      "name": "debug",
+      "flags": [
+        "--debug"
+      ],
+      "kind": "boolean",
+      "help": "Show sanitized diagnostic details for unexpected errors."
+    }
+  ],
+  "commands": [
+    {
+      "name": "blueprint",
+      "about": "List, add, inspect, run, and diagnose MirrorNeuron blueprints.",
+      "args": [
+        {
+          "name": "blueprint_repo",
+          "flags": [
+            "--blueprint-repo"
+          ],
+          "kind": "str",
+          "help": "Catalog source for list or an attached local runtime."
+        }
+      ],
+      "commands": [
+        {
+          "name": "list",
+          "about": "List blueprints from this surface's catalog without connecting a runtime.",
+          "args": [
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "add",
+          "about": "Add one catalog blueprint and its required runtime models.",
+          "args": [
+            {
+              "name": "blueprint_id",
+              "flags": [
+                "blueprint_id"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Catalog blueprint ID to add."
+            },
+            {
+              "name": "source",
+              "flags": [
+                "--source"
+              ],
+              "kind": "str",
+              "help": "Blueprint repository URL or local path."
+            },
+            {
+              "name": "revision",
+              "flags": [
+                "--revision"
+              ],
+              "kind": "str",
+              "help": "Git revision to add."
+            },
+            {
+              "name": "force",
+              "flags": [
+                "--force"
+              ],
+              "kind": "boolean",
+              "help": "Override compatibility checks; does not replace confirmation."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "show",
+          "about": "Show one catalog blueprint without preparing or running it.",
+          "args": [
+            {
+              "name": "blueprint_id",
+              "flags": [
+                "blueprint_id"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Catalog blueprint ID."
+            },
+            {
+              "name": "source",
+              "flags": [
+                "--source"
+              ],
+              "kind": "str",
+              "help": "Blueprint repository URL or local path."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "update",
+          "about": "Refresh one blueprint or the complete catalog and its dependencies.",
+          "args": [
+            {
+              "name": "blueprint_id",
+              "flags": [
+                "blueprint_id"
+              ],
+              "kind": "str",
+              "help": "Blueprint ID to refresh; omit only with --all."
+            },
+            {
+              "name": "all_",
+              "flags": [
+                "--all"
+              ],
+              "kind": "boolean",
+              "help": "Refresh the complete blueprint catalog."
+            },
+            {
+              "name": "source",
+              "flags": [
+                "--source"
+              ],
+              "kind": "str",
+              "help": "Cached blueprint repo/path to update."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "remove",
+          "about": "Remove one blueprint or the complete cached catalog.",
+          "args": [
+            {
+              "name": "blueprint_id",
+              "flags": [
+                "blueprint_id"
+              ],
+              "kind": "str",
+              "help": "Blueprint ID to remove; omit only with --all."
+            },
+            {
+              "name": "all_",
+              "flags": [
+                "--all"
+              ],
+              "kind": "boolean",
+              "help": "Remove the complete cached blueprint catalog."
+            },
+            {
+              "name": "source",
+              "flags": [
+                "--source"
+              ],
+              "kind": "str",
+              "help": "Cached blueprint storage path."
+            },
+            {
+              "name": "keep_resources",
+              "flags": [
+                "--keep-resources"
+              ],
+              "kind": "boolean",
+              "help": "Keep blueprint-owned cached runtime resources."
+            },
+            {
+              "name": "keep_models",
+              "flags": [
+                "--keep-models"
+              ],
+              "kind": "boolean",
+              "help": "Keep orphaned runtime models."
+            },
+            {
+              "name": "remove_models",
+              "flags": [
+                "--remove-models"
+              ],
+              "kind": "boolean",
+              "help": "Remove orphaned models without a second prompt."
+            },
+            {
+              "name": "dry_run",
+              "flags": [
+                "--dry-run"
+              ],
+              "kind": "boolean",
+              "help": "Preview removal without changing state."
+            },
+            {
+              "name": "yes",
+              "flags": [
+                "--yes",
+                "-y"
+              ],
+              "kind": "boolean",
+              "help": "Confirm removal without prompting."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "run",
+          "about": "Run a catalog blueprint or an explicitly addressed local folder.",
+          "args": [
+            {
+              "name": "target",
+              "flags": [
+                "target"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Catalog blueprint ID or explicit local path such as ./blueprint."
+            },
+            {
+              "name": "run_id",
+              "flags": [
+                "--run-id"
+              ],
+              "kind": "str",
+              "help": "Use a specific shared blueprint run ID."
+            },
+            {
+              "name": "job_id",
+              "flags": [
+                "--job-id"
+              ],
+              "kind": "str",
+              "help": "Run an existing durable job instead of creating a new job."
+            },
+            {
+              "name": "owner_node",
+              "flags": [
+                "--node"
+              ],
+              "kind": "str",
+              "help": "Create and execute the job on this federated Core."
+            },
+            {
+              "name": "blueprint_repo",
+              "flags": [
+                "--blueprint-repo"
+              ],
+              "kind": "str",
+              "help": "Use this blueprint repository URL/path instead of the default catalog."
+            },
+            {
+              "name": "update",
+              "flags": [
+                "--update"
+              ],
+              "kind": "boolean",
+              "help": "Update the cached blueprint repository before running a catalog blueprint."
+            },
+            {
+              "name": "offline",
+              "flags": [
+                "--offline"
+              ],
+              "kind": "boolean",
+              "help": "Use only local blueprint files; never clone, fetch, or pull."
+            },
+            {
+              "name": "revision",
+              "flags": [
+                "--revision"
+              ],
+              "kind": "str",
+              "help": "Checkout a specific git revision before running."
+            },
+            {
+              "name": "follow_seconds",
+              "flags": [
+                "--follow-seconds"
+              ],
+              "kind": "float",
+              "help": "Seconds to keep polling job events after the submit stream detaches. Defaults to MN_RUN_DETACH_LOG_SECONDS or 30."
+            },
+            {
+              "name": "set_values",
+              "flags": [
+                "--set"
+              ],
+              "kind": "str",
+              "multiple": true,
+              "help": "Override one config value for this run. Repeat for multiple values."
+            },
+            {
+              "name": "force",
+              "flags": [
+                "--force"
+              ],
+              "kind": "boolean",
+              "help": "Run even if blueprint input validation or runtime requirements fail."
+            },
+            {
+              "name": "replace_existing_run",
+              "flags": [
+                "--replace-existing-run"
+              ],
+              "kind": "boolean",
+              "help": "Permanently replace the run attached to an existing service job."
+            },
+            {
+              "name": "yes",
+              "flags": [
+                "--yes",
+                "-y"
+              ],
+              "kind": "boolean",
+              "help": "Confirm service-run replacement without prompting."
+            },
+            {
+              "name": "detached",
+              "flags": [
+                "-d",
+                "--detached"
+              ],
+              "kind": "boolean",
+              "help": "Start the blueprint run without the live workflow UI."
+            },
+            {
+              "name": "web_ui",
+              "flags": [
+                "--web-ui"
+              ],
+              "kind": "boolean",
+              "help": "Start or register the blueprint Web UI for this run."
+            },
+            {
+              "name": "web_ui_host",
+              "flags": [
+                "--web-ui-host"
+              ],
+              "kind": "str",
+              "help": "Override the blueprint Web UI listener host for this run."
+            },
+            {
+              "name": "web_ui_port",
+              "flags": [
+                "--web-ui-port"
+              ],
+              "kind": "int range",
+              "help": "Override the blueprint Web UI listener port for this run.",
+              "min": 1,
+              "max": 65535
+            },
+            {
+              "name": "queue",
+              "flags": [
+                "--queue"
+              ],
+              "kind": "boolean",
+              "help": "Queue this run when resources are busy."
+            },
+            {
+              "name": "auto_schedule",
+              "flags": [
+                "--auto-schedule"
+              ],
+              "kind": "boolean",
+              "help": "Queue the run until the cluster has the required agent resources."
+            },
+            {
+              "name": "schedule",
+              "flags": [
+                "--schedule"
+              ],
+              "kind": "str",
+              "help": "Create a schedule instead of running now. Accepts JSON, a delay like 30m, or an ISO run_at timestamp."
+            },
+            {
+              "name": "fake_llm",
+              "flags": [
+                "--fake-llm"
+              ],
+              "kind": "boolean",
+              "help": "Replace blueprint LLM configuration with the deterministic fake LLM for this run."
+            },
+            {
+              "name": "fake_skills",
+              "flags": [
+                "--fake-skills"
+              ],
+              "kind": "boolean",
+              "help": "Use deterministic mock outputs for supported external blueprint skills."
+            },
+            {
+              "name": "benchmark",
+              "flags": [
+                "--benchmark"
+              ],
+              "kind": "boolean",
+              "help": "Write per-step and per-skill timing artifacts into the blueprint run folder."
+            },
+            {
+              "name": "debug",
+              "flags": [
+                "--debug"
+              ],
+              "kind": "boolean",
+              "help": "Enable verbose blueprint runtime debug events and logs for this run."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "validate",
+          "about": "Validate a local job bundle before submitting it.",
+          "args": [
+            {
+              "name": "bundle_path",
+              "flags": [
+                "bundle_path"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Path to the local job bundle folder."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "doctor",
+          "about": "Diagnose a catalog blueprint or local folder without submitting a job.",
+          "args": [
+            {
+              "name": "target",
+              "flags": [
+                "target"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Catalog blueprint ID or explicit local path such as ./blueprint."
+            },
+            {
+              "name": "blueprint_repo",
+              "flags": [
+                "--blueprint-repo"
+              ],
+              "kind": "str",
+              "help": "Use this blueprint repository URL/path instead of the default catalog."
+            },
+            {
+              "name": "update",
+              "flags": [
+                "--update"
+              ],
+              "kind": "boolean",
+              "help": "Update the cached blueprint repository before diagnosing a catalog blueprint."
+            },
+            {
+              "name": "offline",
+              "flags": [
+                "--offline"
+              ],
+              "kind": "boolean",
+              "help": "Use only local blueprint files; never clone, fetch, or pull."
+            },
+            {
+              "name": "revision",
+              "flags": [
+                "--revision"
+              ],
+              "kind": "str",
+              "help": "Checkout a specific git revision before diagnosing."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print the doctor report as JSON."
+            },
+            {
+              "name": "timeout",
+              "flags": [
+                "--timeout"
+              ],
+              "kind": "float range",
+              "default": 3.0,
+              "help": "Per-probe timeout in seconds.",
+              "min": 0.1
+            },
+            {
+              "name": "check_only",
+              "flags": [
+                "--check-only"
+              ],
+              "kind": "boolean",
+              "help": "Validate declared dependencies without preparing Docker, OpenShell, or native environments."
+            },
+            {
+              "name": "no_llm_call",
+              "flags": [
+                "--no-llm-call"
+              ],
+              "kind": "boolean",
+              "help": "Skip tiny LLM and embedding smoke requests."
+            },
+            {
+              "name": "cleanup",
+              "flags": [
+                "--cleanup"
+              ],
+              "kind": "boolean",
+              "help": "Clean up doctor-created DockerWorker resources after probing."
+            },
+            {
+              "name": "force",
+              "flags": [
+                "--force"
+              ],
+              "kind": "boolean",
+              "help": "Continue preparation even if runtime requirement checks fail."
+            },
+            {
+              "name": "debug",
+              "flags": [
+                "--debug"
+              ],
+              "kind": "boolean",
+              "help": "Enable verbose blueprint runtime debug environment variables."
+            }
+          ]
+        },
+        {
+          "name": "cleanup",
+          "about": "Clean blueprint-owned Python envs, ~/.mn files, Docker resources, and stale leftovers.",
+          "args": [
+            {
+              "name": "blueprint_id",
+              "flags": [
+                "--blueprint-id"
+              ],
+              "kind": "str",
+              "help": "Clean resources for one blueprint ID."
+            },
+            {
+              "name": "source",
+              "flags": [
+                "--source"
+              ],
+              "kind": "str",
+              "help": "Blueprint storage path used to decide which resources are dead."
+            },
+            {
+              "name": "python_envs_dir",
+              "flags": [
+                "--python-envs-dir"
+              ],
+              "kind": "str",
+              "help": "Override the blueprint Python environment cache root."
+            },
+            {
+              "name": "runs_root",
+              "flags": [
+                "--runs-root"
+              ],
+              "kind": "str",
+              "help": "Override the shared blueprint run store root."
+            },
+            {
+              "name": "generated_bundles_dir",
+              "flags": [
+                "--generated-bundles-dir"
+              ],
+              "kind": "str",
+              "help": "Override the generated Python workflow bundle cache root."
+            },
+            {
+              "name": "bundle_cache_dir",
+              "flags": [
+                "--bundle-cache-dir"
+              ],
+              "kind": "str",
+              "help": "Override the MirrorNeuron local bundle cache root."
+            },
+            {
+              "name": "include_files",
+              "flags": [
+                "--files",
+                "--no-files"
+              ],
+              "kind": "boolean",
+              "default": true,
+              "help": "Also remove blueprint-owned run records, generated bundles, and local bundle cache entries.",
+              "secondary_opts": [
+                "--no-files"
+              ]
+            },
+            {
+              "name": "include_docker",
+              "flags": [
+                "--docker",
+                "--no-docker"
+              ],
+              "kind": "boolean",
+              "default": true,
+              "help": "Also remove Docker resources labelled for removed blueprints.",
+              "secondary_opts": [
+                "--no-docker"
+              ]
+            },
+            {
+              "name": "include_dead",
+              "flags": [
+                "--dead",
+                "--no-dead"
+              ],
+              "kind": "boolean",
+              "default": true,
+              "help": "Remove stale incomplete resources and resources for blueprints no longer in storage.",
+              "secondary_opts": [
+                "--no-dead"
+              ]
+            },
+            {
+              "name": "dry_run",
+              "flags": [
+                "--dry-run"
+              ],
+              "kind": "boolean",
+              "help": "Show what would be removed without deleting anything."
+            },
+            {
+              "name": "yes",
+              "flags": [
+                "--yes",
+                "-y"
+              ],
+              "kind": "boolean",
+              "help": "Confirm cleanup without prompting."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "export",
+          "about": "Export one blueprint run as JSON, Markdown, or static HTML.",
+          "args": [
+            {
+              "name": "run_id",
+              "flags": [
+                "run_id"
+              ],
+              "kind": "str",
+              "required": true
+            },
+            {
+              "name": "output_format",
+              "flags": [
+                "--format",
+                "-f"
+              ],
+              "kind": "str",
+              "default": "json",
+              "help": "Export format: json, markdown, or html."
+            },
+            {
+              "name": "output",
+              "flags": [
+                "--output",
+                "-o"
+              ],
+              "kind": "str",
+              "help": "Write the export to this path instead of stdout."
+            },
+            {
+              "name": "runs_root",
+              "flags": [
+                "--runs-root"
+              ],
+              "kind": "str",
+              "help": "Override the default $MN_HOME/runs directory."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "job",
+      "about": "Create and manage durable job definitions.",
+      "commands": [
+        {
+          "name": "list",
+          "about": "List durable job definitions.",
+          "args": [
+            {
+              "name": "include_archived",
+              "flags": [
+                "--include-archived"
+              ],
+              "kind": "boolean"
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "create",
+          "about": "Create a durable job definition without starting a run.",
+          "args": [
+            {
+              "name": "bundle",
+              "flags": [
+                "bundle"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Blueprint/job bundle directory or archive."
+            },
+            {
+              "name": "job_id",
+              "flags": [
+                "--job-id"
+              ],
+              "kind": "str",
+              "help": "Optional durable job ID."
+            },
+            {
+              "name": "config",
+              "flags": [
+                "--config"
+              ],
+              "kind": "str",
+              "help": "Resolved configuration JSON file."
+            },
+            {
+              "name": "node",
+              "flags": [
+                "--node"
+              ],
+              "kind": "str",
+              "help": "Core that will own and execute this job."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "backup",
+          "about": "Back up a job, its data, history, and offline dependencies to a ZIP.",
+          "args": [
+            {
+              "name": "job_id",
+              "flags": [
+                "job_id"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Durable job ID. Pause active runs before backup."
+            },
+            {
+              "name": "output",
+              "flags": [
+                "--output",
+                "-o"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Destination ZIP file."
+            },
+            {
+              "name": "air_gapped",
+              "flags": [
+                "--air-gapped",
+                "--no-air-gapped"
+              ],
+              "kind": "boolean",
+              "default": true,
+              "help": "Include model files, Python wheels, and Docker images.",
+              "secondary_opts": [
+                "--no-air-gapped"
+              ]
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "restore",
+          "about": "Restore a ZIP as a new job without hiring a blueprint.",
+          "args": [
+            {
+              "name": "input_path",
+              "flags": [
+                "--input",
+                "-i"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Job backup ZIP file."
+            },
+            {
+              "name": "job_id",
+              "flags": [
+                "--job-id"
+              ],
+              "kind": "str",
+              "help": "Optional new durable job ID."
+            },
+            {
+              "name": "start",
+              "flags": [
+                "--start"
+              ],
+              "kind": "boolean",
+              "help": "Start a fresh run after restoring the job."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "show",
+          "about": "Inspect a durable job definition.",
+          "args": [
+            {
+              "name": "job_id",
+              "flags": [
+                "job_id"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Durable job ID."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "relocate",
+          "about": "Move an idle job and its data to another PC. Pause its schedules first.",
+          "args": [
+            {
+              "name": "job_id",
+              "flags": [
+                "job_id"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Durable job ID."
+            },
+            {
+              "name": "node",
+              "flags": [
+                "--node"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Connected destination PC."
+            },
+            {
+              "name": "abort",
+              "flags": [
+                "--abort"
+              ],
+              "kind": "boolean",
+              "help": "Cancel a move before ownership has committed."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "analysis",
+          "about": "Show performance statistics for all recorded job history.",
+          "args": [
+            {
+              "name": "job_id",
+              "flags": [
+                "job_id"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Durable job ID."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print the shared analysis as JSON."
+            }
+          ]
+        },
+        {
+          "name": "start",
+          "about": "Start a new run of a durable job.",
+          "args": [
+            {
+              "name": "job_id",
+              "flags": [
+                "job_id"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Durable job ID."
+            },
+            {
+              "name": "run_id",
+              "flags": [
+                "--run-id"
+              ],
+              "kind": "str"
+            },
+            {
+              "name": "queue",
+              "flags": [
+                "--queue"
+              ],
+              "kind": "boolean",
+              "help": "Queue this run when resources are busy."
+            },
+            {
+              "name": "inputs",
+              "flags": [
+                "--inputs"
+              ],
+              "kind": "str",
+              "help": "Run-input JSON file."
+            },
+            {
+              "name": "force",
+              "flags": [
+                "--force"
+              ],
+              "kind": "boolean",
+              "help": "Permanently replace the existing run of a service job."
+            },
+            {
+              "name": "yes",
+              "flags": [
+                "--yes",
+                "-y"
+              ],
+              "kind": "boolean",
+              "help": "Confirm replacement without prompting."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "archive",
+          "about": "Archive a job while retaining its persistent data.",
+          "args": [
+            {
+              "name": "job_id",
+              "flags": [
+                "job_id"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Durable job ID."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "reset-data",
+          "about": "Clear job data and advance its data generation.",
+          "args": [
+            {
+              "name": "job_id",
+              "flags": [
+                "job_id"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Durable job ID."
+            },
+            {
+              "name": "yes",
+              "flags": [
+                "--yes",
+                "-y"
+              ],
+              "kind": "boolean"
+            },
+            {
+              "name": "dry_run",
+              "flags": [
+                "--dry-run"
+              ],
+              "kind": "boolean",
+              "help": "Preview the reset without changing data."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "delete",
+          "about": "Permanently delete a durable job, its runs, resources, and data.",
+          "args": [
+            {
+              "name": "job_id",
+              "flags": [
+                "job_id"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Durable job ID."
+            },
+            {
+              "name": "yes",
+              "flags": [
+                "--yes",
+                "-y"
+              ],
+              "kind": "boolean"
+            },
+            {
+              "name": "dry_run",
+              "flags": [
+                "--dry-run"
+              ],
+              "kind": "boolean",
+              "help": "Preview deletion without changing state."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "connect",
+          "about": "Connect a public channel, reusing an approved workspace on this device.",
+          "args": [
+            {
+              "name": "provider",
+              "flags": [
+                "provider"
+              ],
+              "kind": "str",
+              "required": true
+            },
+            {
+              "name": "name",
+              "flags": [
+                "--name"
+              ],
+              "kind": "str"
+            },
+            {
+              "name": "job_id",
+              "flags": [
+                "--job-id"
+              ],
+              "kind": "str",
+              "required": true
+            },
+            {
+              "name": "channel",
+              "flags": [
+                "--channel"
+              ],
+              "kind": "str"
+            },
+            {
+              "name": "session",
+              "flags": [
+                "--session"
+              ],
+              "kind": "str"
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "skills",
+          "about": "Manage prepared job skills.",
+          "commands": [
+            {
+              "name": "list",
+              "about": "",
+              "args": [
+                {
+                  "name": "job_id",
+                  "flags": [
+                    "--job-id"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "json_output",
+                  "flags": [
+                    "--json"
+                  ],
+                  "kind": "boolean",
+                  "help": "Print a versioned machine-readable JSON result."
+                }
+              ]
+            },
+            {
+              "name": "add",
+              "about": "Prepare a dependency declared in a JSON file for subsequent runs.",
+              "args": [
+                {
+                  "name": "declaration",
+                  "flags": [
+                    "declaration"
+                  ],
+                  "kind": "path",
+                  "required": true
+                },
+                {
+                  "name": "job_id",
+                  "flags": [
+                    "--job-id"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "json_output",
+                  "flags": [
+                    "--json"
+                  ],
+                  "kind": "boolean",
+                  "help": "Print a versioned machine-readable JSON result."
+                }
+              ]
+            },
+            {
+              "name": "enable",
+              "about": "",
+              "args": [
+                {
+                  "name": "name",
+                  "flags": [
+                    "name"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "job_id",
+                  "flags": [
+                    "--job-id"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "json_output",
+                  "flags": [
+                    "--json"
+                  ],
+                  "kind": "boolean",
+                  "help": "Print a versioned machine-readable JSON result."
+                }
+              ]
+            },
+            {
+              "name": "disable",
+              "about": "",
+              "args": [
+                {
+                  "name": "name",
+                  "flags": [
+                    "name"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "job_id",
+                  "flags": [
+                    "--job-id"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "json_output",
+                  "flags": [
+                    "--json"
+                  ],
+                  "kind": "boolean",
+                  "help": "Print a versioned machine-readable JSON result."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "integrations",
+          "about": "Manage this job's connections.",
+          "commands": [
+            {
+              "name": "list",
+              "about": "",
+              "args": [
+                {
+                  "name": "job_id",
+                  "flags": [
+                    "--job-id"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "json_output",
+                  "flags": [
+                    "--json"
+                  ],
+                  "kind": "boolean",
+                  "help": "Print a versioned machine-readable JSON result."
+                }
+              ]
+            },
+            {
+              "name": "add",
+              "about": "Make a provider visible to this job before authorizing delivery.",
+              "args": [
+                {
+                  "name": "provider",
+                  "flags": [
+                    "provider"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "job_id",
+                  "flags": [
+                    "--job-id"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "json_output",
+                  "flags": [
+                    "--json"
+                  ],
+                  "kind": "boolean",
+                  "help": "Print a versioned machine-readable JSON result."
+                }
+              ]
+            },
+            {
+              "name": "pause",
+              "about": "",
+              "args": [
+                {
+                  "name": "provider",
+                  "flags": [
+                    "provider"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "job_id",
+                  "flags": [
+                    "--job-id"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "json_output",
+                  "flags": [
+                    "--json"
+                  ],
+                  "kind": "boolean",
+                  "help": "Print a versioned machine-readable JSON result."
+                }
+              ]
+            },
+            {
+              "name": "disconnect",
+              "about": "",
+              "args": [
+                {
+                  "name": "provider",
+                  "flags": [
+                    "provider"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "job_id",
+                  "flags": [
+                    "--job-id"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "json_output",
+                  "flags": [
+                    "--json"
+                  ],
+                  "kind": "boolean",
+                  "help": "Print a versioned machine-readable JSON result."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "mailbox",
+          "about": "Exchange durable messages with configured co-workers.",
+          "commands": [
+            {
+              "name": "list",
+              "about": "Read queued messages for this co-worker.",
+              "args": [
+                {
+                  "name": "job_id",
+                  "flags": [
+                    "job_id"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "after",
+                  "flags": [
+                    "--after"
+                  ],
+                  "kind": "int range",
+                  "default": 0,
+                  "min": 0
+                },
+                {
+                  "name": "limit",
+                  "flags": [
+                    "--limit"
+                  ],
+                  "kind": "int range",
+                  "default": 25,
+                  "min": 1,
+                  "max": 50
+                },
+                {
+                  "name": "include_acknowledged",
+                  "flags": [
+                    "--all"
+                  ],
+                  "kind": "boolean"
+                },
+                {
+                  "name": "kind",
+                  "flags": [
+                    "--kind"
+                  ],
+                  "kind": "choice",
+                  "help": "Filter by message kind.",
+                  "choices": [
+                    "note",
+                    "assignment",
+                    "result"
+                  ]
+                },
+                {
+                  "name": "reply_to",
+                  "flags": [
+                    "--reply-to"
+                  ],
+                  "kind": "str",
+                  "help": "Filter results for this assignment ID."
+                },
+                {
+                  "name": "json_output",
+                  "flags": [
+                    "--json"
+                  ],
+                  "kind": "boolean",
+                  "help": "Print a versioned machine-readable JSON result."
+                }
+              ]
+            },
+            {
+              "name": "send",
+              "about": "Queue a note, manager assignment, or specialist result for a group member.",
+              "args": [
+                {
+                  "name": "job_id",
+                  "flags": [
+                    "job_id"
+                  ],
+                  "kind": "str",
+                  "required": true,
+                  "help": "Sender's stable Job ID."
+                },
+                {
+                  "name": "recipient",
+                  "flags": [
+                    "--to"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "subject",
+                  "flags": [
+                    "--subject"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "text",
+                  "flags": [
+                    "--text"
+                  ],
+                  "kind": "str",
+                  "default": ""
+                },
+                {
+                  "name": "kind",
+                  "flags": [
+                    "--kind"
+                  ],
+                  "kind": "choice",
+                  "default": "note",
+                  "help": "Type of message to queue.",
+                  "choices": [
+                    "note",
+                    "assignment",
+                    "result"
+                  ]
+                },
+                {
+                  "name": "reply_to",
+                  "flags": [
+                    "--reply-to"
+                  ],
+                  "kind": "str",
+                  "help": "Original assignment ID for a result."
+                },
+                {
+                  "name": "attachment",
+                  "flags": [
+                    "--attachment"
+                  ],
+                  "kind": "path",
+                  "help": "JSON reference with run_id, sha256 and size_bytes."
+                },
+                {
+                  "name": "request_id",
+                  "flags": [
+                    "--request-id"
+                  ],
+                  "kind": "str",
+                  "help": "Reuse this ID on retry."
+                },
+                {
+                  "name": "json_output",
+                  "flags": [
+                    "--json"
+                  ],
+                  "kind": "boolean",
+                  "help": "Print a versioned machine-readable JSON result."
+                }
+              ]
+            },
+            {
+              "name": "ack",
+              "about": "Acknowledge a message in this co-worker's inbox.",
+              "args": [
+                {
+                  "name": "job_id",
+                  "flags": [
+                    "job_id"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "message_id",
+                  "flags": [
+                    "message_id"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "json_output",
+                  "flags": [
+                    "--json"
+                  ],
+                  "kind": "boolean",
+                  "help": "Print a versioned machine-readable JSON result."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "schedule",
+      "about": "Inspect schedules and automatically queued starts.",
+      "commands": [
+        {
+          "name": "list",
+          "about": "",
+          "args": [
+            {
+              "name": "node",
+              "flags": [
+                "--node"
+              ],
+              "kind": "str",
+              "default": "",
+              "help": "Selected PC's owner node."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "show",
+          "about": "",
+          "args": [
+            {
+              "name": "schedule_id",
+              "flags": [
+                "schedule_id"
+              ],
+              "kind": "str",
+              "required": true
+            },
+            {
+              "name": "node",
+              "flags": [
+                "--node"
+              ],
+              "kind": "str",
+              "default": ""
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "set-time",
+          "about": "",
+          "args": [
+            {
+              "name": "schedule_id",
+              "flags": [
+                "schedule_id"
+              ],
+              "kind": "str",
+              "required": true
+            },
+            {
+              "name": "at",
+              "flags": [
+                "--at"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Future ISO 8601 date and time with timezone."
+            },
+            {
+              "name": "node",
+              "flags": [
+                "--node"
+              ],
+              "kind": "str",
+              "default": ""
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "cancel",
+          "about": "",
+          "args": [
+            {
+              "name": "schedule_id",
+              "flags": [
+                "schedule_id"
+              ],
+              "kind": "str",
+              "required": true
+            },
+            {
+              "name": "node",
+              "flags": [
+                "--node"
+              ],
+              "kind": "str",
+              "default": ""
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "run",
+      "about": "Inspect and control individual execution runs.",
+      "commands": [
+        {
+          "name": "list",
+          "about": "List execution runs, optionally filtered by job or blueprint.",
+          "args": [
+            {
+              "name": "job",
+              "flags": [
+                "--job"
+              ],
+              "kind": "str",
+              "help": "Only show runs belonging to this durable job."
+            },
+            {
+              "name": "blueprint",
+              "flags": [
+                "--blueprint"
+              ],
+              "kind": "str",
+              "help": "Only show runs for this blueprint ID."
+            },
+            {
+              "name": "follow",
+              "flags": [
+                "--follow",
+                "-f"
+              ],
+              "kind": "boolean",
+              "help": "Refresh until interrupted."
+            },
+            {
+              "name": "limit",
+              "flags": [
+                "--limit"
+              ],
+              "kind": "int range",
+              "default": 20,
+              "help": "Maximum runs to show.",
+              "min": 1
+            },
+            {
+              "name": "runs_root",
+              "flags": [
+                "--runs-root"
+              ],
+              "kind": "str"
+            },
+            {
+              "name": "interval",
+              "flags": [
+                "--interval"
+              ],
+              "kind": "float range",
+              "default": 2.0,
+              "help": "Refresh interval when following.",
+              "min": 0.1
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "show",
+          "about": "Show one execution run.",
+          "args": [
+            {
+              "name": "run_id",
+              "flags": [
+                "run_id"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Execution run ID."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "info",
+          "about": "Show one execution run.",
+          "args": [
+            {
+              "name": "run_id",
+              "flags": [
+                "run_id"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Execution run ID."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "watch",
+          "about": "Watch live workflow progress for one execution run.",
+          "args": [
+            {
+              "name": "run_id",
+              "flags": [
+                "run_id"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Execution run ID."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "logs",
+          "about": "Show stored run logs, events, or the merged operational stream.",
+          "args": [
+            {
+              "name": "run_id",
+              "flags": [
+                "run_id"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Execution run ID."
+            },
+            {
+              "name": "channel",
+              "flags": [
+                "--channel"
+              ],
+              "kind": "str",
+              "default": "logs",
+              "help": "Stream channel: logs, events, or all."
+            },
+            {
+              "name": "lines",
+              "flags": [
+                "--lines",
+                "-n"
+              ],
+              "kind": "int range",
+              "default": 50,
+              "help": "Number of records to show.",
+              "min": 1
+            },
+            {
+              "name": "level",
+              "flags": [
+                "--level"
+              ],
+              "kind": "str",
+              "help": "Minimum log level."
+            },
+            {
+              "name": "follow",
+              "flags": [
+                "--follow",
+                "-f"
+              ],
+              "kind": "boolean",
+              "help": "Continue printing records."
+            },
+            {
+              "name": "runs_root",
+              "flags": [
+                "--runs-root"
+              ],
+              "kind": "str"
+            },
+            {
+              "name": "interval",
+              "flags": [
+                "--interval"
+              ],
+              "kind": "float range",
+              "default": 1.0,
+              "help": "Polling interval when following.",
+              "min": 0.1
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "result",
+          "about": "Fetch final and progressive results for one execution run.",
+          "args": [
+            {
+              "name": "run_id",
+              "flags": [
+                "run_id"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Execution run ID."
+            },
+            {
+              "name": "output",
+              "flags": [
+                "--output",
+                "-o"
+              ],
+              "kind": "path",
+              "help": "Directory for fetched result files."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "resources",
+          "about": "Show CPU, GPU, memory, and LLM token usage for one blueprint run.",
+          "args": [
+            {
+              "name": "run_id",
+              "flags": [
+                "run_id"
+              ],
+              "kind": "str",
+              "required": true
+            },
+            {
+              "name": "window",
+              "flags": [
+                "--window"
+              ],
+              "kind": "str",
+              "default": "24h",
+              "help": "History window, for example 24h."
+            },
+            {
+              "name": "bucket",
+              "flags": [
+                "--bucket"
+              ],
+              "kind": "str",
+              "default": "1h",
+              "help": "Aggregation bucket, for example 1h."
+            },
+            {
+              "name": "live",
+              "flags": [
+                "--live"
+              ],
+              "kind": "boolean",
+              "help": "Refresh resource usage until interrupted."
+            },
+            {
+              "name": "interval",
+              "flags": [
+                "--interval"
+              ],
+              "kind": "float",
+              "default": 5.0,
+              "help": "Live refresh interval in seconds."
+            },
+            {
+              "name": "runs_root",
+              "flags": [
+                "--runs-root"
+              ],
+              "kind": "str",
+              "help": "Override the default $MN_HOME/runs directory."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "compare",
+          "about": "Compare two blueprint runs from the shared run store.",
+          "args": [
+            {
+              "name": "run_a",
+              "flags": [
+                "run_a"
+              ],
+              "kind": "str",
+              "required": true
+            },
+            {
+              "name": "run_b",
+              "flags": [
+                "run_b"
+              ],
+              "kind": "str",
+              "required": true
+            },
+            {
+              "name": "runs_root",
+              "flags": [
+                "--runs-root"
+              ],
+              "kind": "str",
+              "help": "Override the default $MN_HOME/runs directory."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "pause",
+          "about": "Pause one execution run.",
+          "args": [
+            {
+              "name": "run_id",
+              "flags": [
+                "run_id"
+              ],
+              "kind": "str",
+              "required": true
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "resume",
+          "about": "Resume one execution run.",
+          "args": [
+            {
+              "name": "run_id",
+              "flags": [
+                "run_id"
+              ],
+              "kind": "str",
+              "required": true
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "retry",
+          "about": "Retry unfinished work from the failed run's last verified checkpoint.",
+          "args": [
+            {
+              "name": "run_id",
+              "flags": [
+                "run_id"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Failed execution run ID."
+            },
+            {
+              "name": "queue",
+              "flags": [
+                "--queue"
+              ],
+              "kind": "boolean",
+              "help": "Queue this retry when resources are busy."
+            },
+            {
+              "name": "dry_run",
+              "flags": [
+                "--dry-run"
+              ],
+              "kind": "boolean",
+              "help": "Verify recovery without starting work."
+            },
+            {
+              "name": "settings",
+              "flags": [
+                "--set"
+              ],
+              "kind": "str",
+              "multiple": true,
+              "help": "Explicit declared retry setting: path=value. Repeatable."
+            },
+            {
+              "name": "idempotency_key",
+              "flags": [
+                "--idempotency-key"
+              ],
+              "kind": "str",
+              "help": "Reuse this key after a lost response."
+            },
+            {
+              "name": "expected_attempt",
+              "flags": [
+                "--expected-attempt"
+              ],
+              "kind": "int range",
+              "help": "Original attempt selection when resubmitting a lost response.",
+              "min": 1
+            },
+            {
+              "name": "checkpoint_revision",
+              "flags": [
+                "--checkpoint-revision"
+              ],
+              "kind": "str",
+              "help": "Original checkpoint selection when resubmitting a lost response."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "cancel",
+          "about": "Cancel one execution run without deleting job data.",
+          "args": [
+            {
+              "name": "run_id",
+              "flags": [
+                "run_id"
+              ],
+              "kind": "str",
+              "required": true
+            },
+            {
+              "name": "queued_only",
+              "flags": [
+                "--queued-only"
+              ],
+              "kind": "boolean",
+              "help": "Cancel only if execution has not started."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "delete",
+          "about": "Delete one run, cancelling it first when active, without deleting job data.",
+          "args": [
+            {
+              "name": "run_id",
+              "flags": [
+                "run_id"
+              ],
+              "kind": "str",
+              "required": true
+            },
+            {
+              "name": "yes",
+              "flags": [
+                "--yes",
+                "-y"
+              ],
+              "kind": "boolean"
+            },
+            {
+              "name": "dry_run",
+              "flags": [
+                "--dry-run"
+              ],
+              "kind": "boolean",
+              "help": "Preview deletion without changing state."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "human",
+          "about": "Inspect and respond to human collaboration events.",
+          "commands": [
+            {
+              "name": "list",
+              "about": "List human collaboration events for one run.",
+              "args": [
+                {
+                  "name": "run_id",
+                  "flags": [
+                    "run_id"
+                  ],
+                  "kind": "str",
+                  "required": true,
+                  "help": "Execution run ID."
+                },
+                {
+                  "name": "pending",
+                  "flags": [
+                    "--pending"
+                  ],
+                  "kind": "boolean",
+                  "help": "Show only pending input requests."
+                },
+                {
+                  "name": "runs_root",
+                  "flags": [
+                    "--runs-root"
+                  ],
+                  "kind": "str"
+                },
+                {
+                  "name": "json_output",
+                  "flags": [
+                    "--json"
+                  ],
+                  "kind": "boolean",
+                  "help": "Print a versioned machine-readable JSON result."
+                }
+              ]
+            },
+            {
+              "name": "respond",
+              "about": "Record a response to a human input request.",
+              "args": [
+                {
+                  "name": "run_id",
+                  "flags": [
+                    "run_id"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "request_id",
+                  "flags": [
+                    "request_id"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "decision",
+                  "flags": [
+                    "--decision"
+                  ],
+                  "kind": "str",
+                  "required": true,
+                  "help": "Decision value, such as approve, revise, or reject."
+                },
+                {
+                  "name": "notes",
+                  "flags": [
+                    "--notes"
+                  ],
+                  "kind": "str",
+                  "default": "",
+                  "help": "Optional reviewer notes."
+                },
+                {
+                  "name": "reviewer",
+                  "flags": [
+                    "--reviewer"
+                  ],
+                  "kind": "str",
+                  "default": "cli",
+                  "help": "Reviewer identity label."
+                },
+                {
+                  "name": "runs_root",
+                  "flags": [
+                    "--runs-root"
+                  ],
+                  "kind": "str",
+                  "help": "Override the default $MN_HOME/runs directory."
+                },
+                {
+                  "name": "json_output",
+                  "flags": [
+                    "--json"
+                  ],
+                  "kind": "boolean",
+                  "help": "Print a versioned machine-readable JSON result."
+                }
+              ]
+            },
+            {
+              "name": "ack",
+              "about": "Acknowledge a human notice.",
+              "args": [
+                {
+                  "name": "run_id",
+                  "flags": [
+                    "run_id"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "notice_id",
+                  "flags": [
+                    "notice_id"
+                  ],
+                  "kind": "str",
+                  "required": true
+                },
+                {
+                  "name": "reviewer",
+                  "flags": [
+                    "--reviewer"
+                  ],
+                  "kind": "str",
+                  "default": "cli",
+                  "help": "Reviewer identity label."
+                },
+                {
+                  "name": "runs_root",
+                  "flags": [
+                    "--runs-root"
+                  ],
+                  "kind": "str",
+                  "help": "Override the default $MN_HOME/runs directory."
+                },
+                {
+                  "name": "json_output",
+                  "flags": [
+                    "--json"
+                  ],
+                  "kind": "boolean",
+                  "help": "Print a versioned machine-readable JSON result."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "model",
+      "about": "Manage native llama.cpp and provider-backed models",
+      "commands": [
+        {
+          "name": "list",
+          "about": "List registered models and discovered DMR artifacts.",
+          "args": [
+            {
+              "name": "available",
+              "flags": [
+                "--available"
+              ],
+              "kind": "boolean",
+              "help": "Include catalog models that have not been added."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print machine-readable JSON."
+            }
+          ]
+        },
+        {
+          "name": "add",
+          "about": "Add a DMR or NVIDIA Docker model, or a provider definition.",
+          "args": [
+            {
+              "name": "model",
+              "flags": [
+                "model"
+              ],
+              "kind": "str",
+              "help": "Catalog ID or Hugging Face or Docker Hub GGUF model reference."
+            },
+            {
+              "name": "definition_file",
+              "flags": [
+                "--file"
+              ],
+              "kind": "path",
+              "help": "Provider model definition JSON file."
+            },
+            {
+              "name": "backend",
+              "flags": [
+                "--backend"
+              ],
+              "kind": "str",
+              "default": "auto",
+              "help": "Backend: auto, llama.cpp, vllm, or nim."
+            },
+            {
+              "name": "context_size",
+              "flags": [
+                "--context-size"
+              ],
+              "kind": "int",
+              "help": "Override model context size."
+            },
+            {
+              "name": "force",
+              "flags": [
+                "--force"
+              ],
+              "kind": "boolean",
+              "help": "Override advisory capacity checks. GPU models still require a hardware GPU."
+            },
+            {
+              "name": "node",
+              "flags": [
+                "--node"
+              ],
+              "kind": "str",
+              "multiple": true,
+              "help": "Add on a named runtime cluster node. Repeat for multiple replicas."
+            },
+            {
+              "name": "local",
+              "flags": [
+                "--local"
+              ],
+              "kind": "boolean",
+              "help": "Use the local model installation."
+            },
+            {
+              "name": "default",
+              "flags": [
+                "--default"
+              ],
+              "kind": "boolean",
+              "help": "Install the configured default, or make MODEL/--file the logical default."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print machine-readable JSON."
+            }
+          ]
+        },
+        {
+          "name": "show",
+          "about": "Show all catalog models or one model. Use `mn model doctor` for live checks.",
+          "args": [
+            {
+              "name": "model",
+              "flags": [
+                "model"
+              ],
+              "kind": "str",
+              "help": "Model id, alias, or DMR reference. Omit to show the full catalog."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print machine-readable JSON."
+            }
+          ]
+        },
+        {
+          "name": "probe",
+          "about": "Live-probe one or all runtime models through LiteLLM and cache results.",
+          "args": [
+            {
+              "name": "model",
+              "flags": [
+                "model"
+              ],
+              "kind": "str",
+              "help": "Registered model id, catalog id, alias, or DMR reference. Omit to probe every model in `mn model list`."
+            },
+            {
+              "name": "capabilities",
+              "flags": [
+                "--capabilities"
+              ],
+              "kind": "str",
+              "default": "",
+              "help": "Comma-separated capability subset. Defaults to embeddings, image input, structured output, streaming, and thinking."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print machine-readable JSON."
+            }
+          ]
+        },
+        {
+          "name": "update",
+          "about": "Update a registered model from its source.",
+          "args": [
+            {
+              "name": "model",
+              "flags": [
+                "model"
+              ],
+              "kind": "str",
+              "help": "Registered model id."
+            },
+            {
+              "name": "all_models",
+              "flags": [
+                "--all"
+              ],
+              "kind": "boolean",
+              "help": "Update all registered models."
+            },
+            {
+              "name": "force",
+              "flags": [
+                "--force"
+              ],
+              "kind": "boolean",
+              "help": "Update even when hardware compatibility fails."
+            },
+            {
+              "name": "node",
+              "flags": [
+                "--node"
+              ],
+              "kind": "str",
+              "multiple": true,
+              "help": "Update the installation on a named node. Repeat as needed."
+            },
+            {
+              "name": "local",
+              "flags": [
+                "--local"
+              ],
+              "kind": "boolean",
+              "help": "Update only the local installation."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print machine-readable JSON."
+            }
+          ]
+        },
+        {
+          "name": "remove",
+          "about": "Remove a registered model or unmanaged DMR artifact.",
+          "args": [
+            {
+              "name": "model",
+              "flags": [
+                "model"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Registered model id or unmanaged DMR reference."
+            },
+            {
+              "name": "force",
+              "flags": [
+                "--force"
+              ],
+              "kind": "boolean",
+              "help": "Remove a DMR model even when blueprint owners remain."
+            },
+            {
+              "name": "keep_artifact",
+              "flags": [
+                "--keep-artifact"
+              ],
+              "kind": "boolean",
+              "help": "Unregister a DMR model without deleting its artifact."
+            },
+            {
+              "name": "node",
+              "flags": [
+                "--node"
+              ],
+              "kind": "str",
+              "multiple": true,
+              "help": "Remove the installation on a named node. Repeat as needed."
+            },
+            {
+              "name": "local",
+              "flags": [
+                "--local"
+              ],
+              "kind": "boolean",
+              "help": "Remove the local installation."
+            },
+            {
+              "name": "all_nodes",
+              "flags": [
+                "--all-nodes"
+              ],
+              "kind": "boolean",
+              "help": "Remove every recorded installation."
+            },
+            {
+              "name": "yes",
+              "flags": [
+                "--yes",
+                "-y"
+              ],
+              "kind": "boolean",
+              "help": "Confirm removal without prompting."
+            },
+            {
+              "name": "dry_run",
+              "flags": [
+                "--dry-run"
+              ],
+              "kind": "boolean",
+              "help": "Preview removal without changing state."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print machine-readable JSON."
+            }
+          ]
+        },
+        {
+          "name": "doctor",
+          "about": "Check model definition, runtime state, and route health.",
+          "args": [
+            {
+              "name": "model",
+              "flags": [
+                "model"
+              ],
+              "kind": "str",
+              "default": "nemotron-3.5-bolt-e4b:q4_k_m",
+              "help": "Registered model id, catalog id, or DMR reference."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print machine-readable JSON."
+            }
+          ]
+        },
+        {
+          "name": "start",
+          "about": "Start a model and wait for readiness.",
+          "args": [
+            {
+              "name": "model",
+              "flags": [
+                "model"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Installed model id or alias."
+            },
+            {
+              "name": "node",
+              "flags": [
+                "--node"
+              ],
+              "kind": "str",
+              "help": "Runtime node owning the model."
+            },
+            {
+              "name": "local",
+              "flags": [
+                "--local"
+              ],
+              "kind": "boolean",
+              "help": "Use the local installation."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print machine-readable JSON."
+            }
+          ]
+        },
+        {
+          "name": "stop",
+          "about": "Stop serving a model while retaining downloaded artifacts.",
+          "args": [
+            {
+              "name": "model",
+              "flags": [
+                "model"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Installed model id or alias."
+            },
+            {
+              "name": "node",
+              "flags": [
+                "--node"
+              ],
+              "kind": "str",
+              "help": "Runtime node owning the model."
+            },
+            {
+              "name": "local",
+              "flags": [
+                "--local"
+              ],
+              "kind": "boolean",
+              "help": "Use the local installation."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print machine-readable JSON."
+            }
+          ]
+        },
+        {
+          "name": "unload",
+          "about": "Release model GPU memory while retaining downloaded artifacts.",
+          "args": [
+            {
+              "name": "model",
+              "flags": [
+                "model"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Installed model id or alias."
+            },
+            {
+              "name": "node",
+              "flags": [
+                "--node"
+              ],
+              "kind": "str",
+              "help": "Runtime node owning the model."
+            },
+            {
+              "name": "local",
+              "flags": [
+                "--local"
+              ],
+              "kind": "boolean",
+              "help": "Use the local installation."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print machine-readable JSON."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "runtime",
+      "about": "Start, stop, upgrade, and diagnose the local MirrorNeuron runtime.",
+      "commands": [
+        {
+          "name": "start",
+          "about": "Start a federation-capable MirrorNeuron runtime",
+          "args": [
+            {
+              "name": "host",
+              "flags": [
+                "--host"
+              ],
+              "kind": "str",
+              "help": "Federation-reachable host or IP advertised by this node."
+            },
+            {
+              "name": "grpc_port",
+              "flags": [
+                "--grpc-port"
+              ],
+              "kind": "int",
+              "default": 55051,
+              "help": "Core gRPC port."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "stop",
+          "about": "Stop MirrorNeuron services",
+          "args": [
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "status",
+          "about": "Report runtime endpoints, health, nodes, jobs, and shared storage",
+          "args": [
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print machine-readable JSON."
+            },
+            {
+              "name": "timeout",
+              "flags": [
+                "--timeout"
+              ],
+              "kind": "float range",
+              "default": 3.0,
+              "help": "Per-component timeout in seconds.",
+              "min": 0.1
+            }
+          ]
+        },
+        {
+          "name": "reconnect",
+          "about": "",
+          "args": [
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "doctor",
+          "about": "Check runtime foundation services before running blueprints",
+          "args": [
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print machine-readable JSON."
+            },
+            {
+              "name": "timeout",
+              "flags": [
+                "--timeout"
+              ],
+              "kind": "float range",
+              "default": 3.0,
+              "help": "Per-component timeout in seconds.",
+              "min": 0.1
+            },
+            {
+              "name": "repair",
+              "flags": [
+                "--repair"
+              ],
+              "kind": "boolean",
+              "help": "Repair unhealthy replaceable runtime sidecars, then recheck."
+            }
+          ]
+        },
+        {
+          "name": "cleanup",
+          "about": "Safely reconcile node-local Docker and OpenShell resources.",
+          "args": [
+            {
+              "name": "dry_run",
+              "flags": [
+                "--dry-run"
+              ],
+              "kind": "boolean",
+              "help": "Report confirmed cleanup candidates without removing them."
+            },
+            {
+              "name": "yes",
+              "flags": [
+                "--yes",
+                "-y"
+              ],
+              "kind": "boolean",
+              "help": "Apply cleanup without prompting."
+            },
+            {
+              "name": "include_cache",
+              "flags": [
+                "--include-cache"
+              ],
+              "kind": "boolean",
+              "help": "Also apply the managed DockerWorker image cache policy."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print machine-readable JSON."
+            }
+          ]
+        },
+        {
+          "name": "restart-sidecars",
+          "about": "Restart only the REST API and/or Web UI sidecars",
+          "args": [
+            {
+              "name": "api",
+              "flags": [
+                "--api"
+              ],
+              "kind": "boolean",
+              "help": "Restart the REST API sidecar."
+            },
+            {
+              "name": "web_ui",
+              "flags": [
+                "--web-ui"
+              ],
+              "kind": "boolean",
+              "help": "Restart the Web UI sidecar."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "ensure-context-engine",
+          "about": "Prepare and start the packaged Membrane context engine service",
+          "args": [
+            {
+              "name": "force",
+              "flags": [
+                "--force"
+              ],
+              "kind": "boolean",
+              "help": "Recreate the context engine even if it is running."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "upgrade",
+          "about": "Install available release-pinned runtime upgrades.",
+          "args": [
+            {
+              "name": "yes",
+              "flags": [
+                "--yes",
+                "-y"
+              ],
+              "kind": "boolean",
+              "help": "Upgrade without prompting."
+            },
+            {
+              "name": "check_only",
+              "flags": [
+                "--check-only"
+              ],
+              "kind": "boolean",
+              "help": "Only check for upgrades; do not install them."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "node",
+      "about": "Inspect cluster nodes and manage node membership or maintenance.",
+      "commands": [
+        {
+          "name": "list",
+          "about": "List connected nodes with their reachable endpoint and job role.",
+          "args": [
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "show",
+          "about": "Show one runtime node from the current system summary.",
+          "args": [
+            {
+              "name": "node_name",
+              "flags": [
+                "node_name"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Runtime node name."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "add",
+          "about": "Connect to a runtime; subsequent additions join peers to its cluster.",
+          "args": [
+            {
+              "name": "host",
+              "flags": [
+                "host"
+              ],
+              "kind": "str",
+              "required": true
+            },
+            {
+              "name": "token",
+              "flags": [
+                "--token"
+              ],
+              "kind": "str",
+              "help": "Runtime node control token; required for remote hosts."
+            },
+            {
+              "name": "grpc_port",
+              "flags": [
+                "--grpc-port"
+              ],
+              "kind": "int range",
+              "min": 1,
+              "max": 65535
+            },
+            {
+              "name": "runtime_home",
+              "flags": [
+                "--runtime-home"
+              ],
+              "kind": "str",
+              "help": "Installation path for mn node add local."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "remove",
+          "about": "Remove one reciprocal federated peer from this runtime.",
+          "args": [
+            {
+              "name": "node_name",
+              "flags": [
+                "node_name"
+              ],
+              "kind": "str",
+              "required": true
+            },
+            {
+              "name": "yes",
+              "flags": [
+                "--yes",
+                "-y"
+              ],
+              "kind": "boolean",
+              "help": "Confirm peer removal."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "reconcile",
+          "about": "Reconcile jobs affected by an unavailable node",
+          "args": [
+            {
+              "name": "node_name",
+              "flags": [
+                "node_name"
+              ],
+              "kind": "str",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "flags": [
+                "--reason"
+              ],
+              "kind": "str",
+              "default": "",
+              "help": "Reason recorded on reconciliation events."
+            },
+            {
+              "name": "dry_run",
+              "flags": [
+                "--dry-run"
+              ],
+              "kind": "boolean",
+              "help": "Plan reconciliation without moving work."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "drain",
+          "about": "Drain a node and move safe workloads elsewhere",
+          "args": [
+            {
+              "name": "node_name",
+              "flags": [
+                "node_name"
+              ],
+              "kind": "str",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "flags": [
+                "--reason"
+              ],
+              "kind": "str",
+              "default": "",
+              "help": "Reason recorded on drain events."
+            },
+            {
+              "name": "deadline",
+              "flags": [
+                "--deadline"
+              ],
+              "kind": "str",
+              "default": "30m",
+              "help": "Drain deadline, e.g. 30m, 10s, 1h."
+            },
+            {
+              "name": "dry_run",
+              "flags": [
+                "--dry-run"
+              ],
+              "kind": "boolean",
+              "help": "Plan the drain without changing node state."
+            },
+            {
+              "name": "wait",
+              "flags": [
+                "--wait"
+              ],
+              "kind": "boolean",
+              "help": "Poll drain status until it completes or blocks."
+            },
+            {
+              "name": "ignore_system_jobs",
+              "flags": [
+                "--ignore-system-jobs",
+                "--include-system-jobs"
+              ],
+              "kind": "boolean",
+              "default": true,
+              "help": "Ignore system/sysbatch jobs while draining.",
+              "secondary_opts": [
+                "--include-system-jobs"
+              ]
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "undrain",
+          "about": "Cancel node drain and optionally make the node schedulable",
+          "args": [
+            {
+              "name": "node_name",
+              "flags": [
+                "node_name"
+              ],
+              "kind": "str",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "flags": [
+                "--reason"
+              ],
+              "kind": "str",
+              "default": "",
+              "help": "Reason recorded on undrain events."
+            },
+            {
+              "name": "mark_eligible",
+              "flags": [
+                "--mark-eligible"
+              ],
+              "kind": "boolean",
+              "help": "Make the node schedulable after cancelling/completing drain."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "maintenance",
+          "about": "Toggle node maintenance mode without moving existing work",
+          "args": [
+            {
+              "name": "node_name",
+              "flags": [
+                "node_name"
+              ],
+              "kind": "str",
+              "required": true
+            },
+            {
+              "name": "enable",
+              "flags": [
+                "--enable",
+                "--disable"
+              ],
+              "kind": "boolean",
+              "default": true,
+              "help": "Enable or disable maintenance mode.",
+              "secondary_opts": [
+                "--disable"
+              ]
+            },
+            {
+              "name": "reason",
+              "flags": [
+                "--reason"
+              ],
+              "kind": "str",
+              "default": "",
+              "help": "Reason recorded on maintenance events."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "refresh-token",
+          "about": "Rotate the persistent MirrorNeuron network join token",
+          "args": [
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "operation",
+      "about": "Inspect or reattach to durable group operations.",
+      "commands": [
+        {
+          "name": "show",
+          "about": "Show a durable group operation and its item states.",
+          "args": [
+            {
+              "name": "operation_id",
+              "flags": [
+                "operation_id"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Durable operation ID."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "watch",
+          "about": "Reattach to a durable group operation's progress stream.",
+          "args": [
+            {
+              "name": "operation_id",
+              "flags": [
+                "operation_id"
+              ],
+              "kind": "str",
+              "required": true,
+              "help": "Durable operation ID."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "resource",
+      "about": "Inspect runtime capacity, usage, and limits.",
+      "commands": [
+        {
+          "name": "show",
+          "about": "Show CPU, GPU, memory, and disk resources reported by the core",
+          "args": [
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "usage",
+          "about": "Show runtime resource usage derived from the core system summary.",
+          "args": [
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "set",
+          "about": "Set core resource use percentages",
+          "args": [
+            {
+              "name": "cpu",
+              "flags": [
+                "--cpu"
+              ],
+              "kind": "int",
+              "help": "Maximum CPU use percentage: 25, 50, 75, or 100"
+            },
+            {
+              "name": "gpu",
+              "flags": [
+                "--gpu"
+              ],
+              "kind": "int",
+              "help": "Maximum GPU use percentage: 25, 50, 75, or 100"
+            },
+            {
+              "name": "memory",
+              "flags": [
+                "--memory"
+              ],
+              "kind": "int",
+              "help": "Maximum memory use percentage: 25, 50, 75, or 100"
+            },
+            {
+              "name": "disk",
+              "flags": [
+                "--disk"
+              ],
+              "kind": "int",
+              "help": "Maximum disk use percentage: 25, 50, 75, or 100"
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "service",
+      "about": "Inspect MirrorNeuron service discovery.",
+      "commands": [
+        {
+          "name": "list",
+          "about": "List registered services",
+          "args": [
+            {
+              "name": "name",
+              "flags": [
+                "--name"
+              ],
+              "kind": "str",
+              "help": "Filter by service name."
+            },
+            {
+              "name": "node",
+              "flags": [
+                "--node"
+              ],
+              "kind": "str",
+              "help": "Filter by node name."
+            },
+            {
+              "name": "job_id",
+              "flags": [
+                "--job-id"
+              ],
+              "kind": "str",
+              "help": "Filter by job ID."
+            },
+            {
+              "name": "status",
+              "flags": [
+                "--status"
+              ],
+              "kind": "str",
+              "help": "Filter by health status."
+            },
+            {
+              "name": "all_statuses",
+              "flags": [
+                "--all"
+              ],
+              "kind": "boolean",
+              "help": "Show warning and critical services too."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        },
+        {
+          "name": "show",
+          "about": "Resolve healthy instances for one service",
+          "args": [
+            {
+              "name": "name",
+              "flags": [
+                "name"
+              ],
+              "kind": "str",
+              "required": true
+            },
+            {
+              "name": "tag",
+              "flags": [
+                "--tag"
+              ],
+              "kind": "str",
+              "multiple": true,
+              "help": "Require a service tag."
+            },
+            {
+              "name": "node",
+              "flags": [
+                "--node"
+              ],
+              "kind": "str",
+              "help": "Filter by node name."
+            },
+            {
+              "name": "all_statuses",
+              "flags": [
+                "--all"
+              ],
+              "kind": "boolean",
+              "help": "Return warning and critical services too."
+            },
+            {
+              "name": "json_output",
+              "flags": [
+                "--json"
+              ],
+              "kind": "boolean",
+              "help": "Print a versioned machine-readable JSON result."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
