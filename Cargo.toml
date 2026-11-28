@@ -21,10 +21,11 @@ chrono = "0.4"
 regex = "1"
 unicode-width = "0.2"
 async-stream = "0.3"
+ratatui = { version = "0.30", default-features = false, features = ["std", "layout-cache"] }
 
 [target.'cfg(not(target_os = "wasi"))'.dependencies]
 tokio = { version = "1", features = ["full"] }
-crossterm = "0.28"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 
 [target.'cfg(target_os = "wasi")'.dependencies]
 tokio = { version = "1", features = ["rt", "io-util", "net", "time", "macros", "sync"] }

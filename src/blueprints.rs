@@ -333,7 +333,7 @@ pub async fn execute(a: &App, c: &[&str], v: &Value) -> Result<Value> {
             && v["detached"] != true
             && let Some(run) = result["run_id"].as_str()
         {
-            runs::watch(a, run, v["follow_seconds"].as_f64()).await?;
+            runs::follow(a, run, v["follow_seconds"].as_f64()).await?;
         }
     }
     Ok(result)

@@ -1,116 +1,111 @@
-use super::view::View;
-use crossterm::{
-    cursor::{Hide, MoveTo, Show},
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
-    execute, queue,
-    terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
-};
+use super::{dashboard, view::View};
+use ratatui::Terminal;
 use std::{
     env,
     io::{self, IsTerminal, Write},
-    time::Duration,
 };
 
+#[cfg(not(target_os = "wasi"))]
+#[path = "native_terminal.rs"]
+mod platform;
+#[cfg(target_os = "wasi")]
+#[path = "wasi_terminal.rs"]
+mod platform;
+
+#[derive(PartialEq)]
 pub(super) enum Input {
     Idle,
     Redraw,
     Detach,
 }
 
+enum Key {
+    Up,
+    Down,
+    Enter,
+    Backspace,
+    Tab,
+    Char(char),
+    Detach,
+}
+
+impl Key {
+    fn apply(self, view: &mut View) -> Input {
+        match self {
+            Self::Up => view.move_agent(-1),
+            Self::Down => view.move_agent(1),
+            Self::Enter => view.detail = true,
+            Self::Backspace => view.detail = false,
+            Self::Tab => view.detail = !view.detail,
+            Self::Char('[') => view.page_children(-1),
+            Self::Char(']') => view.page_children(1),
+            Self::Char('f') => view.child_page = None,
+            Self::Char('q') | Self::Detach => return Input::Detach,
+            Self::Char(_) => return Input::Idle,
+        }
+        Input::Redraw
+    }
+}
+
 pub(super) struct Screen {
-    interactive: bool,
+    live: Option<(Terminal<platform::Backend>, platform::Session)>,
     previous: Vec<String>,
+    json: bool,
 }
 
 impl Screen {
     pub fn open(json: bool) -> io::Result<Self> {
-        let interactive = !json
+        let live = if !json
             && io::stdin().is_terminal()
             && io::stdout().is_terminal()
             && env::var("TERM").as_deref() != Ok("dumb")
-            && env::var("MN_CLI_OUTPUT").as_deref() != Ok("plain");
-        let screen = Self {
-            interactive,
-            previous: vec![],
+            && env::var("MN_CLI_OUTPUT").as_deref() != Ok("plain")
+            && let Some(session) = platform::Session::open()?
+        {
+            Some((Terminal::new(session.backend())?, session))
+        } else {
+            None
         };
-        if interactive {
-            terminal::enable_raw_mode()?;
-            execute!(io::stdout(), EnterAlternateScreen, Hide)?;
-        }
-        Ok(screen)
+        Ok(Self {
+            live,
+            previous: Vec::new(),
+            json,
+        })
     }
-    pub fn draw(&mut self, view: &View, id: &str) -> io::Result<()> {
-        let (width, height) = if self.interactive {
-            terminal::size().unwrap_or((80, 24))
-        } else {
-            (120, u16::MAX)
-        };
-        let lines = view.lines(
-            id,
-            usize::from(width),
-            usize::from(height),
-            self.interactive,
-        );
-        if lines == self.previous {
-            return Ok(());
-        }
-        let mut out = io::stdout().lock();
-        if self.interactive {
-            queue!(out, MoveTo(0, 0), Clear(ClearType::All))?;
-            for (i, line) in lines.iter().enumerate() {
-                queue!(out, MoveTo(0, i as u16))?;
-                write!(out, "{line}")?;
-            }
-        } else {
-            for line in &lines {
-                if !self.previous.contains(line) {
-                    writeln!(out, "{line}")?;
+
+    pub fn interactive(&self) -> bool {
+        self.live.is_some()
+    }
+
+    pub fn draw(&mut self, view: &View, id: &str, finished: bool) -> io::Result<()> {
+        if let Some((terminal, _)) = &mut self.live {
+            terminal.draw(|frame| dashboard::render(frame, view, id, finished))?;
+        } else if !self.json {
+            let lines = view.plain_lines(id);
+            if lines != self.previous {
+                let mut out = io::stdout().lock();
+                for line in &lines {
+                    if !self.previous.contains(line) {
+                        writeln!(out, "{line}")?;
+                    }
                 }
+                out.flush()?;
+                self.previous = lines;
             }
         }
-        out.flush()?;
-        self.previous = lines;
         Ok(())
     }
-    pub fn interactive(&self) -> bool {
-        self.interactive
-    }
+
     pub fn input(&mut self, view: &mut View) -> io::Result<Input> {
-        let mut action = Input::Idle;
-        while event::poll(Duration::ZERO)? {
-            let input = event::read()?;
-            if matches!(input, Event::Resize(_, _)) {
-                self.previous.clear();
-                action = Input::Redraw;
-            }
-            if let Event::Key(key) = input {
-                if key.kind == KeyEventKind::Release {
-                    continue;
-                }
-                match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(Input::Detach),
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        return Ok(Input::Detach);
-                    }
-                    KeyCode::Up => view.move_agent(-1),
-                    KeyCode::Down => view.move_agent(1),
-                    KeyCode::Tab => view.detail = !view.detail,
-                    KeyCode::Char('[') => view.page_children(-1),
-                    KeyCode::Char(']') => view.page_children(1),
-                    KeyCode::Char('f') => view.child_page = None,
-                    _ => continue,
-                }
-                action = Input::Redraw;
-            }
+        let Some((terminal, session)) = &mut self.live else {
+            return Ok(Input::Idle);
+        };
+        let input = session.input(view)?;
+        // The Wasmtime launcher reports resizes in a file, even when input is idle.
+        if input == Input::Idle && terminal.size()? != terminal.current_buffer_mut().area.as_size()
+        {
+            return Ok(Input::Redraw);
         }
-        Ok(action)
-    }
-}
-impl Drop for Screen {
-    fn drop(&mut self) {
-        if self.interactive {
-            let _ = execute!(io::stdout(), Show, LeaveAlternateScreen);
-            let _ = terminal::disable_raw_mode();
-        }
+        Ok(input)
     }
 }

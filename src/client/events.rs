@@ -123,6 +123,7 @@ pub(crate) fn follow<'a>(app: &'a App, feed: Feed, id: &'a str) -> impl Stream<I
     async_stream::stream! {
         let mut cursor = None;
         let mut history = RunHistory::default();
+        let mut backoff = Duration::from_millis(250);
         loop {
             if let Ok(mut chunks) = app.events(feed, id, cursor.as_deref()).await {
                 let mut decoder = Decoder::default();
@@ -131,6 +132,7 @@ pub(crate) fn follow<'a>(app: &'a App, feed: Feed, id: &'a str) -> impl Stream<I
                         break;
                     };
                     for event in events {
+                        backoff = Duration::from_millis(250);
                         if let Some(id) = &event.id {
                             if cursor.as_ref() == Some(id) {
                                 continue;
@@ -146,7 +148,11 @@ pub(crate) fn follow<'a>(app: &'a App, feed: Feed, id: &'a str) -> impl Stream<I
                     }
                 }
             }
-            time::sleep(Duration::from_secs(1)).await;
+            if matches!(feed, Feed::Run) {
+                yield Event { id: None, kind: "run.observation_stale".into(), data: Value::Null };
+            }
+            time::sleep(backoff).await;
+            backoff = (backoff * 2).min(Duration::from_secs(5));
         }
     }
 }

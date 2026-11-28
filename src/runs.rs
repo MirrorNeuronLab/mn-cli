@@ -5,7 +5,7 @@ use crate::{
     input::{confirm, pick, s},
 };
 use mn_client_support::{Error, Result, connection};
-pub(crate) use monitor::watch;
+pub(crate) use monitor::follow;
 use serde_json::{Value, json};
 use std::{collections::HashSet, path::Path, time::Duration};
 
@@ -35,7 +35,7 @@ pub async fn execute(a: &App, c: &[&str], v: &Value) -> Result<Value> {
     }
     match action {
         "show" | "info" => a.get("get_run", q).await,
-        "watch" => watch(a, s(v, "run_id"), None).await,
+        "watch" => monitor::watch(a, s(v, "run_id")).await,
         "pause" | "resume" | "cancel" => {
             q["request"] = json!({"desired_state":match action{"pause"=>"paused","resume"=>"running",_=>"cancelled"},"queued_only":v["queued_only"]==true});
             a.get("update_run", q).await

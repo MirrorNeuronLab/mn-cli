@@ -1,132 +1,105 @@
-use super::view::View;
+#[path = "wasi_backend.rs"]
+mod backend;
+
+use super::{Input, Key, View};
+pub(super) use backend::Backend;
 use std::{
-    io::{self, IsTerminal, Write},
+    io::{self, Write},
     path::PathBuf,
     time::{Duration, Instant},
 };
-pub(super) enum Input {
-    Idle,
-    Redraw,
-    Detach,
-}
-pub(super) struct Screen {
-    session: Option<PathBuf>,
-    previous: Vec<String>,
+
+pub(super) struct Session {
+    dir: PathBuf,
     keys: Vec<u8>,
     escape_started: Option<Instant>,
     input: wasip2::io::streams::InputStream,
 }
-impl Screen {
-    pub fn open(json: bool) -> io::Result<Self> {
-        let session = std::env::var_os("MN_WASI_HOST_DIR")
-            .map(PathBuf::from)
-            .filter(|_| {
-                !json
-                    && io::stdin().is_terminal()
-                    && io::stdout().is_terminal()
-                    && std::env::var("TERM").as_deref() != Ok("dumb")
-                    && std::env::var("MN_CLI_OUTPUT").as_deref() != Ok("plain")
-            });
-        if let Some(dir) = &session {
-            std::fs::write(dir.join("terminal"), b"open")?;
-            print!("\x1b[?1049h\x1b[?25l");
-        }
-        Ok(Self {
-            session,
-            previous: vec![],
-            keys: vec![],
+
+impl Session {
+    pub fn open() -> io::Result<Option<Self>> {
+        let Some(dir) = std::env::var_os("MN_WASI_HOST_DIR").map(PathBuf::from) else {
+            return Ok(None);
+        };
+        std::fs::write(dir.join("terminal"), b"open")?;
+        let session = Self {
+            dir,
+            keys: Vec::new(),
             escape_started: None,
             input: wasip2::cli::stdin::get_stdin(),
-        })
-    }
-    pub fn interactive(&self) -> bool {
-        self.session.is_some()
-    }
-    pub fn draw(&mut self, view: &View, id: &str) -> io::Result<()> {
-        let (width, height) = if let Some(dir) = &self.session {
-            let size = std::fs::read_to_string(dir.join("size")).unwrap_or_default();
-            let mut parts = size
-                .split_whitespace()
-                .filter_map(|p| p.parse::<usize>().ok());
-            let height = parts.next().unwrap_or(24);
-            (parts.next().unwrap_or(80), height)
-        } else {
-            (120, usize::from(u16::MAX))
         };
-        let lines = view.lines(id, width, height, self.interactive());
-        if lines == self.previous {
-            return Ok(());
-        }
         let mut out = io::stdout().lock();
-        if self.interactive() {
-            write!(out, "\x1b[H\x1b[2J")?;
-            for (i, line) in lines.iter().enumerate() {
-                write!(out, "\x1b[{};1H{line}", i + 1)?;
-            }
-        } else {
-            for line in &lines {
-                if !self.previous.contains(line) {
-                    writeln!(out, "{line}")?;
-                }
-            }
-        }
-        self.previous = lines;
-        out.flush()
+        write!(out, "\x1b[?1049h\x1b[?25l")?;
+        out.flush()?;
+        Ok(Some(session))
     }
+
+    pub fn backend(&self) -> Backend {
+        Backend::new(self.dir.join("size"))
+    }
+
     pub fn input(&mut self, view: &mut View) -> io::Result<Input> {
         self.keys.extend(self.input.read(128).unwrap_or_default());
-        if self.keys.is_empty() {
-            return Ok(Input::Idle);
-        }
+        let mut action = Input::Idle;
         let mut keys = self.keys.as_slice();
         while let Some((&key, rest)) = keys.split_first() {
             keys = rest;
-            match key {
-                3 | b'q' => return Ok(Input::Detach),
-                27 if keys.starts_with(b"[A") => {
-                    self.escape_started = None;
-                    view.move_agent(-1);
-                    keys = &keys[2..];
-                }
-                27 if keys.starts_with(b"[B") => {
-                    self.escape_started = None;
-                    view.move_agent(1);
-                    keys = &keys[2..];
-                }
-                27 if (keys.is_empty() || keys == b"[")
-                    && self
-                        .escape_started
-                        .get_or_insert_with(Instant::now)
-                        .elapsed()
-                        < Duration::from_millis(150) =>
-                {
-                    // WASI can split a terminal arrow sequence across reads.
-                    let consumed = self.keys.len() - keys.len() - 1;
-                    self.keys.drain(..consumed);
-                    return Ok(if consumed == 0 {
-                        Input::Idle
+            let key = match key {
+                3 => Key::Detach,
+                27 => {
+                    let sequence = matches!(keys.first(), Some(b'[' | b'O'));
+                    let end = if sequence {
+                        keys.iter()
+                            .skip(1)
+                            .position(|ch| (0x40..=0x7e).contains(ch))
                     } else {
-                        Input::Redraw
-                    });
+                        None
+                    };
+                    if let Some(end) = end {
+                        let code = keys[end + 1];
+                        keys = &keys[end + 2..];
+                        self.escape_started = None;
+                        match code {
+                            b'A' => Key::Up,
+                            b'B' => Key::Down,
+                            _ => continue,
+                        }
+                    } else if (keys.is_empty() || sequence)
+                        && self
+                            .escape_started
+                            .get_or_insert_with(Instant::now)
+                            .elapsed()
+                            < Duration::from_millis(150)
+                    {
+                        // A terminal escape sequence can span multiple WASI reads.
+                        let consumed = self.keys.len() - keys.len() - 1;
+                        self.keys.drain(..consumed);
+                        return Ok(action);
+                    } else {
+                        Key::Detach
+                    }
                 }
-                27 => return Ok(Input::Detach),
-                9 => view.detail = !view.detail,
-                b'[' => view.page_children(-1),
-                b']' => view.page_children(1),
-                b'f' => view.child_page = None,
-                _ => {}
+                b'\r' | b'\n' => Key::Enter,
+                8 | 127 => Key::Backspace,
+                b'\t' => Key::Tab,
+                byte => Key::Char(char::from(byte)),
+            };
+            match key.apply(view) {
+                Input::Detach => return Ok(Input::Detach),
+                Input::Redraw => action = Input::Redraw,
+                Input::Idle => {}
             }
         }
         self.keys.clear();
-        Ok(Input::Redraw)
+        Ok(action)
     }
 }
-impl Drop for Screen {
+
+impl Drop for Session {
     fn drop(&mut self) {
-        if let Some(dir) = &self.session {
-            print!("\x1b[?25h\x1b[?1049l");
-            let _ = io::stdout().flush();
-            let _ = std::fs::remove_file(dir.join("terminal"));
-        }
+        let mut out = io::stdout().lock();
+        let _ = write!(out, "\x1b[0m\x1b[?25h\x1b[?1049l");
+        let _ = out.flush();
+        let _ = std::fs::remove_file(self.dir.join("terminal"));
     }
 }

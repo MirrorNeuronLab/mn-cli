@@ -24,7 +24,7 @@ pub(crate) async fn execute(a: &App, c: &[&str], v: &Value) -> Result<Value> {
                 )
                 .await?;
             let id = monitor_run(&runs, v["run_id"].as_str())?;
-            runs::watch(&pinned, id, None).await
+            runs::follow(&pinned, id, None).await
         }
         "list" => a.items("list_jobs", pick(v, &["include_archived"])).await,
         "show" | "analysis" => {
